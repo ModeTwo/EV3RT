@@ -1,3 +1,5 @@
+# 【日本語解説】 Raspberry PiからSPIKEとWebカメラを連携させ、ETロボコン2026の走行・画像認識を制御する。
+# 【日本語解説】 行動木の各update()は短時間で1周期だけ処理し、完了まではRUNNINGを返す。
 from .video import Video
 from .video import TraceSide
 from .video import TargetInterested

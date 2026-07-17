@@ -1,0 +1,14 @@
+{
+  "cell_mm": 250.0,
+  "grid_size": 5,
+  "course_margin_mm": 250.0,
+  "astar_resolution_mm": 50.0,
+  "gate_approach_mm": 180.0,
+  "obstacle_clearance_mm": 100.0,
+  "start_mm": [1178.0, 857.0],
+  "finish_mm": [-148.0, 876.0],
+  "laps": 3,
+  "heading_sign": 1.0,
+  "coordinate_source": "2026_competition_course_50pct_v0.3.pdf",
+  "measurement_note": "50%図面を実寸へ2倍換算。G1-1～G5-5間隔250mm、Lコース上側青線と左側上端青球を画像座標から換算。障害物安全距離100mmは隣接ゲート間の中心経路を確保する暫定値"
+}
