@@ -1,22 +1,14 @@
-# 【日本語解説】 Raspberry PiからSPIKEとWebカメラを連携させ、ETロボコン2026の走行・画像認識を制御する。
-# 【日本語解説】 行動木の各update()は短時間で1周期だけ処理し、完了まではRUNNINGを返す。
 from enum import Enum
 from collections import deque
 import math
 
-# 【日本語解説】 制御量の符号を保ったまま、絶対値を最小値から最大値の範囲へ制限するクラス。
 class SymmetricClamper:
-    # 【日本語解説】 SymmetricClamperの設定値と実行中に保持する状態を初期化する。
     def __init__(self, min_val: float, max_val: float):
-        # 【引数】 min_val: 符号付き制限で許可する絶対値の下限。
-        # 【引数】 max_val: 符号付き制限で許可する絶対値の上限。
         assert 0 <= min_val <= max_val, "Require 0 <= min_val <= max_val"
         self.min_val = min_val
         self.max_val = max_val
 
-    # 【日本語解説】 値の符号を維持し、絶対値を設定範囲へ丸めて返す。
     def clamp(self, value: float) -> float:
-        # 【引数】 value: 上下限へ丸める入力値。
         if value > 0:
             return max(self.min_val, min(value, self.max_val))
         elif value < 0:
@@ -24,7 +16,6 @@ class SymmetricClamper:
         else:
             return 0.0
 
-# 【日本語解説】 カラーセンサーで識別する色と判定不能状態を表す列挙型。
 class Color(Enum):
     BLACK = "black"
     BLUE = "blue"
@@ -34,22 +25,21 @@ class Color(Enum):
     WHITE = "white"
     UNKNOWN = "unknown"
 
-# 【日本語解説】 HSV値を単発判定し、直近の多数決でノイズを抑えて色を確定するクラス。
 class ColorClassifier:
     _WINDOW_SIZE = 5
 
-    # 【日本語解説】 ColorClassifierの設定値と実行中に保持する状態を初期化する。
     def __init__(self):
         self.window: deque[int] = deque(maxlen=self._WINDOW_SIZE)
 
     # --- 収集データから導いた閾値 ---
-    # 現在の制御状態に必要な値を更新し、次の処理へ進む。
+    # black : V < 30, S < 25  (V avg≈26)
+    # white : V > 55, S < 22  (V avg≈98, S avg≈5)
+    # blue  : H in [205,220], S > 80  (H avg≈213, S avg≈93)
+    # green : H in [140,155], S > 60  (H avg≈148, S avg≈73)
+    # yellow: H in [35,65], V > 88    (H avg≈52, V avg≈99)
+    # red   : H > 345 or H < 10, S > 75  (H avg≈354, S avg≈87)
 
-    # 【日本語解説】 1組のHSV値をしきい値と比較し、対応する色を返す。
     def classify_single(self,h: int, s: int, v: int) -> Color:
-        # 【引数】 h: 色相値（度）。
-        # 【引数】 s: 彩度値。
-        # 【引数】 v: 明度値。
         """1サンプルのHSVから色を判定する。"""
         # 純白：収集データのS最大値は19。S<20 かつ高輝度のみ白と認める
         if s < 20 and v > 75:
@@ -71,9 +61,7 @@ class ColorClassifier:
         return Color.UNKNOWN
 
 
-    # 【日本語解説】 直近の色判定を多数決し、一時的な照明変化や走行振動の影響を抑える。
     def classify_robust(self, window: deque) -> Color:
-        # 【引数】 window: 直近の色判定結果を保持する両端キュー。
         """
         直近 WINDOW_SIZE サンプルの多数決で色を決定する。
         走行体の左右揺れや外乱光による一時的なノイズを抑制する。
@@ -97,54 +85,53 @@ class ColorClassifier:
         return max(votes, key=lambda k: votes[k])
 
 
-    # 【日本語解説】 単発の色判定を履歴へ追加し、平滑化済みの最終判定を返す。
     def classify(self, h: int, s: int, v: int) -> Color:
-        # 【引数】 h: 色相値（度）。
-        # 【引数】 s: 彩度値。
-        # 【引数】 v: 明度値。
         single = self.classify_single(h, s, v)
         self.window.append(single)
         return self.classify_robust(self.window)
 
-# 【日本語解説】 センサー値の突発ノイズを抑える一次IIRローパスフィルター。
 class LowPassFilter:
-    """一次IIR（指数移動平均）ローパスフィルター。
-    
-        遮断周波数とサンプリング周期から係数を計算する。遮断周波数を上げると平滑化と位相遅れが小さくなり、
-        下げると平滑化と位相遅れが大きくなる。必要に応じて前段の中央値フィルターで単発ノイズも除去する。
+    """First-order IIR (exponential) low-pass filter.
+ 
+    The cutoff is given in Hz so it carries physical meaning independent of the
+    loop rate, then converted once to an EMA coefficient `alpha`:
+ 
+        w     = 2*pi * cutoff_hz * sample_time
+        alpha = w / (w + 1)
+        y[n]  = y[n-1] + alpha * (x[n] - y[n-1])
+ 
+    Higher cutoff -> alpha -> 1 -> less smoothing, less phase lag.
+    Lower  cutoff -> alpha -> 0 -> more smoothing, more phase lag.
+ 
+    Phase lag added at a frequency f is approximately atan(f / cutoff_hz);
+    keep cutoff_hz well above the loop's working bandwidth (~2 Hz here) so the
+    filter removes sensor spikes without eating the phase margin the PID needs.
     """
  
-    # 【日本語解説】 LowPassFilterの設定値と実行中に保持する状態を初期化する。
     def __init__(self, cutoff_hz: float, sample_time: float,
                  median_window: int = 0) -> None:
-        # 【引数】 cutoff_hz: ローパスフィルターの遮断周波数（Hz）。
-        # 【引数】 sample_time: 入力値を更新するサンプリング周期（秒）。
-        # 【引数】 median_window: 単発ノイズ除去に使う中央値フィルターのサンプル数。0で無効。
         w = 2.0 * math.pi * cutoff_hz * sample_time
         self.alpha = w / (w + 1.0)
-        self.y = None                      # 初回入力値で初期化し、ゼロ開始による立ち上がり遅延を避ける
-        # 必要に応じて短い中央値フィルターを前段に置き、単発ノイズを除去する
-        # 単発ノイズ除去に使う中央値フィルターの窓幅。0で無効。
+        self.y = None                      # lazy init -> no start-up ramp from 0
+        # optional tiny median pre-stage to reject single-sample spikes
+        # (line crossings, glare). 0 disables it; 3 is a good value if enabled.
         self._mwin = median_window
         self._buf = []
  
-    # 【日本語解説】 保持しているフィルター出力と中央値判定用バッファを初期状態へ戻す。
     def reset(self) -> None:
         self.y = None
         self._buf = []
  
-    # 【日本語解説】 LowPassFilterを関数のように呼び出し、入力値に対する処理結果を返す。
     def __call__(self, x: float) -> float:
-        # 平滑化の前に、必要に応じて単発ノイズを除去する
-        # 【引数】 x: フィルターへ入力する現在のサンプル値。
+        # optional spike rejection before smoothing
         if self._mwin > 1:
             self._buf.append(x)
             if len(self._buf) > self._mwin:
                 self._buf.pop(0)
             x = sorted(self._buf)[len(self._buf) // 2]
-        # 指数移動平均によるローパス処理
+        # exponential low-pass
         if self.y is None:
-            self.y = x  # 初回入力値でフィルターを初期化し、ゼロ始動による遅れを防ぐ。
+            self.y = x                     # seed with the first real sample
         else:
             self.y += self.alpha * (x - self.y)
         return self.y
