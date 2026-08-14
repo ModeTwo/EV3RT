@@ -1,6 +1,6 @@
 """Feature 19 subtree factory."""
 
-from py_trees.composites import Sequence
+from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..placeholder import PendingFeature
 
 
@@ -9,4 +9,3 @@ def build_drive_to_garage(context, config):
     root = Sequence(name="drive_to_garage", memory=True)
     root.add_children([PendingFeature(name="drive_to_garage_pending")])
     return root
-

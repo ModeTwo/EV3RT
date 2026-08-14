@@ -1,6 +1,6 @@
 """Feature 06 subtree factory."""
 
-from py_trees.composites import Sequence
+from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..placeholder import PendingFeature
 
 
@@ -10,4 +10,3 @@ def build_read_hint(context, config, hint_number):
     root = Sequence(name=f"read_hint{hint_number}", memory=True)
     root.add_children([PendingFeature(name=f"read_hint{hint_number}_pending")])
     return root
-

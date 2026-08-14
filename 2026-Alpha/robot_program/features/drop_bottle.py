@@ -1,6 +1,6 @@
 """Feature 08 subtree factory."""
 
-from py_trees.composites import Sequence
+from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..placeholder import PendingFeature
 
 
@@ -9,4 +9,3 @@ def build_drop_bottle(context, config):
     root = Sequence(name="drop_bottle", memory=True)
     root.add_children([PendingFeature(name="drop_bottle_pending")])
     return root
-

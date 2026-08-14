@@ -1,7 +1,6 @@
 """Feature 02 subtree factory."""
 
-from py_trees.common import ParallelPolicy
-from py_trees.composites import Parallel, Sequence
+from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 
 from py_etrobo_util import Color, TraceSide
 

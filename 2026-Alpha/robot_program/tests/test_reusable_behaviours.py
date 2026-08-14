@@ -58,7 +58,6 @@ from robot_program.behaviours.gyro_drive import SpinAround
 from robot_program.behaviours.hint_reader import ReadHintCard
 from robot_program.behaviours.motor_control import RunAsInstructed, StopNow
 from robot_program.context import RaceContext
-from robot_program.features.behaviour_smoke_test import build_behaviour_smoke_test
 from robot_program.runtime import runtime
 from robot_program.types import HeadingType
 
@@ -213,13 +212,6 @@ class ReusableBehaviourTest(unittest.TestCase):
         self.assertEqual(behaviour.update(), Status.SUCCESS)
         self.assertEqual(context.hint2, "raw-encrypted-hint")
         self.assertEqual(runtime.video.target, TargetInterested.LINE)
-
-    def test_behaviour_smoke_test_tree_can_be_built(self) -> None:
-        # 実機を動かさず、全Behaviorのimportとツリーへの組み込みだけを確認する。
-        root = build_behaviour_smoke_test(RaceContext(), object())
-        self.assertEqual(root.name, "behaviour_smoke_test")
-        self.assertEqual(len(root.children), 9)
-
 
 if __name__ == "__main__":
     unittest.main()

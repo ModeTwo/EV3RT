@@ -157,6 +157,90 @@ ETRobo.dispatch()
 
 各担当者が主に変更する場所です。一つの機能は一つのファイル内で完結させます。
 
+新しいFeatureは`features/feature_template.py`を複製して作成します。すべてのFeatureは`features/bt_imports.py`から次の基本部品をあらかじめ読み込みます。
+
+- `Behaviour`
+- `Sequence`
+- `Parallel`
+- `Selector`
+- `ParallelPolicy`
+- `Status`
+- `Success`
+- `Failure`
+- `Running`
+- `time`
+- `runtime`
+- `HeadingType`
+- `TraceSide`
+- `TargetInterested`
+- `Color`
+- `BottleColor`
+
+標準importは次の1行にまとめられています。Feature内でSequenceやParallelが後から必要になっても、追加importは不要です。
+
+```python
+from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
+```
+
+#### 必要な場合だけ追加するimport
+
+Feature固有の処理に応じ、次の基準で個別importを追加します。
+
+PIDでモーター出力や操舵量を計算する場合：
+
+```python
+from simple_pid import PID
+```
+
+PID出力を最小値・最大値の範囲へ制限する場合：
+
+```python
+from py_etrobo_util import SymmetricClamper
+```
+
+カラーセンサーのHSV値を色へ分類する場合：
+
+```python
+from py_etrobo_util import ColorClassifier
+```
+
+センサー値や操舵値を平滑化する場合：
+
+```python
+from py_etrobo_util import LowPassFilter
+```
+
+三角関数、角度変換、座標計算をFeature内で行う場合：
+
+```python
+import math
+```
+
+Feature独自の状態を列挙型で管理する場合：
+
+```python
+from enum import Enum, IntEnum, auto
+```
+
+走行体側でHint文字列の解釈が本当に必要な場合：
+
+```python
+from py_etrobo_util import Hint, HintType
+```
+
+現在の責務分担では、Hintの復号と走行指示SEQ生成はPC側が担当します。走行体側Featureへ`Hint`と`HintType`を追加する前に、PC側で処理できないか確認してください。
+
+既存の共通Behaviorを利用する場合は、使用するものだけを明示的にimportします。
+
+```python
+from ..behaviours.conditions import IsColorDetected, IsDistanceEarned
+from ..behaviours.gyro_drive import RunByGyro, SpinAround
+from ..behaviours.line_trace import TraceLine
+from ..behaviours.motor_control import RunAsInstructed, StopNow
+```
+
+`ETRobo`、`Hub`、`Motor`、各Sensor型、`Video`、`Plotter`はFeatureへ直接importしません。実機へのアクセスには標準import済みの`runtime`を使用します。
+
 例：
 
 | 機能 | ファイル |
@@ -259,6 +343,7 @@ class SelectDropZone(Behaviour):
 4. 定数や調整値は担当機能のファイル内、または共通化が必要な場合は`RaceConfig`へ置きます。
 5. 工程の追加・削除・実行順変更が必要な場合は、統合担当者が`phases/`または`tree_builder.py`を変更します。
 6. Pythonの識別子、実行時文字列、docstringは英語を使用します。日本語の説明はコメントへ記載します。
+7. 新規Featureは`feature_template.py`を複製し、`bt_imports.py`からの標準importを削除しないでください。
 
 ## 10. 単体テスト
 

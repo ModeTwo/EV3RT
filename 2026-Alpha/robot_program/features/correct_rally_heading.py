@@ -1,6 +1,6 @@
 """Feature 13 subtree factory."""
 
-from py_trees.composites import Sequence
+from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..placeholder import PendingFeature
 
 
