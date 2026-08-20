@@ -1,3 +1,4 @@
+"""Robot-side race program entry point."""
 import sys
 import argparse
 import time
@@ -9,16 +10,17 @@ from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSen
 from simple_pid import PID
 from py_trees.trees import BehaviourTree
 from py_trees.behaviour import Behaviour
-from py_trees.common import Status
-from py_trees.composites import Sequence
-from py_trees.composites import Selector
-from py_trees.composites import Parallel
-from py_trees.common import ParallelPolicy
+from py_trees.common import ParallelPolicy, Status
+from py_trees.composites import Parallel, Sequence,Selector
 from py_trees import (
     display as display_tree,
     logging as log_tree
 )
 from py_etrobo_util import Video, TraceSide, TargetInterested, Plotter, SymmetricClamper, Color, ColorClassifier, LowPassFilter, BottleColor, Hint, HintType
+from robot_program.config import RaceConfig
+from robot_program.context import RaceContext
+from robot_program.runtime import runtime as robot_runtime
+from robot_program.tree_builder import build_mission_children
 
 # constants for defining execution intervals
 EXEC_INTERVAL: float  = 0.02
@@ -37,6 +39,20 @@ JUNCT_UPPER_THRESH = 50   # IsJunction
 JUNCT_LOWER_THRESH = 40   # IsJunction
 ROE_DEGEN          = 90   # TraceLineCam: span above this = line ~tangent
 CURV_MIN_ROWS_SEP  = 15   # TraceLineCam: need this many rows between near/far to trust the slope
+
+g_plotter = None
+g_hub = None
+g_arm_motor = None
+g_right_motor = None
+g_left_motor = None
+g_touch_sensor = None
+g_color_sensor = None
+g_sonar_sensor = None
+g_gyro_sensor = None
+g_video = None
+g_video_thread = None
+g_course = 0
+
 
 class ArmDirection(IntEnum):
     UP = -1
@@ -930,6 +946,7 @@ class HasCaughtBottle(Behaviour):
 
 
 class TraverseBehaviourTree(object):
+    # ETRoboから渡された実機参照を初回だけ保存し、以後はBTを周期実行する。
     def __init__(self, tree: BehaviourTree) -> None:
         self.tree = tree
         self.last_log_time = None
@@ -956,6 +973,19 @@ class TraverseBehaviourTree(object):
             g_sonar_sensor = sonar_sensor
             g_gyro_sensor = gyro_sensor
             g_plotter = Plotter()
+            robot_runtime.configure(
+                hub=hub,
+                arm_motor=arm_motor,
+                right_motor=right_motor,
+                left_motor=left_motor,
+                touch_sensor=touch_sensor,
+                color_sensor=color_sensor,
+                sonar_sensor=sonar_sensor,
+                gyro_sensor=gyro_sensor,
+                plotter=g_plotter,
+                video=g_video,
+                course=g_course,
+            )
             print(" -- TraverseBehaviorTree initialization complete")
             self.running = True
         else:
@@ -987,22 +1017,11 @@ class VideoThread(threading.Thread):
 
 
 def build_behaviour_tree() -> BehaviourTree:
-    root = Sequence(name="2026 base", memory=True)
+    # alpha.pyには競技全体の基本順序を残し、各工程の詳細は機能別ファイルから取得する。
+    root = Sequence(name="2026 alpha", memory=True)
     calibration = Sequence(name="calibration", memory=True)
     start = Parallel(name="start", policy=ParallelPolicy.SuccessOnOne())
-    lap2 = Parallel(name="lap2", policy=ParallelPolicy.SuccessOnOne())
-    lap3 = Parallel(name="lap3", policy=ParallelPolicy.SuccessOnOne())
-    carry1 = Parallel(name="carry1", policy=ParallelPolicy.SuccessOnOne())
-    carry2 = Parallel(name="carry2", policy=ParallelPolicy.SuccessOnOne())
-    carry3 = Parallel(name="carry3", policy=ParallelPolicy.SuccessOnOne())
-    carry4 = Parallel(name="carry4", policy=ParallelPolicy.SuccessOnOne())
-    qr2 = Parallel(name="qr2", policy=ParallelPolicy.SuccessOnOne())
-    qr3 = Parallel(name="qr3", policy=ParallelPolicy.SuccessOnOne())
-    qr4 = Parallel(name="qr4", policy=ParallelPolicy.SuccessOnOne())
-    qr5 = Parallel(name="qr4", policy=ParallelPolicy.SuccessOnOne())
-    qr_read = Parallel(name="qr_read", policy=ParallelPolicy.SuccessOnOne())
-    qr_scan_shake = Sequence(name="qr_scan_shake", memory=True)
-    qr_scan_move_back = Parallel(name="qr_scan_move_back2", policy=ParallelPolicy.SuccessOnOne())
+
     calibration.add_children(
         [
             ArmUpDownFull(name="arm up", direction=ArmDirection.UP),
@@ -1011,165 +1030,15 @@ def build_behaviour_tree() -> BehaviourTree:
             #ReadKey(name="read key"),
         ]
     )
-    start.add_children(
-        [
-            IsTouchOn(name="touch start"),
-        ]
-    )
-    lap2.add_children(
-        [
-            TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V,
-                power=70, power_min=33,
-                pid_p=0.65, pid_i=0.000001, pid_d=0.045,
-                err_lo=6, err_hi=16, decel_per_s=350, gains_slow=(0.65, 0.045), gains_fast=(0.55, 0.065),
-                recover_v=97, recover_after=3, recover_turn=35,
-                trace_side=TraceSide.NORMAL),
-            IsColorDetected(name="check color", color=Color.BLUE),
-        ]
-    )
-    lap3.add_children(
-        [
-            RunByGyro(name="run straight to catch the bottle", target=3, power=33,
-                pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE),
-            IsDistanceEarned(name="check distance", delta_dist = 370),
-        ]
-    )
-    carry1.add_children(
-        [
-            TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V,
-                power=70, power_min=33,
-                pid_p=0.65, pid_i=0.000001, pid_d=0.045,
-                err_lo=6, err_hi=16, decel_per_s=350, gains_slow=(0.65, 0.045), gains_fast=(0.55, 0.065),
-                recover_v=97, recover_after=3, recover_turn=35,
-                trace_side=TraceSide.NORMAL),
-            IsColorDetected(name="check color", color=Color.BLUE),
-        ]
-    )
-    carry2.add_children(
-        [
-            RunByGyro(name="run straight to pass the blue line", target=90, power=33,
-                pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE),
-            IsDistanceEarned(name="check distance", delta_dist = 120),
-        ]
-    )
-    carry3.add_children(
-        [
-            TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V,
-                power=70, power_min=33,
-                pid_p=0.65, pid_i=0.000001, pid_d=0.045,
-                err_lo=6, err_hi=16, decel_per_s=350, gains_slow=(0.65, 0.045), gains_fast=(0.55, 0.065),
-                recover_v=97, recover_after=3, recover_turn=35,
-                trace_side=TraceSide.NORMAL),
-            IsDistanceEarned(name="check distance", delta_dist = 1100),
-        ]
-    )
-    carry4.add_children(
-        [
-            TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V,
-                power=33,
-                pid_p=0.65, pid_i=0.000001, pid_d=0.045,
-                err_lo=6, err_hi=16, decel_per_s=350, gains_slow=(0.65, 0.045), gains_fast=(0.55, 0.065),
-                recover_v=97, recover_after=3, recover_turn=35,
-                trace_side=TraceSide.NORMAL),
-            IsColorDetected(name="check color", color=Color.BLUE),
-        ]
-    )
-    qr2.add_children(
-        [
-            RunByGyro(name="run straight to correct heading", target=0, power=33,
-                pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE),
-            IsDistanceEarned(name="check distance", delta_dist = 50),
-        ]
-    )
-    qr3.add_children(
-        [
-            TraceLine(name="sensor trace opposite edge", target=TRACELINE_TARGET_V,
-                power=33,
-                pid_p=0.65, pid_i=0.000001, pid_d=0.045,
-                err_lo=6, err_hi=16, decel_per_s=350, gains_slow=(0.65, 0.045), gains_fast=(0.55, 0.065),
-                recover_v=97, recover_after=3, recover_turn=35,
-                trace_side=TraceSide.OPPOSITE),
-            IsDistanceEarned(name="check distance", delta_dist = 500),
-        ]
-    )
-    qr4.add_children(
-        [
-            TraceLine(name="sensor trace opposite edge", target=TRACELINE_TARGET_V,
-                power=70, power_min=33,
-                pid_p=0.65, pid_i=0.000001, pid_d=0.045,
-                err_lo=6, err_hi=16, decel_per_s=350, gains_slow=(0.65, 0.045), gains_fast=(0.55, 0.065),
-                recover_v=97, recover_after=3, recover_turn=35,
-                trace_side=TraceSide.OPPOSITE),
-            IsColorDetected(name="check color", color=Color.BLUE),
-        ]
-    )
-    qr5.add_children(
-        [
-            RunByGyro(name="run straight to pass half the blue line", target=-90, power=33,
-                pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE),
-            IsDistanceEarned(name="check distance", delta_dist = 100),
-        ]
-    )
-    qr_scan_move_back.add_children(
-        [
-            RunAsInstructed(name="move back a little", pwm_l=-SPIN_MIN_POWER, pwm_r=-SPIN_MIN_POWER),
-            IsDistanceEarned(name="check distance", delta_dist = 50),
-        ]
-    )
-    qr_scan_shake.add_children(
-        [
-            IsTimePassed(name="wait for a moment", delta_time=3.0),
-            qr_scan_move_back,
-            StopNow(name="stop"),
-            IsTimePassed(name="wait for a moment", delta_time=3.0),
-            SpinAround(name="scan for QR code", target=3, max_power=SPIN_MAX_POWER, min_power=SPIN_MIN_POWER,
-                pid_p=0.4, pid_i=0.001, pid_d=0.03, target_type=HeadingType.RELATIVE),
-            StopNow(name="stop"),
-            IsTimePassed(name="wait for a moment", delta_time=2.0),
-            SpinAround(name="scan for QR code", target=-6, max_power=SPIN_MAX_POWER, min_power=SPIN_MIN_POWER,
-                pid_p=0.4, pid_i=0.001, pid_d=0.03, target_type=HeadingType.RELATIVE),
-            StopNow(name="stop"),
-            IsTimePassed(name="wait for a moment", delta_time=2.0),
-            SpinAround(name="scan for QR code", target=3, max_power=SPIN_MAX_POWER, min_power=SPIN_MIN_POWER,
-                pid_p=0.4, pid_i=0.001, pid_d=0.03, target_type=HeadingType.RELATIVE),
-            StopNow(name="stop"),
-            IsTimePassed(name="wait for a moment", delta_time=3.0),
-        ]
-    )
-    qr_read.add_children(
-        [
-            IsQRDecoded(name="check QR code"),
-            qr_scan_shake,
-        ]
-    )
+    start.add_children([IsTouchOn(name="touch start")])
+
+    mission_context = RaceContext()
+    mission_config = RaceConfig()
     root.add_children(
         [
             calibration,
             start,
-            lap2,
-            lap3,
-            carry1,
-            carry2,
-            carry3,
-            carry4,
-            SpinAround(name="about the face", target=10, max_power=SPIN_MAX_POWER, min_power=SPIN_MIN_POWER,
-                pid_p=0.4, pid_i=0.001, pid_d=0.03, target_type=HeadingType.ABSOLUTE),
-            qr2,
-            StopNow(name="stop"),
-            SpinAndLocateLine(name="spin and locate line", target=TRACELINE_TARGET_V, max_power=SPIN_MAX_POWER, min_power=SPIN_MIN_POWER,
-                pid_p=0.4, pid_i=0.001, pid_d=0.03, trace_side=TraceSide.OPPOSITE),
-            StopNow(name="stop"),
-            qr3,
-            qr4,
-            qr5,
-            StopNow(name="stop"),
-            ArmUpDownFull(name="arm up", direction=ArmDirection.UP),
-            SpinAround(name="align for QR code scanning", target=0, max_power=SPIN_MAX_POWER, min_power=SPIN_MIN_POWER,
-                pid_p=0.4, pid_i=0.001, pid_d=0.03, target_type=HeadingType.ABSOLUTE),
-            StopNow(name="stop"),
-            qr_read,
-            ArmUpDownFull(name="arm down", direction=ArmDirection.DOWN),
-            StopNow(name="stop"),
+            *build_mission_children(mission_context, mission_config),
             TheEnd(name="end"),
         ]
     )
