@@ -24,7 +24,8 @@ def build_start_to_lap_gate(context, config):
     # ジャイロ走行全体
     square = Sequence(name="square", memory=True)
     
-    lap2_4 = Parallel(name="lap2", policy=ParallelPolicy.SuccessOnOne())#カーブ箇所のライントレース
+    lap2_1 = Parallel(name="lap2", policy=ParallelPolicy.SuccessOnOne())#カーブ箇所のライントレース
+    lap2_2 = Parallel(name="lap2", policy=ParallelPolicy.SuccessOnOne())#カーブ箇所のライントレース
 
     # lap2_1：角度0°で直進 → 距離500で成功
     edge_01.add_children(
@@ -98,7 +99,7 @@ def build_start_to_lap_gate(context, config):
              RunByGyro(
                  name="run straight",
                  target=-180,
-                 power=70, #ここだけ60
+                 power=60, #ここだけ60
                  pid_p=1.1,
                  pid_i=0.1,
                  pid_d=0.03,
@@ -121,9 +122,18 @@ def build_start_to_lap_gate(context, config):
         ]
     )
 
+    #lap2_4（床の線を見ながら通常エッジをトレース。50mmまではpower=33でゆっくり進む）
+    lap2_1.add_children(
+        [
+            TraceLine(name="fukki", target=TRACELINE_TARGET_V, power=33,
+                pid_p=0.55, pid_i=0.0000009, pid_d=0.015, trace_side=TraceSide.NORMAL),
+            IsDistanceEarned(name="check distance", delta_dist=80)
+        ]
+    )
 
-    #lap2_4（床の線を見ながら通常エッジをトレースし、地面に青い線が見えるまで突っ走る）
-    lap2_4.add_children(
+
+     #lap2_4（床の線を見ながら通常エッジをトレースし、地面に青い線が見えるまで突っ走る）
+    lap2_2.add_children(
         [
             TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V, power=50,
                 pid_p=0.55, pid_i=0.0000009, pid_d=0.015, trace_side=TraceSide.NORMAL),
@@ -141,5 +151,11 @@ def build_start_to_lap_gate(context, config):
     target:角度
     """
 
-    root.add_children([square, lap2_4])
+    root.add_children(
+        [
+            square,
+            lap2_1,
+            lap2_2
+        ]
+    )
     return root
