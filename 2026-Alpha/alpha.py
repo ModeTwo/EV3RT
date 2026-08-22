@@ -19,7 +19,8 @@ from py_trees import (
 from py_etrobo_util import Video, TraceSide, TargetInterested, Plotter, SymmetricClamper, Color, ColorClassifier, LowPassFilter, BottleColor, Hint, HintType
 from robot_program.config import RaceConfig
 from robot_program.context import RaceContext
-from robot_program.runtime import runtime as robot_runtime
+from robot_program.behaviours.device_control import ResetDevice
+from robot_program.runtime import RobotRuntime as robot_runtime
 from robot_program.tree_builder import build_mission_children
 
 # constants for defining execution intervals
@@ -32,8 +33,6 @@ SPIN_MIN_POWER     = 47
 TRACELINE_TARGET_V = 75
 
 # constants for specific action classes
-GS_MIN_DEFAULT     = 0
-GS_MAX_DEFAULT     = 55
 ARM_SHIFT_PWM      = 35   # ArmUpDownFull
 JUNCT_UPPER_THRESH = 50   # IsJunction 
 JUNCT_LOWER_THRESH = 40   # IsJunction
@@ -94,30 +93,6 @@ class TheEnd(Behaviour):
         if not self.running:
             self.running = True
             self.logger.info("%+06d %s.behavior tree exhausted. ctrl+C shall terminate the program" % (g_plotter.get_distance(), self.__class__.__name__))
-        return Status.RUNNING
-
-
-class ResetDevice(Behaviour):
-    def __init__(self, name: str):
-        super(ResetDevice, self).__init__(name)
-        self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-        self.count = 0
-
-    def update(self) -> Status:
-        if self.count == 0:
-            g_arm_motor.reset_count()
-            g_right_motor.reset_count()
-            g_left_motor.reset_count()
-            g_gyro_sensor.reset()
-            g_video.set_thresholds(GS_MIN_DEFAULT, GS_MAX_DEFAULT)
-            g_video.set_target_interested(TargetInterested.LINE)
-            self.logger.info("%+06d %s.resetting..." % (g_plotter.get_distance(), self.__class__.__name__))
-            self.logger.info("%+06d %s.waiting for IMU to be stationary..." % (g_plotter.get_distance(), self.__class__.__name__))
-        elif self.count > 3:
-            self.logger.info("%+06d %s.complete" % (g_plotter.get_distance(), self.__class__.__name__))
-            return Status.SUCCESS
-        if g_hub.hub_imu_is_stationary():
-            self.count += 1
         return Status.RUNNING
 
 

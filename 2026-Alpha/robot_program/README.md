@@ -113,7 +113,9 @@ ETRobo.dispatch()
 
 競技固有の走行処理は`alpha.py`へ追加せず、`features/`または`behaviours/`へ配置します。
 
-`ArmDirection`と`ArmUpDownFull`はキャリブレーションでのみ使用するため、共通`behaviours/`へ分割せず`alpha.py`に配置しています。
+`ArmDirection`と`ArmUpDownFull`はキャリブレーションでのみ使用するため、共通`behaviours/`へ分割せず`alpha.py`に配置しています。`ResetDevice`は単体テスト可能な共通Behaviorとして`behaviours/device_control.py`に配置し、`alpha.py`のキャリブレーションから呼び出します。
+
+`ResetDevice`自身がデバイス値をグローバル変数として保持する必要はありません。`runtime`に設定済みの同一デバイス参照を使い、モーターのエンコーダー値とジャイロ角度は各デバイス内部の`reset_count()`／`reset()`でゼロ化します。走行途中で実行すると`Plotter`の累積走行値と基準がずれるため、競技開始前のキャリブレーションでだけ使用してください。
 
 `TraceLineCam`、`IsJunction`、`CatchBottle`は現在の走行戦略と合致しないため、`alpha.py`には配置していません。
 
@@ -270,11 +272,62 @@ root.add_children([PendingFeature(name="feature_name_pending")])
 | `line_trace.py` | `TraceLine` |
 | `gyro_drive.py` | `RunByGyro`、`SpinAround` |
 | `motor_control.py` | `StopNow`、`RunAsInstructed` |
+| `device_control.py` | `ResetDevice` |
 | `conditions.py` | `IsDistanceEarned`、`IsColorDetected`、`IsTimePassed` |
 | `bottle.py` | `IsBottleInsight`、`HasCaughtBottle` |
 | `hint_reader.py` | `ReadHintCard` |
 
 `RunAsInstructed`は従来から使用している名称を維持しています。
+
+### ET相撲 No.15～18
+
+ET相撲は、上側の緑エリアへ進入せず、土俵下側のP1・P2から力士ボトルを観測する構成です。
+
+ET相撲でも、旋回は`behaviours/gyro_drive.py`の`SpinAround`、方位維持走行は`RunByGyro`、距離終了判定は`IsDistanceEarned`、停止は`StopNow`を利用します。Feature内にモーター出力やPID旋回を重複実装しません。
+
+Feature内に残すのは、ボトルの停止中認識、押出し計画、`RaceContext.sumo`の位置・完了状態更新など、ET相撲に固有の処理だけです。Feature間では観測結果・押出し計画を`RaceContext.sumo`で共有し、副作用を持たない座標計算は`sumo_geometry.py`を使用します。
+
+```text
+move_to_sumo_start.py
+├─ ETラリー終了姿勢からコース別に90度旋回
+├─ 上向きを維持し、青検知まで基準位置Sへ移動
+└─ 制動停止後にET相撲座標を初期化
+   └─ locate_sumo_bottle.py
+      ├─ P1へ移動して黒ラベルを観測
+      ├─ P2へ移動して黒ラベルを観測
+      └─ 左・右・下だけから押出し計画を作成
+         └─ push_sumo_bottle.py
+            ├─ 押出し準備位置へ移動
+            ├─ ボトルを土俵外まで押す
+            └─ 静止待ち
+               └─ move_to_sumo_exit.py
+                  └─ FINISH用の引継ぎ位置・方位へ移動
+```
+
+調整値は`RaceConfig.sumo`の`SumoSettings`へ集約しています。P1・P2、土俵中心、半径、センサー換算値、速度、タイムアウトは、レプリカコースで実測して変更してください。
+
+方位は`Plotter.get_azimuth()`または`Plotter.get_degree()`を使用せず、既存のジャイロ走行と同じ規則で`runtime.gyro_sensor`から取得します。No.15が基準位置Sで停止した時のジャイロ方位を`RaceContext.sumo.heading_origin_deg`に保存し、その上向きをET相撲ローカル方位の0度とします。`plotter.py`への変更はありません。
+
+`SpinAround`、`RunByGyro`、`IsDistanceEarned`の実装と引数仕様は、2026baseから部品化した内容を変更しません。探索後に決まる方位・距離は、Feature側の設定Behaviorが実行直前に既存Behaviorの`target`または`delta_dist`へ数値を設定します。
+
+No.15の最初の動作は`SpinAround(target=90, target_type=HeadingType.RELATIVE)`一つです。`SpinAround`が元から使用する`runtime.course`により、Left／Rightコースの旋回方向を反転します。続けて`RunByGyro(target=0, target_type=HeadingType.RELATIVE)`で旋回後の上向きを維持し、`IsColorDetected(Color.BLUE)`が成立するまで進みます。この工程に`sumo_geometry.py`の座標計算は使用しません。
+
+ET相撲内の方位は、既存ジャイロ制御へ合わせて「前方0度・左旋回正・右旋回負」を使用します。例えば、開始位置`(0, 0)`から左上のP1`(-120, 120)`へ向く目標方位は`45度`です。
+
+P1・P2のボトル探索は連続旋回せず、`observation_step_deg`ずつ旋回してからブレーキ停止し、`observation_pause_s`の間に撮影します。停止中に`observation_min_frames`回連続して黒ラベルを認識できた場合だけ観測成功とします。
+
+ET相撲開始時にはアームが下端にあることを上流工程の事後条件とし、ET相撲内ではアームモーターを動かしません。準備位置、挟み込み距離、離脱距離は次の式で決定します。
+
+```text
+旋回禁止半径 = ボトル半径 + アーム前方張出し + 位置誤差余裕
+準備位置距離 = 旋回禁止半径 + 準備位置追加余裕
+挟み込み距離 = アーム先端までの空走距離 + アーム保持深さ
+後退距離 = アーム保持深さ + ボトル直径 + 離脱余裕
+```
+
+準備位置へ向かう直線が旋回禁止領域へ入る押出し候補は採用しません。準備位置でボトル方向への旋回を完了してから、低速直進でアーム間へ収めます。押出し完了後はカメラ再認識を行わず、実験で確定した後退距離を使用します。
+
+ボトルを2地点で認識できない場合や推定結果が大きく食い違う場合は、`RaceContext.sumo.skipped`を設定してET相撲を省略します。通常の認識失敗でツリー全体を`FAILURE`にしないため、No.18とFINISHへ継続できます。
 
 `alpha.py`の`ArmUpDownFull`は、エンコーダー回転量の変化が5度未満の状態を5周期連続で検知すると、機械端へ到達したと判断してPWMを0にし、ブレーキを有効にします。実行周期が20msの場合、終端到達後の判定時間は約0.1秒です。
 
