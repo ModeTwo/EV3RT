@@ -126,3 +126,73 @@ class IsColorDetected(Behaviour):
                 )
                 self.prev_color = detected_color
         return Status.RUNNING
+
+
+class IsColorTransitionDetected(Behaviour):
+    # 指定した開始色を確認した後、終了色へ変化したことを連続検出時間で判定する。
+    # 開始地点が白地や色付き領域でも、開始色を一度通過するまでは成功しない。
+    def __init__(
+        self,
+        name: str,
+        from_color: Color,
+        to_color: Color,
+        from_duration_sec: float,
+        to_duration_sec: float,
+    ):
+        super().__init__(name)
+        if from_duration_sec <= 0 or to_duration_sec <= 0:
+            raise ValueError("color transition durations must be positive")
+        self.from_color = from_color
+        self.to_color = to_color
+        self.from_duration_sec = from_duration_sec
+        self.to_duration_sec = to_duration_sec
+        self.classifier = ColorClassifier()
+        self.from_started_at = None
+        self.to_started_at = None
+        self.from_confirmed = False
+
+    def update(self) -> Status:
+        runtime.require("plotter", "color_sensor")
+        h, s, v = runtime.color_sensor.get_raw_color_hsv()
+        detected_color = self.classifier.classify(h, s, v)
+        now = time.monotonic()
+
+        # まず黒ラインなどの開始色へ確実に入ったことを確認する。
+        if not self.from_confirmed:
+            if detected_color == self.from_color:
+                if self.from_started_at is None:
+                    self.from_started_at = now
+                if now - self.from_started_at >= self.from_duration_sec:
+                    self.from_confirmed = True
+                    self.logger.info(
+                        "%+06d %s.from color=%s confirmed for %.3fs"
+                        % (
+                            runtime.plotter.get_distance(),
+                            self.__class__.__name__,
+                            self.from_color.value,
+                            self.from_duration_sec,
+                        )
+                    )
+            else:
+                self.from_started_at = None
+            return Status.RUNNING
+
+        # 開始色確認後に白地などの終了色が規定時間続いた場合だけ、境界を抜けたと判断する。
+        if detected_color == self.to_color:
+            if self.to_started_at is None:
+                self.to_started_at = now
+            if now - self.to_started_at >= self.to_duration_sec:
+                self.logger.info(
+                    "%+06d %s.transition %s to %s detected for %.3fs"
+                    % (
+                        runtime.plotter.get_distance(),
+                        self.__class__.__name__,
+                        self.from_color.value,
+                        self.to_color.value,
+                        self.to_duration_sec,
+                    )
+                )
+                return Status.SUCCESS
+        else:
+            self.to_started_at = None
+        return Status.RUNNING
