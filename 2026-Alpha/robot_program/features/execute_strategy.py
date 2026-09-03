@@ -1,18 +1,24 @@
 """Feature 12 subtree factory."""
 
 import json
+from pathlib import Path
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..placeholder import PendingFeature
-from behaviours.gyro_drive import RunByGyro, SpinAround
-from behaviours.conditions import IsDistanceEarned
+from ..behaviours.gyro_drive import RunByGyro, SpinAround
+from ..behaviours.conditions import IsDistanceEarned
 
 SPIN_MAX_POWER = 57         # その場回旋（スピン）するときの最大モーター出力
 SPIN_MIN_POWER = 47         # その場回旋（スピン）するときの最低モーター出力
 
+# TODO: receive_strategy(feature11)が実装され次第、context.strategyから読み込む形に置き換える。
+# それまでの暫定対応として、実行時のカレントディレクトリに依存しないよう
+# このファイルの場所を基準にした絶対パスで固定シードのplan.jsonを読む。
+DEFAULT_PLAN_PATH = Path(__file__).resolve().parents[1] / "tests" / "plan_seed9392783.json"
+
 def build_execute_strategy(context, config, lap_number):
     # No.12 受信した走行指令に従う走行を担当する。
     root = Sequence(name=f"execute_strategy_lap{lap_number}", memory=True)
-    root.add_children(steps_from_plan("plan_seed9392783.json"))
+    root.add_children(steps_from_plan(DEFAULT_PLAN_PATH))
     return root
 
 def steps_from_plan(plan_path: str, move_power: int = 50, move_pid=(1.1, 0.00075, 0.04),
