@@ -10,7 +10,21 @@ import numpy as np
 from enum import Enum
 import time
 import threading
-import zxingcpp
+try:
+    import zxingcpp
+
+    # zxingcppが使用できる場合だけQR用設定を作る
+    _QR_ONLY = zxingcpp.BarcodeFormat.QRCode
+    _GH = zxingcpp.Binarizer.GlobalHistogram
+
+except ImportError:
+    # 今回はQRコードを使わないため、
+    # zxingcppが読み込めなくてもVideo自体は使えるようにする
+    zxingcpp = None
+    _QR_ONLY = None
+    _GH = None
+
+    print(" -- zxingcpp unavailable: QR detection disabled")
 from .plotter import Plotter
 from etrobo_python import Hub, Motor, ColorSensor, SonarSensor, GyroSensor
 
@@ -71,9 +85,7 @@ CROP_X2   = 1560
 QR_ROI_MARGIN = 40
 QR_LINE_THICKNESS = int(IN_FRAME_WIDTH / 160)   # = 12
 TEXT_EXPIRY_SEC = 2.0     # clear decoded text after this many seconds
-# internal constants for QR detection and decode pipeline
-_QR_ONLY = zxingcpp.BarcodeFormat.QRCode
-_GH      = zxingcpp.Binarizer.GlobalHistogram
+
 _WECHAT  = cv2.wechat_qrcode_WeChatQRCode()
 
 _CL_DETECT = cv2.createCLAHE(clipLimit=3, tileGridSize=(8, 8))
@@ -262,6 +274,11 @@ class Video(object):
         text    -- decoded string, or "" if not decoded
         corners -- list of 4 (x, y) in full-image coords if QR located, else None
         """
+
+         # ★ zxingcpp が使えない場合はQR検出をスキップする
+        if zxingcpp is None:
+            return "", None
+
         crop = img_gray[:, CROP_X1:CROP_X2]
 
         # Stage 1: GH fast path (QRv1 mostly)
@@ -392,8 +409,11 @@ class Video(object):
             if self._bottle_lock_color is not None:
                 candidates = [self._bottle_lock_color]
             else:
-                candidates = [BottleColor.RED, BottleColor.BLUE,
-                              BottleColor.YELLOW, BottleColor.BLACK]
+            # ボトルの色は赤・青・黄の3色のみなので、
+            # BLACKは認識候補から除外する
+                candidates = [BottleColor.RED,
+                              BottleColor.BLUE,
+                              BottleColor.YELLOW]
 
             best = None   # (area, color, cx, bottom_row, (x,y,w,h), cnt)
             for color in candidates:

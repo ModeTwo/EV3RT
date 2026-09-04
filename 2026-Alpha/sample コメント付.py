@@ -239,37 +239,80 @@ class IsDistanceEarned(Behaviour):  # IsDistanceEarned クラスを定義する
             return Status.RUNNING  # 処理結果を呼び出し元へ返す
 
 
-class IsColorDetected(Behaviour):  # IsColorDetected クラスを定義する
-    def __init__(self, name: str, color: Color):  # __init__ メソッド／関数を定義する
-        super(IsColorDetected, self).__init__(name)  # 親クラスの初期化処理を呼び出す
-        self.logger.debug("%s.__init__()" % (self.__class__.__name__))  # デバッグ用のログを出力する
-        self.color = color  # self.color に、このオブジェクトで使用する値を設定する
-        self.prevColor = Color.UNKNOWN  # self.prevColor に、このオブジェクトで使用する値を設定する
-        self.classifier = ColorClassifier()  # self.classifier に、このオブジェクトで使用する値を設定する
-        self.running = False  # self.running に、このオブジェクトで使用する値を設定する
-        self.detected = False  # self.detected に、このオブジェクトで使用する値を設定する
-
-    def update(self) -> Status:  # update メソッド／関数を定義する
-        cur_dist = g_plotter.get_distance()  # 現在の走行距離またはセンサ距離を取得して変数に保存する
-        if not self.running:  # 条件を判定し、成立した場合の処理を行う
-            self.running = True  # self.running に、このオブジェクトで使用する値を設定する
-            self.logger.info("%+06d %s.detection started for color=%s" % (cur_dist, self.__class__.__name__, self.color.value))  # 動作状況を情報ログとして出力する
-        h, s, v = g_color_sensor.get_raw_color_hsv()  # カラーセンサからHSV形式の色情報を取得する
-
-        detected_color = self.classifier.classify(h, s, v)  # detected_color に処理で使用する値を設定する
-        if detected_color == self.color:  # 条件を判定し、成立した場合の処理を行う
-            if not self.detected:  # 条件を判定し、成立した場合の処理を行う
-                self.detected = True  # self.detected に、このオブジェクトで使用する値を設定する
-                self.logger.info("%+06d %s.color=%s detected" % (cur_dist, self.__class__.__name__, self.color.value))  # 動作状況を情報ログとして出力する
-            return Status.SUCCESS  # 処理結果を呼び出し元へ返す
-        else:  # 上記の条件に当てはまらない場合の処理を行う
-            if detected_color != self.prevColor:  # 条件を判定し、成立した場合の処理を行う
-                # do not log UNKNOWN color to reduce log clutter
-                if detected_color != Color.UNKNOWN or self.prevColor != Color.UNKNOWN:  # 条件を判定し、成立した場合の処理を行う
-                    self.logger.info("%+06d %s.color changed from %s to %s" % (cur_dist, self.__class__.__name__, self.prevColor.value, detected_color.value))  # 動作状況を情報ログとして出力する
-                    self.prevColor = detected_color  # self.prevColor に、このオブジェクトで使用する値を設定する
-            return Status.RUNNING  # 処理結果を呼び出し元へ返す
-
+class IsColorDetected(Behaviour):
+    # 色を検出するためのクラス
+    def __init__(self, name: str, color: Color):
+        # 親クラス Behaviour の初期化処理を呼び出す
+        super(IsColorDetected, self).__init__(name)
+        # IsColorDetected が初期化されたことをデバッグログに出力する
+        self.logger.debug("%s.__init__()" % (self.__class__.__name__))
+        # 検出したい色を保存する
+        # 例：Color.RED、Color.BLUE など
+        self.color = color
+        # 直前に検出した色を保存する
+        # 最初はまだ色を検出していないため UNKNOWN とする
+        self.prevColor = Color.UNKNOWN
+        # HSV値から色を判定するための ColorClassifier を生成する
+        self.classifier = ColorClassifier()
+        # 色検出処理を開始したかどうかを管理する
+        self.running = False
+        # 指定した色を検出したかどうかを管理する
+        self.detected = False
+    def update(self) -> Status:
+        # 現在の走行距離を取得する
+        # 主にログへ「どの位置で色を検出したか」を出力するために使用する
+        cur_dist = g_plotter.get_distance()
+        # 初回の update() 呼び出し時のみ実行する
+        if not self.running:
+            # 色検出処理を開始した状態にする
+            self.running = True
+            # 「色の検出を開始した」という情報をログに出力する
+            self.logger.info(
+                "%+06d %s.detection started for color=%s"
+                % (cur_dist,
+                    self.__class__.__name__,
+                    self.color.value)
+            )
+        # カラーセンサーから現在の色をHSV形式で取得する
+        # h：色相（Hue）
+        # s：彩度（Saturation）
+        # v：明度（Value）
+        h, s, v = g_color_sensor.get_raw_color_hsv()
+        # 取得したHSV値から、現在の色を判定する
+        detected_color = self.classifier.classify(h, s, v)
+        # 判定した色が「検出したい色」と一致した場合
+        if detected_color == self.color:
+            # まだ検出済みになっていない場合
+            if not self.detected:
+                # 指定した色を検出済みにする
+                self.detected = True
+                # 「指定した色を検出した」という情報をログに出力する
+                self.logger.info(
+                    "%+06d %s.color=%s detected"
+                    % (cur_dist,
+                        self.__class__.__name__,
+                        self.color.value)
+                )
+            # 指定した色を検出できたため SUCCESS を返す
+            return Status.SUCCESS
+        # 判定した色が「検出したい色」と一致しなかった場合
+        else:
+            # 今回検出した色が、前回検出した色と異なる場合
+            if detected_color != self.prevColor:
+                # UNKNOWN のログが大量に出ないようにする
+                if detected_color != Color.UNKNOWN or self.prevColor != Color.UNKNOWN:
+                    # 色が変化したことをログに出力する
+                    self.logger.info(
+                        "%+06d %s.color changed from %s to %s"
+                        % (cur_dist,
+                            self.__class__.__name__,
+                            self.prevColor.value,
+                            detected_color.value)
+                    )
+                    # 今回検出した色を「前回の色」として保存する
+                    self.prevColor = detected_color
+            # まだ目的の色を検出していないため RUNNING を返す
+            return Status.RUNNING
 
 class IsQRDecoded(Behaviour):  # IsQRDecoded クラスを定義する
     def __init__(self, name: str):  # __init__ メソッド／関数を定義する

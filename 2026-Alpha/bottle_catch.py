@@ -1,26 +1,45 @@
+import sys
+import argparse
+import time
+import threading
+import signal
 import math
 
 from etrobo_python import (
+    ETRobo,
+    Hub,
     Motor,
     TouchSensor,
-    ColorSensor
+    ColorSensor,
+    SonarSensor,
+    GyroSensor
 )
 
 from simple_pid import PID
-
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 from py_trees.trees import BehaviourTree
 from py_trees.composites import Sequence
 from py_trees.composites import Parallel
 from py_trees.common import ParallelPolicy
-
 from py_etrobo_util import (
+    Video,
     TraceSide,
+    TargetInterested,
     Color,
     ColorClassifier,
-    LowPassFilter
+    LowPassFilter,
+    Plotter,
+    BottleColor
 )
+# OpenCVを使用する
+# XLaunch経由でカメラ映像を表示するため、
+# imshow / waitKey / destroyAllWindows は無効化しない
+import cv2
+
+# cv2.imshow = lambda *args, **kwargs: None
+# cv2.waitKey = lambda *args, **kwargs: -1
+# cv2.destroyAllWindows = lambda *args, **kwargs: None
 
 # ==========================================
 # 定数
@@ -28,6 +47,7 @@ from py_etrobo_util import (
 
 # Behaviour Treeの実行間隔
 EXEC_INTERVAL: float = 0.02
+VIDEO_INTERVAL: float = 0.02
 
 # ライントレース時の目標V値
 TRACELINE_TARGET_V = 75
@@ -36,6 +56,12 @@ TRACELINE_TARGET_V = 75
 # ==========================================
 # グローバル変数
 # ==========================================
+
+# 実機デバイス（ETRoboのハンドラから設定される）
+g_hub: Hub = None
+g_arm_motor: Motor = None
+g_sonar_sensor: SonarSensor = None
+g_gyro_sensor: GyroSensor = None
 
 # 走行距離取得用
 g_plotter = None
@@ -52,6 +78,13 @@ g_color_sensor: ColorSensor = None
 
 # コース方向
 g_course: int = 0
+
+# カメラ処理用
+g_video = None
+g_video_thread = None
+
+# 認識したボトル色
+g_bottle_color = BottleColor.NONE
 
 class IsColorDetected(Behaviour):
     # 色を検出するためのクラス
@@ -611,67 +644,541 @@ class TraceLine(Behaviour):
         # 別のBehaviourがSUCCESSになるまで走行を続ける
         return Status.RUNNING
 
+
+class DriveDistance(Behaviour):
+    """指定した距離だけ直進する。
+       powerが正なら前進、負なら後退。"""
+
+    def __init__(self, name: str, distance_mm: float, power: int) -> None:
+        super(DriveDistance, self).__init__(name)
+
+        self.distance_mm = abs(distance_mm)
+        self.power = power
+
+        self.running = False
+        self.start_distance = 0.0
+
+    def update(self) -> Status:
+        # 初回に開始地点を記録する
+        if not self.running:
+            self.running = True
+            self.start_distance = g_plotter.get_distance()
+
+            # 直前の停止処理でブレーキがONになっている場合に備えて解除する
+            g_right_motor.set_brake(False)
+            g_left_motor.set_brake(False)
+
+            direction = "forward" if self.power >= 0 else "backward"
+            self.logger.info(
+                "%+06d %s.%s started target=%.1fmm power=%d"
+                % (
+                    g_plotter.get_distance(),
+                    self.__class__.__name__,
+                    direction,
+                    self.distance_mm,
+                    self.power
+                )
+            )
+
+        # 開始位置からどれだけ移動したかを取得する
+        moved_distance = abs(
+            g_plotter.get_distance() - self.start_distance
+        )
+
+        # 指定距離に到達したら停止して終了
+        if moved_distance >= self.distance_mm:
+            g_right_motor.set_power(0)
+            g_left_motor.set_power(0)
+            g_right_motor.set_brake(True)
+            g_left_motor.set_brake(True)
+
+            self.logger.info(
+                "%+06d %s.completed moved=%.1fmm"
+                % (
+                    g_plotter.get_distance(),
+                    self.__class__.__name__,
+                    moved_distance
+                )
+            )
+            return Status.SUCCESS
+
+        # 左右を同じ出力にして直進する
+        g_right_motor.set_power(self.power)
+        g_left_motor.set_power(self.power)
+
+        return Status.RUNNING
+
+class IsDistanceReached(Behaviour):
+    """
+    開始位置から指定距離だけ進んだらSUCCESSを返す。
+    モーター制御は行わず、距離だけを監視する。
+    """
+
+    def __init__(self, name: str, distance_mm: float) -> None:
+        super(IsDistanceReached, self).__init__(name)
+
+        self.distance_mm = abs(distance_mm)
+        self.running = False
+        self.start_distance = 0.0
+
+    def update(self) -> Status:
+
+        # 初回に開始位置を記録
+        if not self.running:
+            self.running = True
+            self.start_distance = g_plotter.get_distance()
+
+            self.logger.info(
+                "%+06d %s.started target=%.1fmm"
+                % (
+                    g_plotter.get_distance(),
+                    self.__class__.__name__,
+                    self.distance_mm
+                )
+            )
+
+        # 開始位置からの走行距離
+        moved_distance = abs(
+            g_plotter.get_distance() - self.start_distance
+        )
+
+        # 指定距離に到達したらSUCCESS
+        if moved_distance >= self.distance_mm:
+
+            self.logger.info(
+                "%+06d %s.reached moved=%.1fmm"
+                % (
+                    g_plotter.get_distance(),
+                    self.__class__.__name__,
+                    moved_distance
+                )
+            )
+
+            return Status.SUCCESS
+
+        return Status.RUNNING
+    
 class StopNow(Behaviour):
     def __init__(self, name: str):
         super(StopNow, self).__init__(name)
-        self.logger.debug("%s.__init__()" % (self.__class__.__name__)) 
+        self.logger.debug("%s.__init__()" % (self.__class__.__name__))
 
     def update(self) -> Status:
-        g_right_motor.set_power(0) 
-        g_right_motor.set_brake(True) 
-        g_left_motor.set_power(0) 
-        g_left_motor.set_brake(True) 
-        self.logger.info("%+06d %s.motors stopped" % (g_plotter.get_distance(), self.__class__.__name__))  # 動作状況を情報ログとして出力する
-        return Status.SUCCESS  
+        g_right_motor.set_power(0)
+        g_right_motor.set_brake(True)
+        g_left_motor.set_power(0)
+        g_left_motor.set_brake(True)
+        self.logger.info(
+            "%+06d %s.motors stopped"
+            % (g_plotter.get_distance(), self.__class__.__name__)
+        )
+        return Status.SUCCESS
 
 
+class DetectBottleColor(Behaviour):
+    """停止状態でカメラからボトル色を認識する。"""
+
+    def __init__(self, name: str, min_area: int = 150, min_frames: int = 3) -> None:
+        super(DetectBottleColor, self).__init__(name)
+        self.min_area = min_area
+        self.min_frames = min_frames
+        self._hits = 0
+        self.running = False
+
+    def update(self) -> Status:
+        global g_bottle_color
+
+        # ボトル認識中は完全停止
+        g_right_motor.set_power(0)
+        g_right_motor.set_brake(True)
+        g_left_motor.set_power(0)
+        g_left_motor.set_brake(True)
+
+        # 初回処理
+        if not self.running:
+            self.running = True
+            self._hits = 0
+            # カメラをボトル検知モードへ切り替える
+            g_video.set_target_interested(TargetInterested.BOTTLE)
+            self.logger.info(
+                "%+06d %s.bottle color detection started"
+                % (g_plotter.get_distance(), self.__class__.__name__)
+            )
+        # カメラからボトル情報取得
+        insight, color, bcx, btheta, bbottom, barea, in_blind = g_video.get_bottle_stamped()
+
+        # 有効な色を一定面積以上で連続検出したら確定する
+        if insight and barea >= self.min_area and color != BottleColor.NONE:
+            self._hits += 1
+        else:
+            self._hits = 0
+            return Status.RUNNING
+        # 一定惟回数連続で検知したら確定
+        if self._hits >= self.min_frames:
+            g_bottle_color = color
+            print(" -- Bottle color detected: %s" % color.name)
+            self.logger.info(
+                "%+06d %s.bottle color=%s"
+                % (
+                    g_plotter.get_distance(),
+                    self.__class__.__name__,
+                    color.name
+                )
+            )
+            return Status.SUCCESS
+
+        return Status.RUNNING
 
 
-    def build_behaviour_tree() -> BehaviourTree:
+class VideoThread(threading.Thread):
+    """画面表示なしでカメラ画像処理を継続するスレッド。"""
 
-        # 全体を順番に実行するSequence
-        root = Sequence(name="blue detection test", memory=True)
+    def __init__(self):
+        super().__init__()
+        self._stop_event = threading.Event()
+        self.prev_time = time.time()
 
-        # ライントレースと青色検知を同時に行う
-        trace_until_blue = Parallel(
-            name="trace until blue",
-            policy=ParallelPolicy.SuccessOnOne()
+    def stop(self):
+        self._stop_event.set()
+
+    def run(self):
+        while not self._stop_event.is_set():
+            g_video.process(
+                g_plotter,
+                g_hub,
+                g_arm_motor,
+                g_right_motor,
+                g_left_motor,
+                g_color_sensor,
+                g_sonar_sensor,
+                g_gyro_sensor
+            )
+
+            current_time = time.time()
+            elapsed_time = current_time - self.prev_time
+            self.prev_time = current_time
+
+            if elapsed_time < VIDEO_INTERVAL:
+                time.sleep(VIDEO_INTERVAL - elapsed_time)
+
+
+# ==========================================
+# Behaviour Tree 実行ハンドラ
+# ==========================================
+class TraverseBehaviourTree(object):
+    """ETRoboから実機デバイスを受け取り、Behaviour Treeを周期実行する。"""
+
+    def __init__(self, tree) -> None:
+        self.tree = tree
+        self.running = False
+
+    def __call__(
+        self,
+        hub: Hub,
+        arm_motor: Motor,
+        right_motor: Motor,
+        left_motor: Motor,
+        touch_sensor: TouchSensor,
+        color_sensor: ColorSensor,
+        sonar_sensor: SonarSensor,
+        gyro_sensor: GyroSensor,
+    ) -> None:
+        global g_hub, g_arm_motor, g_right_motor, g_left_motor
+        global g_touch_sensor, g_color_sensor, g_sonar_sensor, g_gyro_sensor
+        global g_plotter
+
+        # 最初の1回だけ、ETRoboから渡された実機デバイスを保存する
+        if not self.running:
+            g_hub = hub
+            g_arm_motor = arm_motor
+            g_right_motor = right_motor
+            g_left_motor = left_motor
+            g_touch_sensor = touch_sensor
+            g_color_sensor = color_sensor
+            g_sonar_sensor = sonar_sensor
+            g_gyro_sensor = gyro_sensor
+            g_plotter = Plotter()
+
+            print(" -- TraverseBehaviourTree initialization complete")
+            self.running = True
+            return
+
+        # Behaviour Treeを1周期進める
+        self.tree.tick_once()
+
+        # 走行距離などを更新する
+        g_plotter.plot(
+            hub,
+            arm_motor,
+            right_motor,
+            left_motor,
+            touch_sensor,
+            color_sensor,
+            sonar_sensor,
+            gyro_sensor,
         )
 
-        # ライントレースしながら青色を探す
-        trace_until_blue.add_children(
-            [
-                # ライントレース
-                TraceLine(
-                    name="sensor trace normal edge",
-                    target=TRACELINE_TARGET_V,
-                    power=33,
-                    pid_p=0.65,
-                    pid_i=0.000001,
-                    pid_d=0.045,
-                    trace_side=TraceSide.NORMAL
-                ),
+# ==========================================
+# Behaviour Tree
+# ==========================================
+def build_behaviour_tree():
 
-                # 青色を検知
-                IsColorDetected(
-                    name="check blue",
-                    color=Color.BLUE
-                ),
-            ]
+    """
+    タッチ待ち
+      ↓
+    ライントレース + 青色検知
+      ↓
+    青色を検知
+      ↓
+    10cm前進
+      ↓
+    10cm後退
+      ↓
+    停止
+      ↓
+    カメラでボトル色を認識
+      ↓
+    ボトル色を保存
+      ↓
+    ライントレース再開
+    """
+
+    root = Sequence(
+        name="blue and bottle test",
+        memory=True
+    )
+
+
+    # ==========================================
+    # 青色を検知するまでライントレース
+    # ==========================================
+
+    trace_until_blue = Parallel(
+        name="trace until blue",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
+
+    trace_until_blue.add_children(
+        [
+            TraceLine(
+                name="trace before blue",
+
+                target=TRACELINE_TARGET_V,
+
+                power=60,
+
+                pid_p=0.65,
+                pid_i=0.000001,
+                pid_d=0.045,
+
+                trace_side=TraceSide.NORMAL
+            ),
+
+            IsColorDetected(
+                name="check blue",
+                color=Color.BLUE
+            ),
+        ]
+    )
+
+    # ==========================================
+    # ボトル色認識後、46cmライントレース
+    # ==========================================
+
+    trace_after_bottle_46cm = Parallel(
+        name="trace 46cm after bottle",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
+
+    trace_after_bottle_46cm.add_children(
+        [
+            # ライントレース
+            TraceLine(
+                name="trace after bottle",
+
+                target=TRACELINE_TARGET_V,
+
+                power=60,
+
+                pid_p=0.65,
+                pid_i=0.000001,
+                pid_d=0.045,
+
+                trace_side=TraceSide.NORMAL
+            ),
+
+            # 46cm進んだか確認
+            IsDistanceReached(
+                name="check 46cm",
+                distance_mm=460
+            ),
+        ]
+    )
+
+    # ==========================================
+    # Behaviour Tree
+    # ==========================================
+
+    root.add_children(
+        [
+
+            # ① タッチを待つ
+            IsTouchOn(
+                name="touch start"
+            ),
+
+
+            # ② 青色までライントレース
+            trace_until_blue,
+
+
+            # ③ 青色検知後、10cm前進
+            DriveDistance(
+                name="forward 10cm",
+                distance_mm=100,
+                power=60
+            ),
+
+
+            # ④ 10cm後退
+            DriveDistance(
+                name="backward 10cm",
+                distance_mm=200,
+                power=-60
+            ),
+
+
+            # ⑤ 停止
+            StopNow(
+                name="stop before bottle detection"
+            ),
+
+
+            # ⑥ ボトル色認識
+            DetectBottleColor(
+                name="detect bottle color",
+
+                min_area=150,
+                min_frames=3
+            ),
+
+
+            # ⑦ ボトル色認識後、
+            #    ライントレースしながら46cm走行
+            trace_after_bottle_46cm,
+
+
+            # ⑧ 46cm前進したら停止
+            StopNow(
+                name="final stop"
+            ),
+
+        ]
+    )
+
+    return root
+
+
+# ==========================================
+# ETRobo 初期化
+# ==========================================
+def initialize_etrobo(backend: str) -> ETRobo:
+    """実機ポート構成を登録する。元の2026-Alpha sample.pyと同じ構成。"""
+    return (
+        ETRobo(backend=backend)
+        .add_hub('hub')
+        .add_device('arm_motor', device_type=Motor, port='C')
+        .add_device('right_motor', device_type=Motor, port='A')
+        .add_device('left_motor', device_type=Motor, port='B')
+        .add_device('touch_sensor', device_type=TouchSensor, port='D')
+        .add_device('color_sensor', device_type=ColorSensor, port='E')
+        .add_device('sonar_sensor', device_type=SonarSensor, port='F')
+        .add_device('gyro_sensor', device_type=GyroSensor, port='')
+    )
+
+
+def setup_thread():
+    global g_video, g_video_thread
+
+    g_video = Video()
+    print(" -- starting headless VideoThread...")
+
+    g_video_thread = VideoThread()
+    g_video_thread.start()
+
+
+def cleanup_thread():
+    global g_video, g_video_thread
+
+    if g_video_thread is not None:
+        print(" -- stopping VideoThread...")
+        g_video_thread.stop()
+        g_video_thread.join()
+        g_video_thread = None
+
+    g_video = None
+
+
+def sig_handler(signum, frame) -> None:
+    sys.exit(1)
+
+
+# ==========================================
+# main
+# ==========================================
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        'course',
+        choices=['right', 'left'],
+        help='Course to run'
+    )
+    parser.add_argument(
+        '--logfile',
+        type=str,
+        default=None,
+        help='Path to log file'
+    )
+    args = parser.parse_args()
+
+    # TraceLine内で旋回方向の符号として使う。
+    if args.course == 'right':
+        g_course = -1
+    else:
+        g_course = 1
+
+    print(" -- course=%s, g_course=%d" % (args.course, g_course))
+
+    # Behaviour Treeを生成する。
+    tree = build_behaviour_tree()
+
+    signal.signal(signal.SIGTERM, sig_handler)
+
+    # ボトル色認識のためカメラスレッドを起動する。
+    # cv2.imshow / waitKey は上で無効化済みなのでGUIは開かない。
+    setup_thread()
+
+    try:
+        etrobo = initialize_etrobo(backend='raspike_art')
+        etrobo.add_handler(TraverseBehaviourTree(tree))
+        etrobo.dispatch(
+            interval=EXEC_INTERVAL,
+            logfile=args.logfile
         )
 
-        # 実行する順番を設定
-        root.add_children(
-            [
-                # ① タッチセンサーが押されるまで待つ
-                IsTouchOn(name="touch start"),
+    finally:
+        # カメラスレッドを終了する。
+        cleanup_thread()
 
-                # ② ライントレースしながら青色を探す
-                trace_until_blue,
+        # Ctrl+Cや終了時に可能な範囲でモーターを停止する。
+        if g_right_motor is not None:
+            g_right_motor.set_power(0)
+            g_right_motor.set_brake(True)
 
-                # ③ 青色を検知したら停止
-                StopNow(name="stop"),
-            ]
-        )
+        if g_left_motor is not None:
+            g_left_motor.set_power(0)
+            g_left_motor.set_brake(True)
 
-        return root
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        print(" -- exiting...")
