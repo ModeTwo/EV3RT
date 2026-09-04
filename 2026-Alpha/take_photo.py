@@ -7,6 +7,13 @@ elif platform.python_implementation() == 'PyPy':
 import cv2
 
 cap = cv2.VideoCapture(0)
+
+# width = cap.gat(cv2.CAP_PROP_FRAME_WIDTH)
+# height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+# print("現在の解像度：｛width｝×｛height｝")
+# print(width)
+# print(height)
+
 count = 0
 
 while True:
@@ -20,7 +27,7 @@ while True:
 
     # sキーで1枚だけ撮影して保存
     if key == ord('s'):
-        filename = f"capture_{count}.jpg"
+        filename = f"capture_{count}.png"
         cv2.imwrite(filename, frame)
         print(f"{filename} を保存しました")
         count += 1

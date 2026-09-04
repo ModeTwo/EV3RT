@@ -33,7 +33,7 @@ def build_start_to_lap_gate(context, config):
             RunByGyro(
                 name="run straight",
                 target=0,
-                power=70,
+                power=80,
                 pid_p=1.1,
                 pid_i=0.1,
                 pid_d=0.03,
@@ -49,7 +49,7 @@ def build_start_to_lap_gate(context, config):
             RunByGyro(
                 name="run straight",
                 target=-45,
-                power=70,
+                power=80,
                 pid_p=1.1,
                 pid_i=0.1,
                 pid_d=0.03,
@@ -65,7 +65,7 @@ def build_start_to_lap_gate(context, config):
             RunByGyro(
                 name="run straight",
                 target=-90,
-                power=70,
+                power=80,
                 pid_p=1.1,
                 pid_i=0.1,
                 pid_d=0.03,
@@ -76,19 +76,19 @@ def build_start_to_lap_gate(context, config):
     )
 
     
-    # lap2_3：角度135°で直進 → 距離200で成功
+    # lap2_3：角度135°で直進 → 距離190で成功(1cm短くした)
     edge_04.add_children(
         [
             RunByGyro(
                 name="run straight",
                 target=-135,
-                power=70,
+                power=80,
                 pid_p=1.1,
                 pid_i=0.1,
                 pid_d=0.03,
                 target_type=HeadingType.ABSOLUTE
             ),
-            IsDistanceEarned(name="check distance", delta_dist=200),
+            IsDistanceEarned(name="check distance", delta_dist=190),
         ]
     )
 

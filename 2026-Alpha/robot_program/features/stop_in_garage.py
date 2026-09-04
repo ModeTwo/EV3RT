@@ -18,27 +18,28 @@ def build_stop_in_garage(context, config):
     # goal_01:ライントレースで進む→青いマーカーまで進む
     goal_01.add_children(
        [
-            TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V, power=50,
-                pid_p=0.55, pid_i=0.0000009, pid_d=0.015, trace_side=TraceSide.NORMAL),
-            IsColorDetected(name="check color", color=Color.BLUE),
-        ]
+           TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V, power=50,
+           pid_p=0.55, pid_i=0.0000009, pid_d=0.015, trace_side=TraceSide.NORMAL),
+           IsColorDetected(name="check color", color=Color.BLUE),
+       ]
     )
 
     # goal_02：ゴールまで角度0°で直進 → 距離650mmで成功
     goal_02.add_children(
         [
-            RunByGyro(
-                name="run straight",
-                target=0,
+           RunByGyro(
+             name="run straight",
+                    target=0,
                 power=60,
-                pid_p=1.1,
-                pid_i=0.1,
-                pid_d=0.03,
+                 pid_p=1.1,
+                 pid_i=0.1,
+                 pid_d=0.03,
                 target_type=HeadingType.ABSOLUTE
             ),
-            IsDistanceEarned(name="check distance", delta_dist=650),
-        ]
-    )
+             IsDistanceEarned(name="check distance", delta_dist=650),
+         ]
+     )
 
     root.add_children([goal_01,goal_02])
+    
     return root
