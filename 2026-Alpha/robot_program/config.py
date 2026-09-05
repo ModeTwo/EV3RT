@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from .sumo_types import SumoSettings
+
 
 @dataclass(frozen=True)
 class RaceConfig:
@@ -12,4 +14,4 @@ class RaceConfig:
     et_rally_laps: int = 3
     enable_et_sumo: bool = True
     enable_finish: bool = True
-
+    sumo: SumoSettings = SumoSettings()

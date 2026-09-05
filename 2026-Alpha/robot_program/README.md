@@ -35,6 +35,34 @@ python alpha.py left --logfile logs/run.log
 
 `--logfile`へ出力したログはテキストとして保存されるため、後から生成AIやスクリプトへ渡して解析できます。
 
+### センサー値を常時表示する
+
+実機調整時は、競技プログラムとは別の`sensor_monitor.py`を実行します。コマンド実行で計測を開始し、任意のタイミングで`Ctrl+C`を押すと終了します。計測中は、タッチ、カラーHSVと判定色、距離、ジャイロ、各モーターエンコーダー、IMU静止判定が同じ画面上で更新され続けます。モーター駆動やセンサー値のリセットは行いません。
+
+```text
+python sensor_monitor.py
+```
+
+標準の表示更新間隔は0.1秒です。変更する場合：
+
+```text
+python sensor_monitor.py --interval 0.05
+```
+
+画面表示と同じ値をCSVにも保存する場合：
+
+```text
+python sensor_monitor.py --csv logs/sensors.csv
+```
+
+ANSI画面クリアに対応していない端末では、次の指定で各サンプルを追記表示できます。
+
+```text
+python sensor_monitor.py --no-clear
+```
+
+距離センサー値はmmとして扱うため、ET相撲側の換算係数は`1.0`です。モニターの生値とmm表示が一致することを、既知距離でも確認してください。
+
 ## 3. 機能の有効・無効とETラリー周回数
 
 設定は`robot_program/config.py`の`RaceConfig`で変更します。
@@ -113,7 +141,9 @@ ETRobo.dispatch()
 
 競技固有の走行処理は`alpha.py`へ追加せず、`features/`または`behaviours/`へ配置します。
 
-`ArmDirection`と`ArmUpDownFull`はキャリブレーションでのみ使用するため、共通`behaviours/`へ分割せず`alpha.py`に配置しています。
+`ArmDirection`と`ArmUpDownFull`はキャリブレーションでのみ使用するため、共通`behaviours/`へ分割せず`alpha.py`に配置しています。`ResetDevice`は単体テスト可能な共通Behaviorとして`behaviours/device_control.py`に配置し、`alpha.py`のキャリブレーションから呼び出します。
+
+`ResetDevice`自身がデバイス値をグローバル変数として保持する必要はありません。`runtime`に設定済みの同一デバイス参照を使い、モーターのエンコーダー値とジャイロ角度は各デバイス内部の`reset_count()`／`reset()`でゼロ化します。走行途中で実行すると`Plotter`の累積走行値と基準がずれるため、競技開始前のキャリブレーションでだけ使用してください。
 
 `TraceLineCam`、`IsJunction`、`CatchBottle`は現在の走行戦略と合致しないため、`alpha.py`には配置していません。
 
@@ -270,11 +300,51 @@ root.add_children([PendingFeature(name="feature_name_pending")])
 | `line_trace.py` | `TraceLine` |
 | `gyro_drive.py` | `RunByGyro`、`SpinAround` |
 | `motor_control.py` | `StopNow`、`RunAsInstructed` |
-| `conditions.py` | `IsDistanceEarned`、`IsColorDetected`、`IsTimePassed` |
+| `device_control.py` | `ResetDevice` |
+| `conditions.py` | `IsDistanceEarned`、`IsColorDetected`、`IsColorTransitionDetected`、`IsTimePassed` |
 | `bottle.py` | `IsBottleInsight`、`HasCaughtBottle` |
 | `hint_reader.py` | `ReadHintCard` |
 
 `RunAsInstructed`は従来から使用している名称を維持しています。
+
+### ET相撲 No.15～18
+
+ET相撲は画像を使用せず、距離センサーと走行体の左右首振りで力士ボトルの方向を探します。ETラリー終了位置は青円上を想定するため、開始直後はライントレースせず、ジャイロで方位を維持して直進します。黒ラインと白地をそれぞれ規定時間連続検出し、白地上を調整可能なクリアランス距離だけ追加直進してから土俵方向へ90度旋回します。
+
+ET相撲でも、旋回は`behaviours/gyro_drive.py`の`SpinAround`、方位維持走行は`RunByGyro`、距離終了判定は`IsDistanceEarned`、停止は`StopNow`を利用します。Feature内にモーター出力やPID旋回を重複実装しません。
+
+Feature内に残すのは、距離センサー値の集計、最短距離方向の選択、検出距離に応じた接近距離設定など、ET相撲に固有の処理だけです。旧方式のカメラ認識、P1・P2の2地点推定、座標経路計画、`sumo_geometry.py`は使用しません。
+
+```text
+move_to_sumo_start.py
+├─ 青円上のETラリー終了位置からジャイロ直進
+├─ 黒を0.5秒連続確認した後、白を0.5秒連続確認して黒ライン終端と判定
+├─ 白地上を調整可能なクリアランス距離だけ追加直進
+├─ Leftでは左、Rightでは右へ90度旋回して土俵方向を向く
+└─ 制動停止して土俵方向を探索正面として登録
+   └─ locate_sumo_bottle.py
+      ├─ コース外側端から内側端まで段階的に首振り
+      ├─ 各角度で停止後100ms待ち、100ms間隔で有効値を3回取得
+      ├─ 未検出時は探索中心へ復帰して100mm低速前進し、もう一度だけ探索
+      └─ 最短の有効距離方向へ絶対方位で正対
+         └─ push_sumo_bottle.py
+            ├─ 検出距離に応じてボトルへ低速直進
+            └─ 下端アーム内へボトルを捕捉した状態で停止
+               └─ move_to_sumo_exit.py
+                  ├─ ボトルを保持したままLeftは左、Rightは右の緩い円弧で出口方向へ向く
+                  ├─ 円弧終了時の方位を維持して直進
+                  └─ ET相撲終了位置側の黒ラインを検知して停止
+```
+
+調整値は`RaceConfig.sumo`の`SumoSettings`へ集約しています。黒ライン進入は`line_entry_black_duration_sec`、白地への退出は`line_exit_white_duration_sec`で連続検出時間を判定します。白地確認後は`post_line_clearance_distance_mm`だけ追加直進してから90度旋回します。保持運搬の円弧距離は50%コースの縮尺に合わせて初期値120mmとしています。首振り範囲・刻み、距離センサー有効範囲、捕捉時のセンサー・ボトル間距離、運搬円弧の左右PWMと距離はレプリカコースでの実測対象です。
+
+距離センサーは各首振り角度で走行体を停止し、`sonar_settle_time_sec`だけ待ってから`sonar_sample_interval_sec`間隔で取得します。診断時の初期値はいずれも100msで、有効値3回の中央値を使用します。1回目の全角度探索で有効値がなければ、保存した探索中心へ絶対方位で戻り、`retry_advance_distance_mm`だけ低速前進してもう一度だけ探索します。2回目も未検出なら捕捉と運搬を省略します。
+
+最短距離を返した角度をボトル候補の方向とみなし、保存した探索中心方位と候補オフセットから絶対目標方位を計算して`SpinAround`で正対します。距離センサーが走行体正面を向いている前提なので、旋回完了時にボトル候補が走行体とアームの真正面に来ます。
+
+No.17では正対完了後に旋回せず、`RunByGyro`で低速直進して下端アーム内へ捕捉します。No.18ではボトル保持中のその場旋回を避け、`RunAsInstructed`へ左右差の小さいPWMを与え、Leftでは左、Rightでは右の緩い鏡像円弧を描きます。Rightではcourse負転を相殺しながら左右PWMを交換するため、前進を維持します。その後、`IsColorDetected(Color.BLACK)`が成立するまで方位維持走行し、出口側黒ラインで停止します。
+
+ET相撲開始時にはアームが下端にあることを上流工程の事後条件とし、ET相撲内ではアームモーターを動かしません。捕捉成功を直接検知するセンサーは使わず、実験で確定したセンサー・ボトル間距離へ到達したことを捕捉成立として扱います。出口位置とみなす黒ラインが意図したラインか、運搬円弧が緑エリアやETラリーゲートへ接触しないかは実機で確認してください。
 
 `alpha.py`の`ArmUpDownFull`は、エンコーダー回転量の変化が5度未満の状態を5周期連続で検知すると、機械端へ到達したと判断してPWMを0にし、ブレーキを有効にします。実行周期が20msの場合、終端到達後の判定時間は約0.1秒です。
 
