@@ -52,6 +52,8 @@ runtime.gyro_sensor=Mock()
 runtime.gyro_sensor.get_angle.return_value=-15
 runtime.color_sensor=Mock()
 runtime.color_sensor.get_raw_color_hsv.return_value=(0,0,65)
+runtime.sonar_sensor=Mock()
+runtime.sonar_sensor.get_distance.return_value=100
 runtime.course=1
 ctx=RaceContext()
 '''

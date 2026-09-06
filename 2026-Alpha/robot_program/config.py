@@ -80,3 +80,18 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
 def mission_requires_qr(config: RaceConfig) -> bool:
     # Hint読取を含まない単体工程ではQRデコーダーを起動条件にしない。
     return config.mission_mode in ('hint2', 'hint2-return') or config.enable_et_rally
+
+
+def mission_requires_camera(config: RaceConfig) -> bool:
+    # ET相撲は黒テープ付き力士ボトルの捕捉にカメラを使用する。
+    if config.mission_mode in ('hint2', 'hint2-return'):
+        return True
+    return any(
+        (
+            config.lapgate,
+            config.enable_bottle_delivery,
+            config.enable_et_rally,
+            config.enable_et_sumo,
+            config.enable_finish,
+        )
+    )

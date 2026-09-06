@@ -77,14 +77,26 @@ from robot_program.context import RaceContext
 from robot_program.config import RaceConfig
 from robot_program.features.locate_sumo_bottle import (
     build_locate_sumo_bottle,
+    ConfirmSonarCandidate,
+    ContinuousSonarSweep,
     SampleSonarAtAngle,
     SelectNearestBottleAndConfigureAlignment,
 )
+from robot_program.features.capture_sumo_bottle_camera import (
+    CaptureSumoBottleWithCamera,
+    build_capture_sumo_bottle_camera,
+)
 from robot_program.features.move_to_sumo_exit import (
-    ConfigureMirroredCarryCurvePwm,
+    ConfigureCourseIndependentReversePwm,
+    ConfigureMirroredGarageReturnPwm,
+    MarkSumoExitState,
     build_move_to_sumo_exit,
 )
-from robot_program.features.move_to_sumo_start import build_move_to_sumo_start
+from robot_program.features.move_to_sumo_start import (
+    ConfigureCameraRetreatPwm,
+    IsBlackThenBrightSurface,
+    build_move_to_sumo_start,
+)
 from robot_program.features.push_sumo_bottle import build_push_sumo_bottle
 from robot_program.phases.et_sumo import build_et_sumo_phase
 from robot_program.runtime import runtime
@@ -184,6 +196,8 @@ class FakeVideo:
             0,
             False,
         )
+        self.bottle_session = 1
+        self.bottle_frame_id = 0
 
     def set_target_interested(self, target) -> None:
         self.target = target
@@ -206,6 +220,15 @@ class FakeVideo:
 
     def set_bottle_color(self, color) -> None:
         self.bottle_color = color
+
+    def begin_sumo_bottle_read(self):
+        self.bottle_session += 1
+        self.target = TargetInterested.BOTTLE
+        self.bottle_color = BottleColor.BLACK
+        return self.bottle_session
+
+    def get_bottle_observation(self):
+        return self.bottle_session, self.bottle_frame_id, self.bottle_snapshot
 
 
 class ReusableBehaviourTest(unittest.TestCase):
@@ -239,6 +262,12 @@ class ReusableBehaviourTest(unittest.TestCase):
         self.assertEqual(runtime.arm_motor.reset_count_calls, 1)
         self.assertEqual(runtime.right_motor.reset_count_calls, 1)
         self.assertEqual(runtime.left_motor.reset_count_calls, 1)
+        self.assertEqual(runtime.gyro_sensor.reset_calls, 1)
+
+    def test_reset_device_allows_camera_free_sumo(self) -> None:
+        runtime.video = None
+        behaviour = ResetDevice(name="reset without camera", stationary_samples=1)
+        self.assertEqual(behaviour.update(), Status.SUCCESS)
         self.assertEqual(runtime.gyro_sensor.reset_calls, 1)
 
     def test_stop_now_stops_and_brakes_both_motors(self) -> None:
@@ -286,17 +315,16 @@ class ReusableBehaviourTest(unittest.TestCase):
         self.assertEqual(behaviour.update(), Status.SUCCESS)
 
     def test_sumo_start_drives_through_black_to_white_then_turns_to_ring(self) -> None:
-        # No.15は黒→白を時間判定し、クリアランス直進後に土俵方向へ90度旋回する。
+        # No.15は黒を1回、白を連続判定し、クリアランス直進後に90度旋回する。
         feature = build_move_to_sumo_start(RaceContext(), RaceConfig())
         self.assertEqual(feature.children[0].name, "drive across black line to white area")
         transition = next(
             child for child in feature.children[0].children
-            if isinstance(child, IsColorTransitionDetected)
+            if isinstance(child, IsBlackThenBrightSurface)
         )
-        self.assertEqual(transition.from_color, Color.BLACK)
-        self.assertEqual(transition.to_color, Color.WHITE)
-        self.assertEqual(transition.from_duration_sec, 0.5)
-        self.assertEqual(transition.to_duration_sec, 0.5)
+        self.assertEqual(transition.settings.line_black_max_value, 45)
+        self.assertEqual(transition.settings.line_white_min_value, 65)
+        self.assertEqual(transition.settings.line_exit_white_duration_sec, 0.5)
         self.assertIsInstance(feature.children[1], StopNow)
         self.assertEqual(
             feature.children[2].name,
@@ -312,6 +340,13 @@ class ReusableBehaviourTest(unittest.TestCase):
         self.assertEqual(feature.children[4].target, 90)
         self.assertEqual(feature.children[4].target_type, HeadingType.RELATIVE)
         self.assertIsInstance(feature.children[5], StopNow)
+        self.assertEqual(feature.children[7].name, "reverse to widen sumo camera view")
+        retreat_distance = next(
+            child for child in feature.children[7].children
+            if isinstance(child, IsDistanceEarned)
+        )
+        self.assertEqual(retreat_distance.delta_dist, 50.0)
+        self.assertIsInstance(feature.children[8], StopNow)
 
     def test_sumo_ring_turn_is_left_on_left_and_right_on_right_course(self) -> None:
         # 同じ正角度指定がLeftでは物理左、Rightでは物理右へ鏡像化されることを確認する。
@@ -332,8 +367,22 @@ class ReusableBehaviourTest(unittest.TestCase):
         self.assertGreater(runtime.left_motor.power, 0)
         right_turn.terminate(Status.INVALID)
 
+    def test_sumo_camera_retreat_is_backward_on_both_courses(self) -> None:
+        # RunAsInstructedのcourse変換後も、左右コースとも両輪が負出力になる。
+        for course in (1, -1):
+            runtime.course = course
+            command = RunAsInstructed("camera retreat", 0, 0)
+            configure = ConfigureCameraRetreatPwm(
+                "configure retreat", command, SumoSettings().camera_retreat_power
+            )
+            self.assertEqual(configure.update(), Status.SUCCESS)
+            self.assertEqual(command.update(), Status.RUNNING)
+            self.assertEqual(runtime.left_motor.power, -60)
+            self.assertEqual(runtime.right_motor.power, -60)
+            command.terminate(Status.INVALID)
+
     def test_color_transition_requires_black_before_white(self) -> None:
-        # 青円上の白では終了せず、黒0.5秒の後に白が0.5秒続いた場合だけ成功する。
+        # 青円上の白では終了せず、黒を1回確認した後に白が0.5秒続けば成功する。
         runtime.color_sensor.readings = [
             (0, 0, 100),
             (0, 0, 0),
@@ -345,14 +394,32 @@ class ReusableBehaviourTest(unittest.TestCase):
             "black to white",
             from_color=Color.BLACK,
             to_color=Color.WHITE,
-            from_duration_sec=0.5,
+            from_duration_sec=0.0,
             to_duration_sec=0.5,
         )
         with patch(
             "robot_program.behaviours.conditions.time.monotonic",
-            side_effect=[0.0, 0.1, 0.6, 0.7, 1.3],
+            side_effect=[0.0, 0.1, 0.2, 0.3, 0.9],
         ):
             self.assertEqual(behaviour.update(), Status.RUNNING)
+            self.assertEqual(behaviour.update(), Status.RUNNING)
+            self.assertEqual(behaviour.update(), Status.RUNNING)
+            self.assertEqual(behaviour.update(), Status.RUNNING)
+            self.assertEqual(behaviour.update(), Status.SUCCESS)
+
+    def test_sumo_line_exit_uses_raw_brightness_after_black(self) -> None:
+        # 彩度によるWHITE分類に依存せず、黒確認後の明度継続で白地退出を判定する。
+        runtime.color_sensor.readings = [
+            (0, 80, 80),
+            (0, 70, 40),
+            (0, 90, 66),
+            (0, 90, 68),
+        ]
+        behaviour = IsBlackThenBrightSurface("sumo line exit", SumoSettings())
+        with patch(
+            "robot_program.features.move_to_sumo_start.time.monotonic",
+            side_effect=[0.0, 0.1, 0.2, 0.8],
+        ):
             self.assertEqual(behaviour.update(), Status.RUNNING)
             self.assertEqual(behaviour.update(), Status.RUNNING)
             self.assertEqual(behaviour.update(), Status.RUNNING)
@@ -380,14 +447,16 @@ class ReusableBehaviourTest(unittest.TestCase):
         self.assertEqual(context.sumo.sonar_samples[0].distance_mm, 300.0)
         self.assertEqual(runtime.video.target, original_video_target)
 
-    def test_sumo_sonar_diagnostic_timing_and_single_retry_are_configured(self) -> None:
-        # 診断段階では100ms間隔で測定し、未検出時の前進再探索は1回だけ構成する。
+    def test_sumo_continuous_scan_and_three_retries_are_configured(self) -> None:
+        # 連続走査後に静止確認し、未検出時は3段階で接近する。
         settings = SumoSettings()
         self.assertEqual(settings.sonar_samples_per_angle, 3)
         self.assertEqual(settings.sonar_settle_time_sec, 0.10)
         self.assertEqual(settings.sonar_sample_interval_sec, 0.10)
         self.assertEqual(settings.sonar_mm_per_unit, 1.0)
-        self.assertEqual(settings.retry_advance_distance_mm, 100.0)
+        self.assertEqual(settings.continuous_sample_interval_sec, 0.02)
+        self.assertEqual(settings.continuous_scan_power, 50)
+        self.assertEqual(settings.retry_advance_distances_mm, (100.0, 70.0, 50.0))
 
         feature = build_locate_sumo_bottle(RaceContext(), RaceConfig())
 
@@ -399,17 +468,66 @@ class ReusableBehaviourTest(unittest.TestCase):
 
         nodes = descendants(feature)
         self.assertEqual(
-            sum(node.name == "run closer before sumo sonar retry" for node in nodes),
-            1,
+            sum(node.name.startswith("run closer before sumo sonar retry") for node in nodes),
+            3,
         )
         self.assertEqual(
             sum(node.name == "first sumo sonar scan" for node in nodes),
             1,
         )
         self.assertEqual(
-            sum(node.name == "second sumo sonar scan" for node in nodes),
-            1,
+            sum(isinstance(node, ContinuousSonarSweep) for node in nodes),
+            4,
         )
+
+    def test_continuous_scan_completes_when_inner_boundary_is_crossed(self) -> None:
+        # PWM50で目標角を飛び越しても、±3度への収束を待たず120度走査で完了する。
+        for course in (1, -1):
+            context = RaceContext()
+            context.sumo.search_heading_deg = 90.0
+            runtime.course = course
+            runtime.gyro_sensor.angle = -course * 150
+            node = ContinuousSonarSweep("continuous", context, SumoSettings())
+            with patch("robot_program.features.locate_sumo_bottle.time.monotonic", return_value=1.0):
+                node.tick_once()
+            self.assertEqual(node.status, Status.RUNNING)
+            runtime.gyro_sensor.angle = -course * 28
+            with patch("robot_program.features.locate_sumo_bottle.time.monotonic", return_value=1.1):
+                node.tick_once()
+            self.assertEqual(node.status, Status.SUCCESS)
+            self.assertGreaterEqual(node.swept_angle_deg, 120.0)
+            self.assertEqual(runtime.left_motor.power, 0)
+            self.assertEqual(runtime.right_motor.power, 0)
+
+    def test_continuous_candidate_is_confirmed_while_stopped(self) -> None:
+        context = RaceContext()
+        context.sumo.bottle_distance_mm = 108.0
+        context.sumo.skipped = False
+        runtime.sonar_sensor.readings = [108, 110, 109]
+        settings = replace(
+            SumoSettings(), sonar_settle_time_sec=0, sonar_sample_interval_sec=0
+        )
+        node = ConfirmSonarCandidate("confirm", context, settings)
+        self.assertEqual(node.update(), Status.RUNNING)
+        self.assertEqual(node.update(), Status.RUNNING)
+        self.assertEqual(node.update(), Status.SUCCESS)
+        self.assertEqual(context.sumo.bottle_distance_mm, 109.0)
+
+    def test_et_sumo_motor_settings_are_at_least_fifty(self) -> None:
+        settings = SumoSettings()
+        values = (
+            settings.navigation_power, settings.approach_power,
+            settings.carry_power, settings.continuous_scan_power,
+            settings.scan_step_turn_min_power, settings.scan_step_turn_max_power,
+            settings.retry_advance_power, settings.push_out_drive_power,
+            settings.release_reverse_power, settings.garage_return_reverse_left_pwm,
+            settings.garage_return_reverse_right_pwm, settings.line_rejoin_trace_power,
+            settings.turn_min_power,
+            settings.turn_max_power, settings.camera_retreat_power,
+            settings.camera_approach_power, settings.camera_min_wheel_power,
+            settings.camera_max_wheel_power,
+        )
+        self.assertTrue(all(value >= 50 for value in values))
 
     def test_sumo_alignment_selects_nearest_sonar_direction(self) -> None:
         # 全角度のうち最短距離方向を選び、保存した探索中心からの絶対方位を設定する。
@@ -448,47 +566,63 @@ class ReusableBehaviourTest(unittest.TestCase):
         self.assertEqual(spins, [])
         self.assertTrue(any(child.name == "approach sumo bottle" for child in execute.children))
 
-    def test_sumo_carry_curve_is_left_on_left_and_right_on_right_course(self) -> None:
-        # Leftは左カーブ、Rightは前進を維持した右カーブになることを確認する。
+    def test_sumo_garage_return_curve_reverses_and_mirrors_by_course(self) -> None:
+        # 両コースで後退し、ガレージ側へ寄せる左右差だけが鏡像になることを確認する。
         settings = SumoSettings()
-        left_command = RunAsInstructed("left curve", 0, 0)
-        left_configure = ConfigureMirroredCarryCurvePwm(
-            "configure left curve", left_command, settings
+        left_command = RunAsInstructed("left garage return", 0, 0)
+        left_configure = ConfigureMirroredGarageReturnPwm(
+            "configure left garage return", left_command, settings
         )
 
         self.assertEqual(left_configure.update(), Status.SUCCESS)
         self.assertEqual(left_command.update(), Status.RUNNING)
-        self.assertEqual(runtime.left_motor.power, settings.carry_curve_left_pwm)
-        self.assertEqual(runtime.right_motor.power, settings.carry_curve_right_pwm)
-        self.assertGreater(runtime.right_motor.power, runtime.left_motor.power)
+        self.assertEqual(runtime.left_motor.power, -settings.garage_return_reverse_left_pwm)
+        self.assertEqual(runtime.right_motor.power, -settings.garage_return_reverse_right_pwm)
         left_command.terminate(Status.INVALID)
 
-        right_command = RunAsInstructed("right curve", 0, 0)
-        right_configure = ConfigureMirroredCarryCurvePwm(
-            "configure right curve", right_command, settings
+        right_command = RunAsInstructed("right garage return", 0, 0)
+        right_configure = ConfigureMirroredGarageReturnPwm(
+            "configure right garage return", right_command, settings
         )
         runtime.course = -1
 
         self.assertEqual(right_configure.update(), Status.SUCCESS)
         self.assertEqual(right_command.update(), Status.RUNNING)
-        self.assertEqual(runtime.left_motor.power, settings.carry_curve_right_pwm)
-        self.assertEqual(runtime.right_motor.power, settings.carry_curve_left_pwm)
-        self.assertGreater(runtime.left_motor.power, runtime.right_motor.power)
+        self.assertEqual(runtime.left_motor.power, -settings.garage_return_reverse_right_pwm)
+        self.assertEqual(runtime.right_motor.power, -settings.garage_return_reverse_left_pwm)
 
-    def test_sumo_exit_carries_bottle_by_curve_then_black_line(self) -> None:
-        # No.18は保持中のその場旋回を使わず、円弧後に出口側黒ラインまで運ぶ。
+    def test_sumo_release_reverse_runs_backward_on_both_courses(self) -> None:
+        # RunAsInstructedのcourse補正後も、Left／Rightの両方で左右輪が後退する。
+        settings = SumoSettings()
+        for course in (1, -1):
+            runtime.course = course
+            command = RunAsInstructed("release reverse", 0, 0)
+            configure = ConfigureCourseIndependentReversePwm(
+                "configure release reverse", command, settings.release_reverse_power
+            )
+            self.assertEqual(configure.update(), Status.SUCCESS)
+            self.assertEqual(command.update(), Status.RUNNING)
+            self.assertEqual(runtime.left_motor.power, -settings.release_reverse_power)
+            self.assertEqual(runtime.right_motor.power, -settings.release_reverse_power)
+            command.terminate(Status.INVALID)
+
+    def test_sumo_exit_pushes_releases_and_rejoins_line(self) -> None:
+        # No.18は黒ライン越え、直線後退、ガレージ側復帰、ライントレースの順で構成する。
         context = RaceContext()
         context.sumo.bottle_captured = True
         feature = build_move_to_sumo_exit(context, RaceConfig())
         transport = feature.children[1]
-        self.assertEqual(RaceConfig().sumo.carry_curve_distance_mm, 120.0)
+        self.assertEqual(RaceConfig().sumo.push_out_after_line_distance_mm, 30.0)
         self.assertFalse(any(isinstance(child, SpinAround) for child in transport.children))
-        self.assertTrue(
-            any(
-                child.name == "drive onto course-side black line"
-                for child in transport.children
-            )
+        expected_names = (
+            "drive captured bottle to push-out black line",
+            "push bottle 30 mm beyond black line",
+            "reverse straight to release sumo bottle",
+            "reverse curve to garage-side black line",
+            "stabilize on garage-side black line",
         )
+        child_names = [child.name for child in transport.children]
+        self.assertTrue(all(name in child_names for name in expected_names))
 
     def test_zero_second_wait_succeeds(self) -> None:
         behaviour = IsTimePassed(name="wait", delta_time=0.0)
@@ -537,10 +671,75 @@ class ReusableBehaviourTest(unittest.TestCase):
         self.assertEqual(context.hint2, "raw-encrypted-hint")
         self.assertEqual(runtime.video.target, TargetInterested.LINE)
 
-    def test_et_sumo_phase_builds_four_feature_subtrees(self) -> None:
+    def test_sumo_camera_capture_uses_black_only_and_no_search_spin(self) -> None:
+        # 新方式は距離センサー探索を実行木から外し、黒テープだけをカメラ追跡する。
+        context = RaceContext()
+        feature = build_capture_sumo_bottle_camera(context, RaceConfig())
+        descendants = []
+
+        def collect(node):
+            descendants.append(node)
+            for child in getattr(node, "children", []):
+                collect(child)
+
+        collect(feature)
+        self.assertFalse(any(isinstance(node, SpinAround) for node in descendants))
+        camera_node = next(
+            node for node in descendants
+            if isinstance(node, CaptureSumoBottleWithCamera)
+        )
+
+        camera_node.tick_once()
+        self.assertEqual(runtime.video.target, TargetInterested.BOTTLE)
+        self.assertEqual(runtime.video.bottle_color, BottleColor.BLACK)
+        self.assertEqual(runtime.right_motor.power, 0)
+        self.assertEqual(runtime.left_motor.power, 0)
+
+    def test_sumo_camera_confirmation_counts_only_new_frames(self) -> None:
+        # 制御周期が画像周期より速くても、同じ画像を3回検出として数えない。
+        context = RaceContext()
+        node = CaptureSumoBottleWithCamera(
+            "camera capture", context, RaceConfig().sumo
+        )
+        runtime.video.bottle_snapshot = (
+            True, BottleColor.BLACK, 220, 10.0, 80, 300, False
+        )
+
+        node.tick_once()
+        self.assertEqual(node.confirmed_frames, 1)
+        node.tick_once()
+        self.assertEqual(node.confirmed_frames, 1)
+        runtime.video.bottle_frame_id = 1
+        node.tick_once()
+        self.assertEqual(node.confirmed_frames, 2)
+        runtime.video.bottle_frame_id = 2
+        node.tick_once()
+        self.assertEqual(node.phase, node.APPROACH)
+        self.assertGreaterEqual(runtime.right_motor.power, 50)
+        self.assertGreaterEqual(runtime.left_motor.power, 50)
+        self.assertNotEqual(runtime.right_motor.power, runtime.left_motor.power)
+
+    def test_sumo_exit_state_records_push_release_and_line_trace_ready(self) -> None:
+        # 押し出し、離脱、ライン復帰の状態を後続工程から個別に確認できる。
+        context = RaceContext()
+        context.sumo.bottle_held_at_exit = True
+        self.assertEqual(MarkSumoExitState("mark push", context, "pushed_out").update(), Status.SUCCESS)
+        self.assertEqual(MarkSumoExitState("mark release", context, "released").update(), Status.SUCCESS)
+        self.assertEqual(MarkSumoExitState("mark ready", context, "line_trace_ready").update(), Status.SUCCESS)
+        self.assertTrue(context.sumo.bottle_pushed_out)
+        self.assertTrue(context.sumo.bottle_released)
+        self.assertTrue(context.sumo.transport_completed)
+        self.assertFalse(context.sumo.bottle_held_at_exit)
+        self.assertTrue(context.sumo.line_trace_ready)
+
+    def test_et_sumo_phase_builds_three_feature_subtrees(self) -> None:
         phase = build_et_sumo_phase(RaceContext(), RaceConfig())
         self.assertEqual(phase.name, "et_sumo")
-        self.assertEqual(len(phase.children), 4)
+        self.assertEqual(len(phase.children), 3)
+        self.assertEqual(
+            [child.name for child in phase.children],
+            ["move_to_sumo_start", "capture_sumo_bottle_camera", "move_to_sumo_exit"],
+        )
 
 if __name__ == "__main__":
     unittest.main()

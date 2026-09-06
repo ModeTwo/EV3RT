@@ -798,6 +798,13 @@ class Video(object):
         self.set_target_interested(TargetInterested.BOTTLE)
         return self._vision_sessions.capture_token()[0]
 
+    def begin_sumo_bottle_read(self):
+        # ET相撲では力士ボトルの黒テープだけを追跡する。
+        # Bottle Deliveryの赤・青・黄の自動判定とは開始口を分離する。
+        self.set_bottle_color(BottleColor.BLACK)
+        self.set_target_interested(TargetInterested.BOTTLE)
+        return self._vision_sessions.capture_token()[0]
+
     def get_bottle_observation(self):
         session, frame_id, observation = self._vision_sessions.get_bottle()
         if observation is None:

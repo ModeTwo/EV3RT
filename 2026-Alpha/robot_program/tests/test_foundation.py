@@ -58,7 +58,7 @@ fake.Video.assert_not_called()
 
     def test_configured_switches_and_each_single_mission(self):
         self.run_case('''
-from robot_program.config import RaceConfig, config_for_mission, mission_requires_qr
+from robot_program.config import RaceConfig, config_for_mission, mission_requires_camera, mission_requires_qr
 from robot_program.context import RaceContext
 from robot_program.tree_builder import build_mission_children
 def names(config):
@@ -85,14 +85,30 @@ for profile, result in expected.items():
     assert names(config) == result, (profile, names(config))
 assert not mission_requires_qr(config_for_mission('lap'))
 assert not mission_requires_qr(config_for_mission('sumo'))
+assert mission_requires_camera(config_for_mission('sumo'))
+assert mission_requires_camera(config_for_mission('lap'))
 assert mission_requires_qr(config_for_mission('rally'))
 assert mission_requires_qr(config_for_mission('hint2'))
+''')
+
+    def test_camera_disabled_setup_does_not_create_or_start_camera(self):
+        self.run_case('''
+alpha.setup_thread(camera_enabled=False)
+assert alpha.g_video is None and alpha.g_video_thread is None
+fake.Video.assert_not_called()
+tree = Sequence('camera-disabled check', memory=True)
+handler = alpha.TraverseBehaviourTree(tree)
+devices = [Mock() for _ in range(8)]
+with patch.object(alpha, 'start_video_thread') as start:
+    handler(*devices)
+    start.assert_not_called()
 ''')
 
     def test_initialization_precedes_camera_and_failure_latches_stop(self):
         self.run_case('''
 tree = Failure('mission failure')
 handler = alpha.TraverseBehaviourTree(tree)
+alpha.g_video = Mock()
 motors = [Mock(), Mock(), Mock()]
 devices = [Mock(), *motors, Mock(), Mock(), Mock(), Mock()]
 def check_refs():
@@ -131,7 +147,7 @@ alpha.cleanup_thread()
         self.run_case('''
 for fail_setup in (False, True):
     empty = Sequence('ready', memory=True)
-    def setup():
+    def setup(camera_enabled=True):
         alpha.g_video = Mock()
         if fail_setup:
             raise OSError('camera initialization failed')
@@ -147,8 +163,28 @@ for fail_setup in (False, True):
             raise AssertionError('Expected error')
         except OSError:
             pass
-        stop.assert_called_once_with(runtime)
+        stop.assert_not_called()  # Dispatch reception is already closed; do not resend.
         cleanup.assert_called_once()
+''')
+
+    def test_sumo_forces_camera_even_if_helper_returns_false(self):
+        self.run_case('''
+driver = Mock()
+driver.dispatch.side_effect = OSError('stop before hardware dispatch')
+with patch.object(alpha, 'mission_requires_camera', return_value=False), \
+     patch.object(alpha, 'setup_thread') as setup, \
+     patch.object(alpha, 'initialize_etrobo', return_value=driver), \
+     patch.object(alpha, 'cleanup_thread'):
+    def provide_camera(camera_enabled):
+        assert camera_enabled is True
+        alpha.g_video = Mock()
+    setup.side_effect = provide_camera
+    try:
+        alpha.main(['left', '--mission', 'sumo'])
+        raise AssertionError('Expected dispatch stop')
+    except OSError:
+        pass
+    setup.assert_called_once_with(camera_enabled=True)
 ''')
 
     def test_camera_error_is_reported_to_dispatch(self):

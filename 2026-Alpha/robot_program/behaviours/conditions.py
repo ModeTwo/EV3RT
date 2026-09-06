@@ -130,6 +130,7 @@ class IsColorDetected(Behaviour):
 
 class IsColorTransitionDetected(Behaviour):
     # 指定した開始色を確認した後、終了色へ変化したことを連続検出時間で判定する。
+    # 開始色の時間を0にすると、開始色は1回の確定判定だけで通過扱いになる。
     # 開始地点が白地や色付き領域でも、開始色を一度通過するまでは成功しない。
     def __init__(
         self,
@@ -140,8 +141,8 @@ class IsColorTransitionDetected(Behaviour):
         to_duration_sec: float,
     ):
         super().__init__(name)
-        if from_duration_sec <= 0 or to_duration_sec <= 0:
-            raise ValueError("color transition durations must be positive")
+        if from_duration_sec < 0 or to_duration_sec <= 0:
+            raise ValueError("from duration must be non-negative and to duration must be positive")
         self.from_color = from_color
         self.to_color = to_color
         self.from_duration_sec = from_duration_sec
