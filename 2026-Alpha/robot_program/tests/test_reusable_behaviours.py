@@ -76,6 +76,7 @@ from robot_program.behaviours.motor_control import RunAsInstructed, StopNow
 from robot_program.context import RaceContext
 from robot_program.config import RaceConfig
 from robot_program.features.locate_sumo_bottle import (
+    build_locate_sumo_bottle,
     SampleSonarAtAngle,
     SelectNearestBottleAndConfigureAlignment,
 )
@@ -189,6 +190,13 @@ class FakeVideo:
 
     def set_thresholds(self, gs_min, gs_max) -> None:
         self.thresholds = (gs_min, gs_max)
+
+    def begin_qr_read(self):
+        self.target = TargetInterested.QRCODE
+        return 1
+
+    def get_qr_observation(self):
+        return (1, 1, self.qr_text)
 
     def get_QR_text(self) -> str:
         return self.qr_text

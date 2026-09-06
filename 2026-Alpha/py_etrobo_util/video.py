@@ -10,6 +10,7 @@ import numpy as np
 from enum import Enum
 import time
 import threading
+from .vision_sessions import VisionSessions
 try:
     import zxingcpp
 
@@ -139,6 +140,9 @@ BOTTLE_HSV = {
 
 class Video(object):
     def __init__(self):
+        self._vision_sessions = VisionSessions()
+        self._worker_stop = threading.Event()
+        self._closed = False
         cv2.setLogLevel(3) # LOG_LEVEL_WARNING
         # set number of threads
         #cv2.setNumThreads(0)
@@ -198,8 +202,8 @@ class Video(object):
         self.target_insight = False
 
     def __del__(self):
-        cv2.destroyAllWindows()
-        self.cap.release()
+        if hasattr(self, "_closed") and hasattr(self, "cap"):
+            self.close()
 
     def _open_cap(self, fourcc, width, height, fps):
         """(Re)open the V4L2 capture in the given pixel format.
@@ -313,29 +317,32 @@ class Video(object):
         return "", None
 
     def _detection_worker(self) -> None:
-        """Background thread: continuously processes the latest frame."""
-        while True:
-            # Grab latest frame
+        while not self._worker_stop.is_set():
             with self._frame_lock:
-                gray = self._latest_gray
-                self._latest_gray = None  # mark as consumed
-
-            if gray is None:
-                time.sleep(0.005)
+                packet = self._latest_gray
+                self._latest_gray = None
+            if packet is None:
+                self._worker_stop.wait(0.005)
                 continue
-
+            gray, session, frame_id = packet
+            if self._vision_sessions.capture_token() != (session, 'qr'):
+                continue
             with self._result_lock:
                 self._is_detecting = True
-
-            text, corners = self._detect_qr(gray)
-
-            with self._result_lock:
-                self._is_detecting = False
-                self._detected_corners = corners
-                if text:
-                    self._detected_text = text
-                    self._last_decode_time = time.time()
-
+            try:
+                text, corners = self._detect_qr(gray)
+            except Exception as error:
+                self._vision_sessions.publish_qr(session, frame_id, '', error)
+                continue
+            finally:
+                with self._result_lock:
+                    self._is_detecting = False
+            if self._vision_sessions.publish_qr(session, frame_id, text):
+                with self._result_lock:
+                    self._detected_corners = corners
+                    if text:
+                        self._detected_text = text
+                        self._last_decode_time = time.time()
 
     def process(self,
                 plotter: Plotter,
@@ -354,6 +361,7 @@ class Video(object):
         if cfg is not None:
             self._open_cap(*cfg)
 
+        capture_session, capture_mode = self._vision_sessions.capture_token()
         ret, frame = self.cap.read()
 
         if frame is None:
@@ -368,7 +376,8 @@ class Video(object):
             img_gray = cv2.cvtColor(img_orig, cv2.COLOR_BGR2GRAY)
 
             with self._frame_lock:
-                self._latest_gray = img_gray
+                if capture_mode == 'qr':
+                    self._latest_gray = (img_gray, capture_session, self.frame_id)
 
             # Read detection state; expire text after TEXT_EXPIRY_SEC
             with self._result_lock:
@@ -469,6 +478,8 @@ class Video(object):
                 self._bottle_stamped = (self.target_insight, self.bottle_color,
                                         self.bottle_cx, self.bottle_theta,
                                         self.bottle_bottom_row, self.bottle_area, in_blind)
+                if capture_mode == 'bottle':
+                    self._vision_sessions.publish_bottle(capture_session, self.frame_id, self._bottle_stamped)
 
         else: # TargetInterested.LINE
             # ---- LINE runs on the downsized frame ----
@@ -768,13 +779,30 @@ class Video(object):
         self._bottle_lock_color = color
 
     def get_QR_text(self) -> str:
-        if self.target_interested == TargetInterested.QRCODE:
-            with self._result_lock:
-                return self._detected_text
-        else:
-            # latch the detected text until set_target_interest(TargetInterested.QRCODE) is invoked,
-            # or TEXT_EXPIRY_SEC is exhausted while self.target_interested == TargetInterested.QRCODE.
-            return self._detected_text
+        return self._vision_sessions.get_qr()[2]
+
+    def require_qr_decoder(self):
+        if zxingcpp is None:
+            raise RuntimeError('zxingcpp is required for the Hint1/Hint2 mission')
+
+    def begin_qr_read(self):
+        self.require_qr_decoder()
+        self.set_target_interested(TargetInterested.QRCODE)
+        return self._vision_sessions.capture_token()[0]
+
+    def get_qr_observation(self):
+        return self._vision_sessions.get_qr()
+
+    def begin_bottle_read(self):
+        self.set_bottle_color(None)
+        self.set_target_interested(TargetInterested.BOTTLE)
+        return self._vision_sessions.capture_token()[0]
+
+    def get_bottle_observation(self):
+        session, frame_id, observation = self._vision_sessions.get_bottle()
+        if observation is None:
+            observation = (False, BottleColor.NONE, 0, 0.0, 0, 0, False)
+        return session, frame_id, observation
 
     def set_thresholds(self, gs_min: int, gs_max: int) -> None:
         self.gsmin = gs_min
@@ -786,26 +814,35 @@ class Video(object):
         return
 
     def set_target_interested(self, target_interested: TargetInterested) -> None:
+        mode = {TargetInterested.QRCODE: 'qr', TargetInterested.BOTTLE: 'bottle'}.get(target_interested, 'line')
+        self._vision_sessions.start(mode)
         self.target_interested = target_interested
-
-        # request the matching capture format; the reopen itself happens on the
-        # capture thread, at the top of process()
+        with self._frame_lock:
+            self._latest_gray = None
+        with self._result_lock:
+            self._detected_text = ''
+            self._detected_corners = None
         cfg = _CAP_CONFIG.get(target_interested)
         if cfg is not None and cfg != self._cap_cfg:
             with self._pending_lock:
                 self._pending_cap_cfg = cfg
-
-        if self.target_interested == TargetInterested.QRCODE and not hasattr(self, "_detection_thread"):
-            self._detected_text    = ""    # initialize the detected text for safety
-            # Start detection thread
+        # One worker for the Video lifetime. No join or 1s delay inside a BT tick.
+        if target_interested == TargetInterested.QRCODE and not hasattr(self, '_detection_thread'):
             self._detection_thread = threading.Thread(target=self._detection_worker, daemon=True)
             self._detection_thread.start()
-        else:
-            # Stop detection thread if not interested in QR code
-            if hasattr(self, "_detection_thread"):
-                self._detection_thread.join(timeout=1.0)
-                del self._detection_thread
-        return
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        self._vision_sessions.start('closed')
+        self._worker_stop.set()
+        worker = getattr(self, '_detection_thread', None)
+        if worker is not None:
+            worker.join(timeout=2.0)
+        if self.cap is not None:
+            self.cap.release()
+        cv2.destroyAllWindows()
 
     def is_target_insight(self) -> bool:
         return self.target_insight

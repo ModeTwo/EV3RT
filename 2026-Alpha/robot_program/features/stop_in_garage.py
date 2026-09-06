@@ -1,7 +1,12 @@
 """Feature 20 subtree factory."""
 
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
-from ..placeholder import PendingFeature
+from ..behaviours.line_trace import TraceLine
+from ..behaviours.conditions import IsColorDetected, IsDistanceEarned
+from ..behaviours.gyro_drive import RunByGyro
+from ..behaviours.motor_control import StopNow
+
+TRACELINE_TARGET_V = 75  # Existing alpha.py nominal target; garage tuning unverified.
 
 
 def build_stop_in_garage(context, config):
@@ -40,6 +45,6 @@ def build_stop_in_garage(context, config):
          ]
      )
 
-    root.add_children([goal_01,goal_02])
+    root.add_children([goal_01, goal_02, StopNow(name="garage final brake")])
     
     return root

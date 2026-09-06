@@ -5,10 +5,15 @@ from .phases.et_rally import build_et_rally_phase
 from .phases.et_sumo import build_et_sumo_phase
 from .phases.finish import build_finish_phase
 from .phases.lap_gate import build_lap_gate_phase
+from .phases.hint_collection import build_hint_collection_phase
 
 
 def build_mission_children(context, config):
     # この関数は統合担当者だけが変更し、各機能担当者はfeatures配下だけを変更する。
+    if config.mission_mode not in ('configured', 'hint2', 'hint2-return', 'full'):
+        raise ValueError('Unknown mission mode: ' + config.mission_mode)
+    if config.mission_mode in ('hint2', 'hint2-return'):
+        return [build_lap_gate_phase(context, config), build_hint_collection_phase(context, config)]
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))

@@ -1,3 +1,7 @@
+> 2026-09-06 復元：①〜④の調整前へ復元済み。相撲・ミッション選択は維持。現状は [復元記録](../RESTORED_BEFORE_RIGHT_TRIAL.md) を優先してください。
+
+> 2026-09-05 v2更新：最新は[RE・AT・TO連続走行版](../INTEGRATION_RUN_v2.md)です。標準alpha.pyはHint2取得後に停止します。周期はtiming.pyのCONTROL_INTERVAL_SECへ統一しました。以下の旧版説明よりv2文書を優先してください。
+> 2026-09-05更新：現在は統合基盤・移植準備版です。最新状況は[統合基盤v1](../INTEGRATION_FOUNDATION_v1.md)を参照してください。未実装工程があるため通常起動は走行前に終了コード2で停止します。下記の「仮処理は成功」「スタートのみ実装済み」等の過去説明より、この案内とv1文書を優先してください。
 # 2026-Alpha 走行体プログラム
 
 ## 1. この構成の目的
@@ -70,6 +74,8 @@ python sensor_monitor.py --no-clear
 ```python
 @dataclass(frozen=True)
 class RaceConfig:
+    mission_mode: str = "configured"
+    lapgate: bool = True
     enable_bottle_delivery: bool = True
     enable_et_rally: bool = True
     et_rally_laps: int = 3
@@ -81,15 +87,32 @@ class RaceConfig:
 
 | 要求上の設定 | `RaceConfig`のフィールド | 設定値 |
 |---|---|---|
+| スタート～LAPゲート | `lapgate` | `True` / `False` |
 | `ENABLE_BOTTLE_DELIVERY` | `enable_bottle_delivery` | `True` / `False` |
 | `ENABLE_ET_RALLY` | `enable_et_rally` | `True` / `False` |
 | `ET_RALLY_LAPS` | `et_rally_laps` | `0` / `1` / `2` / `3` |
 | `ENABLE_ET_SUMO` | `enable_et_sumo` | `True` / `False` |
 | `ENABLE_FINISH` | `enable_finish` | `True` / `False` |
 
-スタート～LAPゲートは競技の基本工程なので、設定にかかわらず常にツリーへ追加されます。
+`mission_mode="configured"`では、スタート～LAPゲートを含むすべての工程が上記フラグに従います。すべて`False`なら、キャリブレーションとタッチスタートの後に終了し、LAP走行は開始しません。
 
 `enable_et_rally=False`の場合、`et_rally_laps`の値にかかわらずETラリー周回は実行されません。`et_rally_laps=0`の場合もETラリー周回は実行されません。
+
+設定ファイルを変更せずに工程を単体実行する場合は、`alpha.py`の`--mission`を使用します。
+
+| 工程 | コマンド例 |
+|---|---|
+| 設定フラグどおり | `python alpha.py left --mission configured` |
+| LAP | `python alpha.py left --mission lap` |
+| Bottle Delivery | `python alpha.py left --mission bottle` |
+| ETラリー準備＋周回 | `python alpha.py left --mission rally` |
+| ET相撲 | `python alpha.py left --mission sumo` |
+| FINISH | `python alpha.py left --mission finish` |
+| 全工程 | `python alpha.py left --mission full` |
+
+`--mission`を省略した場合も`configured`です。Rightコースは`left`を`right`へ置き換えます。どの工程でも共通のキャリブレーションとタッチスタートは先に実行されます。単体工程は上流工程の動作を実行しないため、走行体をその工程の開始位置・開始方位・アーム状態へ手動で置いてから開始してください。
+
+`hint2`と`hint2-return`はRE→AT→TO接続試験を維持する専用モードであり、工程フラグを参照しません。未実装の`PendingFeature`は警告を表示して何もせず成功扱いとなり、次の工程へ進みます。詳細は[工程単体実行ガイド](../MISSION_SELECTION_v6.md)を参照してください。
 
 ## 4. プログラムが実行される順序
 
