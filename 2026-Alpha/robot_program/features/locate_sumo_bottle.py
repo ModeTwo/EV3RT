@@ -119,6 +119,194 @@ class SampleSonarAtAngle(Behaviour):
         return Status.RUNNING
 
 
+class ContinuousSonarSweep(SpinAround):
+    # 既存SpinAroundで旋回しながら、各tickの距離と実方位を対応付ける。
+    # 精密停止ではなく所定角度の通過で完了し、高い最低PWMによる往復振動を防ぐ。
+    def __init__(self, name, context, settings):
+        super().__init__(
+            name=name,
+            target=0,
+            min_power=settings.continuous_scan_power,
+            max_power=settings.continuous_scan_power,
+            pid_p=settings.turn_pid_p,
+            pid_i=settings.turn_pid_i,
+            pid_d=settings.turn_pid_d,
+            target_type=HeadingType.ABSOLUTE,
+            tolerance=settings.heading_tolerance_deg,
+        )
+        self.context = context
+        self.settings = settings
+        self.started_at = None
+        self.next_sample_at = None
+        self.last_heading = None
+        self.swept_angle_deg = 0.0
+        self.sample_count = 0
+
+    @staticmethod
+    def _heading_delta(current, previous):
+        # 0/360度境界を越えても、1tick分の符号付き角度差を-180～180度で得る。
+        return (current - previous + 180.0) % 360.0 - 180.0
+
+    def update(self):
+        runtime.require(
+            "plotter", "gyro_sensor", "sonar_sensor", "right_motor", "left_motor"
+        )
+        now = time.monotonic()
+        heading = (-runtime.course * runtime.gyro_sensor.get_angle()) % 360.0
+        if self.started_at is None:
+            self.started_at = now
+            self.next_sample_at = now
+            self.last_heading = heading
+            self.target = (
+                self.context.sumo.search_heading_deg
+                - self.settings.scan_half_angle_deg
+            ) % 360.0
+            self.logger.info(
+                "continuous scan start center=%.1f outer=%.1f inner=%.1f range=%.1f"
+                % (
+                    self.context.sumo.search_heading_deg,
+                    heading,
+                    self.target,
+                    2.0 * self.settings.scan_half_angle_deg,
+                )
+            )
+        else:
+            delta = self._heading_delta(heading, self.last_heading)
+            # 正規化方位では外側端から内側端へ負方向に走査する。
+            # 逆方向へ戻った量も差し引くため、往復だけで完了扱いにはならない。
+            self.swept_angle_deg -= delta
+            self.last_heading = heading
+
+        if now - self.started_at >= self.settings.continuous_scan_timeout_sec:
+            self.terminate(Status.FAILURE)
+            StopNow(name="stop timed out continuous scan").update()
+            raise RuntimeError(
+                "Continuous sumo scan timed out; motors stopped "
+                "(heading=%.1f swept=%.1f target=%.1f samples=%d candidates=%d)"
+                % (
+                    heading,
+                    self.swept_angle_deg,
+                    self.target,
+                    self.sample_count,
+                    len(self.context.sumo.sonar_samples),
+                )
+            )
+
+        if now >= self.next_sample_at:
+            self.next_sample_at = now + self.settings.continuous_sample_interval_sec
+            raw_distance = runtime.sonar_sensor.get_distance()
+            self.sample_count += 1
+            distance_mm = (
+                None
+                if raw_distance is None or raw_distance <= 0
+                else float(raw_distance) * self.settings.sonar_mm_per_unit
+            )
+            valid = (
+                distance_mm is not None
+                and self.settings.sonar_min_distance_mm
+                <= distance_mm
+                <= self.settings.sonar_max_distance_mm
+            )
+            if valid:
+                offset = (
+                    heading - self.context.sumo.search_heading_deg + 180.0
+                ) % 360.0 - 180.0
+                self.context.sumo.sonar_samples.append(
+                    SumoSonarSample(offset, distance_mm)
+                )
+            log = self.logger.info if valid else self.logger.debug
+            log(
+                "continuous sonar elapsed_ms=%.1f heading=%.1f swept=%.1f "
+                "raw=%s valid=%s"
+                % (
+                    (now - self.started_at) * 1000.0,
+                    heading,
+                    self.swept_angle_deg,
+                    raw_distance,
+                    valid,
+                )
+            )
+
+        required_sweep = 2.0 * self.settings.scan_half_angle_deg
+        # 目標近傍を1tickで通過しても、走査角度で確実に完了する。
+        if self.swept_angle_deg >= required_sweep:
+            self.logger.info(
+                "continuous scan complete reason=angle-crossed heading=%.1f "
+                "swept=%.1f samples=%d candidates=%d elapsed_ms=%.1f"
+                % (
+                    heading,
+                    self.swept_angle_deg,
+                    self.sample_count,
+                    len(self.context.sumo.sonar_samples),
+                    (now - self.started_at) * 1000.0,
+                )
+            )
+            return Status.SUCCESS
+
+        status = super().update()
+        if status == Status.SUCCESS:
+            self.logger.info(
+                "continuous scan complete reason=target-tolerance heading=%.1f "
+                "swept=%.1f samples=%d candidates=%d elapsed_ms=%.1f"
+                % (
+                    heading,
+                    self.swept_angle_deg,
+                    self.sample_count,
+                    len(self.context.sumo.sonar_samples),
+                    (now - self.started_at) * 1000.0,
+                )
+            )
+        return status
+
+
+class ConfirmSonarCandidate(SampleSonarAtAngle):
+    # 走査中の候補へ正対後、静止した状態で3有効値を再確認する。
+    def __init__(self, name, context, settings):
+        super().__init__(name, context, settings, 0.0)
+
+    def update(self):
+        state = self.context.sumo
+        if state.skipped or state.bottle_distance_mm is None:
+            return Status.SUCCESS
+        if self.started_at is None:
+            heading = (-runtime.course * runtime.gyro_sensor.get_angle()) % 360.0
+            self.angle_offset_deg = (
+                heading - state.search_heading_deg + 180.0
+            ) % 360.0 - 180.0
+        status = super().update()
+        if status == Status.SUCCESS:
+            if len(self.valid_distances) >= self.settings.sonar_samples_per_angle:
+                state.bottle_distance_mm = statistics.median(self.valid_distances)
+                state.bottle_bearing_deg = self.angle_offset_deg
+                self.logger.info(
+                    "stationary sonar candidate confirmed distance=%.1fmm"
+                    % state.bottle_distance_mm
+                )
+            else:
+                state.skipped = True
+                state.bottle_distance_mm = None
+                state.bottle_bearing_deg = None
+                state.failure_reason = "stationary sonar confirmation failed"
+                self.logger.warning(state.failure_reason)
+        return status
+
+
+class ConfigureConfirmationReturn(Behaviour):
+    # 静止確認に失敗した場合だけ探索中央へ戻し、次の接近方向を揃える。
+    def __init__(self, name, context, spin):
+        super().__init__(name)
+        self.context = context
+        self.spin = spin
+
+    def update(self):
+        self.spin.target = (
+            self.context.sumo.search_heading_deg
+            if self.context.sumo.skipped
+            else (-runtime.course * runtime.gyro_sensor.get_angle()) % 360.0
+        )
+        return Status.SUCCESS
+
+
 class SelectNearestBottleAndConfigureAlignment(Behaviour):
     # 有効な測定のうち最短距離をボトル候補とし、その角度へ戻る旋回量を設定する。
     def __init__(self, name, context, alignment_spin, last_scan_offset_deg):
@@ -260,11 +448,23 @@ def _spin(
 
 
 def _build_scan_pass(name, context, settings, offsets):
-    # 1回分の外側端から内側端までの段階探索を、再試行でも再利用できる形で構成する。
+    # 1回分の外側端から内側端までの探索を、再試行でも再利用できる形で構成する。
     root = Sequence(name=name, memory=True)
     root.add_child(
         _spin("%s turn to course outer edge" % name, offsets[0], settings)
     )
+    if settings.continuous_scan_enabled:
+        root.add_children(
+            [
+                StopNow(name="%s stop before continuous sweep" % name),
+                ContinuousSonarSweep(
+                    "%s continuous sweep" % name, context, settings
+                ),
+                StopNow(name="%s stop after continuous sweep" % name),
+            ]
+        )
+        return root
+
     previous_offset = offsets[0]
     for index, offset in enumerate(offsets):
         if index > 0:
@@ -291,6 +491,28 @@ def _build_scan_pass(name, context, settings, offsets):
     return root
 
 
+def _confirmation_nodes(name, context, settings):
+    # 従来の停止探索では各角度ですでに3回測定しているため、追加確認しない。
+    if not settings.continuous_scan_enabled:
+        return []
+    recovery = _spin(
+        "%s return after confirmation" % name,
+        0,
+        settings,
+        target_type=HeadingType.ABSOLUTE,
+    )
+    return [
+        ConfirmSonarCandidate(
+            "%s stationary confirmation" % name, context, settings
+        ),
+        ConfigureConfirmationReturn(
+            "%s configure confirmation return" % name, context, recovery
+        ),
+        recovery,
+        StopNow(name="%s stop after confirmation" % name),
+    ]
+
+
 def build_locate_sumo_bottle(context, config):
     # No.16：画像を使わず、走行体の左右首振りと距離センサーだけでボトルへ正対する。
     settings = config.sumo
@@ -302,61 +524,83 @@ def build_locate_sumo_bottle(context, config):
         settings,
         target_type=HeadingType.ABSOLUTE,
     )
-    retry_alignment = _spin(
-        "align retry sumo scan result",
-        0,
-        settings,
-        target_type=HeadingType.ABSOLUTE,
+    retry_distances = tuple(settings.retry_advance_distances_mm)
+    if not retry_distances or any(distance <= 0 for distance in retry_distances):
+        raise ValueError("sumo retry advance distances must be positive")
+    retry_names = ("second", "third", "fourth")
+    if len(retry_distances) > len(retry_names):
+        raise ValueError("at most three sumo sonar retries are supported")
+
+    finish_or_retry = Selector(
+        name="accept sumo scan or retry closer", memory=True
+    )
+    finish_or_retry.add_child(
+        HasBottleCandidate("accept first sumo sonar candidate", context)
     )
 
-    retry_advance = Parallel(
-        name="advance before sumo sonar retry",
-        policy=ParallelPolicy.SuccessOnOne(),
-    )
-    retry_advance.add_children(
-        [
-            RunByGyro(
-                name="run closer before sumo sonar retry",
-                target=0,
-                power=settings.retry_advance_power,
-                pid_p=settings.drive_pid_p,
-                pid_i=settings.drive_pid_i,
-                pid_d=settings.drive_pid_d,
-                target_type=HeadingType.RELATIVE,
-            ),
-            IsDistanceEarned(
-                name="sumo sonar retry advance distance",
-                delta_dist=settings.retry_advance_distance_mm,
-            ),
-        ]
-    )
-
-    retry = Sequence(name="retry sumo sonar after advance", memory=True)
-    retry.add_children(
-        [
-            # 1回目の未検出時は絶対方位で探索中心へ復帰済みなので、低速で規定距離だけ近づく。
+    for retry_index, retry_distance in enumerate(retry_distances):
+        ordinal = retry_names[retry_index]
+        retry_number = retry_index + 1
+        retry_alignment = _spin(
+            "align %s sumo sonar scan result" % ordinal,
+            0,
+            settings,
+            target_type=HeadingType.ABSOLUTE,
+        )
+        retry_advance = Parallel(
+            name="advance before %s sumo sonar scan" % ordinal,
+            policy=ParallelPolicy.SuccessOnOne(),
+        )
+        retry_advance.add_children(
+            [
+                RunByGyro(
+                    name="run closer before sumo sonar retry %d" % retry_number,
+                    target=0,
+                    power=settings.retry_advance_power,
+                    pid_p=settings.drive_pid_p,
+                    pid_i=settings.drive_pid_i,
+                    pid_d=settings.drive_pid_d,
+                    target_type=HeadingType.RELATIVE,
+                ),
+                IsDistanceEarned(
+                    name="sumo sonar retry %d advance distance" % retry_number,
+                    delta_dist=retry_distance,
+                ),
+            ]
+        )
+        retry = Sequence(
+            name="%s sumo sonar scan after advance" % ordinal, memory=True
+        )
+        retry_children = [
             retry_advance,
-            StopNow(name="stop at closer sumo search position"),
-            PrepareSonarRetry("prepare second sumo sonar scan", context),
-            _build_scan_pass("second sumo sonar scan", context, settings, offsets),
+            StopNow(
+                name="stop at closer sumo search position %d" % retry_number
+            ),
+            PrepareSonarRetry(
+                "prepare %s sumo sonar scan" % ordinal, context
+            ),
+            _build_scan_pass(
+                "%s sumo sonar scan" % ordinal, context, settings, offsets
+            ),
             SelectNearestBottleAndConfigureAlignment(
-                "select second sumo sonar result",
+                "select %s sumo sonar result" % ordinal,
                 context,
                 retry_alignment,
                 offsets[-1],
             ),
             retry_alignment,
-            StopNow(name="stop after second sumo sonar alignment"),
+            StopNow(name="stop after %s sumo sonar alignment" % ordinal),
+            *_confirmation_nodes(ordinal, context, settings),
         ]
-    )
-
-    finish_or_retry = Selector(name="accept first sumo scan or retry", memory=True)
-    finish_or_retry.add_children(
-        [
-            HasBottleCandidate("accept first sumo sonar candidate", context),
-            retry,
-        ]
-    )
+        # 最終再探索以外は未検出時に次のSelector枝へ進む。
+        if retry_index < len(retry_distances) - 1:
+            retry_children.append(
+                HasBottleCandidate(
+                    "accept %s sumo sonar candidate" % ordinal, context
+                )
+            )
+        retry.add_children(retry_children)
+        finish_or_retry.add_child(retry)
 
     root = Sequence(name="locate_sumo_bottle", memory=True)
     root.add_children(
@@ -370,6 +614,7 @@ def build_locate_sumo_bottle(context, config):
             ),
             first_alignment,
             StopNow(name="stop after first sumo sonar alignment"),
+            *_confirmation_nodes("first", context, settings),
             finish_or_retry,
         ]
     )

@@ -33,7 +33,6 @@ class ResetDevice(Behaviour):
             "right_motor",
             "left_motor",
             "gyro_sensor",
-            "video",
             "plotter",
         )
 
@@ -43,8 +42,9 @@ class ResetDevice(Behaviour):
             runtime.right_motor.reset_count()
             runtime.left_motor.reset_count()
             runtime.gyro_sensor.reset()
-            runtime.video.set_thresholds(self.gs_min, self.gs_max)
-            runtime.video.set_target_interested(TargetInterested.LINE)
+            if runtime.video is not None:
+                runtime.video.set_thresholds(self.gs_min, self.gs_max)
+                runtime.video.set_target_interested(TargetInterested.LINE)
             self.reset_started = True
             self.logger.info(
                 "%+06d %s.resetting..."
