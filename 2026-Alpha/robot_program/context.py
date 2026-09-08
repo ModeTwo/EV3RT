@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .services.race_timer import RaceTimer
+from .sumo_types import SumoState
+from .integration_settings import HandoffState
 
 
 @dataclass
@@ -15,3 +17,5 @@ class RaceContext:
     strategy: List[Dict[str, Any]] = field(default_factory=list)
     rally_lap: int = 0
     timer: RaceTimer = field(default_factory=RaceTimer)
+    sumo: SumoState = field(default_factory=SumoState)
+    at_to: HandoffState = field(default_factory=HandoffState)
