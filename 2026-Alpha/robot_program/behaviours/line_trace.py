@@ -11,7 +11,7 @@ from py_etrobo_util import LowPassFilter, TraceSide
 from ..runtime import runtime
 
 
-EXEC_INTERVAL = 0.02
+from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
 
 
 class TraceLine(Behaviour):
@@ -141,7 +141,16 @@ class TraceLine(Behaviour):
         base_power = int(round(self.power))
         left_power = max(-100, min(100, base_power + turn))
         right_power = max(-100, min(100, base_power - turn))
+        runtime.right_motor.set_brake(False)
+        runtime.left_motor.set_brake(False)
         runtime.right_motor.set_power(right_power)
         runtime.left_motor.set_power(left_power)
         return Status.RUNNING
 
+
+
+    def terminate(self, new_status: Status) -> None:
+        for motor in (runtime.left_motor, runtime.right_motor):
+            if motor is not None:
+                motor.set_power(0)
+        self.running = False
