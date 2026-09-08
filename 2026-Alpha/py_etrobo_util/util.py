@@ -27,13 +27,18 @@ class Color(Enum):
 
 class ColorClassifier:
     _WINDOW_SIZE = 5
+    # 実機計測値（2026-09-03）を基準にした無彩色判定閾値。
+    # white: S=29～31, V=75～80 / black: S=0, V=5
+    _ACHROMATIC_MAX_S = 35
+    _WHITE_MIN_V = 70
+    _BLACK_MAX_V = 45
 
     def __init__(self):
         self.window: deque[int] = deque(maxlen=self._WINDOW_SIZE)
 
     # --- 収集データから導いた閾値 ---
-    # black : V < 30, S < 25  (V avg≈26)
-    # white : V > 55, S < 22  (V avg≈98, S avg≈5)
+    # black : S <= 35, V <= 45
+    # white : S <= 35, V >= 70
     # blue  : H in [205,220], S > 80  (H avg≈213, S avg≈93)
     # green : H in [140,155], S > 60  (H avg≈148, S avg≈73)
     # yellow: H in [35,65], V > 88    (H avg≈52, V avg≈99)
@@ -41,8 +46,9 @@ class ColorClassifier:
 
     def classify_single(self,h: int, s: int, v: int) -> Color:
         """1サンプルのHSVから色を判定する。"""
-        # 純白：収集データのS最大値は19。S<20 かつ高輝度のみ白と認める
-        if s < 20 and v > 75:
+        # 無彩色ではHが安定しないため、白黒判定にはSとVだけを使用する。
+        # 白を先に判定し、実測したS=29～31の白地を黒へ落とさない。
+        if s <= self._ACHROMATIC_MAX_S and v >= self._WHITE_MIN_V:
             return Color.WHITE
         # 有彩色判定（S が高い領域）
         # 青は境界でSが59〜71まで低下するため閾値を緩める
@@ -54,10 +60,10 @@ class ColorClassifier:
             return Color.YELLOW
         if (h > 345 or h < 10) and s > 75:
             return Color.RED
-        # 上記いずれにも該当しない低彩度(S<35)はすべて黒扱い
-        # 外乱光でVが上昇しても、彩度が低ければ有色ラインではない
-        if s < 35:
+        # 黒には明度上限を設け、低彩度という理由だけで明るい白地を黒にしない。
+        if s <= self._ACHROMATIC_MAX_S and v <= self._BLACK_MAX_V:
             return Color.BLACK
+        # V=46～69の無彩色は白黒境界の誤判定を避けるためUNKNOWNとする。
         return Color.UNKNOWN
 
 
