@@ -9,7 +9,7 @@ def build_read_hint(context, config, hint_number):
     root.add_children([
         StopNow(name=f'TO hint{hint_number} stationary'),
         ReadHintCard(name=f'TO capture hint{hint_number}', hint_number=hint_number,
-                     context=context, timeout_sec=config.integration.qr_timeout_sec),
+                     context=context),
         StopNow(name=f'TO hint{hint_number} captured brake'),
     ])
     return root

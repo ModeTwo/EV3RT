@@ -2,8 +2,8 @@
 
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 
-from ..behaviours.conditions import IsColorDetected, IsDistanceEarned
-from ..behaviours.gyro_drive import RunByGyro
+from ..behaviours.conditions import IsDistanceEarned
+from .sumo_bearing_motion import RunAtBearing, SpinToBearing, current_bearing, search_bearing
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.motor_control import RunAsInstructed, StopNow
 
@@ -55,26 +55,89 @@ class ConfigureCourseIndependentReversePwm(Behaviour):
         return Status.SUCCESS
 
 
-class ConfigureMirroredGarageReturnPwm(Behaviour):
-    # 離脱後の後退カーブを左右コースで鏡像化し、各コースのガレージ側へ寄せる。
-    def __init__(self, name, motor_command, settings):
+class DetectDarkGarageLine(Behaviour):
+    # 復帰用黒ラインは彩度に依存させず、カラーセンサーの生V値を連続確認する。
+    def __init__(self, name, context, settings):
         super().__init__(name)
-        self.motor_command = motor_command
+        self.context = context
+        self.settings = settings
+        self.dark_samples = 0
+        self.last_log_at = None
+
+    def update(self):
+        runtime.require("plotter", "color_sensor", "gyro_sensor")
+        now = time.monotonic()
+        h, s, v = runtime.color_sensor.get_raw_color_hsv()
+        if v <= self.settings.garage_line_black_max_value:
+            self.dark_samples += 1
+        else:
+            self.dark_samples = 0
+
+        if (
+            self.last_log_at is None
+            or now - self.last_log_at >= self.settings.garage_line_sensor_log_interval_sec
+        ):
+            self.last_log_at = now
+            self.logger.info(
+                "%+06d %s.hsv=(%d,%d,%d) dark_samples=%d/%d"
+                % (
+                    runtime.plotter.get_distance(),
+                    self.__class__.__name__,
+                    h,
+                    s,
+                    v,
+                    self.dark_samples,
+                    self.settings.garage_line_confirm_samples,
+                )
+            )
+
+        if self.dark_samples >= self.settings.garage_line_confirm_samples:
+            self.context.sumo.garage_line_found = True
+            absolute_heading = current_bearing(self.context)
+            self.logger.info(
+                "%+06d %s.garage-side black line detected v=%d bearing=%.1f"
+                % (
+                    runtime.plotter.get_distance(),
+                    self.__class__.__name__,
+                    v,
+                    absolute_heading,
+                )
+            )
+            return Status.SUCCESS
+        return Status.RUNNING
+
+
+class WasGarageLineFound(Behaviour):
+    # 最大探索距離と黒ライン検知のどちらが探索を終了させたかを後段で判別する。
+    def __init__(self, name, context):
+        super().__init__(name)
+        self.context = context
+
+    def update(self):
+        if self.context.sumo.garage_line_found:
+            return Status.SUCCESS
+        return Status.FAILURE
+
+
+class FailWhenGarageLineWasNotFound(Behaviour):
+    # ライン未検出のままFINISHへ進ませず、停止済みの状態でミッションを失敗終了させる。
+    def __init__(self, name, context, settings):
+        super().__init__(name)
+        self.context = context
         self.settings = settings
 
     def update(self):
-        runtime.require("right_motor", "left_motor")
-        left_power = abs(int(self.settings.garage_return_reverse_left_pwm))
-        right_power = abs(int(self.settings.garage_return_reverse_right_pwm))
-        if runtime.course >= 0:
-            # Leftでは左輪を遅くして、後退しながらガレージ側へ緩く寄せる。
-            self.motor_command.pwm_l = -left_power
-            self.motor_command.pwm_r = -right_power
-        else:
-            # Rightでは左右差を反転し、course符号を相殺する正の論理PWMを渡す。
-            self.motor_command.pwm_l = right_power
-            self.motor_command.pwm_r = left_power
-        return Status.SUCCESS
+        runtime.require("plotter")
+        self.context.sumo.failure_reason = "garage_line_not_found"
+        self.logger.error(
+            "%+06d %s.garage-side black line not found within %.0f mm"
+            % (
+                runtime.plotter.get_distance(),
+                self.__class__.__name__,
+                self.settings.garage_line_search_max_distance_mm,
+            )
+        )
+        return Status.FAILURE
 
 
 class MarkSumoExitState(Behaviour):
@@ -88,7 +151,7 @@ class MarkSumoExitState(Behaviour):
         runtime.require("plotter")
         if self.event == "pushed_out":
             self.context.sumo.bottle_pushed_out = True
-            message = "bottle pushed beyond black line"
+            message = "bottle pushed by configured distance"
         elif self.event == "released":
             self.context.sumo.bottle_released = True
             self.context.sumo.bottle_held_at_exit = False
@@ -107,48 +170,10 @@ class MarkSumoExitState(Behaviour):
 
 
 def build_move_to_sumo_exit(context, config):
-    # No.18：黒ライン外へ押し出し、直線後退で離脱し、ガレージ側の黒ラインへ復帰する。
+    # No.18：前工程で合計500mm走行済み。直線後退で離脱し、ガレージ側黒ラインへ復帰する。
     settings = config.sumo
 
-    # 捕捉時の方位を維持したまま、最初に見つかる黒ラインまでボトルを押して進む。
-    find_push_out_line = Parallel(
-        name="drive captured bottle to push-out black line",
-        policy=ParallelPolicy.SuccessOnOne(),
-    )
-    find_push_out_line.add_children(
-        [
-            RunByGyro(
-                name="run straight to push-out black line",
-                target=0,
-                power=settings.push_out_drive_power,
-                pid_p=settings.drive_pid_p,
-                pid_i=settings.drive_pid_i,
-                pid_d=settings.drive_pid_d,
-                target_type=HeadingType.RELATIVE,
-            ),
-            IsColorDetected(name="detect push-out black line", color=Color.BLACK),
-        ]
-    )
-
-    # 黒ラインを検知した位置から30mm進み、ボトル全体を境界の外へ押し出す。
-    push_beyond_line = Parallel(
-        name="push bottle 30 mm beyond black line",
-        policy=ParallelPolicy.SuccessOnOne(),
-    )
-    push_beyond_line.add_children(
-        [
-            RunByGyro(
-                name="run straight after push-out line",
-                target=0,
-                power=settings.push_out_drive_power,
-                pid_p=settings.drive_pid_p,
-                pid_i=settings.drive_pid_i,
-                pid_d=settings.drive_pid_d,
-                target_type=HeadingType.RELATIVE,
-            ),
-            IsDistanceEarned(name="push-out margin distance", delta_dist=settings.push_out_after_line_distance_mm),
-        ]
-    )
+    # キャッチと押し出しは前工程の合計500mmに含まれるため、ここでは直線後退から開始する。
 
     # ボトルを押した向きのまま直線後退し、アームから確実に離脱する。
     release_reverse_motor = RunAsInstructed(name="straight reverse release motor command", pwm_l=-settings.release_reverse_power, pwm_r=-settings.release_reverse_power)
@@ -163,16 +188,32 @@ def build_move_to_sumo_exit(context, config):
         ]
     )
 
-    # 離脱後は後退を続けつつ少しガレージ側へ曲がり、復帰用の黒ラインを探す。
-    garage_return_motor = RunAsInstructed(name="garage-side reverse curve motor command", pwm_l=-settings.garage_return_reverse_left_pwm, pwm_r=-settings.garage_return_reverse_right_pwm)
+    # 候補選択による旋回後の方位を保持し、直進で黒ラインを探す。
+    garage_line_detector = DetectDarkGarageLine(
+        name="detect garage-side black line by brightness",
+        context=context,
+        settings=settings,
+    )
     find_garage_side_line = Parallel(
-        name="reverse curve to garage-side black line",
+        name="drive straight to garage-side black line",
         policy=ParallelPolicy.SuccessOnOne(),
     )
     find_garage_side_line.add_children(
         [
-            garage_return_motor,
-            IsColorDetected(name="detect garage-side black line", color=Color.BLACK),
+            RunAtBearing(
+                name="hold garage heading and drive straight",
+                context=context,
+                bearing=lambda: current_bearing(context),
+                power=settings.garage_return_drive_power,
+                pid_p=settings.drive_pid_p,
+                pid_i=settings.drive_pid_i,
+                pid_d=settings.drive_pid_d,
+            ),
+            garage_line_detector,
+            IsDistanceEarned(
+                name="garage-side black line search limit",
+                delta_dist=settings.garage_line_search_max_distance_mm,
+            ),
         ]
     )
 
@@ -196,21 +237,70 @@ def build_move_to_sumo_exit(context, config):
         ]
     )
 
+    # 黒検知後の進入量を調整し、旋回時に機体がラインへ十分乗り込むようにする。
+    enter_garage_line = Parallel(
+        name="advance onto garage line before alignment",
+        policy=ParallelPolicy.SuccessOnOne(),
+    )
+    enter_garage_line.add_children([
+        RunAtBearing(
+            name="run straight onto garage line",
+            context=context,
+            bearing=lambda: current_bearing(context),
+            power=settings.garage_return_drive_power,
+            pid_p=settings.drive_pid_p,
+            pid_i=settings.drive_pid_i,
+            pid_d=settings.drive_pid_d,
+        ),
+        IsDistanceEarned(
+            name="garage line entry distance",
+            delta_dist=settings.garage_line_entry_distance_mm,
+        ),
+    ])
+
+    # 黒検知成功時のみ追加直進、絶対180度合わせ、ライントレースを行う。
+    complete_line_rejoin = Sequence(name="complete garage-side line rejoin", memory=True)
+    complete_line_rejoin.add_children(
+        [
+            WasGarageLineFound("confirm garage-side black line was found", context),
+            enter_garage_line,
+            StopNow(name="stop after garage line entry"),
+            # 黒検知後はコース図の下向き（方位180度）へ向き直す。
+            # 相撲専用アダプターがリセット基準のジャイロ目標へ変換する。
+            SpinToBearing(
+                name="align to garage absolute heading",
+                context=context,
+                bearing=settings.garage_bearing_deg,
+                max_power=settings.turn_max_power,
+                min_power=settings.turn_min_power,
+                pid_p=settings.turn_pid_p,
+                pid_i=settings.turn_pid_i,
+                pid_d=settings.turn_pid_d,
+                tolerance=settings.heading_tolerance_deg,
+            ),
+            # 方位合わせ終了後に制動し、ガレージ方向へのライントレースを開始する。
+            StopNow(name="stop after absolute garage alignment"),
+            stabilize_line_trace,
+            StopNow(name="stop after garage-side line stabilization"),
+            MarkSumoExitState("mark sumo line trace ready", context, "line_trace_ready"),
+        ]
+    )
+    handle_line_search_result = Selector(name="handle garage-side line search result", memory=True)
+    handle_line_search_result.add_children(
+        [
+            complete_line_rejoin,
+            FailWhenGarageLineWasNotFound(
+                "fail when garage-side black line was not found",
+                context,
+                settings,
+            ),
+        ]
+    )
+
     transport = Sequence(name="carry sumo bottle to exit", memory=True)
     transport.add_children(
         [
-            # 実行順1：捕捉したボトルを保持したまま、押し出し用黒ラインへ直進する。
-            AnnounceSumoTransportStage(
-                name="begin straight push-out with bottle held",
-                message="driving straight to push-out black line; bottle remains held",
-            ),
-            find_push_out_line,
-            StopNow(name="stop at push-out black line"),
-            # 実行順2：黒ラインから30mm直進し、ボトルを確実に押し出す。
-            push_beyond_line,
-            StopNow(name="stop after push-out margin"),
-            MarkSumoExitState("mark sumo bottle pushed out", context, "pushed_out"),
-            # 実行順3：旋回せず、そのまま真っすぐ後退してアームからボトルを外す。
+            # 実行順2：旋回せず、そのまま真っすぐ後退してアームからボトルを外す。
             AnnounceSumoTransportStage(
                 name="begin straight reverse release",
                 message="reversing straight to release bottle from arm",
@@ -219,14 +309,25 @@ def build_move_to_sumo_exit(context, config):
             release_reverse,
             StopNow(name="stop after sumo bottle release reverse"),
             MarkSumoExitState("mark sumo bottle released", context, "released"),
-            # 実行順4：少しガレージ側へそれる後退カーブで、復帰用黒ラインを検知する。
-            ConfigureMirroredGarageReturnPwm("configure mirrored garage return pwm", garage_return_motor, settings),
+            # 実行順3：後退完了時の方位±50度のうち、ガレージ方位180度から遠い候補を選ぶ。
+            SpinToBearing(
+                name="turn toward garage before line search",
+                context=context,
+                bearing=lambda: search_bearing(context, settings),
+                max_power=settings.turn_max_power,
+                min_power=settings.turn_min_power,
+                pid_p=settings.turn_pid_p,
+                pid_i=settings.turn_pid_i,
+                pid_d=settings.turn_pid_d,
+                tolerance=settings.heading_tolerance_deg,
+            ),
+            # 実行順4：旋回完了位置で制動し、後続直進が保持する絶対方位を確定する。
+            StopNow(name="stop after garage heading turn"),
+            # 実行順5：旋回後の絶対方位を維持して直進し、復帰用黒ラインを検知する。
             find_garage_side_line,
-            StopNow(name="stop on garage-side black line"),
-            # 実行順5：短距離のライントレースで姿勢を整え、FINISH工程へ引き渡す。
-            stabilize_line_trace,
-            StopNow(name="stop after garage-side line stabilization"),
-            MarkSumoExitState("mark sumo line trace ready", context, "line_trace_ready"),
+            StopNow(name="stop after garage-side black line search"),
+            # 実行順6：検知成功時だけ短距離ライントレースし、FINISH工程へ引き渡す。
+            handle_line_search_result,
         ]
     )
 

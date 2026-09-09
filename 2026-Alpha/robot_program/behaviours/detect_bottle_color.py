@@ -1,5 +1,4 @@
 """Stationary, fresh-frame red/blue/yellow recognition for AT."""
-import time
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 from py_etrobo_util import BottleColor, TargetInterested
@@ -15,15 +14,11 @@ class DetectBottleColor(Behaviour):
         self.context.bottle_color = None
         self.session = runtime.video.begin_bottle_read()
         self.last_frame, self.candidate, self.hits = -1, None, 0
-        self.started = time.monotonic()
 
     def update(self):
         for motor in (runtime.left_motor, runtime.right_motor):
             motor.set_power(0)
             motor.set_brake(True)
-        if time.monotonic() - self.started >= self.settings.bottle_timeout_sec:
-            self.logger.error('AT bottle recognition timed out')
-            return Status.FAILURE
         session, frame_id, observation = runtime.video.get_bottle_observation()
         if session != self.session or frame_id <= self.last_frame:
             return Status.RUNNING

@@ -1,12 +1,8 @@
 import re
-import base64
 from enum import Enum
 from typing import Optional, Tuple
 
-from Crypto.Cipher import AES
-from Crypto.Protocol.KDF import PBKDF2
-from Crypto.Util.Padding import unpad
-from Crypto.Hash import SHA256
+from shared_communication.hint_decoder import decode_hint2
 
 
 class HintType(Enum):
@@ -69,31 +65,7 @@ class Hint:
 
         Uses `password` if given, otherwise falls back to `self.PASSWORD`.
         """
-        pw = self.PASSWORD if password is None else password
-
-        # strip whitespace/newlines safely before decoding
-        encoded_bytes = b"".join(self.raw.encode("utf-8").split())
-        data = base64.b64decode(encoded_bytes)
-
-        if data[:8] != b"Salted__":
-            raise ValueError("Missing OpenSSL salt header")
-
-        salt = data[8:16]
-        ciphertext = data[16:]
-        password_bytes = b"".join(pw.encode("utf-8").split())
-
-        # OpenSSL -pbkdf2 defaults: iterations=10000, hash=SHA256
-        key = PBKDF2(
-            password_bytes,
-            salt,
-            dkLen=16,
-            count=10000,
-            hmac_hash_module=SHA256,
-        )
-
-        cipher = AES.new(key, AES.MODE_ECB)
-        plaintext = unpad(cipher.decrypt(ciphertext), 16)
-        return plaintext.decode("utf-8")
+        return decode_hint2(self.raw, self.PASSWORD if password is None else password)
 
     def resolve(self, password: Optional[str] = None) -> Tuple[HintType, str]:
         """

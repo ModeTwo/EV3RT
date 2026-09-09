@@ -26,7 +26,10 @@ from robot_program.config import (
     mission_requires_qr,
 )
 from robot_program.context import RaceContext
+from robot_program.decryption_key import read_decryption_key
 from robot_program.behaviours.device_control import ResetDevice
+from robot_program.features.sumo_bearing import initial_sumo_bearing
+from robot_program.features.sumo_bearing_motion import RegisterSumoBearing
 from robot_program.runtime import runtime as robot_runtime
 from robot_program.services.execution_safety import stop_motors, pending_features
 from robot_program.services.shutdown import Shutdown
@@ -1030,7 +1033,7 @@ class VideoThread(threading.Thread):
                 time.sleep(VIDEO_INTERVAL - elapsed_time)
 
 
-def build_behaviour_tree(mission_config=None) -> BehaviourTree:
+def build_behaviour_tree(mission_config=None, decryption_key=None, sumo_initial_bearing=180.0) -> BehaviourTree:
     # alpha.pyには競技全体の基本順序を残し、各工程の詳細は機能別ファイルから取得する。
     root = Sequence(name="2026 alpha", memory=True)
     calibration = Sequence(name="calibration", memory=True)
@@ -1046,13 +1049,18 @@ def build_behaviour_tree(mission_config=None) -> BehaviourTree:
     )
     start.add_children([IsTouchOn(name="touch start")])
 
-    mission_context = RaceContext()
+    mission_context = RaceContext(decryption_key=decryption_key)
     mission_config = mission_config or RaceConfig()
+    if mission_config.enable_et_sumo:
+        # 既存ResetDevice完了直後に相撲用の方位対応だけを保存する。他工程の基準は変更しない。
+        calibration.add_child(RegisterSumoBearing(
+            "register sumo bearing after reset", mission_context, sumo_initial_bearing))
+    mission_children = build_mission_children(mission_context, mission_config)
     root.add_children(
         [
             calibration,
             start,
-            *build_mission_children(mission_context, mission_config),
+            *mission_children,
             TheEnd(name="end"),
         ]
     )
@@ -1121,7 +1129,7 @@ def sig_handler(signum, frame) -> None:
 
 
 def main(argv=None):
-    global g_course, g_shutdown
+    global g_course, g_key, g_shutdown
     g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
     parser = argparse.ArgumentParser()
     parser.add_argument('course', choices=['right', 'left'], help='Course to run')
@@ -1134,13 +1142,29 @@ def main(argv=None):
         default='configured',
         help='Mission profile; configured uses the switches in RaceConfig',
     )
+    parser.add_argument("--sumo-initial-bearing", type=float, default=None,
+                        help="Placement bearing for --mission sumo only: up=0, clockwise positive")
     args = parser.parse_args(argv)
+    try:
+        sumo_initial_bearing = initial_sumo_bearing(args.mission, args.sumo_initial_bearing)
+    except ValueError as error:
+        parser.error(str(error))
     g_course = -1 if args.course == 'right' else 1
 
     # 未実装ノードは明示警告するが、PendingFeature自身のSUCCESSで後続工程へ進める。
     print(" -- shutdown-v8 control interval=%.3fs mission=%s" % (EXEC_INTERVAL, args.mission))
     mission_config = config_for_mission(args.mission)
-    tree = build_behaviour_tree(mission_config)
+    decryption_key = None
+    if (not args.check_tree
+            and mission_config.enable_et_rally
+            and mission_config.et_rally_laps > 0
+            and mission_config.et_rally_strategy_source == "received"):
+        # デバイス初期化と20ms制御周期の開始前に、4桁キーの入力・確認を完了する。
+        decryption_key = read_decryption_key()
+        # alpha.py内に残る旧Behaviorとの互換性だけを維持し、新処理はContextを参照する。
+        g_key = decryption_key
+    tree = build_behaviour_tree(mission_config, decryption_key=decryption_key,
+                                sumo_initial_bearing=sumo_initial_bearing)
     pending = pending_features(tree)
     if args.check_tree:
         print(display_tree.unicode_tree(tree))

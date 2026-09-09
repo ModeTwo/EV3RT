@@ -13,6 +13,6 @@ def build_move_after_hint2(context, config):
             TraceLine(name='TO exit trace motor', target=65, power=50,
                       pid_p=0.55, pid_i=0.0000009, pid_d=0.015,
                       trace_side=TraceSide.NORMAL, cutoff_hz=None),
-            settings.to_exit_trace_mm, settings.motion_timeout_sec),
+            settings.to_exit_trace_mm),
     ])
     return root

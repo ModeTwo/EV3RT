@@ -1,3 +1,15 @@
+> 2026-09-09 最新相撲仕様：[方位角・単体試走・復元手順](SUMO_BEARING_v1.md)。相撲のみ上0度・時計回りの方位角へ移行。下記の相撲旧ジャイロ絶対角度・相対20度説明より同資料を優先します。
+
+> 2026-09-08 最新・相撲500mm走行：黒ボトルを検出して方位を確定した位置から、キャッチ・押し出し込みで `capture_and_push_distance_mm=500.0` だけ走り、停止後に設定距離を後退する。画像消失・死角に依存せず毎制御周期で距離を確認する。旧死角150mmと押し出し距離は追加しない。500mmは開始位置からの350mmやカメラ用後退を含まない。以下の旧追加直進仕様より本項を優先する。
+
+> 2026-09-08 最新相撲開始動作：No.15初期位置から`start_straight_distance_mm=350.0`だけジャイロ直進し、停止して土俵側へ相対90度旋回する。旧黒→白0.5秒判定と追加75mmは使用しない。以下の旧開始条件説明より本項を優先する。
+
+> 2026-09-08 最新ガレージ復帰：黒検知・停止→`garage_line_entry_distance_mm=30.0`だけ現在方位で追加直進→停止→絶対180度旋回→停止→既存TraceLineで100mm試走→停止。追加30mmは進入量不足を調整する暫定値で、0にすれば追加距離なし。試走距離は`line_rejoin_trace_distance_mm`、出力は`line_rejoin_trace_power=50`。黒未検知時は復帰動作へ進まない。Left／Rightは既存部品のcourse補正を使用する。
+
+> 2026-09-08 相撲の暫定運用：ボトル検出確定後は、死角進入時の角度ずれ・見失いを捕捉失敗とせず、固定方位の規定距離走行へ移る。下記の旧「正面±8度」「角度ずれで停止」の記載より本項を優先する。`camera_blind_max_theta_deg`は未使用。現設定では死角直進150mm＋押し出し300mmの後、150mm直線後退する。捕捉・押し出しは実測判定ではなく仮定。初回検出待ちと、死角／見失い条件までの接近は従来どおり。
+
+> 2026-09-08：AT・TO・相撲の追加工程タイムアウトを撤去。[現行仕様](../TASK_TIMEOUTS_REMOVED.md)。PC戦略受信の制限とCtrl+C終了処理は維持。
+
 > 2026-09-06 復元：①〜④の調整前へ復元済み。相撲・ミッション選択は維持。現状は [復元記録](../RESTORED_BEFORE_RIGHT_TRIAL.md) を優先してください。
 
 > 2026-09-05 v2更新：最新は[RE・AT・TO連続走行版](../INTEGRATION_RUN_v2.md)です。標準alpha.pyはHint2取得後に停止します。周期はtiming.pyのCONTROL_INTERVAL_SECへ統一しました。以下の旧版説明よりv2文書を優先してください。
@@ -97,6 +109,8 @@ class RaceConfig:
     enable_bottle_delivery: bool = True
     enable_et_rally: bool = True
     et_rally_laps: int = 3
+    et_rally_strategy_source: str = "file"
+    et_rally_plan_path: Optional[str] = None
     enable_et_sumo: bool = True
     enable_finish: bool = True
 ```
@@ -109,12 +123,20 @@ class RaceConfig:
 | `ENABLE_BOTTLE_DELIVERY` | `enable_bottle_delivery` | `True` / `False` |
 | `ENABLE_ET_RALLY` | `enable_et_rally` | `True` / `False` |
 | `ET_RALLY_LAPS` | `et_rally_laps` | `0` / `1` / `2` / `3` |
+| ETラリーSEQ取得元 | `et_rally_strategy_source` | `"received"` / `"file"` |
+| 固定planのパス | `et_rally_plan_path` | `None` / JSONファイルのパス |
 | `ENABLE_ET_SUMO` | `enable_et_sumo` | `True` / `False` |
 | `ENABLE_FINISH` | `enable_finish` | `True` / `False` |
 
 `mission_mode="configured"`では、スタート～LAPゲートを含むすべての工程が上記フラグに従います。すべて`False`なら、キャリブレーションとタッチスタートの後に終了し、LAP走行は開始しません。
 
 `enable_et_rally=False`の場合、`et_rally_laps`の値にかかわらずETラリー周回は実行されません。`et_rally_laps=0`の場合もETラリー周回は実行されません。
+
+現在は無線通信デバイス連携を一時的に横へよけているため、標準設定を`et_rally_strategy_source="file"`としています。`robot_program/tests/plan_seed9392783.json`の固定planを使用し、復号キー入力、PC接続、受信待ちは行いません。
+
+無線通信デバイス連携を再開する場合は`et_rally_strategy_source="received"`へ戻します。PCから受信した`context.strategy`を実行直前にBehavior Treeへ展開し、PCが選択した1～3周分の全SEQを一度だけ実行します。
+
+従来の固定planを使う場合は`et_rally_strategy_source="file"`にします。この場合はPC接続と受信待ちを行いません。`et_rally_plan_path=None`なら`robot_program/tests/plan_seed9392783.json`を使用します。別ファイルを指定する相対パスは`2026-Alpha`直下が基準です。固定planの`steps`全体を一度実行するため、`et_rally_laps`によるJSON内容の切出しは行いません。
 
 設定ファイルを変更せずに工程を単体実行する場合は、`alpha.py`の`--mission`を使用します。
 
@@ -197,6 +219,7 @@ ETRobo.dispatch()
 ├─ robot_program/
 │  ├─ config.py                     # 工程の有効・無効、ETラリー周回数
 │  ├─ context.py                    # 工程間で共有する値
+│  ├─ decryption_key.py             # 起動時の4桁復号キー入力・確認
 │  ├─ runtime.py                    # 実機、センサー、Plotter、Videoの参照
 │  ├─ tree_builder.py               # 有効な競技工程を実行順に並べる
 │  ├─ placeholder.py                # 未実装機能用の仮Behavior
@@ -208,7 +231,6 @@ ETRobo.dispatch()
 │  └─ tests/                        # 単体テスト
 └─ wireless_device/
    ├─ application.py                # PC側処理の統合
-   ├─ password_input.py             # 復号キー入力
    └─ strategy_planner.py           # 走行指示SEQ生成
 ```
 
@@ -299,7 +321,7 @@ from enum import Enum, IntEnum, auto
 from py_etrobo_util import Hint, HintType
 ```
 
-現在の責務分担では、Hintの復号と走行指示SEQ生成はPC側が担当します。走行体側Featureへ`Hint`と`HintType`を追加する前に、PC側で処理できないか確認してください。
+現在の責務分担では、Hint2の復号は走行体側通信スレッド、走行指示SEQ生成はPC側が担当します。Hint読取Featureでは暗号文字列を`context.hint2`へ保存するだけで、復号処理を追加しないでください。
 
 既存の共通Behaviorを利用する場合は、使用するものだけを明示的にimportします。
 
@@ -343,10 +365,49 @@ root.add_children([PendingFeature(name="feature_name_pending")])
 | `motor_control.py` | `StopNow`、`RunAsInstructed` |
 | `device_control.py` | `ResetDevice` |
 | `conditions.py` | `IsDistanceEarned`、`IsColorDetected`、`IsColorTransitionDetected`、`IsTimePassed` |
-| `bottle.py` | `IsBottleInsight`、`HasCaughtBottle` |
+| `bottle.py` | `IsBottleInsight`、`HasCaughtBottle`、`SelectBottleDropZone`、配置先判定・完了記録 |
 | `hint_reader.py` | `ReadHintCard` |
 
 `RunAsInstructed`は従来から使用している名称を維持しています。
+
+### Bottle Delivery No.7～9
+
+ボトルのキャッチは既存の`catch_bottle.py`を使用します。新たに実装したBottle Delivery後半は、Hintカード2の読取と`move_after_hint2.py`による既存の移動（相対-25度旋回、600mmライントレース）が完了した後から始まります。
+
+```text
+move_after_hint2.py
+└─ Hint2後の既存移動を完了
+   └─ select_drop_zone.py
+      ├─ 最初の青ライン（黄ドロップゾーン前）を検知
+      ├─ 黄ボトル: その位置を選択
+      ├─ 青ボトル: 青ラインを1本通過して選択
+      └─ 赤ボトル／不正な認識値: 青ラインを2本通過して最上段を選択
+         └─ drop_bottle.py
+            ├─ 選択した青ラインの中央まで移動
+            ├─ ドロップゾーン側へ90度旋回
+            ├─ 規定距離を前進して配置
+            ├─ 同じ距離を後退
+            └─ ライン進行方向へ90度戻す
+               └─ move_to_rally_ready.py
+                  ├─ 黄・青からは赤ドロップゾーン前までライントレース
+                  ├─ 最上段の青ライン中央で停止
+                  └─ コース内側へ90度旋回してETラリーへ引き渡す
+```
+
+Left／Rightの旋回方向は`SpinAround`内の`runtime.course`で鏡像化されます。Feature側では同じ相対角度`+90度`を指定し、両コースで内側を向く設計です。青ラインを通過する前に固定距離を進むため、同じ青ラインを次のラインとして再検知しません。
+
+実機で調整する値は`IntegrationSettings`へ集約しています。初期値は、ライントレース目標V値75、出力50、青ライン全幅120mm、手前端から中央60mm、ドロップゾーン進入距離250mm、進入出力50、配置側旋回-90度、ラリー内向き旋回+90度です。コード内の経路順序を変更せず、次のフィールドだけで調整できます。
+
+- `delivery_trace_target_v`
+- `delivery_trace_power`
+- `delivery_marker_full_width_mm`
+- `delivery_marker_half_width_mm`
+- `delivery_drop_distance_mm`
+- `delivery_drive_power`
+- `delivery_drop_turn_deg`
+- `delivery_inward_turn_deg`
+
+配置先、配置完了、ETラリー開始姿勢の成立はそれぞれ`RaceContext.selected_drop_zone`、`bottle_delivered`、`rally_ready`へ記録します。ボトル色が赤・青・黄のいずれでもない場合は、事前に決めた既定動作として赤ドロップゾーンを選択します。
 
 ### ET相撲 No.15～18
 
@@ -354,7 +415,7 @@ ET相撲は距離センサーを使用せず、カメラで力士ボトルの黒
 
 ET相撲でも、旋回は`behaviours/gyro_drive.py`の`SpinAround`、方位維持走行は`RunByGyro`、距離終了判定は`IsDistanceEarned`、停止は`StopNow`を利用します。Feature内にモーター出力やPID旋回を重複実装しません。
 
-Feature内に残すのは、黒テープの連続フレーム確認、画像中央へ寄せる前進操舵、カメラ死角へ入った後の捕捉距離設定など、ET相撲に固有の処理だけです。P1・P2の2地点推定、座標経路計画、`sumo_geometry.py`は使用しません。旧距離センサー方式のファイルは比較・復帰用に残していますが、ET相撲の実行木からは外しています。
+Feature内に残すのは、黒テープの連続フレーム確認、停止中画像からのボトル絶対方位算出、カメラ死角へ入った後の捕捉距離設定など、ET相撲に固有の処理だけです。P1・P2の2地点推定、座標経路計画、`sumo_geometry.py`は使用しません。旧距離センサー方式のファイルは比較・復帰用に残していますが、ET相撲の実行木からは外しています。
 
 ```text
 move_to_sumo_start.py
@@ -365,15 +426,17 @@ move_to_sumo_start.py
 ├─ 両コースで50mm後退して制動停止
 └─ capture_sumo_bottle_camera.py
    ├─ 静止状態で黒テープを異なる3フレーム連続確認
-   ├─ 首振り旋回をせず、画像角度を0度へ寄せながら前進
-   ├─ 黒テープが画面下端の死角へ入った時の方位を保存
+   ├─ 停止中の画像角度とジャイロ方位からボトル絶対方位を固定
+   ├─ PWM75・左右輪50～100を維持し、固定方位へジャイロ操舵して前進
+   ├─ 正面±8度以内で黒テープが死角へ入った場合だけ捕捉工程を継続
    └─ 保存方位を維持して調整可能な距離を直進し、下端アーム内へ捕捉
       └─ move_to_sumo_exit.py
-         ├─ ボトルを保持したまま押し出し側の黒ラインまで直進
-         ├─ 黒ライン検知後、30mm追加直進して押し出す
+         ├─ ボトル捕捉完了位置から300mm直進して押し出す
          ├─ 旋回せず直線後退してアームから離脱
-         ├─ 後退しながらガレージ側へ緩く曲がり、復帰用黒ラインを検知
-         └─ 短距離ライントレースで姿勢を整えて停止
+         ├─ 現在方位からガレージ側へ20度旋回して停止
+         ├─ 旋回後の絶対方位を維持して直進し、生V値で復帰用黒ラインを検知
+         ├─ 300mm以内に検知できなければ停止して失敗終了
+         └─ 検知時だけ短距離ライントレースで姿勢を整えて停止
 ```
 
 調整値は`RaceConfig.sumo`の`SumoSettings`へ集約しています。ET相撲開始位置の黒線退出は、共通色分類のWHITEではなくカラーセンサーの生V値を使用します。Vが`line_black_max_value`以下になった後、`line_white_min_value`以上の状態が`line_exit_white_duration_sec`継続した場合に明るい路面へ抜けたと判定します。判定中はHSVと段階を0.25秒間隔でログへ出します。白地確認後は`post_line_clearance_distance_mm`だけ追加直進してから90度旋回します。後退距離は`camera_retreat_distance_mm`（初期値50mm）、後退出力は`camera_retreat_power`（初期値60）です。
@@ -382,13 +445,17 @@ move_to_sumo_start.py
 
 ET相撲の駆動出力設定はすべて50以上です。相撲単体の`--mission sumo`でも、カメラ撮影・画像処理・プレビュー用スレッドを起動します。黒テープを3秒以内に確定できない場合、または接近が8秒を超えた場合はモーターを停止し、捕捉と後続運搬を省略します。
 
-No.16・17では90度旋回後の探索旋回を行いません。カメラで得た黒テープの角度に応じ、基準PWM75へ最大±25の差を付けて両輪50以上のまま前進操舵します。0.25秒間隔で画像角度、画像下端位置、面積、左右PWMをログへ出します。テープが死角へ入った後は、最後の観測方位を既存の`RunByGyro`へ渡して規定距離だけ直進します。
+No.16・17では90度旋回後の探索旋回を行いません。黒テープを停止中に3フレーム確認した時点で、画像角度、ジャイロ方位、Left／Rightのcourse符号からボトル絶対方位を一度だけ算出します。接近中は遅延した画像角度を目標として追い続けず、この固定方位との差を20ms周期のジャイロ値で補正します。基準PWM75、左右輪50～100、最大左右差±25は変更しておらず、速度と最低出力を落としていません。
 
-No.18では、捕捉したボトルを保持したまま黒ラインまで直進し、黒ライン検知後に`push_out_after_line_distance_mm`（初期値30mm）だけ追加直進して押し出します。その後は旋回せず、`release_reverse_distance_mm`（初期値150mm）だけ真っすぐ後退してアームから離脱します。
+ログには画像角度、画像下端位置、面積に加え、固定目標方位、現在の方位誤差、左右PWMを0.25秒間隔で出します。黒テープが画面下端へ到達しても、最後の画像角度が`camera_blind_max_theta_deg`（初期値8度）を超えている場合は横を通過していると判断し、捕捉成功にせず停止・省略します。正面条件を満たした場合だけ、固定したボトル絶対方位を既存の`RunByGyro`へ渡して死角区間を直進します。
 
-離脱後は`garage_return_reverse_left_pwm`と`garage_return_reverse_right_pwm`の左右差を使い、後退しながら少しガレージ側へそれて復帰用黒ラインを探します。この左右差はRightコースで鏡像化されます。黒ライン検知後は`line_rejoin_trace_distance_mm`（初期値100mm）だけ既存の`TraceLine`で走り、FINISH工程へ渡せる姿勢に整えて停止します。ガレージ側へ曲がる向き、150mmの離脱距離、100mmの安定化距離はレプリカコースで調整してください。
+No.18の押し出し完了条件には黒ラインを使用しません。捕捉完了位置から`push_out_distance_mm`（初期値300mm）だけ方位維持直進して押し出します。その後は旋回せず、`release_reverse_distance_mm`（初期値150mm）だけ真っすぐ後退してアームから離脱します。押し出し側黒ラインを取り逃がしても直進を継続し続けない構成です。
 
-Contextには工程ごとに`bottle_pushed_out`、`bottle_released`、`line_trace_ready`を記録します。最後は`transport_completed=True`、`bottle_held_at_exit=False`となります。ログでは押し出し線への接近、直線後退による離脱、ガレージ側黒ライン復帰を個別に確認できます。
+離脱後は`garage_return_turn_deg`（初期値20度）だけガレージ側へその場旋回し、完全停止してから`garage_return_drive_power`（初期値60）で直進します。旋回は既存の`SpinAround`を使用し、Left／Rightは`course`により鏡像化されます。直進は既存の`RunByGyro`が開始時のジャイロ角を絶対目標として保持するため、緩いカーブではなく、ガレージ方向へ向けた方位を維持したまま黒ラインを探します。復帰用黒ラインは彩度を条件にせず、生のV値が`garage_line_black_max_value`（初期値45）以下の状態を`garage_line_confirm_samples`（初期値2回）連続確認して確定します。検知ログにはHSV、連続回数、検知時の絶対方位を出します。
+
+黒ライン検知後は`line_rejoin_trace_distance_mm`（初期値100mm）だけ既存の`TraceLine`で走り、FINISH工程へ渡せる姿勢に整えて停止します。`garage_line_search_max_distance_mm`（初期値300mm）以内に黒ラインを検知できなければ、モーター停止後に`garage_line_not_found`としてミッションを失敗終了し、不明な位置からFINISHへ進みません。300mmの押し出し距離、ガレージ側への旋回角度20度、150mmの離脱距離、300mmの探索上限、100mmの安定化距離はレプリカコースで調整してください。
+
+Contextには工程ごとに`bottle_pushed_out`、`bottle_released`、`garage_line_found`、`line_trace_ready`を記録します。正常完了時は`transport_completed=True`、`bottle_held_at_exit=False`となります。ログでは距離押し出し、直線後退による離脱、ガレージ側黒ライン復帰を個別に確認できます。
 
 ET相撲開始時にはアームが下端にあることを上流工程の事後条件とし、ET相撲内ではアームモーターを動かしません。捕捉成功を直接検知するセンサーは使わず、黒テープが死角へ入った後に`camera_blind_capture_distance_mm`へ到達したことを捕捉成立として扱います。50mm後退量、黒テープ閾値、死角後150mmの初期値、出口運搬経路は実機で確認・調整してください。
 
@@ -403,9 +470,15 @@ ET相撲開始時にはアームが下端にあることを上流工程の事後
 | フィールド | 内容 |
 |---|---|
 | `bottle_color` | 認識したボトル色 |
+| `selected_drop_zone` | Bottle Deliveryで確定した配置先（赤／青／黄） |
+| `bottle_delivered` | 配置用の前進・後退・復帰旋回が完了したか |
+| `rally_ready` | 最上段青ライン中央で内向きになったか |
+| `decryption_key` | alpha.py起動時に入力・確認した4桁復号キー |
 | `hint1` | Hintカード1の読取結果 |
-| `hint2` | Hintカード2の読取結果 |
+| `hint2` | Hintカード2から読み取った暗号文字列 |
+| `hint2_gate_info` | 通信スレッドが復号したHintカード2のゲート情報 |
 | `strategy` | 走行指示SEQ |
+| `selected_rally_laps` | PCが選択し、受信SEQに含めた周回数 |
 | `rally_lap` | 現在のETラリー周回 |
 | `timer` | 競技時間計測 |
 
@@ -472,3 +545,16 @@ class SelectDropZone(Behaviour):
 実機を使わない単体テストでは、`runtime`へFakeMotor、FakeSensor、FakeVideoなどを設定してBehavior単体を確認します。
 
 実機調整が必要な値は、Behaviorのコンストラクタ引数または設定値として外から変更できる形にしてください。
+
+## 11. Hint・走行指示SEQ通信
+
+ETラリー有効時は、`alpha.py`が実機初期化と20ms周期開始の前に4桁復号キーを入力・確認します。Hintカード1・2が`RaceContext`へそろうと、走行体側のバックグラウンド通信スレッドがHint2を復号し、復号値を`hint2_gate_info`へ反映してからPCへ送信します。PC側は経路計算担当の関数を呼び、計算結果のJSONを走行体へ返します。Behavior Treeの周期処理では復号やソケット待機を行わず、キューを短時間確認するだけです。
+
+受信した`strategy`は`RaceContext`へ保存され、No.11の受信待ち成功後にNo.12が走行命令へ変換します。PC側の`selectedLaps`も`selected_rally_laps`へ保存します。SEQは選択周回分を一つの配列として受信するため、走行体側では同じ配列を周回数分繰り返しません。
+
+担当別の組込み方法、JSON形式、通信試験手順は次を参照してください。
+
+- [通信担当・Hint読取担当・経路計算担当・経路実行担当向けガイド](../shared_communication/INTEGRATION_GUIDE_v2.md)
+- [通信方式と実行コマンド](../shared_communication/README.md)
+
+通信試験用の固定経路は`shared_communication/example_strategy.json`です。本番では`python -m wireless_device --host ROBOT_IP --planner module:function`の形式で経路計算担当の関数を指定します。

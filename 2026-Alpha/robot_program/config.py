@@ -1,6 +1,7 @@
 """Race feature switches used by the robot-side tree builder."""
 
 from dataclasses import dataclass, replace
+from typing import Optional
 
 from .sumo_types import SumoSettings
 from .integration_settings import IntegrationSettings
@@ -16,8 +17,16 @@ class RaceConfig:
     enable_bottle_delivery: bool = True
     enable_et_rally: bool = True
     et_rally_laps: int = 3
+    # received: PCから受信したSEQ、file: 従来の固定plan JSONを実行する。
+    et_rally_strategy_source: str = "file"
+    # Noneならtests/plan_seed9392783.json。相対パスは2026-Alpha直下を基準にする。
+    et_rally_plan_path: Optional[str] = None
     enable_et_sumo: bool = True
     enable_finish: bool = True
+    # 直接TCP接続用。SSHポート転送だけならhostを127.0.0.1へ変更する。
+    strategy_host: str = "0.0.0.0"
+    strategy_port: int = 50000
+    strategy_timeout_s: float = 5.0
     sumo: SumoSettings = SumoSettings()
     integration: IntegrationSettings = IntegrationSettings()
 
@@ -79,7 +88,11 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
 
 def mission_requires_qr(config: RaceConfig) -> bool:
     # Hint読取を含まない単体工程ではQRデコーダーを起動条件にしない。
-    return config.mission_mode in ('hint2', 'hint2-return') or config.enable_et_rally
+    return (
+        config.mission_mode in ('hint2', 'hint2-return')
+        or config.enable_et_rally
+        or config.enable_bottle_delivery
+    )
 
 
 def mission_requires_camera(config: RaceConfig) -> bool:

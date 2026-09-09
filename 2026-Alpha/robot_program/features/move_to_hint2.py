@@ -14,7 +14,7 @@ def build_move_to_hint2(context, config):
             TraceLine(name='TO hint2 trace motor', target=65, power=60,
                       pid_p=0.055, pid_i=0.005, pid_d=0.5,
                       trace_side=TraceSide.NORMAL, cutoff_hz=None),
-            settings.to_hint2_trace_mm, settings.motion_timeout_sec),
+            settings.to_hint2_trace_mm),
         to_turn('TO face hint2 relative25', context, settings, 25, relative=True),
     ])
     return root

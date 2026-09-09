@@ -29,6 +29,8 @@ fake.Video = Mock(side_effect=AssertionError('Camera must not open in this check
 fake.Plotter = Mock()
 sys.modules['py_etrobo_util'] = fake
 import alpha
+# 非対話の基盤テストでは、大会前に入力済みの4桁キーを注入する。
+alpha.read_decryption_key = Mock(return_value='1234')
 from py_trees.common import Status
 from py_trees.composites import Sequence
 from py_trees.behaviours import Failure
