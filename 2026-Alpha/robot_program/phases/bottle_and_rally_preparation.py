@@ -3,12 +3,9 @@
 from py_trees.composites import Sequence
 
 from ..features.catch_bottle import build_catch_bottle
+from ..features.to_hint_route import build_tantou_tree
 from ..features.drop_bottle import build_drop_bottle
-from ..features.move_to_hint1 import build_move_to_hint1
-from ..features.move_to_hint2 import build_move_to_hint2
-from ..features.move_after_hint2 import build_move_after_hint2
 from ..features.move_to_rally_ready import build_move_to_rally_ready
-from ..features.read_hint import build_read_hint
 from ..features.select_drop_zone import build_select_drop_zone
 
 
@@ -19,16 +16,8 @@ def build_bottle_and_rally_preparation_phase(context, config):
     if config.enable_bottle_delivery:
         children.append(build_catch_bottle(context, config))
     if config.enable_et_rally or config.enable_bottle_delivery:
-        children.extend(
-            [
-                build_move_to_hint1(context, config),
-                build_read_hint(context, config, hint_number=1),
-                build_move_to_hint2(context, config),
-                build_read_hint(context, config, hint_number=2),
-                # Bottle Deliveryは、既存TOのHint2後移動を完了してから開始する。
-                build_move_after_hint2(context, config),
-            ]
-        )
+        # TOの元の全ツリーを実行し、出口移動後にボトル配置へ進む。
+        children.append(build_tantou_tree(context, config))
     if config.enable_bottle_delivery:
         children.extend(
             [

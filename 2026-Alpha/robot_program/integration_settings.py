@@ -15,7 +15,7 @@ class IntegrationSettings:
     at_gate_forward_mm: float = 100.0
     at_recognition_reverse_mm: float = 200.0
     # AT終了位置（緑円の延長線付近）を調整する第1候補。
-    at_to_transfer_trace_mm: float = 460.0
+    at_to_transfer_trace_mm: float = 560.0
     # TOが引渡し後に黒線へ接近する区間の距離上限。tantou3.py準拠。
     to_first_black_limit_mm: float = 565.0
     to_after_hint1_mm: float = 385.0

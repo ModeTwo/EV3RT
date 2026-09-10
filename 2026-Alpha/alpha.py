@@ -1253,4 +1253,6 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    # 画面ログを実行ごとに保存する。既存--logfile(機器ログ)とは別。
+    from robot_program.services.run_log import run_with_log
+    sys.exit(run_with_log(main))

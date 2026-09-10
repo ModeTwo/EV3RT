@@ -6,7 +6,7 @@
 
 from ..behaviours.conditions import IsColorDetected
 from ..behaviours.gyro_drive import RunByGyro
-from ..heading_profile import HeadingProfile
+from ..start_lap_calibration import calibrated_profile
 from ..start_lap_profile_v1 import POINTS, BLUE_START_MM, LAP_GATE_MM
 from ..types import HeadingType
 from .bt_imports import Color
@@ -26,18 +26,22 @@ def build_start_to_lap_gate(context, config):
         raise ValueError('start_lap_mode must be profile or legacy')
 
     # 1. 距離を渡すと目標角を返す関数を用意する。
-    profile = HeadingProfile(POINTS)
+    profile, blue_start_mm, lap_gate_mm = calibrated_profile(
+        POINTS, BLUE_START_MM, LAP_GATE_MM,
+        first_straight_mm=config.start_lap_first_straight_mm,
+        route_scale=config.start_lap_route_scale,
+    )
 
     # 2. 後続工程があれば青で引渡し、LAP単体なら距離で終了する。
     follows_bottle = config.enable_bottle_delivery or config.mission_mode in ('hint2', 'hint2-return')
     if follows_bottle:
         finish_condition = IsColorDetected('lap blue marker', Color.BLUE)
-        finish_check_from_mm = max(0.0, BLUE_START_MM - BLUE_SEARCH_BEFORE_MM)
-        distance_limit_mm = LAP_GATE_MM + BLUE_MISS_MARGIN_MM
+        finish_check_from_mm = max(0.0, blue_start_mm - BLUE_SEARCH_BEFORE_MM)
+        distance_limit_mm = lap_gate_mm + BLUE_MISS_MARGIN_MM
     else:
         finish_condition = None
         finish_check_from_mm = 0.0
-        distance_limit_mm = LAP_GATE_MM + LAP_PASS_MARGIN_MM
+        distance_limit_mm = lap_gate_mm + LAP_PASS_MARGIN_MM
 
     # 3. 走行命令はこの一つ。heading_atに括弧を付けず「関数」を渡す。
     #    RunByGyroが毎周期、heading_at(走行距離mm)を呼んで目標角を更新する。

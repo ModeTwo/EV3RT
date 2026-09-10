@@ -6,9 +6,10 @@ from ..runtime import runtime
 
 
 class DetectBottleColor(Behaviour):
-    def __init__(self, name, context, settings):
+    def __init__(self, name, context, settings=None, min_area=150, min_frames=3):
         super().__init__(name)
         self.context, self.settings = context, settings
+        self.min_area, self.min_frames = min_area, min_frames
 
     def initialise(self):
         self.context.bottle_color = None
@@ -24,12 +25,12 @@ class DetectBottleColor(Behaviour):
             return Status.RUNNING
         self.last_frame = frame_id
         insight, color, _, _, _, area, _ = observation
-        if not insight or area < 150 or color not in (BottleColor.RED, BottleColor.BLUE, BottleColor.YELLOW):
+        if not insight or area < self.min_area or color not in (BottleColor.RED, BottleColor.BLUE, BottleColor.YELLOW):
             self.candidate, self.hits = None, 0
             return Status.RUNNING
         self.hits = self.hits + 1 if color == self.candidate else 1
         self.candidate = color
-        if self.hits < 3:
+        if self.hits < self.min_frames:
             return Status.RUNNING
         self.context.bottle_color = color.value
         self.logger.info('AT bottle_color=%s frame=%d' % (color.value, frame_id))

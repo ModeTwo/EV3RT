@@ -135,7 +135,7 @@ with patch('time.monotonic',side_effect=lambda:now[0]):
         self.run_case('''
 assert alpha.EXEC_INTERVAL==alpha.VIDEO_INTERVAL==CONTROL_INTERVAL_SEC
 ctx.at_to.heading_deg=15
-tree=alpha.build_behaviour_tree()
+tree=alpha.build_behaviour_tree(RaceConfig(mission_mode='hint2', start_lap_mode='legacy'))
 for n in tree.iterate():
     if isinstance(n,TraceLine):
         assert n.pid.sample_time==CONTROL_INTERVAL_SEC
@@ -156,7 +156,7 @@ for mode in ('hint2','hint2-return'):
     runtime.gyro_sensor.get_angle.return_value=-course*15
     ctx=RaceContext()
     tree=Sequence('RE_AT_TO integration',memory=True)
-    tree.add_children(build_mission_children(ctx,RaceConfig(mission_mode=mode)))
+    tree.add_children(build_mission_children(ctx,RaceConfig(mission_mode=mode, start_lap_mode='legacy')))
     now=[0.0]
     with patch('time.monotonic',side_effect=lambda:now[0]):
       for step in range(200):
@@ -190,10 +190,10 @@ for mode in ('hint2','hint2-return'):
 cfg=RaceConfig(integration=IntegrationSettings(at_to_transfer_trace_mm=480,to_first_black_limit_mm=580))
 t=build_hint_collection_phase(ctx,cfg)
 distances={n.name:n.delta_dist for n in t.iterate() if isinstance(n,IsDistanceEarned)}
-assert distances['AT_TO transfer trace distance']==480
-assert distances['TO first approach distance']==580
-assert distances['TO after hint1 straight distance']==385
-assert distances['TO hint2 approach trace distance']==1000
+assert distances['check 46cm']==480
+assert distances['black_distance_limit']==580
+assert distances['distance_after_qr1']==385
+assert distances['dist_1200']==1000
 ''')
 
     def test_motion_waits_for_distance_and_can_be_interrupted(self):
@@ -265,12 +265,8 @@ cfg=config_for_mission('bottle')
 phase=build_bottle_and_rally_preparation_phase(RaceContext(),cfg)
 names=[child.name for child in phase.children]
 assert names == [
-    'AT bottle capture and transfer',
-    'TO move to hint1',
-    'TO read hint1',
-    'TO move to hint2',
-    'TO read hint2',
-    'TO original exit after hint2',
+    'blue and bottle test',
+    'Tantou Section',
     'select_drop_zone',
     'drop_bottle',
     'move_to_rally_ready',
@@ -349,3 +345,47 @@ selector=next(node for node in mission.iterate() if isinstance(node,SelectBottle
 assert selector.context.bottle_color == fake.BottleColor.BLUE.value
 assert not any(node.name.startswith('TO ') for node in mission.iterate())
 ''')
+
+    def test_to_tree_has_original_order_without_added_stops(self):
+        self.run_case("""
+from robot_program.features.to_hint_route import build_tantou_tree
+for include_exit in (False, True):
+    tree = build_tantou_tree(ctx, RaceConfig(), include_exit=include_exit)
+    names = [n.name for n in tree.children]
+    assert len(names) == (15 if include_exit else 12), names
+    assert names[:3] == ['turn_left_55', 'go_to_black', 'turn_right_125'], names
+    assert not {'stop_black', 'TO stop before hint1', 'TO stop before hint2'} & {n.name for n in tree.iterate()}
+    assert names[-1] == ('stop_final' if include_exit else 'qr2_read'), names
+""")
+
+    def test_standalone_at_to_scope_camera_and_origin(self):
+        self.run_case("""
+from robot_program.config import config_for_mission, mission_requires_camera, mission_requires_qr
+from robot_program.behaviours.handoff import CaptureAtToHandoff
+for mode in ('at', 'to'):
+    cfg = config_for_mission(mode)
+    assert not any((cfg.lapgate, cfg.enable_bottle_delivery, cfg.enable_et_rally,
+                    cfg.enable_et_sumo, cfg.enable_finish))
+    assert mission_requires_camera(cfg)
+    assert mission_requires_qr(cfg) == (mode == 'to')
+    tree = alpha.build_behaviour_tree(cfg)
+    assert [n.name for n in tree.children[:2]] == ['calibration', 'start']
+    assert tree.children[-1].name == 'end'
+    for course in (1, -1):
+        runtime.course = course
+        context = RaceContext()
+        nodes = build_mission_children(context, cfg)
+        if mode == 'at':
+            assert len(nodes) == 1 and nodes[0].name == 'blue and bottle test'
+            assert not any(isinstance(n, ReadHintCard) for n in nodes[0].iterate())
+        else:
+            assert len(nodes) == 2 and isinstance(nodes[0], CaptureAtToHandoff)
+            runtime.gyro_sensor.get_angle.return_value = 23
+            runtime.plotter.get_distance.return_value = 1234
+            nodes[0].tick_once()
+            assert context.at_to.heading_deg == -course * 23
+            assert context.at_to.distance_mm == 1234
+            assert nodes[1].name == 'Tantou Section'
+            assert nodes[1].children[-1].name == 'stop_final'
+            assert sum(isinstance(n, ReadHintCard) for n in nodes[1].iterate()) == 2
+""")

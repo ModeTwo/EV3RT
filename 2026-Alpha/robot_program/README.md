@@ -1,3 +1,15 @@
+AT・TO単体実行: `pypy3 alpha.py right --mission at` / `--mission to`。配置と操作は[単体実行手順](../AT_TO_STANDALONE_v1.md)。
+
+TOは工程分割せず元のツリーを直接接続します。[最新版の説明](../AT_TO_SOURCE_STYLE_v2.md)。
+
+# スタート距離補正 v4
+
+最新の開始距離設定は [START_LAP_CALIBRATION_v4.md](START_LAP_CALIBRATION_v4.md) を参照。
+
+> 2026-09-10 [実行ログの自動保存](RUN_LOGGING_v1.md): 通常のalpha.py実行でrun_logsへ日時付きログを保存。Ctrl+C時も終了処理し、.gitignoreでGit対象から除外する。
+
+AT・TO担当者の編集箇所は [AT_TO_SOURCE_STYLE_v1.md](../AT_TO_SOURCE_STYLE_v1.md) を参照してください。
+
 > 2026-09-10 スタート～LAPの追従調整: [調整ガイド v3](START_LAP_TUNING_v3.md)。P=1.8/I=0/D=0.03、曲率による基本旋回出力と最大8度の推定横ずれ補正を追加。速度33、距離表は維持。以下のv2の「ゲイン不変」は過去版の記録。新規path_tracking.pyも配備する。
 
 > 2026-09-10 スタート～LAPの構造整理: [初学者向け編集ガイド v2](START_LAP_GUIDE_v2.md)。featureは `RunByGyro(target=profile.heading_at, ...)` を一つ返す。速度・PIDはconfig.py、旧方式は別ファイル。以下の距離方位クラスv1説明より本ガイドを優先する。

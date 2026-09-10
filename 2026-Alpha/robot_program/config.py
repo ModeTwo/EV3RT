@@ -15,8 +15,13 @@ class RaceConfig:
     mission_mode: str = 'configured'
     lapgate : bool = True
     # profile: PDF距離-方位表。legacy: 従来の固定方位+ライントレース。
-    start_lap_mode: str = 'profile'
+    #start_lap_mode: str = 'profile'
+    start_lap_mode: str = 'legacy'
     start_lap_power: int = 33
+    # 車軸中心から最初のカーブまで。アーム先端から500mm＋前方100mm。
+    start_lap_first_straight_mm: float = 600.0
+    # 最初のカーブ以降の距離倍率。別途実測するまでは旧表の長さを維持。
+    start_lap_route_scale: float = 1.0
     # スタート～LAP専用。I残留をなくし、角度誤差への補正を少し強める。
     start_lap_pid_p: float = 1.8
     start_lap_pid_i: float = 0.0
@@ -46,6 +51,8 @@ class RaceConfig:
 
 
 MISSION_CHOICES = (
+    'at',
+    'to',
     'configured',
     'lap',
     'bottle',
@@ -77,6 +84,8 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         enable_et_sumo=False,
         enable_finish=False,
     )
+    if mission in ('at', 'to'):
+        return replace(config, mission_mode=mission, **disabled)
     if mission == 'bottle-final':
         # Hint2後移動の終了位置から、Bottle Delivery後半だけを単体実行する。
         return replace(config, mission_mode=mission, **disabled)
@@ -107,7 +116,7 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
 def mission_requires_qr(config: RaceConfig) -> bool:
     # Hint読取を含まない単体工程ではQRデコーダーを起動条件にしない。
     return (
-        config.mission_mode in ('hint2', 'hint2-return')
+        config.mission_mode in ('to', 'hint2', 'hint2-return')
         or config.enable_et_rally
         or config.enable_bottle_delivery
     )
@@ -115,7 +124,7 @@ def mission_requires_qr(config: RaceConfig) -> bool:
 
 def mission_requires_camera(config: RaceConfig) -> bool:
     # ET相撲は黒テープ付き力士ボトルの捕捉にカメラを使用する。
-    if config.mission_mode in ('hint2', 'hint2-return'):
+    if config.mission_mode in ('at', 'to', 'hint2', 'hint2-return'):
         return True
     return any(
         (
