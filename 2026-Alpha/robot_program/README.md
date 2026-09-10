@@ -1,3 +1,5 @@
+AT単体は青線手前のライン上から開始します。[最新単体実行手順](../AT_TO_STANDALONE_v2.md)。
+
 AT・TO単体実行: `pypy3 alpha.py right --mission at` / `--mission to`。配置と操作は[単体実行手順](../AT_TO_STANDALONE_v1.md)。
 
 TOは工程分割せず元のツリーを直接接続します。[最新版の説明](../AT_TO_SOURCE_STYLE_v2.md)。
@@ -455,6 +457,20 @@ Bottle color (red/blue/yellow): blue
 ```
 
 Rightコースでは先頭の`left`を`right`へ変更します。このモードは画像認識結果の代わりに入力色を`RaceContext.bottle_color`へ格納するため、カメラとQRデコーダーを起動しません。`--bottle-color`は`bottle-final`以外では指定できません。
+
+#### コードを読む順番
+
+初めてコードを読む場合は、次の順番で追うと動きとの対応が分かります。
+
+1. `alpha.py`の`read_bottle_color_for_final_mission()`が、端末または`--bottle-color`から色を受け取ります。
+2. `alpha.py`の`build_behaviour_tree()`が、その色を`RaceContext.bottle_color`へ保存します。
+3. `tree_builder.py`が`bottle-final`を見つけ、Bottle Delivery後半だけのPhaseを選びます。
+4. `bottle_and_rally_preparation.py`の`build_bottle_delivery_final_phase()`が、次の3工程を順番に並べます。
+5. `select_drop_zone.py`が入力色に合う青ラインまで進みます。
+6. `drop_bottle.py`が、中央移動→配置側旋回→前進→後退→復帰旋回の順に実行します。
+7. `move_to_rally_ready.py`が最上段の青ライン中央へ進み、内側へ90度旋回して停止します。
+
+`drop_bottle.py`では各動作を`move_to_blue_line_center`、`turn_toward_drop_zone`、`drive_into_drop_zone`のような名前付き変数に分けています。上から順に変数名と日本語コメントを読んだ後、最後の`root.add_children()`を見ると、実際の実行順序を確認できます。調整時は動作の並びを変更せず、`IntegrationSettings`の距離・出力・角度を変更してください。
 
 ### ET相撲 No.15～18
 

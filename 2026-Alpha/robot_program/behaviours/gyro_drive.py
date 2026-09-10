@@ -38,7 +38,7 @@ class SpinAround(Behaviour):
         tolerance: float = 1.0,
         settle_time: float = 0.2,
         slowdown_angle: float = 15.0,
-        fine_power: float = 18.0,
+        fine_power: float = None,
     ) -> None:
         super().__init__(name)
         self.target = target
@@ -46,13 +46,15 @@ class SpinAround(Behaviour):
         self.pid_p = pid_p
         self.pid_i = pid_i
         self.pid_d = pid_d
+        if fine_power is None:
+            fine_power = min_power
         if not (0 < tolerance < slowdown_angle and settle_time > 0
                 and 0 < fine_power <= 100 and 0 <= min_power <= max_power <= 100):
             raise ValueError("Invalid spin settling or power settings")
         self.tolerance = tolerance
         self.settle_time = settle_time
         self.slowdown_angle = slowdown_angle
-        self.fine_power = min(fine_power, max_power)
+        self.fine_power = max(min_power, min(fine_power, max_power))
         self.max_power = max_power
         self.min_power = min_power
         self.stable_since = None
@@ -109,12 +111,11 @@ class SpinAround(Behaviour):
             self.pid.reset()
         self.stable_since = None
         self.stable_heading = None
-        # Bound both PID and minimum output as the target approaches. The fine
-        # output is a commissioning value, not a measured motor deadband.
+        # Slow down the ceiling, but never undercut the caller's minimum
+        # moving PWM: lower power stalled the real robot near the target.
         ratio = min(1.0, abs(error) / self.slowdown_angle)
         ceiling = self.fine_power + (self.max_power - self.fine_power) * ratio
-        floor = min(self.min_power, self.fine_power)
-        floor += (self.min_power - floor) * ratio
+        floor = self.min_power
         raw_power = float(self.pid(-error))
         magnitude = max(floor, min(abs(raw_power), ceiling))
         power = int(magnitude) * (1 if error > 0 else -1)

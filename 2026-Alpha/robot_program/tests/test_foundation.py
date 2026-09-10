@@ -59,6 +59,24 @@ with patch.object(alpha, 'initialize_etrobo', side_effect=AssertionError('No har
 fake.Video.assert_not_called()
 ''')
 
+    def test_bottle_final_color_input_is_kept_simple_and_explicit(self):
+        self.run_case('''
+# コマンド指定、端末入力、ツリー表示用の仮値を同じ関数で確認する。
+assert alpha.read_bottle_color_for_final_mission(
+    'bottle-final', 'blue', False) == fake.BottleColor.BLUE.value
+with patch('builtins.input', return_value=' YELLOW '):
+    assert alpha.read_bottle_color_for_final_mission(
+        'bottle-final', None, False) == fake.BottleColor.YELLOW.value
+assert alpha.read_bottle_color_for_final_mission(
+    'bottle-final', None, True) == fake.BottleColor.RED.value
+assert alpha.read_bottle_color_for_final_mission('lap', None, False) is None
+try:
+    alpha.read_bottle_color_for_final_mission('lap', 'red', False)
+    raise AssertionError('Color input must be rejected outside bottle-final')
+except ValueError:
+    pass
+''')
+
     def test_configured_switches_and_each_single_mission(self):
         self.run_case('''
 from robot_program.config import RaceConfig, config_for_mission, mission_requires_camera, mission_requires_qr

@@ -2,7 +2,7 @@
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..behaviours.section_motion import DriveDistance
 from ..behaviours.line_trace import TraceLine
-from ..behaviours.conditions import IsDistanceEarned
+from ..behaviours.conditions import IsDistanceEarned, IsColorDetected
 from ..behaviours.motor_control import StopNow
 from ..behaviours.detect_bottle_color import DetectBottleColor
 from ..behaviours.handoff import CaptureAtToHandoff
@@ -49,7 +49,33 @@ def build_catch_bottle(context, config):
     # 青色を検知するまでライントレース
     # ==========================================
 
-    # 【統合差分】タッチ待ちと青色検知はalpha/REが担当済み。
+    trace_until_blue = Parallel(
+        name="trace until blue",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
+
+    trace_until_blue.add_children(
+        [
+            TraceLine(
+                name="trace before blue",
+
+                target=TRACELINE_TARGET_V,
+
+                power=60,
+
+                pid_p=0.65,
+                pid_i=0.000001,
+                pid_d=0.045,
+
+                trace_side=TraceSide.NORMAL
+            ),
+
+            IsColorDetected(
+                name="check blue",
+                color=Color.BLUE
+            ),
+        ]
+    )
 
     # ==========================================
     # ボトル色認識後、46cmライントレース
@@ -89,6 +115,10 @@ def build_catch_bottle(context, config):
     # Behaviour Tree
     # ==========================================
 
+    # 【統合差分】AT単体は青線まで走る。統合走行ではREが検知済み。
+    if config.mission_mode == 'at':
+        root.add_child(trace_until_blue)
+
     root.add_children(
         [
 
@@ -97,7 +127,7 @@ def build_catch_bottle(context, config):
 
 
             # ② 青色までライントレース
-            # 【統合差分】trace_until_blueはREで実行済み。
+            # 【統合差分】単体時のみ上でtrace_until_blueを先頭へ接続。
 
 
             # ③ 青色検知後、10cm前進

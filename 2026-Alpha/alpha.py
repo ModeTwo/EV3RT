@@ -46,6 +46,14 @@ SPIN_MAX_POWER     = 57
 SPIN_MIN_POWER     = 47
 TRACELINE_TARGET_V = 75
 
+# Bottle Delivery後半単体試験で、入力名とプログラム内部の色を対応させる。
+BOTTLE_COLOR_NAMES = ('red', 'blue', 'yellow')
+BOTTLE_COLOR_VALUE_BY_NAME = {
+    'red': BottleColor.RED.value,
+    'blue': BottleColor.BLUE.value,
+    'yellow': BottleColor.YELLOW.value,
+}
+
 # constants for specific action classes
 ARM_SHIFT_PWM      = 35   # ArmUpDownFull
 JUNCT_UPPER_THRESH = 50   # IsJunction 
@@ -1136,6 +1144,31 @@ def sig_handler(signum, frame) -> None:
     raise SystemExit(128 + signum)
 
 
+def read_bottle_color_for_final_mission(mission, color_argument, check_tree):
+    # 通常ミッションでは色の手入力を使わない。
+    if mission != 'bottle-final':
+        if color_argument is not None:
+            raise ValueError(
+                '--bottle-color is available only with --mission bottle-final'
+            )
+        return None
+
+    # コマンドで色を省略した場合だけ、走行開始前に端末から入力する。
+    color_name = color_argument
+    if color_name is None and not check_tree:
+        color_name = input('Bottle color (red/blue/yellow): ').strip().lower()
+
+    # ツリー表示だけの場合は分岐を実行しない。Contextには有効な仮値を入れておく。
+    if color_name is None:
+        color_name = 'red'
+
+    if color_name not in BOTTLE_COLOR_VALUE_BY_NAME:
+        raise ValueError('Bottle color must be red, blue, or yellow')
+
+    print(' -- bottle-final color=%s' % color_name)
+    return BOTTLE_COLOR_VALUE_BY_NAME[color_name]
+
+
 def main(argv=None):
     global g_course, g_key, g_shutdown
     g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
@@ -1152,7 +1185,7 @@ def main(argv=None):
     )
     parser.add_argument(
         '--bottle-color',
-        choices=('red', 'blue', 'yellow'),
+        choices=BOTTLE_COLOR_NAMES,
         default=None,
         help='Bottle color for --mission bottle-final',
     )
@@ -1168,25 +1201,14 @@ def main(argv=None):
     # 未実装ノードは明示警告するが、PendingFeature自身のSUCCESSで後続工程へ進める。
     print(" -- shutdown-v8 control interval=%.3fs mission=%s" % (EXEC_INTERVAL, args.mission))
     mission_config = config_for_mission(args.mission)
-    bottle_color = None
-    if args.mission == 'bottle-final':
-        entered_color = args.bottle_color
-        if entered_color is None and not args.check_tree:
-            entered_color = input('Bottle color (red/blue/yellow): ').strip().lower()
-        if entered_color is None:
-            # Tree inspection does not execute the selector, but a valid value keeps its contract explicit.
-            entered_color = 'red'
-        bottle_colors = {
-            'red': BottleColor.RED.value,
-            'blue': BottleColor.BLUE.value,
-            'yellow': BottleColor.YELLOW.value,
-        }
-        if entered_color not in bottle_colors:
-            parser.error('Bottle color must be red, blue, or yellow')
-        bottle_color = bottle_colors[entered_color]
-        print(' -- bottle-final color=%s' % entered_color)
-    elif args.bottle_color is not None:
-        parser.error('--bottle-color is available only with --mission bottle-final')
+    try:
+        bottle_color = read_bottle_color_for_final_mission(
+            mission=args.mission,
+            color_argument=args.bottle_color,
+            check_tree=args.check_tree,
+        )
+    except ValueError as error:
+        parser.error(str(error))
     decryption_key = None
     if (not args.check_tree
             and mission_config.enable_et_rally

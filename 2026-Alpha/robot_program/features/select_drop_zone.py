@@ -55,17 +55,17 @@ def build_select_drop_zone(context, config):
     # No.7 ボトル色に対応する青ライン上の停止位置選択を担当する。
     settings = config.integration
     root = Sequence(name="select_drop_zone", memory=True)
-    route = Selector(name="route to selected drop zone", memory=True)
+    color_route = Selector(name="route to selected drop zone", memory=True)
 
     # Hint2後の移動完了位置から最初の青ライン（黄ゾーン前）まで追従する。
-    yellow = Sequence(name="select yellow zone", memory=True)
-    yellow.add_children(
+    yellow_route = Sequence(name="select yellow zone", memory=True)
+    yellow_route.add_children(
         [IsSelectedDropZone("is yellow zone", BottleColor.YELLOW, context)]
     )
 
     # 青ボトルでは黄ゾーン前を一つ通過する。
-    blue = Sequence(name="select blue zone", memory=True)
-    blue.add_children(
+    blue_route = Sequence(name="select blue zone", memory=True)
+    blue_route.add_children(
         [
             IsSelectedDropZone("is blue zone", BottleColor.BLUE, context),
             _pass_marker_and_find_next("yellow to blue", settings),
@@ -73,20 +73,31 @@ def build_select_drop_zone(context, config):
     )
 
     # 赤ボトルおよび認識失敗時は、黄・青ゾーン前を通過して最上段へ進む。
-    red = Sequence(name="select red zone", memory=True)
-    red.add_children(
+    red_route = Sequence(name="select red zone", memory=True)
+    red_route.add_children(
         [
             IsSelectedDropZone("is red zone", BottleColor.RED, context),
             _pass_marker_and_find_next("yellow to blue for red", settings),
             _pass_marker_and_find_next("blue to red", settings),
         ]
     )
-    route.add_children([yellow, blue, red])
+    # Selectorは上から順に色を確認し、一致した経路だけを実行する。
+    color_route.add_children([yellow_route, blue_route, red_route])
+
+    decide_drop_zone = SelectBottleDropZone(
+        "decide bottle drop zone",
+        context,
+    )
+    move_to_first_blue_line = _trace_until_blue(
+        "find yellow zone blue line",
+        settings,
+    )
+
     root.add_children(
         [
-            SelectBottleDropZone("decide bottle drop zone", context),
-            _trace_until_blue("find yellow zone blue line", settings),
-            route,
+            decide_drop_zone,
+            move_to_first_blue_line,
+            color_route,
         ]
     )
     return root

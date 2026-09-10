@@ -69,15 +69,17 @@ def build_move_to_rally_ready(context, config):
     # No.9 最上段の青ライン中央へ移動し、ETラリーエリア内側へ向ける。
     settings = config.integration
     root = Sequence(name="move_to_rally_ready", memory=True)
-    route = Selector(name="route from delivered zone to rally start", memory=True)
+    start_zone_route = Selector(name="route from delivered zone to rally start", memory=True)
 
     # 赤へ配置した場合は、すでに最上段の青ライン中央へ戻っている。
-    red = Sequence(name="red zone is rally start", memory=True)
-    red.add_children([IsSelectedDropZone("started from red zone", BottleColor.RED, context)])
+    red_route = Sequence(name="red zone is rally start", memory=True)
+    red_route.add_children(
+        [IsSelectedDropZone("started from red zone", BottleColor.RED, context)]
+    )
 
     # 青からは一段、黄からは二段上の赤ゾーン前まで進む。
-    blue = Sequence(name="blue zone to rally start", memory=True)
-    blue.add_children(
+    blue_route = Sequence(name="blue zone to rally start", memory=True)
+    blue_route.add_children(
         [
             IsSelectedDropZone("started from blue zone", BottleColor.BLUE, context),
             _leave_current_center_and_find_next("blue to red rally line", settings),
@@ -89,8 +91,8 @@ def build_move_to_rally_ready(context, config):
         ]
     )
 
-    yellow = Sequence(name="yellow zone to rally start", memory=True)
-    yellow.add_children(
+    yellow_route = Sequence(name="yellow zone to rally start", memory=True)
+    yellow_route.add_children(
         [
             IsSelectedDropZone("started from yellow zone", BottleColor.YELLOW, context),
             _leave_current_center_and_find_next("yellow to blue rally line", settings),
@@ -104,8 +106,8 @@ def build_move_to_rally_ready(context, config):
     )
 
     # ラリー単体モードではボトル配置を経ないため、黄ゾーン前の手前端から赤まで進む。
-    no_bottle = Sequence(name="first marker to rally start without bottle", memory=True)
-    no_bottle.add_children(
+    no_bottle_route = Sequence(name="first marker to rally start without bottle", memory=True)
+    no_bottle_route.add_children(
         [
             IsDropZoneUnset("drop zone was not selected", context),
             _trace_until_blue("find yellow zone without bottle", settings),
@@ -118,21 +120,28 @@ def build_move_to_rally_ready(context, config):
             ),
         ]
     )
-    route.add_children([red, blue, yellow, no_bottle])
+    # 配置した色ごとに、最上段の赤ゾーン前までの移動量を切り替える。
+    start_zone_route.add_children(
+        [red_route, blue_route, yellow_route, no_bottle_route]
+    )
+
+    # ライン進行方向からcourse正規化した+90度へ旋回すると内向きになる。
+    turn_toward_rally = to_turn(
+        "turn inward at rally start",
+        context,
+        settings,
+        settings.delivery_inward_turn_deg,
+        relative=True,
+    )
+    stop_at_rally_start = StopNow(name="stop at rally start")
+    mark_rally_ready = MarkRallyReady("mark rally ready", context)
 
     root.add_children(
         [
-            route,
-            # ライン進行方向からcourse正規化した+90度へ旋回すると内向きになる。
-            to_turn(
-                "turn inward at rally start",
-                context,
-                settings,
-                settings.delivery_inward_turn_deg,
-                relative=True,
-            ),
-            StopNow(name="stop at rally start"),
-            MarkRallyReady("mark rally ready", context),
+            start_zone_route,
+            turn_toward_rally,
+            stop_at_rally_start,
+            mark_rally_ready,
         ]
     )
     return root

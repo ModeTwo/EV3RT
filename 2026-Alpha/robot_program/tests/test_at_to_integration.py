@@ -178,7 +178,10 @@ for mode in ('hint2','hint2-return'):
       assert tree.status==Status.SUCCESS, tree.tip().name
     assert ctx.hint1=='hint-1' and ctx.hint2=='hint-2'
     assert ctx.bottle_color==fake.BottleColor.RED.value
-    assert ctx.at_to.distance_mm==6700  # 2000+RE4340+AT100-200+460
+    settings = IntegrationSettings()
+    assert ctx.at_to.distance_mm == (2000 + 4340 + settings.at_gate_forward_mm
+                                     - settings.at_recognition_reverse_mm
+                                     + settings.at_to_transfer_trace_mm)
     assert ctx.at_to.heading_deg==15
     assert runtime.left_motor.power==runtime.right_motor.power==0
     assert runtime.left_motor.brake and runtime.right_motor.brake
@@ -388,4 +391,29 @@ for mode in ('at', 'to'):
             assert nodes[1].name == 'Tantou Section'
             assert nodes[1].children[-1].name == 'stop_final'
             assert sum(isinstance(n, ReadHintCard) for n in nodes[1].iterate()) == 2
+""")
+
+    def test_at_standalone_waits_for_blue_before_forward(self):
+        self.run_case("""
+from robot_program.config import config_for_mission
+from robot_program.features.catch_bottle import build_catch_bottle
+for course in (1, -1):
+    runtime.course = course
+    tree = build_catch_bottle(RaceContext(), config_for_mission('at'))
+    trace = tree.children[0]
+    assert trace.name == 'trace until blue'
+    detector = next(n for n in trace.iterate() if isinstance(n, IsColorDetected))
+    detector.classifier = Mock()
+    detector.classifier.classify.return_value = fake.Color.UNKNOWN
+    tree.tick_once()
+    assert trace.status == Status.RUNNING
+    assert tree.children[1].status == Status.INVALID
+    detector.classifier.classify.return_value = fake.Color.BLUE
+    tree.tick_once()
+    assert trace.status == Status.SUCCESS
+    assert tree.children[1].name == 'forward 10cm'
+    assert tree.children[1].status == Status.RUNNING
+    integrated = build_catch_bottle(RaceContext(), RaceConfig())
+    assert integrated.children[0].name == 'forward 10cm'
+    assert not any(n.name == 'trace until blue' for n in integrated.iterate())
 """)

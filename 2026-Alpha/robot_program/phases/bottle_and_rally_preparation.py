@@ -33,11 +33,21 @@ def build_bottle_and_rally_preparation_phase(context, config):
 def build_bottle_delivery_final_phase(context, config):
     # Hint2後移動の終了位置から、色別配置とラリー開始位置への復帰だけを実行する。
     root = Sequence(name="bottle_delivery_final", memory=True)
+
+    # 1. 入力されたボトル色に対応する青ラインまで進む。
+    move_to_selected_zone = build_select_drop_zone(context, config)
+
+    # 2. 青ライン中央からドロップゾーンへボトルを置き、ラインへ戻る。
+    place_bottle = build_drop_bottle(context, config)
+
+    # 3. 最上段の青ライン中央へ進み、ETラリーエリアの内側を向く。
+    move_to_rally_start = build_move_to_rally_ready(context, config)
+
     root.add_children(
         [
-            build_select_drop_zone(context, config),
-            build_drop_bottle(context, config),
-            build_move_to_rally_ready(context, config),
+            move_to_selected_zone,
+            place_bottle,
+            move_to_rally_start,
         ]
     )
     return root
