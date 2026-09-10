@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from .services.race_timer import RaceTimer
 from .sumo_types import SumoState
 from .integration_settings import HandoffState
+from .delivery_heading import DeliveryHeadingReference
 
 
 @dataclass
@@ -31,3 +32,5 @@ class RaceContext:
     timer: RaceTimer = field(default_factory=RaceTimer)
     sumo: SumoState = field(default_factory=SumoState)
     at_to: HandoffState = field(default_factory=HandoffState)
+
+    delivery_heading: DeliveryHeadingReference = field(default_factory=DeliveryHeadingReference)

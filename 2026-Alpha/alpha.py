@@ -26,6 +26,7 @@ from robot_program.config import (
     mission_requires_qr,
 )
 from robot_program.context import RaceContext
+from robot_program.delivery_heading import RegisterDeliveryHeading, initial_delivery_heading
 from robot_program.decryption_key import read_decryption_key
 from robot_program.behaviours.device_control import ResetDevice
 from robot_program.features.sumo_bearing import initial_sumo_bearing
@@ -1071,6 +1072,9 @@ def build_behaviour_tree(
         # 既存ResetDevice完了直後に相撲用の方位対応だけを保存する。他工程の基準は変更しない。
         calibration.add_child(RegisterSumoBearing(
             "register sumo bearing after reset", mission_context, sumo_initial_bearing))
+    calibration.add_child(RegisterDeliveryHeading(
+        "register bottle heading after reset", mission_context,
+        initial_delivery_heading(mission_config.mission_mode)))
     mission_children = build_mission_children(mission_context, mission_config)
     root.add_children(
         [

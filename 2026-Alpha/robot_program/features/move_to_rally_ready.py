@@ -5,7 +5,8 @@ from ..behaviours.bottle import IsDropZoneUnset, IsSelectedDropZone, MarkRallyRe
 from ..behaviours.conditions import IsColorDetected
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.motor_control import StopNow
-from ..behaviours.section_motion import distance_motion, to_turn
+from ..behaviours.section_motion import distance_motion
+from ..behaviours.delivery_turn import delivery_turn as to_turn
 
 
 def _trace_motor(name, settings):
@@ -125,13 +126,12 @@ def build_move_to_rally_ready(context, config):
         [red_route, blue_route, yellow_route, no_bottle_route]
     )
 
-    # ライン進行方向からcourse正規化した+90度へ旋回すると内向きになる。
+    # コース絶対方位+90度を目標にする。直前の向きの誤差は加算しない。
     turn_toward_rally = to_turn(
         "turn inward at rally start",
         context,
         settings,
         settings.delivery_inward_turn_deg,
-        relative=True,
     )
     stop_at_rally_start = StopNow(name="stop at rally start")
     mark_rally_ready = MarkRallyReady("mark rally ready", context)

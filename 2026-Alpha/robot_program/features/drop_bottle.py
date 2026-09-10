@@ -3,7 +3,8 @@
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..behaviours.bottle import MarkBottleDelivered
 from ..behaviours.line_trace import TraceLine
-from ..behaviours.section_motion import DriveDistance, distance_motion, to_turn
+from ..behaviours.section_motion import DriveDistance, distance_motion
+from ..behaviours.delivery_turn import delivery_turn as to_turn
 
 
 def build_drop_bottle(context, config):
@@ -32,7 +33,6 @@ def build_drop_bottle(context, config):
         context,
         settings,
         settings.delivery_drop_turn_deg,
-        relative=True,
     )
 
     # 3. ボトルを置くため、ドロップゾーンへ規定距離だけ前進する。
@@ -54,8 +54,7 @@ def build_drop_bottle(context, config):
         "turn back to drop zone line",
         context,
         settings,
-        -settings.delivery_drop_turn_deg,
-        relative=True,
+        0.0,  # 絶対方位: ライン進行方向へ戻る
     )
 
     # 6. ここまでの制御が完了したことを後続工程へ記録する。
