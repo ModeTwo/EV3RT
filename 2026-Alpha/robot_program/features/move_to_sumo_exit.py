@@ -3,9 +3,38 @@
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 
 from ..behaviours.conditions import IsDistanceEarned
-from .sumo_bearing_motion import RunAtBearing, SpinToBearing, current_bearing, search_bearing
+from .sumo_bearing_motion import RunAtBearing, SpinToBearing, current_bearing
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.motor_control import RunAsInstructed, StopNow
+
+
+class PlanGarageReturn(Behaviour):
+    # 相撲開始方向(entry_bearing_deg)を0度、土俵側への旋回を正とする。
+    # Leftは反時計回り、Rightは時計回りで同じ120度条件を使う。
+    def __init__(self, context, settings):
+        super().__init__(name="plan garage return from push heading")
+        self.context = context
+        self.settings = settings
+        self.target_bearing = None
+
+    def update(self):
+        # 押し出し完了直後、後退する前の実測方位で一度だけ計画する。
+        pushed = current_bearing(self.context)
+        relative = (-runtime.course * (pushed - self.settings.entry_bearing_deg)) % 360.0
+        # 120度ちょうども加算側。両分岐とも後退前に方位を固定する。
+        offset = -50.0 if relative > 120.0 else 50.0
+        self.target_bearing = (self.settings.entry_bearing_deg
+                               - runtime.course * (relative + offset)) % 360.0
+        self.logger.info("garage return plan push_bearing=%.1f relative=%.1f target=%s rule=%s" % (
+            pushed, relative, self.target_bearing,
+            "subtract_50" if relative > 120.0 else "add_50"))
+        return Status.SUCCESS
+
+    def bearing(self):
+        # 計画より先に走行しない。後退後のジャイロ値で再選択しない。
+        if self.target_bearing is None:
+            raise RuntimeError("Garage return bearing has not been planned")
+        return self.target_bearing
 
 
 class SkipTransportWhenBottleWasNotCaptured(Behaviour):
@@ -172,6 +201,7 @@ class MarkSumoExitState(Behaviour):
 def build_move_to_sumo_exit(context, config):
     # No.18：前工程で合計500mm走行済み。直線後退で離脱し、ガレージ側黒ラインへ復帰する。
     settings = config.sumo
+    return_plan = PlanGarageReturn(context, settings)
 
     # キャッチと押し出しは前工程の合計500mmに含まれるため、ここでは直線後退から開始する。
 
@@ -300,6 +330,7 @@ def build_move_to_sumo_exit(context, config):
     transport = Sequence(name="carry sumo bottle to exit", memory=True)
     transport.add_children(
         [
+            return_plan,
             # 実行順2：旋回せず、そのまま真っすぐ後退してアームからボトルを外す。
             AnnounceSumoTransportStage(
                 name="begin straight reverse release",
@@ -313,7 +344,7 @@ def build_move_to_sumo_exit(context, config):
             SpinToBearing(
                 name="turn toward garage before line search",
                 context=context,
-                bearing=lambda: search_bearing(context, settings),
+                bearing=return_plan.bearing,
                 max_power=settings.turn_max_power,
                 min_power=settings.turn_min_power,
                 pid_p=settings.turn_pid_p,

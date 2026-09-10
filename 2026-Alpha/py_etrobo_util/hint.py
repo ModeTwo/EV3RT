@@ -2,7 +2,8 @@ import re
 from enum import Enum
 from typing import Optional, Tuple
 
-from shared_communication.hint_decoder import decode_hint2
+# 通信PC用フォルダを配備しない場合も、走行体単独で起動できるようにする。
+from .hint_decoder import decode_hint2
 
 
 class HintType(Enum):

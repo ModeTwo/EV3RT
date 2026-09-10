@@ -331,3 +331,21 @@ node.tick_once()
 assert node.status == Status.SUCCESS
 assert ctx.selected_drop_zone == fake.BottleColor.RED.value
 ''')
+
+    def test_bottle_final_mode_starts_at_drop_zone_route(self):
+        self.run_case('''
+from robot_program.config import config_for_mission
+from robot_program.behaviours.bottle import SelectBottleDropZone
+cfg=config_for_mission('bottle-final')
+tree=alpha.build_behaviour_tree(cfg,bottle_color=fake.BottleColor.BLUE.value)
+mission=tree.children[2]
+assert mission.name == 'bottle_delivery_final'
+assert [child.name for child in mission.children] == [
+    'select_drop_zone',
+    'drop_bottle',
+    'move_to_rally_ready',
+]
+selector=next(node for node in mission.iterate() if isinstance(node,SelectBottleDropZone))
+assert selector.context.bottle_color == fake.BottleColor.BLUE.value
+assert not any(node.name.startswith('TO ') for node in mission.iterate())
+''')

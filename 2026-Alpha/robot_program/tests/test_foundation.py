@@ -52,6 +52,7 @@ with patch.object(alpha, 'initialize_etrobo', side_effect=AssertionError('No har
     assert alpha.main(['left', '--mission', 'hint2', '--check-tree']) == 0
     assert alpha.main(['right', '--mission', 'hint2', '--check-tree']) == 0
     assert alpha.main(['left', '--mission', 'lap', '--check-tree']) == 0
+    assert alpha.main(['left', '--mission', 'bottle-final', '--bottle-color', 'blue', '--check-tree']) == 0
     assert alpha.main(['right', '--mission', 'sumo', '--check-tree']) == 0
     assert alpha.main(['left', '--check-tree']) == 0
     assert alpha.main(['left', '--mission', 'full', '--check-tree']) == 0
@@ -76,6 +77,7 @@ assert names(sumo_only) == ['et_sumo']
 expected = {
     'lap': ['start_to_lap_gate'],
     'bottle': ['bottle_and_rally_preparation'],
+    'bottle-final': ['bottle_delivery_final'],
     'rally': ['bottle_and_rally_preparation', 'et_rally'],
     'sumo': ['et_sumo'],
     'finish': ['finish'],
@@ -87,10 +89,19 @@ for profile, result in expected.items():
     assert names(config) == result, (profile, names(config))
 assert not mission_requires_qr(config_for_mission('lap'))
 assert not mission_requires_qr(config_for_mission('sumo'))
+assert not mission_requires_qr(config_for_mission('bottle-final'))
+assert not mission_requires_camera(config_for_mission('bottle-final'))
 assert mission_requires_camera(config_for_mission('sumo'))
 assert mission_requires_camera(config_for_mission('lap'))
 assert mission_requires_qr(config_for_mission('rally'))
 assert mission_requires_qr(config_for_mission('hint2'))
+
+final_config = config_for_mission('bottle-final')
+assert not final_config.lapgate
+assert not final_config.enable_bottle_delivery
+assert not final_config.enable_et_rally
+assert not final_config.enable_et_sumo
+assert not final_config.enable_finish
 ''')
 
     def test_camera_disabled_setup_does_not_create_or_start_camera(self):
@@ -249,7 +260,10 @@ from robot_program.config import RaceConfig
 from robot_program.context import RaceContext
 from robot_program.behaviours.line_trace import TraceLine
 from robot_program.behaviours.conditions import IsColorDetected
-root = build_start_to_lap_gate(RaceContext(), RaceConfig())
+profile = build_start_to_lap_gate(RaceContext(), RaceConfig())
+assert profile.target(500) == 0
+assert profile.completion_condition is not None
+root = build_start_to_lap_gate(RaceContext(), RaceConfig(start_lap_mode='legacy'))
 assert [n.name for n in root.children] == ['square', 'lap2_1', 'lap2_2', 'lap2_3']
 square = root.children[0]
 assert len(square.children) == 5

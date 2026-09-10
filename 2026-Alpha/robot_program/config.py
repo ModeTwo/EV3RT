@@ -14,6 +14,20 @@ class RaceConfig:
     # hint2系はRE→AT→TO接続試験を残すための専用モード。
     mission_mode: str = 'configured'
     lapgate : bool = True
+    # profile: PDF距離-方位表。legacy: 従来の固定方位+ライントレース。
+    start_lap_mode: str = 'profile'
+    start_lap_power: int = 33
+    # スタート～LAP専用。I残留をなくし、角度誤差への補正を少し強める。
+    start_lap_pid_p: float = 1.8
+    start_lap_pid_i: float = 0.0
+    start_lap_pid_d: float = 0.03
+    # 曲率から旋回出力を加える。0なら無効。PWM比例モデルの仮値。
+    start_lap_feedforward_gain: float = 1.0
+    start_lap_wheel_tread_mm: float = 110.0
+    # 横ずれはエンコーダ/IMUの推定値。0mmなら横補正を無効化できる。
+    start_lap_cross_track_lookahead_mm: float = 300.0
+    start_lap_max_heading_correction_deg: float = 8.0
+    start_lap_log_interval_sec: float = 0.2
     enable_bottle_delivery: bool = True
     enable_et_rally: bool = True
     et_rally_laps: int = 3
@@ -35,6 +49,7 @@ MISSION_CHOICES = (
     'configured',
     'lap',
     'bottle',
+    'bottle-final',
     'rally',
     'sumo',
     'finish',
@@ -62,6 +77,9 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         enable_et_sumo=False,
         enable_finish=False,
     )
+    if mission == 'bottle-final':
+        # Hint2後移動の終了位置から、Bottle Delivery後半だけを単体実行する。
+        return replace(config, mission_mode=mission, **disabled)
     if mission == 'lap':
         disabled['lapgate'] = True
     elif mission == 'bottle':

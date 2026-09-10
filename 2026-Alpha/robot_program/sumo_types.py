@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from .features.sumo_bearing import SumoBearingReference
+
 
 @dataclass(frozen=True)
 class SumoSonarSample:
@@ -14,6 +16,11 @@ class SumoSonarSample:
 
 @dataclass
 class SumoState:
+    # 全体または単体試験のResetDevice直後に登録する方位角とジャイロの対応。
+    # 各実行の状態を共有しないよう、必ず個別インスタンスを生成する。
+    bearing_reference: SumoBearingReference = field(default_factory=SumoBearingReference)
+    search_bearing_deg: float = 0.0
+    camera_capture_bearing_deg: Optional[float] = None
     # No.15からNo.18までの間だけ共有する、ET相撲固有の実行状態。
     started_at: Optional[float] = None
     search_heading_deg: float = 0.0
@@ -35,6 +42,13 @@ class SumoState:
 
 @dataclass(frozen=True)
 class SumoSettings:
+    # コース図の上0、右90、下180、左270。時計回りを正とする。
+    entry_bearing_deg: float = 0.0
+    # RightではNo.15が鏡像の90度へ変換する。
+    ring_bearing_left_deg: float = 270.0
+    garage_bearing_deg: float = 180.0
+    # 現在方位±50度から180度と角度差が大きい候補を選ぶ。
+    garage_search_offset_deg: float = 50.0
     # 値はすべて暫定値。レプリカコースでの実験結果に応じてここだけを変更する。
     # 実機で静止摩擦に負けないよう、ET相撲の駆動出力は絶対値50以上にする。
     # No.15開始位置からの総直進距離。白検知や追加クリアランスは使用しない。

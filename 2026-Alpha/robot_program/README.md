@@ -1,3 +1,7 @@
+> 2026-09-10 スタート～LAPの追従調整: [調整ガイド v3](START_LAP_TUNING_v3.md)。P=1.8/I=0/D=0.03、曲率による基本旋回出力と最大8度の推定横ずれ補正を追加。速度33、距離表は維持。以下のv2の「ゲイン不変」は過去版の記録。新規path_tracking.pyも配備する。
+
+> 2026-09-10 スタート～LAPの構造整理: [初学者向け編集ガイド v2](START_LAP_GUIDE_v2.md)。featureは `RunByGyro(target=profile.heading_at, ...)` を一つ返す。速度・PIDはconfig.py、旧方式は別ファイル。以下の距離方位クラスv1説明より本ガイドを優先する。
+
 > 2026-09-09 最新相撲仕様：[方位角・単体試走・復元手順](SUMO_BEARING_v1.md)。相撲のみ上0度・時計回りの方位角へ移行。下記の相撲旧ジャイロ絶対角度・相対20度説明より同資料を優先します。
 
 > 2026-09-08 最新・相撲500mm走行：黒ボトルを検出して方位を確定した位置から、キャッチ・押し出し込みで `capture_and_push_distance_mm=500.0` だけ走り、停止後に設定距離を後退する。画像消失・死角に依存せず毎制御周期で距離を確認する。旧死角150mmと押し出し距離は追加しない。500mmは開始位置からの350mmやカメラ用後退を含まない。以下の旧追加直進仕様より本項を優先する。
@@ -145,6 +149,7 @@ class RaceConfig:
 | 設定フラグどおり | `python alpha.py left --mission configured` |
 | LAP | `python alpha.py left --mission lap` |
 | Bottle Delivery | `python alpha.py left --mission bottle` |
+| Bottle Delivery後半 | `python alpha.py left --mission bottle-final --bottle-color red` |
 | ETラリー準備＋周回 | `python alpha.py left --mission rally` |
 | ET相撲 | `python alpha.py left --mission sumo` |
 | FINISH | `python alpha.py left --mission finish` |
@@ -409,6 +414,36 @@ Left／Rightの旋回方向は`SpinAround`内の`runtime.course`で鏡像化さ�
 
 配置先、配置完了、ETラリー開始姿勢の成立はそれぞれ`RaceContext.selected_drop_zone`、`bottle_delivered`、`rally_ready`へ記録します。ボトル色が赤・青・黄のいずれでもない場合は、事前に決めた既定動作として赤ドロップゾーンを選択します。
 
+#### 最後の直線部分だけを試す
+
+`bottle-final`は、ボトル認識、キャッチ、Hintカード読取、Hint2後の旋回・600mm移動を実行しません。次の3サブツリーだけを実行します。
+
+```text
+bottle_delivery_final
+├─ select_drop_zone
+├─ drop_bottle
+└─ move_to_rally_ready
+```
+
+走行体は、`move_after_hint2.py`が完了した位置へ、ドロップゾーン列の進行方向を向けて設置してください。アームが下端にあり、ボトルを保持済みであることを開始条件とします。共通キャリブレーションはタッチ待ちより前に実行されるため、実物のボトルを使う場合は、アームの上下キャリブレーションが終わってタッチ待ちになった後にボトルをセットしてください。
+
+コマンドで色まで指定する場合：
+
+```console
+python alpha.py left --mission bottle-final --bottle-color red
+python alpha.py left --mission bottle-final --bottle-color blue
+python alpha.py left --mission bottle-final --bottle-color yellow
+```
+
+色を省略した場合は、デバイス初期化前に端末へ入力します。
+
+```console
+python alpha.py left --mission bottle-final
+Bottle color (red/blue/yellow): blue
+```
+
+Rightコースでは先頭の`left`を`right`へ変更します。このモードは画像認識結果の代わりに入力色を`RaceContext.bottle_color`へ格納するため、カメラとQRデコーダーを起動しません。`--bottle-color`は`bottle-final`以外では指定できません。
+
 ### ET相撲 No.15～18
 
 ET相撲は距離センサーを使用せず、カメラで力士ボトルの黒テープを捕捉します。ETラリー終了位置は青円上を想定するため、開始直後はライントレースせず、ジャイロで方位を維持して直進します。黒ラインを確認して白地へ抜けた後、調整可能なクリアランス距離だけ追加直進して土俵方向へ90度旋回し、さらに50mm後退してカメラ視野を広げます。
@@ -558,3 +593,14 @@ ETラリー有効時は、`alpha.py`が実機初期化と20ms周期開始の前�
 - [通信方式と実行コマンド](../shared_communication/README.md)
 
 通信試験用の固定経路は`shared_communication/example_strategy.json`です。本番では`python -m wireless_device --host ROBOT_IP --planner module:function`の形式で経路計算担当の関数を指定します。
+
+## 2026-09-09 スタート～LAP: 距離・方位角プロファイル v1
+
+- 標準は `RaceConfig.start_lap_mode="profile"`。`"legacy"` で従来の5区間ジャイロ＋ライントレースへ戻せる。初期出力は `start_lap_power=33`。
+- `start_lap_profile_v1.py` は公式50%コースPDFのL黒ラインを抽出した `(距離mm, 連続方位角deg)` 表。5mm間隔、1105点。開始0mm/0度、最初のカーブ入口500mm。Rightは既存の `-runtime.course * gyro_angle` と左右出力の符号で鏡像化する。
+- 500mmはPDFのSTART印～最初の円弧接線点に対応すると仮定して全経路を比例換算した。倍率は0.7422056898 mm/PDF point（PDFをそのまま印刷した寸法の2.10389倍）。50%印刷そのものの実寸ではない。青先端5384.957mm、ゲート5511.717mmはこの仮定から計算した設計値であり、実測値ではない。START設置基準・コース縮尺が違う場合は表を再生成する。
+- `RunByDistanceHeading` はRunByGyroを継承した別クラス。開始時の距離と方位を原点にし、距離から目標角を線形補間する。実方位も折返しを解消して連続値にする。共有RunByGyro/Plotter/IMU原点は変更していない。
+- `--mission lap` はゲート位置+20mm、5531.717mmで停止する。全体・Hint工程は青先端の250mm手前から青を判定し、青検知で既存AT工程へ渡す。青未検知のままゲート+100mmまで達するとFAILURE/出力0。ATの100mm前進・200mm後退は変更していない。この縮尺では青先端～ゲートは126.759mmなので、ATの100mmのみでゲート通過済みとは判定しない。走行体・センサー・ゲート判定の位置関係を実機確認する。
+- 途中停止・完了・失敗時はモーター出力0。PWMは0～100内に制限し、後退しない。距離減少・非有限センサー値・course未設定はFAILURE。1秒ごとに距離/目標角/実角/turnを記録する。
+- 表の補間・左右操舵・角度折返し・PWM制限・再開始・中断停止・青検知窓・青見逃し・従来方式の構築を疑似センサーで検証。PIDの実機調整、横ずれ・スリップ・ジャイロドリフト、実際のゲート通過は未検証。方位追従だけでは横位置誤差は補正できない。
+- 生成元/確認図/テストはETロボコン作業リポジトリの `work/distance-heading-v1/`。既存の工程順序とATへの青検知引渡しを照合し維持した。LAP単体の終了だけをゲート通過距離へ明確化した。

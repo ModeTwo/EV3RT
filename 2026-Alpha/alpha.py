@@ -1033,7 +1033,12 @@ class VideoThread(threading.Thread):
                 time.sleep(VIDEO_INTERVAL - elapsed_time)
 
 
-def build_behaviour_tree(mission_config=None, decryption_key=None, sumo_initial_bearing=180.0) -> BehaviourTree:
+def build_behaviour_tree(
+    mission_config=None,
+    decryption_key=None,
+    sumo_initial_bearing=180.0,
+    bottle_color=None,
+) -> BehaviourTree:
     # alpha.pyには競技全体の基本順序を残し、各工程の詳細は機能別ファイルから取得する。
     root = Sequence(name="2026 alpha", memory=True)
     calibration = Sequence(name="calibration", memory=True)
@@ -1049,7 +1054,10 @@ def build_behaviour_tree(mission_config=None, decryption_key=None, sumo_initial_
     )
     start.add_children([IsTouchOn(name="touch start")])
 
-    mission_context = RaceContext(decryption_key=decryption_key)
+    mission_context = RaceContext(
+        bottle_color=bottle_color,
+        decryption_key=decryption_key,
+    )
     mission_config = mission_config or RaceConfig()
     if mission_config.enable_et_sumo:
         # 既存ResetDevice完了直後に相撲用の方位対応だけを保存する。他工程の基準は変更しない。
@@ -1142,6 +1150,12 @@ def main(argv=None):
         default='configured',
         help='Mission profile; configured uses the switches in RaceConfig',
     )
+    parser.add_argument(
+        '--bottle-color',
+        choices=('red', 'blue', 'yellow'),
+        default=None,
+        help='Bottle color for --mission bottle-final',
+    )
     parser.add_argument("--sumo-initial-bearing", type=float, default=None,
                         help="Placement bearing for --mission sumo only: up=0, clockwise positive")
     args = parser.parse_args(argv)
@@ -1154,6 +1168,25 @@ def main(argv=None):
     # 未実装ノードは明示警告するが、PendingFeature自身のSUCCESSで後続工程へ進める。
     print(" -- shutdown-v8 control interval=%.3fs mission=%s" % (EXEC_INTERVAL, args.mission))
     mission_config = config_for_mission(args.mission)
+    bottle_color = None
+    if args.mission == 'bottle-final':
+        entered_color = args.bottle_color
+        if entered_color is None and not args.check_tree:
+            entered_color = input('Bottle color (red/blue/yellow): ').strip().lower()
+        if entered_color is None:
+            # Tree inspection does not execute the selector, but a valid value keeps its contract explicit.
+            entered_color = 'red'
+        bottle_colors = {
+            'red': BottleColor.RED.value,
+            'blue': BottleColor.BLUE.value,
+            'yellow': BottleColor.YELLOW.value,
+        }
+        if entered_color not in bottle_colors:
+            parser.error('Bottle color must be red, blue, or yellow')
+        bottle_color = bottle_colors[entered_color]
+        print(' -- bottle-final color=%s' % entered_color)
+    elif args.bottle_color is not None:
+        parser.error('--bottle-color is available only with --mission bottle-final')
     decryption_key = None
     if (not args.check_tree
             and mission_config.enable_et_rally
@@ -1163,8 +1196,12 @@ def main(argv=None):
         decryption_key = read_decryption_key()
         # alpha.py内に残る旧Behaviorとの互換性だけを維持し、新処理はContextを参照する。
         g_key = decryption_key
-    tree = build_behaviour_tree(mission_config, decryption_key=decryption_key,
-                                sumo_initial_bearing=sumo_initial_bearing)
+    tree = build_behaviour_tree(
+        mission_config,
+        decryption_key=decryption_key,
+        sumo_initial_bearing=sumo_initial_bearing,
+        bottle_color=bottle_color,
+    )
     pending = pending_features(tree)
     if args.check_tree:
         print(display_tree.unicode_tree(tree))

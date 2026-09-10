@@ -39,3 +39,16 @@ def build_bottle_and_rally_preparation_phase(context, config):
     children.append(build_move_to_rally_ready(context, config))
     root.add_children(children)
     return root
+
+
+def build_bottle_delivery_final_phase(context, config):
+    # Hint2後移動の終了位置から、色別配置とラリー開始位置への復帰だけを実行する。
+    root = Sequence(name="bottle_delivery_final", memory=True)
+    root.add_children(
+        [
+            build_select_drop_zone(context, config),
+            build_drop_bottle(context, config),
+            build_move_to_rally_ready(context, config),
+        ]
+    )
+    return root

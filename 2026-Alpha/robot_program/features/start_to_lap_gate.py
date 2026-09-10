@@ -1,34 +1,60 @@
-"""RE start section from gyro_line_0826.py; hardware validation pending."""
+"""スタート～LAPで「何を走らせるか」を組み立てる。
 
-from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
-from ..behaviours.conditions import IsColorDetected, IsDistanceEarned
+角度表: start_lap_profile_v1.py / 補間: heading_profile.py
+速度・PID: config.py / モーター制御: behaviours/gyro_drive.py
+"""
+
+from ..behaviours.conditions import IsColorDetected
 from ..behaviours.gyro_drive import RunByGyro
-from ..behaviours.line_trace import TraceLine
+from ..heading_profile import HeadingProfile
+from ..start_lap_profile_v1 import POINTS, BLUE_START_MM, LAP_GATE_MM
+from ..types import HeadingType
+from .bt_imports import Color
 
-TRACELINE_TARGET_V = 65
+# 終了位置の調整値（mm）。角度追従の調整でも終了位置は変更しない。
+LAP_PASS_MARGIN_MM = 20.0       # LAP単体: ゲートの20mm先で停止
+BLUE_SEARCH_BEFORE_MM = 250.0  # 青予測位置の250mm手前から検知
+BLUE_MISS_MARGIN_MM = 100.0    # 青を見逃した場合: ゲートの100mm先で停止
 
 
 def build_start_to_lap_gate(context, config):
-    # RE担当範囲だけを採用。青検知後の100mm前進からATへ渡す。
-    # 全工程共通のtiming.CONTROL_INTERVAL_SECを使用する。
-    root = Sequence(name="start_to_lap_gate", memory=True)
-    edge_01 = Parallel(name='edge_01', policy=ParallelPolicy.SuccessOnOne())
-    edge_02 = Parallel(name='edge_02', policy=ParallelPolicy.SuccessOnOne())
-    edge_03 = Parallel(name='edge_03', policy=ParallelPolicy.SuccessOnOne())
-    edge_04 = Parallel(name='edge_04', policy=ParallelPolicy.SuccessOnOne())
-    edge_05 = Parallel(name='edge_05', policy=ParallelPolicy.SuccessOnOne())
-    square = Sequence(name='square', memory=True)
-    lap2_1 = Parallel(name='lap2_1', policy=ParallelPolicy.SuccessOnOne())
-    lap2_2 = Parallel(name='lap2_2', policy=ParallelPolicy.SuccessOnOne())
-    lap2_3 = Parallel(name='lap2_3', policy=ParallelPolicy.SuccessOnOne())
-    edge_01.add_children([RunByGyro(name='run straight', target=0, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE), IsDistanceEarned(name='check distance', delta_dist=500)])
-    edge_02.add_children([RunByGyro(name='run straight', target=-45, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE), IsDistanceEarned(name='check distance', delta_dist=200)])
-    edge_03.add_children([RunByGyro(name='run straight', target=-90, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE), IsDistanceEarned(name='check distance', delta_dist=550)])
-    edge_04.add_children([RunByGyro(name='run straight', target=-135, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE), IsDistanceEarned(name='check distance', delta_dist=230)])
-    edge_05.add_children([RunByGyro(name='run straight', target=-180, power=60, pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE), IsDistanceEarned(name='check distance', delta_dist=300)])
-    square.add_children([edge_01, edge_02, edge_03, edge_04, edge_05])
-    lap2_1.add_children([TraceLine(name='sensor trace normal edge', target=TRACELINE_TARGET_V, power=33, pid_p=0.55, pid_i=9e-07, pid_d=0.015, trace_side=TraceSide.NORMAL, cutoff_hz=None), IsDistanceEarned(name='check distance', delta_dist=100)])
-    lap2_2.add_children([TraceLine(name='sensor trace normal edge', target=TRACELINE_TARGET_V, power=60, pid_p=0.55, pid_i=9e-07, pid_d=0.08, trace_side=TraceSide.NORMAL, cutoff_hz=None), IsDistanceEarned(name='check distance', delta_dist=2460)])
-    lap2_3.add_children([TraceLine(name='sensor trace normal edge', target=TRACELINE_TARGET_V, power=60, pid_p=0.1, pid_i=9e-07, pid_d=0.08, trace_side=TraceSide.NORMAL, cutoff_hz=None), IsColorDetected(name='check color', color=Color.BLUE)])
-    root.add_children([square, lap2_1, lap2_2, lap2_3])
-    return root
+    # 旧方式は別ファイルへ保存。通常読む必要はない。
+    if config.start_lap_mode == 'legacy':
+        from .start_to_lap_gate_legacy import build_legacy_start_to_lap_gate
+        return build_legacy_start_to_lap_gate(context, config)
+    if config.start_lap_mode != 'profile':
+        raise ValueError('start_lap_mode must be profile or legacy')
+
+    # 1. 距離を渡すと目標角を返す関数を用意する。
+    profile = HeadingProfile(POINTS)
+
+    # 2. 後続工程があれば青で引渡し、LAP単体なら距離で終了する。
+    follows_bottle = config.enable_bottle_delivery or config.mission_mode in ('hint2', 'hint2-return')
+    if follows_bottle:
+        finish_condition = IsColorDetected('lap blue marker', Color.BLUE)
+        finish_check_from_mm = max(0.0, BLUE_START_MM - BLUE_SEARCH_BEFORE_MM)
+        distance_limit_mm = LAP_GATE_MM + BLUE_MISS_MARGIN_MM
+    else:
+        finish_condition = None
+        finish_check_from_mm = 0.0
+        distance_limit_mm = LAP_GATE_MM + LAP_PASS_MARGIN_MM
+
+    # 3. 走行命令はこの一つ。heading_atに括弧を付けず「関数」を渡す。
+    #    RunByGyroが毎周期、heading_at(走行距離mm)を呼んで目標角を更新する。
+    return RunByGyro(
+        name='start_to_lap_gate',
+        target=profile.heading_at,
+        power=config.start_lap_power,
+        pid_p=config.start_lap_pid_p,
+        pid_i=config.start_lap_pid_i,
+        pid_d=config.start_lap_pid_d,
+        target_type=HeadingType.RELATIVE,
+        distance_limit_mm=distance_limit_mm,
+        completion_condition=finish_condition,
+        completion_min_mm=finish_check_from_mm,
+        feedforward_gain=config.start_lap_feedforward_gain,
+        wheel_tread_mm=config.start_lap_wheel_tread_mm,
+        cross_track_lookahead_mm=config.start_lap_cross_track_lookahead_mm,
+        max_heading_correction_deg=config.start_lap_max_heading_correction_deg,
+        profile_log_interval_sec=config.start_lap_log_interval_sec,
+    )
