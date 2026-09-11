@@ -113,23 +113,29 @@ runtime.video.qr('hint-two'); second.tick_once()
 assert second.status==Status.SUCCESS and ctx.hint2=='hint-two'
 ''')
 
-    def test_recognition_timeouts_do_not_advance_to_motion(self):
+    def test_recognition_waits_until_observation_after_long_delay(self):
         self.run_case('''
 now=[0.0]
-with patch('time.monotonic',side_effect=lambda: now[0]):
-    n=DetectBottleColor('AT timeout',ctx,IntegrationSettings(bottle_timeout_sec=1))
-    n.tick_once(); now[0]=2; n.tick_once()
-    assert n.status==Status.FAILURE and runtime.left_motor.power==0
-    q=ReadHintCard('QR timeout',1,ctx,timeout_sec=1)
-    q.tick_once(); now[0]=4; q.tick_once()
-    assert q.status==Status.FAILURE and ctx.hint1 is None
+with patch('time.monotonic',side_effect=lambda:now[0]):
+    n=DetectBottleColor('AT wait',ctx,IntegrationSettings())
+    n.tick_once(); now[0]=3600; n.tick_once()
+    assert n.status==Status.RUNNING and runtime.left_motor.power==0
+    for _ in range(3):
+        runtime.video.bottle(fake.BottleColor.RED); n.tick_once()
+    assert n.status==Status.SUCCESS
+    for number in (1,2):
+        q=ReadHintCard('QR wait',number,ctx)
+        q.tick_once(); now[0]+=3600; q.tick_once()
+        assert q.status==Status.RUNNING
+        runtime.video.qr('hint-'+str(number)); q.tick_once()
+        assert q.status==Status.SUCCESS
 ''')
 
     def test_common_period_used_by_every_built_pid(self):
         self.run_case('''
 assert alpha.EXEC_INTERVAL==alpha.VIDEO_INTERVAL==CONTROL_INTERVAL_SEC
 ctx.at_to.heading_deg=15
-tree=alpha.build_behaviour_tree()
+tree=alpha.build_behaviour_tree(RaceConfig(mission_mode='hint2', start_lap_mode='legacy'))
 for n in tree.iterate():
     if isinstance(n,TraceLine):
         assert n.pid.sample_time==CONTROL_INTERVAL_SEC
@@ -150,7 +156,7 @@ for mode in ('hint2','hint2-return'):
     runtime.gyro_sensor.get_angle.return_value=-course*15
     ctx=RaceContext()
     tree=Sequence('RE_AT_TO integration',memory=True)
-    tree.add_children(build_mission_children(ctx,RaceConfig(mission_mode=mode)))
+    tree.add_children(build_mission_children(ctx,RaceConfig(mission_mode=mode, start_lap_mode='legacy')))
     now=[0.0]
     with patch('time.monotonic',side_effect=lambda:now[0]):
       for step in range(200):
@@ -172,7 +178,10 @@ for mode in ('hint2','hint2-return'):
       assert tree.status==Status.SUCCESS, tree.tip().name
     assert ctx.hint1=='hint-1' and ctx.hint2=='hint-2'
     assert ctx.bottle_color==fake.BottleColor.RED.value
-    assert ctx.at_to.distance_mm==6700  # 2000+RE4340+AT100-200+460
+    settings = IntegrationSettings()
+    assert ctx.at_to.distance_mm == (2000 + 4340 + settings.at_gate_forward_mm
+                                     - settings.at_recognition_reverse_mm
+                                     + settings.at_to_transfer_trace_mm)
     assert ctx.at_to.heading_deg==15
     assert runtime.left_motor.power==runtime.right_motor.power==0
     assert runtime.left_motor.brake and runtime.right_motor.brake
@@ -184,23 +193,26 @@ for mode in ('hint2','hint2-return'):
 cfg=RaceConfig(integration=IntegrationSettings(at_to_transfer_trace_mm=480,to_first_black_limit_mm=580))
 t=build_hint_collection_phase(ctx,cfg)
 distances={n.name:n.delta_dist for n in t.iterate() if isinstance(n,IsDistanceEarned)}
-assert distances['AT_TO transfer trace distance']==480
-assert distances['TO first approach distance']==580
-assert distances['TO after hint1 straight distance']==385
-assert distances['TO hint2 approach trace distance']==1000
+assert distances['check 46cm']==480
+assert distances['black_distance_limit']==580
+assert distances['distance_after_qr1']==385
+assert distances['dist_1200']==1000
 ''')
 
-    def test_motion_timeout_interrupts_motor_and_prevents_next_segment(self):
+    def test_motion_waits_for_distance_and_can_be_interrupted(self):
         self.run_case('''
 from robot_program.features.catch_bottle import build_catch_bottle
-t=build_catch_bottle(ctx,RaceConfig(integration=IntegrationSettings(motion_timeout_sec=0.5)))
+from py_trees.decorators import Timeout
+t=build_catch_bottle(ctx,RaceConfig())
+assert not any(isinstance(n,Timeout) for n in t.iterate())
 now=[0.0]
 with patch('time.monotonic',side_effect=lambda:now[0]):
     t.tick_once(); assert runtime.left_motor.power==60
-    now[0]=1; t.tick_once()
-    assert t.status==Status.FAILURE
+    now[0]=3600; t.tick_once()
+    assert t.status==Status.RUNNING and runtime.left_motor.power==60
+    t.stop(Status.INVALID)
 assert runtime.left_motor.power==runtime.right_motor.power==0
-assert runtime.video.store.mode=='line' and ctx.bottle_color is None
+assert runtime.left_motor.brake and runtime.right_motor.brake
 ''')
 
     def test_actual_video_worker_rejects_inflight_old_qr_and_closes(self):
@@ -247,3 +259,161 @@ finally:
 assert not worker.is_alive()
 v.close(); v.cap.release.assert_called_once()
 ''')
+
+    def test_bottle_phase_runs_original_hint2_exit_before_delivery(self):
+        self.run_case('''
+from robot_program.config import config_for_mission, mission_requires_qr
+from robot_program.phases.bottle_and_rally_preparation import build_bottle_and_rally_preparation_phase
+cfg=config_for_mission('bottle')
+phase=build_bottle_and_rally_preparation_phase(RaceContext(),cfg)
+names=[child.name for child in phase.children]
+assert names == [
+    'blue and bottle test',
+    'Tantou Section',
+    'select_drop_zone',
+    'drop_bottle',
+    'move_to_rally_ready',
+], names
+assert mission_requires_qr(cfg)
+''')
+
+    def test_bottle_delivery_all_colors_and_courses_reach_rally_start(self):
+        self.run_case('''
+from robot_program.features.drop_bottle import build_drop_bottle
+from robot_program.features.move_to_rally_ready import build_move_to_rally_ready
+from robot_program.features.select_drop_zone import build_select_drop_zone
+for course in (1,-1):
+  for color in (fake.BottleColor.YELLOW, fake.BottleColor.BLUE, fake.BottleColor.RED):
+    runtime.course=course
+    runtime.plotter.get_distance.return_value=1000
+    runtime.gyro_sensor.get_angle.return_value=0
+    ctx=RaceContext(bottle_color=color.value)
+    cfg=RaceConfig()
+    tree=Sequence('post hint2 bottle delivery',memory=True)
+    tree.add_children([
+        build_select_drop_zone(ctx,cfg),
+        build_drop_bottle(ctx,cfg),
+        build_move_to_rally_ready(ctx,cfg),
+    ])
+    spins=[node for node in tree.iterate() if isinstance(node,SpinAround)]
+    assert [node.target for node in spins] == [-90.0,90.0,90.0]
+    now=[0.0]
+    with patch('time.monotonic',side_effect=lambda:now[0]):
+      for _ in range(250):
+        tree.tick_once()
+        assert tree.status != Status.FAILURE, tree.tip().name
+        if tree.status == Status.SUCCESS: break
+        tip=tree.tip()
+        if isinstance(tip,IsDistanceEarned):
+            runtime.plotter.get_distance.return_value=tip.orig_dist+tip.delta_dist
+        elif isinstance(tip,DriveDistance):
+            direction=1 if tip.power > 0 else -1
+            runtime.plotter.get_distance.return_value=tip.start_distance+direction*tip.distance_mm
+        elif isinstance(tip,SpinAround):
+            runtime.gyro_sensor.get_angle.return_value=-course*tip.target_heading
+        elif isinstance(tip,IsColorDetected):
+            runtime.color_sensor.get_raw_color_hsv.return_value=(210,90,65)
+        now[0]+=0.6
+    assert tree.status == Status.SUCCESS, tree.tip().name
+    assert ctx.selected_drop_zone == color.value
+    assert ctx.bottle_delivered and ctx.rally_ready
+    assert runtime.left_motor.power == runtime.right_motor.power == 0
+    assert runtime.left_motor.brake and runtime.right_motor.brake
+''')
+
+    def test_invalid_bottle_color_uses_red_default(self):
+        self.run_case('''
+from robot_program.behaviours.bottle import SelectBottleDropZone
+ctx=RaceContext(bottle_color=None)
+node=SelectBottleDropZone('default zone',ctx)
+node.tick_once()
+assert node.status == Status.SUCCESS
+assert ctx.selected_drop_zone == fake.BottleColor.RED.value
+''')
+
+    def test_bottle_final_mode_starts_at_drop_zone_route(self):
+        self.run_case('''
+from robot_program.config import config_for_mission
+from robot_program.behaviours.bottle import SelectBottleDropZone
+cfg=config_for_mission('bottle-final')
+tree=alpha.build_behaviour_tree(cfg,bottle_color=fake.BottleColor.BLUE.value)
+mission=tree.children[2]
+assert mission.name == 'bottle_delivery_final'
+assert [child.name for child in mission.children] == [
+    'select_drop_zone',
+    'drop_bottle',
+    'move_to_rally_ready',
+]
+selector=next(node for node in mission.iterate() if isinstance(node,SelectBottleDropZone))
+assert selector.context.bottle_color == fake.BottleColor.BLUE.value
+assert not any(node.name.startswith('TO ') for node in mission.iterate())
+''')
+
+    def test_to_tree_has_original_order_without_added_stops(self):
+        self.run_case("""
+from robot_program.features.to_hint_route import build_tantou_tree
+for include_exit in (False, True):
+    tree = build_tantou_tree(ctx, RaceConfig(), include_exit=include_exit)
+    names = [n.name for n in tree.children]
+    assert len(names) == (15 if include_exit else 12), names
+    assert names[:3] == ['turn_left_55', 'go_to_black', 'turn_right_125'], names
+    assert not {'stop_black', 'TO stop before hint1', 'TO stop before hint2'} & {n.name for n in tree.iterate()}
+    assert names[-1] == ('stop_final' if include_exit else 'qr2_read'), names
+""")
+
+    def test_standalone_at_to_scope_camera_and_origin(self):
+        self.run_case("""
+from robot_program.config import config_for_mission, mission_requires_camera, mission_requires_qr
+from robot_program.behaviours.handoff import CaptureAtToHandoff
+for mode in ('at', 'to'):
+    cfg = config_for_mission(mode)
+    assert not any((cfg.lapgate, cfg.enable_bottle_delivery, cfg.enable_et_rally,
+                    cfg.enable_et_sumo, cfg.enable_finish))
+    assert mission_requires_camera(cfg)
+    assert mission_requires_qr(cfg) == (mode == 'to')
+    tree = alpha.build_behaviour_tree(cfg)
+    assert [n.name for n in tree.children[:2]] == ['calibration', 'start']
+    assert tree.children[-1].name == 'end'
+    for course in (1, -1):
+        runtime.course = course
+        context = RaceContext()
+        nodes = build_mission_children(context, cfg)
+        if mode == 'at':
+            assert len(nodes) == 1 and nodes[0].name == 'blue and bottle test'
+            assert not any(isinstance(n, ReadHintCard) for n in nodes[0].iterate())
+        else:
+            assert len(nodes) == 2 and isinstance(nodes[0], CaptureAtToHandoff)
+            runtime.gyro_sensor.get_angle.return_value = 23
+            runtime.plotter.get_distance.return_value = 1234
+            nodes[0].tick_once()
+            assert context.at_to.heading_deg == -course * 23
+            assert context.at_to.distance_mm == 1234
+            assert nodes[1].name == 'Tantou Section'
+            assert nodes[1].children[-1].name == 'stop_final'
+            assert sum(isinstance(n, ReadHintCard) for n in nodes[1].iterate()) == 2
+""")
+
+    def test_at_standalone_waits_for_blue_before_forward(self):
+        self.run_case("""
+from robot_program.config import config_for_mission
+from robot_program.features.catch_bottle import build_catch_bottle
+for course in (1, -1):
+    runtime.course = course
+    tree = build_catch_bottle(RaceContext(), config_for_mission('at'))
+    trace = tree.children[0]
+    assert trace.name == 'trace until blue'
+    detector = next(n for n in trace.iterate() if isinstance(n, IsColorDetected))
+    detector.classifier = Mock()
+    detector.classifier.classify.return_value = fake.Color.UNKNOWN
+    tree.tick_once()
+    assert trace.status == Status.RUNNING
+    assert tree.children[1].status == Status.INVALID
+    detector.classifier.classify.return_value = fake.Color.BLUE
+    tree.tick_once()
+    assert trace.status == Status.SUCCESS
+    assert tree.children[1].name == 'forward 10cm'
+    assert tree.children[1].status == Status.RUNNING
+    integrated = build_catch_bottle(RaceContext(), RaceConfig())
+    assert integrated.children[0].name == 'forward 10cm'
+    assert not any(n.name == 'trace until blue' for n in integrated.iterate())
+""")

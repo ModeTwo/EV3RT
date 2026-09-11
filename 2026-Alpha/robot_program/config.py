@@ -1,6 +1,7 @@
 """Race feature switches used by the robot-side tree builder."""
 
 from dataclasses import dataclass, replace
+from typing import Optional
 
 from .sumo_types import SumoSettings
 from .integration_settings import IntegrationSettings
@@ -13,19 +14,49 @@ class RaceConfig:
     # hint2系はRE→AT→TO接続試験を残すための専用モード。
     mission_mode: str = 'configured'
     lapgate : bool = True
+    # profile: PDF距離-方位表。legacy: 従来の固定方位+ライントレース。
+    #start_lap_mode: str = 'profile'
+    start_lap_mode: str = 'legacy'
+    start_lap_power: int = 33
+    # 車軸中心から最初のカーブまで。アーム先端から500mm＋前方100mm。
+    start_lap_first_straight_mm: float = 600.0
+    # 最初のカーブ以降の距離倍率。別途実測するまでは旧表の長さを維持。
+    start_lap_route_scale: float = 1.0
+    # スタート～LAP専用。I残留をなくし、角度誤差への補正を少し強める。
+    start_lap_pid_p: float = 1.8
+    start_lap_pid_i: float = 0.0
+    start_lap_pid_d: float = 0.03
+    # 曲率から旋回出力を加える。0なら無効。PWM比例モデルの仮値。
+    start_lap_feedforward_gain: float = 1.0
+    start_lap_wheel_tread_mm: float = 110.0
+    # 横ずれはエンコーダ/IMUの推定値。0mmなら横補正を無効化できる。
+    start_lap_cross_track_lookahead_mm: float = 300.0
+    start_lap_max_heading_correction_deg: float = 8.0
+    start_lap_log_interval_sec: float = 0.2
     enable_bottle_delivery: bool = True
     enable_et_rally: bool = True
     et_rally_laps: int = 3
+    # received: PCから受信したSEQ、file: 従来の固定plan JSONを実行する。
+    et_rally_strategy_source: str = "file"
+    # Noneならtests/plan_seed9392783.json。相対パスは2026-Alpha直下を基準にする。
+    et_rally_plan_path: Optional[str] = None
     enable_et_sumo: bool = True
     enable_finish: bool = True
+    # 直接TCP接続用。SSHポート転送だけならhostを127.0.0.1へ変更する。
+    strategy_host: str = "0.0.0.0"
+    strategy_port: int = 50000
+    strategy_timeout_s: float = 5.0
     sumo: SumoSettings = SumoSettings()
     integration: IntegrationSettings = IntegrationSettings()
 
 
 MISSION_CHOICES = (
+    'at',
+    'to',
     'configured',
     'lap',
     'bottle',
+    'bottle-final',
     'rally',
     'sumo',
     'finish',
@@ -53,6 +84,11 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         enable_et_sumo=False,
         enable_finish=False,
     )
+    if mission in ('at', 'to'):
+        return replace(config, mission_mode=mission, **disabled)
+    if mission == 'bottle-final':
+        # Hint2後移動の終了位置から、Bottle Delivery後半だけを単体実行する。
+        return replace(config, mission_mode=mission, **disabled)
     if mission == 'lap':
         disabled['lapgate'] = True
     elif mission == 'bottle':
@@ -79,12 +115,16 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
 
 def mission_requires_qr(config: RaceConfig) -> bool:
     # Hint読取を含まない単体工程ではQRデコーダーを起動条件にしない。
-    return config.mission_mode in ('hint2', 'hint2-return') or config.enable_et_rally
+    return (
+        config.mission_mode in ('to', 'hint2', 'hint2-return')
+        or config.enable_et_rally
+        or config.enable_bottle_delivery
+    )
 
 
 def mission_requires_camera(config: RaceConfig) -> bool:
     # ET相撲は黒テープ付き力士ボトルの捕捉にカメラを使用する。
-    if config.mission_mode in ('hint2', 'hint2-return'):
+    if config.mission_mode in ('at', 'to', 'hint2', 'hint2-return'):
         return True
     return any(
         (

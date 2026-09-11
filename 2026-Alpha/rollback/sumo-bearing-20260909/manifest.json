@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "description": "ET sumo bearing migration restore point",
+  "files": [
+    {
+      "path": "robot_program/README.md",
+      "before_sha256": "39B63A156DECBD4F0341A2BF900562D00456148A3A8823F67C53E783E2EF4D66",
+      "after_sha256": "D0EBA757E37951A4293ECDD9B941E7D715DBF4C5BE0924849CF17D126BB47C76"
+    },
+    {
+      "path": "robot_program/SUMO_BEARING_v1.md",
+      "before_sha256": null,
+      "after_sha256": "4A79C1E610F32FB8E41B3D60F12869035B7E3FE6302570A80DDEC9ECFCC01282"
+    },
+    {
+      "path": "robot_program/sumo_types.py",
+      "before_sha256": "95694D987CEDF1E0B9275EB19A85DC296A8FCB8FB3B77BC0C083032F0F7C7CD1",
+      "after_sha256": "BE8EDFE4CF0EC9A2E00478F51D344A851C815EB04B9777D8E548C058047C36A9"
+    },
+    {
+      "path": "robot_program/features/capture_sumo_bottle_camera.py",
+      "before_sha256": "BA8EDD919160D6B82E3A90CB24974D4ADC674D4806284C7760D876020E5B6527",
+      "after_sha256": "2E37CC9A52AE0BEA9EB2165795AE6ADEDB0D7E27702AA2A83F88EE8D7D6D6EE6"
+    },
+    {
+      "path": "robot_program/features/move_to_sumo_exit.py",
+      "before_sha256": "FF2B8DB0689341F0819A39F8705575E0A78EC366709C294CFEF332053877BCC8",
+      "after_sha256": "C988F259B1965FAC9018DCD1CF03A6F6CA7B2D48B9145AD0468F0FDC3FCF861C"
+    },
+    {
+      "path": "robot_program/features/move_to_sumo_start.py",
+      "before_sha256": "0B880E698A7B7FA3F244035C2E53B7135D616B90912EBE0019954FE1671AD014",
+      "after_sha256": "6CDF2077E2B3706E705F7F358BD1DC05BE545D0AF235F3C9340FEA176B86E915"
+    },
+    {
+      "path": "robot_program/features/sumo_bearing_motion.py",
+      "before_sha256": null,
+      "after_sha256": "CEB405B50916F59214D73C5831222751A16DB8B72F7C7FC8C82460AD7B5F0D5D"
+    },
+    {
+      "path": "robot_program/features/sumo_bearing.py",
+      "before_sha256": null,
+      "after_sha256": "265000BF7BD18CC160700C3CD8AB0563B2D8D059F36D3278277591BEBEA2C767"
+    },
+    {
+      "path": "robot_program/tests/test_reusable_behaviours.py",
+      "before_sha256": "8A3C085C8ECFAF19689A02BBC3CBFAA663825297B81A01BB0F9A516E916773E2",
+      "after_sha256": "6BD43BE094DB85F93039EEBD1ED645A3B1D174F1F754A7FC498B8688549DCE9D"
+    },
+    {
+      "path": "robot_program/tests/test_sumo_bearing.py",
+      "before_sha256": null,
+      "after_sha256": "DE3892562778D701D27C49F344D1FDAE649743E390954168F9D7826E52508CA9"
+    },
+    {
+      "path": "robot_program/tests/test_sumo_total_distance.py",
+      "before_sha256": "F90860F51FB90F23C2F81CFD45984DD22B9FB767B225FD428E2746F0A287CE99",
+      "after_sha256": "0800FE9EDCB2F4EB0DE12C674DD8ADE6B3F4E8EEBD0578A05BFAFB9AABF2321D"
+    },
+    {
+      "path": "alpha.py",
+      "before_sha256": "00E65AFEC4EE4B764BF814AD33976AA1F84940ABB28791FA4EABE7D1626C1BC8",
+      "after_sha256": "22AAF708FEFA8F5ECA851961B5DE05C15569D97447262AED86FD0D0E9C9D97FF"
+    }
+  ]
+}

@@ -26,7 +26,11 @@ from robot_program.config import (
     mission_requires_qr,
 )
 from robot_program.context import RaceContext
+from robot_program.delivery_heading import RegisterDeliveryHeading, initial_delivery_heading
+from robot_program.decryption_key import read_decryption_key
 from robot_program.behaviours.device_control import ResetDevice
+from robot_program.features.sumo_bearing import initial_sumo_bearing
+from robot_program.features.sumo_bearing_motion import RegisterSumoBearing
 from robot_program.runtime import runtime as robot_runtime
 from robot_program.services.execution_safety import stop_motors, pending_features
 from robot_program.services.shutdown import Shutdown
@@ -42,6 +46,14 @@ VIDEO_INTERVAL = EXEC_INTERVAL
 SPIN_MAX_POWER     = 57
 SPIN_MIN_POWER     = 47
 TRACELINE_TARGET_V = 75
+
+# Bottle Delivery後半単体試験で、入力名とプログラム内部の色を対応させる。
+BOTTLE_COLOR_NAMES = ('red', 'blue', 'yellow')
+BOTTLE_COLOR_VALUE_BY_NAME = {
+    'red': BottleColor.RED.value,
+    'blue': BottleColor.BLUE.value,
+    'yellow': BottleColor.YELLOW.value,
+}
 
 # constants for specific action classes
 ARM_SHIFT_PWM      = 35   # ArmUpDownFull
@@ -1030,7 +1042,12 @@ class VideoThread(threading.Thread):
                 time.sleep(VIDEO_INTERVAL - elapsed_time)
 
 
-def build_behaviour_tree(mission_config=None) -> BehaviourTree:
+def build_behaviour_tree(
+    mission_config=None,
+    decryption_key=None,
+    sumo_initial_bearing=180.0,
+    bottle_color=None,
+) -> BehaviourTree:
     # alpha.pyには競技全体の基本順序を残し、各工程の詳細は機能別ファイルから取得する。
     root = Sequence(name="2026 alpha", memory=True)
     calibration = Sequence(name="calibration", memory=True)
@@ -1046,13 +1063,24 @@ def build_behaviour_tree(mission_config=None) -> BehaviourTree:
     )
     start.add_children([IsTouchOn(name="touch start")])
 
-    mission_context = RaceContext()
+    mission_context = RaceContext(
+        bottle_color=bottle_color,
+        decryption_key=decryption_key,
+    )
     mission_config = mission_config or RaceConfig()
+    if mission_config.enable_et_sumo:
+        # 既存ResetDevice完了直後に相撲用の方位対応だけを保存する。他工程の基準は変更しない。
+        calibration.add_child(RegisterSumoBearing(
+            "register sumo bearing after reset", mission_context, sumo_initial_bearing))
+    calibration.add_child(RegisterDeliveryHeading(
+        "register bottle heading after reset", mission_context,
+        initial_delivery_heading(mission_config.mission_mode)))
+    mission_children = build_mission_children(mission_context, mission_config)
     root.add_children(
         [
             calibration,
             start,
-            *build_mission_children(mission_context, mission_config),
+            *mission_children,
             TheEnd(name="end"),
         ]
     )
@@ -1120,8 +1148,33 @@ def sig_handler(signum, frame) -> None:
     raise SystemExit(128 + signum)
 
 
+def read_bottle_color_for_final_mission(mission, color_argument, check_tree):
+    # 通常ミッションでは色の手入力を使わない。
+    if mission != 'bottle-final':
+        if color_argument is not None:
+            raise ValueError(
+                '--bottle-color is available only with --mission bottle-final'
+            )
+        return None
+
+    # コマンドで色を省略した場合だけ、走行開始前に端末から入力する。
+    color_name = color_argument
+    if color_name is None and not check_tree:
+        color_name = input('Bottle color (red/blue/yellow): ').strip().lower()
+
+    # ツリー表示だけの場合は分岐を実行しない。Contextには有効な仮値を入れておく。
+    if color_name is None:
+        color_name = 'red'
+
+    if color_name not in BOTTLE_COLOR_VALUE_BY_NAME:
+        raise ValueError('Bottle color must be red, blue, or yellow')
+
+    print(' -- bottle-final color=%s' % color_name)
+    return BOTTLE_COLOR_VALUE_BY_NAME[color_name]
+
+
 def main(argv=None):
-    global g_course, g_shutdown
+    global g_course, g_key, g_shutdown
     g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
     parser = argparse.ArgumentParser()
     parser.add_argument('course', choices=['right', 'left'], help='Course to run')
@@ -1134,13 +1187,47 @@ def main(argv=None):
         default='configured',
         help='Mission profile; configured uses the switches in RaceConfig',
     )
+    parser.add_argument(
+        '--bottle-color',
+        choices=BOTTLE_COLOR_NAMES,
+        default=None,
+        help='Bottle color for --mission bottle-final',
+    )
+    parser.add_argument("--sumo-initial-bearing", type=float, default=None,
+                        help="Placement bearing for --mission sumo only: up=0, clockwise positive")
     args = parser.parse_args(argv)
+    try:
+        sumo_initial_bearing = initial_sumo_bearing(args.mission, args.sumo_initial_bearing)
+    except ValueError as error:
+        parser.error(str(error))
     g_course = -1 if args.course == 'right' else 1
 
     # 未実装ノードは明示警告するが、PendingFeature自身のSUCCESSで後続工程へ進める。
     print(" -- shutdown-v8 control interval=%.3fs mission=%s" % (EXEC_INTERVAL, args.mission))
     mission_config = config_for_mission(args.mission)
-    tree = build_behaviour_tree(mission_config)
+    try:
+        bottle_color = read_bottle_color_for_final_mission(
+            mission=args.mission,
+            color_argument=args.bottle_color,
+            check_tree=args.check_tree,
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    decryption_key = None
+    if (not args.check_tree
+            and mission_config.enable_et_rally
+            and mission_config.et_rally_laps > 0
+            and mission_config.et_rally_strategy_source == "received"):
+        # デバイス初期化と20ms制御周期の開始前に、4桁キーの入力・確認を完了する。
+        decryption_key = read_decryption_key()
+        # alpha.py内に残る旧Behaviorとの互換性だけを維持し、新処理はContextを参照する。
+        g_key = decryption_key
+    tree = build_behaviour_tree(
+        mission_config,
+        decryption_key=decryption_key,
+        sumo_initial_bearing=sumo_initial_bearing,
+        bottle_color=bottle_color,
+    )
     pending = pending_features(tree)
     if args.check_tree:
         print(display_tree.unicode_tree(tree))
@@ -1192,4 +1279,6 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    # 画面ログを実行ごとに保存する。既存--logfile(機器ログ)とは別。
+    from robot_program.services.run_log import run_with_log
+    sys.exit(run_with_log(main))
