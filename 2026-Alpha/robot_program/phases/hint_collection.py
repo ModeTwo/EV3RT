@@ -1,10 +1,7 @@
 """The implemented RE -> AT -> TO mission ends in a stationary hold."""
 from py_trees.composites import Sequence
 from ..features.catch_bottle import build_catch_bottle
-from ..features.move_to_hint1 import build_move_to_hint1
-from ..features.move_to_hint2 import build_move_to_hint2
-from ..features.read_hint import build_read_hint
-from ..features.move_after_hint2 import build_move_after_hint2
+from ..features.to_hint_route import build_tantou_tree
 from ..behaviours.motor_control import StopNow
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
@@ -27,11 +24,11 @@ class ReportHints(Behaviour):
 
 def build_hint_collection_phase(context, config):
     root = Sequence(name='AT_TO hint collection', memory=True)
-    nodes = [build_catch_bottle(context, config),
-             build_move_to_hint1(context, config), build_read_hint(context, config, 1),
-             build_move_to_hint2(context, config), build_read_hint(context, config, 2)]
-    if config.mission_mode == 'hint2-return':
-        nodes.append(build_move_after_hint2(context, config))
+    nodes = [
+        build_catch_bottle(context, config),
+        build_tantou_tree(context, config,
+                          include_exit=config.mission_mode == 'hint2-return'),
+    ]
     nodes.append(StopNow(name='Hint mission complete brake'))
     nodes.append(ReportHints(context))
     root.add_children(nodes)

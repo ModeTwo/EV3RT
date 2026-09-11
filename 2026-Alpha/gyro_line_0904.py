@@ -684,7 +684,7 @@ class VideoThread(threading.Thread):
             if elapsed_time < VIDEO_INTERVAL:
                 time.sleep(VIDEO_INTERVAL - elapsed_time)
 
-  class TraceLineBlue(Behaviour):
+class TraceLineBlue(Behaviour):
        """青色ラインでトレース"""
        def __init__(self,name: str, target_h: int, power: int,
                            pid_p: float, pid_i: float, pid_d: float,
@@ -892,6 +892,8 @@ def build_behaviour_tree() -> BehaviourTree:
         [
             TraceLineBlue(name = "trace along blue", target_h=200, power=40,
                  pid_p=0.55, pid_i=0.0000009, pid_d=0.045, trace_side=TraceSide.NORMAL)
+        ]
+    )
     
     """
     #lap2_4（青色検知したら、次の黒までライントレース。）

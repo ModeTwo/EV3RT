@@ -2,7 +2,6 @@
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status, ParallelPolicy
 from py_trees.composites import Sequence, Parallel
-from py_trees.decorators import Timeout
 from ..runtime import runtime
 from ..types import HeadingType
 from .conditions import IsDistanceEarned, IsTimePassed
@@ -60,11 +59,11 @@ class LocalDrive(RunByGyro):
         return super().update()
 
 
-def distance_motion(name, motion, distance, timeout):
+def distance_motion(name, motion, distance):
     parallel = Parallel(name=name, policy=ParallelPolicy.SuccessOnOne())
     parallel.add_children([motion, IsDistanceEarned(name=name + ' distance', delta_dist=distance)])
     root = Sequence(name=name + ' segment', memory=True)
-    root.add_children([Timeout(name=name + ' timeout', child=parallel, duration=timeout),
+    root.add_children([parallel,
                        StopNow(name=name + ' brake')])
     return root
 
@@ -75,7 +74,7 @@ def to_turn(name, context, settings, target, relative=False):
                      max_power=settings.to_spin_max_power, min_power=settings.to_spin_min_power,
                      pid_p=0.2, pid_i=0.00075, pid_d=0.03,
                      target_type=HeadingType.RELATIVE if relative else HeadingType.ABSOLUTE)
-    root.add_children([Timeout(name=name + ' timeout', child=spin, duration=settings.motion_timeout_sec),
+    root.add_children([spin,
                        StopNow(name=name + ' brake'),
                        IsTimePassed(name=name + ' settle', delta_time=0.5)])
     return root
@@ -85,4 +84,4 @@ def to_drive(name, context, settings, distance):
     return distance_motion(name,
         LocalDrive(name=name + ' gyro', context=context, target=0, power=60,
                    pid_p=0.0001, pid_i=0.00001, pid_d=0.04, target_type=HeadingType.ABSOLUTE),
-        distance, settings.motion_timeout_sec)
+        distance)

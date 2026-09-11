@@ -88,3 +88,75 @@ class HasCaughtBottle(Behaviour):
             )
         )
         return Status.SUCCESS if caught else Status.FAILURE
+
+
+class SelectBottleDropZone(Behaviour):
+    # 認識済みのボトル色を配置先として確定する。認識値が不正なら既定の赤を選ぶ。
+    def __init__(self, name: str, context) -> None:
+        super().__init__(name)
+        self.context = context
+
+    def update(self) -> Status:
+        valid_values = {
+            _color_value(BottleColor.RED),
+            _color_value(BottleColor.BLUE),
+            _color_value(BottleColor.YELLOW),
+        }
+        detected = _color_value(self.context.bottle_color)
+        selected = detected if detected in valid_values else _color_value(BottleColor.RED)
+        self.context.selected_drop_zone = selected
+        if selected != detected:
+            self.logger.warning(
+                "%s.invalid bottle color=%s; defaulting to %s"
+                % (self.__class__.__name__, detected, selected)
+            )
+        else:
+            self.logger.info(
+                "%s.selected drop zone=%s" % (self.__class__.__name__, selected)
+            )
+        return Status.SUCCESS
+
+
+class IsSelectedDropZone(Behaviour):
+    # Selectorの各分岐で、確定済みの配置先が指定色かを判定する。
+    def __init__(self, name: str, color: BottleColor, context) -> None:
+        super().__init__(name)
+        self.color = color
+        self.context = context
+
+    def update(self) -> Status:
+        selected = _color_value(self.context.selected_drop_zone)
+        expected = _color_value(self.color)
+        return Status.SUCCESS if selected == expected else Status.FAILURE
+
+
+class IsDropZoneUnset(Behaviour):
+    # ボトル工程を無効にしたラリー単体走行では、最初の青ラインから赤まで移動する。
+    def __init__(self, name: str, context) -> None:
+        super().__init__(name)
+        self.context = context
+
+    def update(self) -> Status:
+        return Status.SUCCESS if self.context.selected_drop_zone is None else Status.FAILURE
+
+
+class MarkBottleDelivered(Behaviour):
+    # 配置走行が最後まで完了したことを共有状態へ記録する。
+    def __init__(self, name: str, context) -> None:
+        super().__init__(name)
+        self.context = context
+
+    def update(self) -> Status:
+        self.context.bottle_delivered = True
+        return Status.SUCCESS
+
+
+class MarkRallyReady(Behaviour):
+    # 最上段の青ライン中央で内向きになったことを後工程へ通知する。
+    def __init__(self, name: str, context) -> None:
+        super().__init__(name)
+        self.context = context
+
+    def update(self) -> Status:
+        self.context.rally_ready = True
+        return Status.SUCCESS

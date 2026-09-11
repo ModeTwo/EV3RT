@@ -177,20 +177,6 @@ class ContinuousSonarSweep(SpinAround):
             self.swept_angle_deg -= delta
             self.last_heading = heading
 
-        if now - self.started_at >= self.settings.continuous_scan_timeout_sec:
-            self.terminate(Status.FAILURE)
-            StopNow(name="stop timed out continuous scan").update()
-            raise RuntimeError(
-                "Continuous sumo scan timed out; motors stopped "
-                "(heading=%.1f swept=%.1f target=%.1f samples=%d candidates=%d)"
-                % (
-                    heading,
-                    self.swept_angle_deg,
-                    self.target,
-                    self.sample_count,
-                    len(self.context.sumo.sonar_samples),
-                )
-            )
 
         if now >= self.next_sample_at:
             self.next_sample_at = now + self.settings.continuous_sample_interval_sec
