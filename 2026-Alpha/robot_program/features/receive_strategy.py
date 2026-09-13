@@ -16,7 +16,8 @@ class WaitForStrategy(Behaviour):
         if self.context.strategy_status == "failed":
             self.logger.error("Strategy unavailable: %s" % self.context.strategy_error)
             return Status.FAILURE
-        if not self.context.hint1 or not self.context.hint2:
+        if not self.context.hint1 or not (
+                self.context.hint2 or self.context.hint2_gate_info):
             self.logger.error("Both hints are required before starting ET rally")
             return Status.FAILURE
         return Status.RUNNING

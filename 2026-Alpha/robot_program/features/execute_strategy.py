@@ -2,6 +2,7 @@
 
 import json
 import math
+from shared_communication.heading_frame import full_start_to_gyro
 from pathlib import Path
 
 from .bt_imports import Failure, HeadingType, Parallel, ParallelPolicy, Sequence
@@ -42,7 +43,7 @@ def build_execute_strategy(context, config, lap_number=None):
     if source == "received":
         return DeferredStrategySequence(
             name="execute_received_strategy",
-            loader=lambda: context.strategy,
+            loader=lambda: full_start_to_gyro(context.strategy, config.mission_mode),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)

@@ -34,6 +34,7 @@ from robot_program.features.sumo_bearing_motion import RegisterSumoBearing
 from robot_program.runtime import runtime as robot_runtime
 from robot_program.services.execution_safety import stop_motors, pending_features
 from robot_program.services.shutdown import Shutdown
+from robot_program.services.strategy_tree import WithStrategyExchange
 
 g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
 from robot_program.tree_builder import build_mission_children
@@ -1047,6 +1048,8 @@ def build_behaviour_tree(
     decryption_key=None,
     sumo_initial_bearing=180.0,
     bottle_color=None,
+    rally_hint1=None,
+    rally_hint2_gate_info=None,
 ) -> BehaviourTree:
     # alpha.pyには競技全体の基本順序を残し、各工程の詳細は機能別ファイルから取得する。
     root = Sequence(name="2026 alpha", memory=True)
@@ -1066,6 +1069,8 @@ def build_behaviour_tree(
     mission_context = RaceContext(
         bottle_color=bottle_color,
         decryption_key=decryption_key,
+        hint1=rally_hint1,
+        hint2_gate_info=rally_hint2_gate_info,
     )
     mission_config = mission_config or RaceConfig()
     if mission_config.enable_et_sumo:
@@ -1076,6 +1081,12 @@ def build_behaviour_tree(
         "register bottle heading after reset", mission_context,
         initial_delivery_heading(mission_config.mission_mode)))
     mission_children = build_mission_children(mission_context, mission_config)
+    if mission_config.enable_et_rally and mission_config.et_rally_laps > 0:
+        # 全工程の実行中に通信キューを監視し、No.11到達前の受信SEQも保持する。
+        mission = Sequence(name="mission", memory=True)
+        mission.add_children(mission_children)
+        mission_children = [WithStrategyExchange(
+            mission, mission_context, mission_config)]
     root.add_children(
         [
             calibration,
@@ -1173,6 +1184,27 @@ def read_bottle_color_for_final_mission(mission, color_argument, check_tree):
     return BOTTLE_COLOR_VALUE_BY_NAME[color_name]
 
 
+def read_rally_drive_hints(mission, hint1, hint2_gate_info, check_tree):
+    # ETラリー走行単体以外では手入力Hintを受け付けず、競技時の読取経路を守る。
+    if mission != 'rally-drive':
+        if hint1 is not None or hint2_gate_info is not None:
+            raise ValueError(
+                '--rally-hint1 and --rally-hint2-gate-info require '
+                '--mission rally-drive'
+            )
+        return None, None
+
+    # ツリー確認では通信を開始しないため、形式だけ満たす固定値を使用する。
+    if check_tree:
+        return hint1 or '25,35', hint2_gate_info or '53,54/12,22'
+    if not hint1 or not hint2_gate_info:
+        raise ValueError(
+            '--mission rally-drive requires --rally-hint1 and '
+            '--rally-hint2-gate-info'
+        )
+    return hint1, hint2_gate_info
+
+
 def main(argv=None):
     global g_course, g_key, g_shutdown
     g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
@@ -1195,6 +1227,16 @@ def main(argv=None):
     )
     parser.add_argument("--sumo-initial-bearing", type=float, default=None,
                         help="Placement bearing for --mission sumo only: up=0, clockwise positive")
+    parser.add_argument(
+        '--rally-hint1',
+        default=None,
+        help='Decoded Hint 1 gate coordinates for --mission rally-drive',
+    )
+    parser.add_argument(
+        '--rally-hint2-gate-info',
+        default=None,
+        help='Decoded Hint 2 gate coordinates for --mission rally-drive',
+    )
     args = parser.parse_args(argv)
     try:
         sumo_initial_bearing = initial_sumo_bearing(args.mission, args.sumo_initial_bearing)
@@ -1213,11 +1255,21 @@ def main(argv=None):
         )
     except ValueError as error:
         parser.error(str(error))
+    try:
+        rally_hint1, rally_hint2_gate_info = read_rally_drive_hints(
+            mission=args.mission,
+            hint1=args.rally_hint1,
+            hint2_gate_info=args.rally_hint2_gate_info,
+            check_tree=args.check_tree,
+        )
+    except ValueError as error:
+        parser.error(str(error))
     decryption_key = None
     if (not args.check_tree
             and mission_config.enable_et_rally
             and mission_config.et_rally_laps > 0
-            and mission_config.et_rally_strategy_source == "received"):
+            and mission_config.et_rally_strategy_source == "received"
+            and mission_config.mission_mode != 'rally-drive'):
         # デバイス初期化と20ms制御周期の開始前に、4桁キーの入力・確認を完了する。
         decryption_key = read_decryption_key()
         # alpha.py内に残る旧Behaviorとの互換性だけを維持し、新処理はContextを参照する。
@@ -1227,6 +1279,8 @@ def main(argv=None):
         decryption_key=decryption_key,
         sumo_initial_bearing=sumo_initial_bearing,
         bottle_color=bottle_color,
+        rally_hint1=rally_hint1,
+        rally_hint2_gate_info=rally_hint2_gate_info,
     )
     pending = pending_features(tree)
     if args.check_tree:

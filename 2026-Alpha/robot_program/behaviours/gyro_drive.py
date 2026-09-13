@@ -149,7 +149,7 @@ class RunByGyro(Behaviour):
 
     target=90.0: 従来どおり一定角度へ走る。
     target=heading_at: 毎周期 heading_at(開始からの距離mm) で目標角を得る。
-    関数を渡す場合はRELATIVEを使い、開始時を0度とする連続角を返す。
+    関数を渡す場合、ABSOLUTEはIMU方位角、RELATIVEは開始時0度の角度を目標にする。
     関数名には括弧を付けない。PIDは開始時に一度だけ生成する。
     """
     def __init__(
@@ -203,8 +203,8 @@ class RunByGyro(Behaviour):
             raise ValueError('path tracking requires a target function')
         if self.distance_target:
             # 距離関数モードだけの契約。固定角度を使う他工程の仕様は維持。
-            if target_type != HeadingType.RELATIVE:
-                raise ValueError('distance target requires HeadingType.RELATIVE')
+            if target_type not in (HeadingType.ABSOLUTE, HeadingType.RELATIVE):
+                raise ValueError('distance target requires a valid HeadingType')
             if distance_limit_mm is None or not math.isfinite(distance_limit_mm) or distance_limit_mm <= 0:
                 raise ValueError('distance_limit_mm must be positive and finite')
             if not math.isfinite(completion_min_mm) or not 0 <= completion_min_mm < distance_limit_mm:
@@ -275,6 +275,8 @@ class RunByGyro(Behaviour):
         if not self.running:
             self.origin_distance = distance
             self.previous_heading = heading
+            self.continuous_heading = heading
+            self.heading_origin = heading
             self.relative_heading = 0.0
             self.path_tracker = (PathTracking(self.cross_track_lookahead_mm, self.max_heading_correction_deg)
                                  if self.cross_track_lookahead_mm > 0 else None)
@@ -288,8 +290,12 @@ class RunByGyro(Behaviour):
         if progress < 0:
             return self._finish_distance_run(Status.FAILURE)
         # 359→0度等の折り返しを解除して開始からの連続角を得る。
-        self.relative_heading += _normalize_heading_error(heading - self.previous_heading)
+        self.continuous_heading += _normalize_heading_error(heading - self.previous_heading)
         self.previous_heading = heading
+        self.relative_heading = self.continuous_heading - self.heading_origin
+        actual_heading = (self.continuous_heading
+                          if self.target_type == HeadingType.ABSOLUTE
+                          else self.relative_heading)
 
         # 2. 終了条件なし: 距離で成功。あり: 検知で成功、距離上限で失敗。
         if self.completion_condition is not None and progress >= self.completion_min_mm:
@@ -305,7 +311,7 @@ class RunByGyro(Behaviour):
         if not math.isfinite(nominal_heading):
             return self._finish_distance_run(Status.FAILURE)
         # 推定横ずれがあるときは、計画の向きへ戻すため小さな追加角度を与える。
-        correction = (self.path_tracker.correction(progress, self.relative_heading, self.target)
+        correction = (self.path_tracker.correction(progress, actual_heading, self.target)
                       if self.path_tracker is not None else 0.0)
         self.target_heading = nominal_heading + correction
         turn_limit = min(self.power, 100-self.power)
@@ -316,7 +322,7 @@ class RunByGyro(Behaviour):
         # FF分を差し引いた範囲に制限し、合計PWMの飽和時も積分を制限する。
         self.pid.output_limits = (-turn_limit-feedforward, turn_limit-feedforward)
         self.pid.setpoint = self.target_heading
-        feedback = self.pid(self.relative_heading)
+        feedback = self.pid(actual_heading)
         turn = max(-turn_limit, min(turn_limit, feedforward+feedback))
 
         # 4. 基本旋回＋PID補正の合計を左右コースへ変換して出力する。
@@ -332,8 +338,8 @@ class RunByGyro(Behaviour):
                 'profile s=%.1f nominal=%.2f target=%.2f actual=%.2f error=%.2f '
                 'xte_est=%.1f correction=%.2f ff=%.2f p=%.2f i=%.2f d=%.2f '
                 'turn=%.2f left=%d right=%d' %
-                (progress, nominal_heading, self.target_heading, self.relative_heading,
-                 self.target_heading-self.relative_heading, xte, correction, feedforward, p, i, d,
+                (progress, nominal_heading, self.target_heading, actual_heading,
+                 self.target_heading-actual_heading, xte, correction, feedforward, p, i, d,
                  turn, round(self.power-runtime.course*turn), round(self.power+runtime.course*turn)))
             self.last_log_time = now
         return Status.RUNNING
