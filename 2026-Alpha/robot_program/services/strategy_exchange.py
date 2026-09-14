@@ -25,6 +25,7 @@ class StrategyExchange:
         self.decoded_hint2_inbox = queue.Queue(maxsize=1)
         self.stop_event = threading.Event()
         self.ready_event = threading.Event()
+        self.connected_event = threading.Event()
         self.thread = None
         self.started_at = None
 
@@ -34,9 +35,17 @@ class StrategyExchange:
                                            name="strategy-exchange")
             self.thread.start()
 
+    def wait_for_connection(self):
+        """Wait before password/device startup; no request or response timer yet."""
+        self.start()
+        while not self.connected_event.wait(0.1):
+            if self.stop_event.is_set() or not self.thread.is_alive():
+                raise RuntimeError("Strategy server stopped before PC connection; check address/port")
+
     def close(self):
         # joinしない。BT周期を止めず、通信側の短いsocket timeoutで終了させる。
         self.stop_event.set()
+        self.connected_event.clear()
 
     def poll(self, context, course="left", laps=3):
         # この関数はBTスレッドだけから呼び、RaceContextの更新もここへ限定する。
@@ -163,6 +172,7 @@ class StrategyExchange:
                     except socket.timeout:
                         continue
                     with connection:
+                        self.connected_event.set()
                         connection.settimeout(0.1)
                         reader = FrameReader()
                         last_sent = 0.0
@@ -191,6 +201,7 @@ class StrategyExchange:
                             except (OSError, ValueError, queue.Full) as error:
                                 LOG.warning("Strategy connection closed: %s", error)
                                 break
+                    self.connected_event.clear()
         except OSError as error:
             # bind失敗などは制御側へ通知する。スレッド内だけで黙って終了しない。
             self.inbox.put_nowait(make_message("ERROR", self.mission_id, 0,

@@ -1081,12 +1081,6 @@ def build_behaviour_tree(
         "register bottle heading after reset", mission_context,
         initial_delivery_heading(mission_config.mission_mode)))
     mission_children = build_mission_children(mission_context, mission_config)
-    if mission_config.enable_et_rally and mission_config.et_rally_laps > 0:
-        # 全工程の実行中に通信キューを監視し、No.11到達前の受信SEQも保持する。
-        mission = Sequence(name="mission", memory=True)
-        mission.add_children(mission_children)
-        mission_children = [WithStrategyExchange(
-            mission, mission_context, mission_config)]
     root.add_children(
         [
             calibration,
@@ -1095,6 +1089,10 @@ def build_behaviour_tree(
             TheEnd(name="end"),
         ]
     )
+    if mission_config.enable_et_rally and mission_config.et_rally_laps > 0:
+        # 初期化とタッチ待ちを含む全体を包み、タッチ前にTCP接続を確認できるようにする。
+        # Hintの送信は従来どおりHint1/Hint2が揃った後だけ行う。
+        root = WithStrategyExchange(root, mission_context, mission_config)
     return root
 
 def initialize_etrobo(backend: str) -> ETRobo:
@@ -1205,7 +1203,7 @@ def read_rally_drive_hints(mission, hint1, hint2_gate_info, check_tree):
     return hint1, hint2_gate_info
 
 
-def main(argv=None):
+def _run_main(argv, startup_cleanup):
     global g_course, g_key, g_shutdown
     g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
     parser = argparse.ArgumentParser()
@@ -1265,15 +1263,6 @@ def main(argv=None):
     except ValueError as error:
         parser.error(str(error))
     decryption_key = None
-    if (not args.check_tree
-            and mission_config.enable_et_rally
-            and mission_config.et_rally_laps > 0
-            and mission_config.et_rally_strategy_source == "received"
-            and mission_config.mission_mode != 'rally-drive'):
-        # デバイス初期化と20ms制御周期の開始前に、4桁キーの入力・確認を完了する。
-        decryption_key = read_decryption_key()
-        # alpha.py内に残る旧Behaviorとの互換性だけを維持し、新処理はContextを参照する。
-        g_key = decryption_key
     tree = build_behaviour_tree(
         mission_config,
         decryption_key=decryption_key,
@@ -1290,6 +1279,19 @@ def main(argv=None):
               file=sys.stderr)
     if args.check_tree:
         return 0
+
+    if (mission_config.enable_et_rally
+            and mission_config.et_rally_laps > 0
+            and mission_config.et_rally_strategy_source == "received"):
+        # 同じ通信サーバーを走行中も使う。ここではHintをキューへ投入しない。
+        startup_cleanup.callback(tree.exchange.close)
+        print(" -- Waiting for PC connection before password input...", flush=True)
+        tree.exchange.wait_for_connection()
+        print(" -- PC TCP connection confirmed", flush=True)
+        if mission_config.mission_mode != 'rally-drive':
+            decryption_key = read_decryption_key()
+            tree.context.decryption_key = decryption_key
+            g_key = decryption_key
 
     previous_sigint = signal.signal(signal.SIGINT, sig_handler)
     previous_sigterm = signal.signal(signal.SIGTERM, sig_handler)
@@ -1330,6 +1332,13 @@ def main(argv=None):
             signal.signal(signal.SIGINT, previous_sigint)
         print(" -- exiting... shutdown-v8", flush=True)
     return 0
+
+
+def main(argv=None):
+    # 接続待ち・キー入力中のCtrl+C/例外でもソケットを閉じる。
+    from contextlib import ExitStack
+    with ExitStack() as startup_cleanup:
+        return _run_main(argv, startup_cleanup)
 
 
 if __name__ == '__main__':

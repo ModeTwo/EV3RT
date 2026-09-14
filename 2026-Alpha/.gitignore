@@ -7,3 +7,5 @@ test_*.py
 
 # Rollback snapshots are retained locally only.
 /rollback/
+
+/strategy_logs/

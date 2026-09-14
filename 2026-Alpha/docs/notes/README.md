@@ -1,6 +1,12 @@
 # 走行関連の補足資料・変更履歴
 
-本番起動は [RACE_STARTUP_v1.md](RACE_STARTUP_v1.md) を参照。
+2026-09-14更新: devRE最新`dd1f880`の方位角制御を正としてdevTKを調整。距離‐方位角プロファイル、POINTS、距離終了、全体方位基準は維持し、`SpinAround`をdevREの連続PID方式へ戻した。スタート～LAPのPIDをP=1.1/I=0.1/D=0.03へ戻し、devTK独自の曲率フィードフォワードと推定横ずれ補正は標準設定で無効化。固定角度`RunByGyro`の左右出力もdevRE方式へ整合。構文、設定値、±180度境界の方向補正、距離関数互換をPC上で確認。実機未検証。
+
+2026-09-13更新: ETラリー受信SEQの遅延展開を修正。空の`py_trees.Sequence`へ`initialise()`中に子ノードを追加すると、最初の旋回開始直後に`Sequence reached an unknown / invalid state`となるため、`Sequence.tick()`が内部状態を選ぶ前に一度だけ展開する。Piへの配備対象は`robot_program/features/execute_strategy.py`。PC環境は`py_trees`未導入のため既存戦略テストは依存関係不足で開始できず、構文・展開順・差分を確認。実機再試走が必要。
+
+本番起動は [RACE_STARTUP_v2.md](RACE_STARTUP_v2.md) を参照。v1は旧版として保持する。
+
+2026-09-13更新: Strategyサーバーを全走行ツリーの外側へ移し、4桁キー確定・デバイス起動後、タッチ待ちより前にPC接続を確認できるようにした。接続成功を確認するまでタッチしない。
 
 資料を元の所属フォルダ別にまとめています。旧版も含むため、各文書の版と日付を確認してください。文中の実行コマンドは従来どおり2026-Alphaを基準に実行します。
 
@@ -34,6 +40,7 @@
 2026-Alpha内のすべての.mdはこのdocs/notes配下に保存します。README、起動手順、変更記録も例外にせず、ルートやコードのフォルダへ作成しません。新しい記録は既存資料への追記を優先します。
 
 - [RACE_STARTUP_v1.md](RACE_STARTUP_v1.md)
+- [RACE_STARTUP_v2.md](RACE_STARTUP_v2.md)
 - [README.md](PROJECT_README.md)
 - [robot_program/README.md](robot_program/README.md)
 - [robot_program/START_LAP_CURVE_TIMING_v7.md](robot_program/START_LAP_CURVE_TIMING_v7.md)
@@ -96,3 +103,33 @@ alpha.py、sample.py、共通ライブラリ、現行robot_program、devTKの撮
 - sumo_bottle_camera_monitor.py → archive/branches/devTK/sumo_bottle_camera_monitor.py（追加コミット d792f0c651af84e0c4d678c110bdefa7134884b4、SHA-256 7479c80c949162af9f751b92183fb337ed6df0991c65e73ec6d4021da4460a46）
 
 補助ツールを再使用する際は2026-Alphaを作業ディレクトリとし、モジュール起動します。例: `python -m archive.branches.devTK.sensor_monitor --help`。通常の実機依存が必要です。ハードウェアでの再実行は未確認。ローカル除外対象のtest_sumo_black_bottle.pyには旧sumo_bottle_camera_monitorのimportが残ります。テストを使わない方針に従い変更せず、再使用時に参照先変更が必要です。
+
+
+## 2026-09-13 旋回補正の刻み改善・回数上限撤去
+
+共通SpinAroundとボトル終盤DeliveryPulseTurnの補正を変更。
+残角に応じて40～120ms駆動し、許容角へ入る／目標を跨ぐ場合は次の制御周期で早期ブレーキ。
+許容±2度の標準設定では残角3度で60ms、5度で100ms、6度以上で120msを上限とする。
+既存の最低PWM・方位原点・目標角・距離走行は維持する。実機未検証の調整値。
+補正12回と安定待ち2秒によるHOLDを撤去。回数で永久停止せず、未達なら停止後の再計測・補正を続ける。
+現在値が許容角内なら追加駆動せず、安定判定の履歴が揃うまで待つ。
+安定していなければブレーキで待ち、安定後は自動で判定を再開する。未達の成功扱いはしない。
+Ctrl+C/通常中断の停止は保持。実機では各工程の収束と行き過ぎを確認する。
+配備対象: robot_program/behaviours/gyro_drive.py、robot_program/behaviours/delivery_turn.py。
+
+
+## 2026-09-13 旋回をsample.py方式へ復帰（最新）
+
+共通SpinAroundとボトル終盤のパルス補正を撤去した。
+sample.pyと同じ連続PID出力＋SymmetricClamperと、標準誤差2度未満で即完了する方式。
+補正パルス、安定待ち、補正回数、HOLD、可変40～120msは使用しない。
+明示toleranceを渡す相撲呼出しはその値を維持。統合ツリーの完了・中断時出力0と駆動時ブレーキ解除は維持。
+ボトル終盤の絶対方位・単体/結合原点、共有直進RunByGyro、通信等の後続変更は巻き戻していない。
+ボトル終盤の既存旋回後StopNow＋0.5秒待ちも維持。
+配備対象: robot_program/behaviours/gyro_drive.pyとrobot_program/behaviours/delivery_turn.py。
+PC反映済み、Pi転送・実機未確認。旧方式と同じ停止後の惰性誤差はあり得る。
+
+
+## 2026-09-14 パスワード入力前のPC接続確認
+
+PCプログラムを先行起動する。PiはTCP接続確認→4桁キー入力→デバイス初期化→タッチ待ちの順。接続待ちではHint送信・応答期限を開始しない。rally-driveも接続確認を行い、キー入力は省略。check-treeと通信不要モードは接続待ちなし。Ctrl+C/起動失敗時も通信を閉じる。TCP接続の確認であり、計算完了の保証ではない。

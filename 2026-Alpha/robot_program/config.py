@@ -28,15 +28,15 @@ class RaceConfig:
     # 個別のカーブの距離移動も無効にし、基準POINTSへ戻す。
     start_lap_second_turn_start_advance_mm: float = 0.0
     start_lap_third_turn_start_delay_mm: float = 0.0
-    # スタート～LAP専用。I残留をなくし、角度誤差への補正を少し強める。
-    start_lap_pid_p: float = 1.8
-    start_lap_pid_i: float = 0.0
+    # devREのRunByGyroを基準にする。距離別目標でも同じPID値を使う。
+    start_lap_pid_p: float = 1.1
+    start_lap_pid_i: float = 0.1
     start_lap_pid_d: float = 0.03
-    # 曲率から旋回出力を加える。0なら無効。PWM比例モデルの仮値。
-    start_lap_feedforward_gain: float = 1.0
+    # devRE基準ではPIDだけで追従するため、追加補正は標準で無効。
+    start_lap_feedforward_gain: float = 0.0
     start_lap_wheel_tread_mm: float = 110.0
     # 横ずれはエンコーダ/IMUの推定値。0mmなら横補正を無効化できる。
-    start_lap_cross_track_lookahead_mm: float = 300.0
+    start_lap_cross_track_lookahead_mm: float = 0.0
     start_lap_max_heading_correction_deg: float = 8.0
     start_lap_log_interval_sec: float = 0.2
     # 最終直線4575～5611.7mmの中間付近でライン追従へ切り替える。

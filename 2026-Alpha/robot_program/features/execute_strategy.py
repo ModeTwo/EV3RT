@@ -24,8 +24,10 @@ class DeferredStrategySequence(Sequence):
         self._loader = loader
         self._loaded = False
 
-    def initialise(self):
-        # 受信SEQはBT構築後にcontextへ入るため、実行直前まで展開を遅らせる。
+    def _load_children(self):
+        # Sequence.tick()が現在の子を決める前に展開する。
+        # initialise()内で追加すると、py_treesのcurrent_childとchildrenが
+        # 食い違い「unknown / invalid state」になる。
         if self._loaded:
             return
         try:
@@ -35,6 +37,11 @@ class DeferredStrategySequence(Sequence):
             nodes = [Failure(name="invalid strategy")]
         self.add_children(nodes)
         self._loaded = True
+
+    def tick(self):
+        # 受信SEQはBT構築後にcontextへ入るため、最初のtick直前まで展開を遅らせる。
+        self._load_children()
+        yield from super().tick()
 
 
 def build_execute_strategy(context, config, lap_number=None):

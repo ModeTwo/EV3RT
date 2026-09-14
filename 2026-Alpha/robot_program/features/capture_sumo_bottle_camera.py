@@ -5,7 +5,7 @@ from simple_pid import PID
 from .bt_imports import Behaviour, BottleColor, HeadingType, Parallel, ParallelPolicy, Selector, Sequence, Status, runtime, time
 
 from ..behaviours.conditions import IsDistanceEarned
-from .sumo_bearing_motion import current_bearing
+from .sumo_bearing_motion import current_bearing, SpinToBearing
 from ..behaviours.motor_control import StopNow
 from ..timing import CONTROL_INTERVAL_SEC
 
@@ -20,6 +20,8 @@ class CaptureSumoBottleWithCamera(Behaviour):
     # 走行中の遅延した画像角度を追い続けず、高出力のまま大きく回り込む挙動を防ぐ。
     ACQUIRE = 0
     APPROACH = 1
+    ALIGN = 2
+    SETTLE = 3
 
     def __init__(self, name, context, settings):
         super().__init__(name)
@@ -39,6 +41,9 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.pid = None
 
     def initialise(self):
+        self.alignment_turn = None
+        self.alignment_checked = False
+        self.settle_until = 0.0
         runtime.require(
             "plotter", "video", "gyro_sensor", "right_motor", "left_motor"
         )
@@ -146,6 +151,28 @@ class CaptureSumoBottleWithCamera(Behaviour):
         return Status.FAILURE
 
     def update(self):
+        # 前進せず既存のその場旋回Behaviorでボトル方位へ整列する。
+        if self.phase == self.ALIGN:
+            self.alignment_turn.tick_once()
+            if self.alignment_turn.status == Status.FAILURE:
+                self._stop_motors()
+                return Status.FAILURE
+            if self.alignment_turn.status == Status.SUCCESS:
+                self._stop_motors()
+                self.settle_until = time.monotonic() + self.settings.camera_alignment_settle_sec
+                self.phase = self.SETTLE
+            return Status.RUNNING
+        if self.phase == self.SETTLE:
+            self._stop_motors()
+            if time.monotonic() >= self.settle_until:
+                # 旋回中に撮影された画像を使わず、新しい撮影セッションを開始する。
+                self.session = runtime.video.begin_sumo_bottle_read()
+                self.last_frame_id = -1
+                self.confirmed_frames = 0
+                self.alignment_checked = True
+                self.phase = self.ACQUIRE
+                self.logger.info("Alignment stopped; reacquiring fresh bottle frames")
+            return Status.RUNNING
         # 方位確定後は画像更新を待たず、毎制御周期で500mm到達を確認する。
         # キャッチ・押し出しを一つの距離へ含め、死角判定による追加走行は行わない。
         if self.phase == self.APPROACH:
@@ -179,11 +206,24 @@ class CaptureSumoBottleWithCamera(Behaviour):
             self.confirmed_frames = self.confirmed_frames + 1 if valid else 0
             if self.confirmed_frames < self.settings.camera_confirm_frames:
                 return Status.RUNNING
+            self.target_bearing = self._estimated_bottle_bearing(theta)
+            if not self.alignment_checked or abs(theta) > self.settings.camera_alignment_tolerance_deg:
+                self._stop_motors()
+                self.alignment_turn = SpinToBearing(
+                    name="align to camera bottle bearing", context=self.context,
+                    bearing=self.target_bearing, max_power=self.settings.turn_max_power,
+                    min_power=self.settings.turn_min_power, pid_p=self.settings.turn_pid_p,
+                    pid_i=self.settings.turn_pid_i, pid_d=self.settings.turn_pid_d,
+                    tolerance=self.settings.heading_tolerance_deg,
+                )
+                self.phase = self.ALIGN
+                self.logger.info("Bottle alignment requested theta=%.1f target=%.1f" % (theta, self.target_bearing))
+                return Status.RUNNING
             self.phase = self.APPROACH
-            # モーターを動かす前に距離の起点を確定する。
+            # 旋回によるエンコーダー距離を含めず、前進開始点から500mmを測る。
             self.total_distance.update()
             self.approach_started_at = now
-            self.target_bearing = self._estimated_bottle_bearing(theta)
+            self.pid.reset()
             self.context.sumo.camera_capture_bearing_deg = self.target_bearing
             self.logger.info(
                 "%+06d %s.black bottle confirmed frame=%d theta=%.1f area=%d target_bearing=%.1f"
@@ -202,6 +242,8 @@ class CaptureSumoBottleWithCamera(Behaviour):
         return Status.RUNNING
 
     def terminate(self, new_status):
+        if getattr(self, "alignment_turn", None) is not None:
+            self.alignment_turn.stop(Status.INVALID)
         # 成功、失敗、中断のどの場合も次のBehaviorへ出力を残さない。
         if runtime.right_motor is not None and runtime.left_motor is not None:
             self._stop_motors()
