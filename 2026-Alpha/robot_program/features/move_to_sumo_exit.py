@@ -1,5 +1,7 @@
 """Feature 18: push out the captured bottle and rejoin the garage-side line."""
 
+import math
+
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 
 from ..behaviours.conditions import IsDistanceEarned
@@ -16,12 +18,48 @@ class PlanGarageReturn(Behaviour):
         self.context = context
         self.settings = settings
         self.target_bearing = None
+        self.search_limit_mm = None
 
     def update(self):
         # 押し出し完了直後、後退する前の実測方位で一度だけ計画する。
         pushed = current_bearing(self.context)
         relative = (-runtime.course * (pushed - self.settings.entry_bearing_deg)) % 360.0
-        # 120度ちょうども加算側。両分岐とも後退前に方位を固定する。
+        self.search_limit_mm = self.settings.garage_line_search_max_distance_mm
+        if self.settings.garage_point_return_enabled:
+            # 直線各区間の設定距離で後退後の位置を近似する試作。
+            # 初期直進は+Y、土俵向き後退は-X。滑りや旋回中心の移動は未補正。
+            capture = self.context.sumo.camera_capture_bearing_deg
+            if capture is None:
+                self.logger.error("Capture bearing missing; cannot plan point return")
+                return Status.FAILURE
+            capture_angle = math.radians((-runtime.course * (
+                capture - self.settings.entry_bearing_deg)) % 360.0)
+            reverse_angle = math.radians(relative)
+            x = (-self.settings.camera_retreat_distance_mm
+                 + self.settings.capture_and_push_distance_mm * math.sin(capture_angle)
+                 - self.settings.release_reverse_distance_mm * math.sin(reverse_angle))
+            y = (self.settings.start_straight_distance_mm
+                 + self.settings.capture_and_push_distance_mm * math.cos(capture_angle)
+                 - self.settings.release_reverse_distance_mm * math.cos(reverse_angle))
+            target_x = self.settings.garage_line_offset_mm
+            target_y = self.settings.garage_blue_forward_mm - self.settings.garage_rejoin_before_blue_mm
+            if x >= target_x or self.settings.garage_rejoin_before_blue_mm <= 0:
+                self.logger.error("Point return geometry invalid; robot must remain before return line")
+                return Status.FAILURE
+            angle = math.degrees(math.atan2(target_x - x, target_y - y))
+            distance = math.hypot(target_x - x, target_y - y)
+            margin = self.settings.garage_search_margin_mm
+            if not math.isfinite(distance) or not math.isfinite(margin) or margin < 0:
+                self.logger.error("Invalid garage search distance or margin")
+                return Status.FAILURE
+            self.search_limit_mm = math.ceil(distance + margin)
+            self.logger.info("Garage search distance=%.1f margin=%.1f limit=%d mm" % (
+                distance, margin, self.search_limit_mm))
+            self.target_bearing = (self.settings.entry_bearing_deg - runtime.course * angle) % 360.0
+            self.logger.info("Point return estimated_after_reverse=(%.1f,%.1f) target=(%.1f,%.1f) bearing=%.1f distance=%.1f" % (
+                x, y, target_x, target_y, self.target_bearing, math.hypot(target_x-x, target_y-y)))
+            return Status.SUCCESS
+        # 互換モード：120度ちょうども加算側。
         offset = -50.0 if relative > 120.0 else 50.0
         self.target_bearing = (self.settings.entry_bearing_deg
                                - runtime.course * (relative + offset)) % 360.0
@@ -35,6 +73,20 @@ class PlanGarageReturn(Behaviour):
         if self.target_bearing is None:
             raise RuntimeError("Garage return bearing has not been planned")
         return self.target_bearing
+
+
+class PlannedGarageDistance(IsDistanceEarned):
+    # 探索開始時に計画済み上限を設定し、既存の距離判定を再利用する。
+    def __init__(self, plan):
+        super().__init__(name="garage-side black line search limit", delta_dist=0)
+        self.plan = plan
+
+    def update(self):
+        if not self.running:
+            if self.plan.search_limit_mm is None:
+                raise RuntimeError("Garage return distance has not been planned")
+            self.delta_dist = self.plan.search_limit_mm
+        return super().update()
 
 
 class SkipTransportWhenBottleWasNotCaptured(Behaviour):
@@ -150,10 +202,11 @@ class WasGarageLineFound(Behaviour):
 
 class FailWhenGarageLineWasNotFound(Behaviour):
     # ライン未検出のままFINISHへ進ませず、停止済みの状態でミッションを失敗終了させる。
-    def __init__(self, name, context, settings):
+    def __init__(self, name, context, settings, plan=None):
         super().__init__(name)
         self.context = context
         self.settings = settings
+        self.plan = plan
 
     def update(self):
         runtime.require("plotter")
@@ -163,7 +216,7 @@ class FailWhenGarageLineWasNotFound(Behaviour):
             % (
                 runtime.plotter.get_distance(),
                 self.__class__.__name__,
-                self.settings.garage_line_search_max_distance_mm,
+                self.plan.search_limit_mm if self.plan is not None else self.settings.garage_line_search_max_distance_mm,
             )
         )
         return Status.FAILURE
@@ -233,17 +286,15 @@ def build_move_to_sumo_exit(context, config):
             RunAtBearing(
                 name="hold garage heading and drive straight",
                 context=context,
-                bearing=lambda: current_bearing(context),
+                bearing=lambda: (return_plan.bearing() if settings.garage_point_return_enabled
+                                 else current_bearing(context)),
                 power=settings.garage_return_drive_power,
                 pid_p=settings.drive_pid_p,
                 pid_i=settings.drive_pid_i,
                 pid_d=settings.drive_pid_d,
             ),
             garage_line_detector,
-            IsDistanceEarned(
-                name="garage-side black line search limit",
-                delta_dist=settings.garage_line_search_max_distance_mm,
-            ),
+            PlannedGarageDistance(return_plan),
         ]
     )
 
@@ -323,6 +374,7 @@ def build_move_to_sumo_exit(context, config):
                 "fail when garage-side black line was not found",
                 context,
                 settings,
+                return_plan,
             ),
         ]
     )

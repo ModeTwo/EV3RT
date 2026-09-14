@@ -22,22 +22,36 @@ class RaceConfig:
     start_lap_first_straight_mm: float = 600.0
     # 最初のカーブ以降の距離倍率。別途実測するまでは旧表の長さを維持。
     start_lap_route_scale: float = 1.0
-    # スタート～LAP専用。I残留をなくし、角度誤差への補正を少し強める。
-    start_lap_pid_p: float = 1.8
-    start_lap_pid_i: float = 0.0
+    # 黒線中心から抽出したPOINTSの形状を維持するため、距離倍率は1.0にする。
+    start_lap_later_turn_distance_scale: float = 1.0
+    # 3番目も同じく元の黒線中心形状を維持する。
+    start_lap_third_turn_distance_scale: float = 1.0
+    # 個別のカーブの距離移動も無効にし、基準POINTSへ戻す。
+    start_lap_second_turn_start_advance_mm: float = 0.0
+    start_lap_third_turn_start_delay_mm: float = 0.0
+    # devREのRunByGyroを基準にする。距離別目標でも同じPID値を使う。
+    start_lap_pid_p: float = 1.1
+    start_lap_pid_i: float = 0.1
     start_lap_pid_d: float = 0.03
-    # 曲率から旋回出力を加える。0なら無効。PWM比例モデルの仮値。
-    start_lap_feedforward_gain: float = 1.0
+    # devRE基準ではPIDだけで追従するため、追加補正は標準で無効。
+    start_lap_feedforward_gain: float = 0.0
     start_lap_wheel_tread_mm: float = 110.0
     # 横ずれはエンコーダ/IMUの推定値。0mmなら横補正を無効化できる。
-    start_lap_cross_track_lookahead_mm: float = 300.0
+    start_lap_cross_track_lookahead_mm: float = 0.0
     start_lap_max_heading_correction_deg: float = 8.0
     start_lap_log_interval_sec: float = 0.2
+    # 最終直線4575～5611.7mmの中間付近でライン追従へ切り替える。
+    start_lap_line_trace_from_mm: float = 5100.0
+    start_lap_line_target_v: int = 65
+    start_lap_line_power: int = 33
+    start_lap_line_pid_p: float = 0.55
+    start_lap_line_pid_i: float = 0.0000009
+    start_lap_line_pid_d: float = 0.015
     enable_bottle_delivery: bool = True
     enable_et_rally: bool = True
     et_rally_laps: int = 3
     # received: PCから受信したSEQ、file: 従来の固定plan JSONを実行する。
-    et_rally_strategy_source: str = "file"
+    et_rally_strategy_source: str = "received"
     # Noneならtests/plan_seed9392783.json。相対パスは2026-Alpha直下を基準にする。
     et_rally_plan_path: Optional[str] = None
     enable_et_sumo: bool = True
@@ -58,6 +72,7 @@ MISSION_CHOICES = (
     'bottle',
     'bottle-final',
     'rally',
+    'rally-drive',
     'sumo',
     'finish',
     'full',
@@ -89,6 +104,11 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
     if mission == 'bottle-final':
         # Hint2後移動の終了位置から、Bottle Delivery後半だけを単体実行する。
         return replace(config, mission_mode=mission, **disabled)
+    if mission == 'rally-drive':
+        # 復号済みHintを外部入力し、準備工程なしでPC受信と周回走行だけを試す。
+        disabled['enable_et_rally'] = True
+        disabled['et_rally_laps'] = max(1, config.et_rally_laps)
+        return replace(config, mission_mode=mission, **disabled)
     if mission == 'lap':
         disabled['lapgate'] = True
     elif mission == 'bottle':
@@ -115,6 +135,8 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
 
 def mission_requires_qr(config: RaceConfig) -> bool:
     # Hint読取を含まない単体工程ではQRデコーダーを起動条件にしない。
+    if config.mission_mode == 'rally-drive':
+        return False
     return (
         config.mission_mode in ('to', 'hint2', 'hint2-return')
         or config.enable_et_rally
@@ -124,6 +146,8 @@ def mission_requires_qr(config: RaceConfig) -> bool:
 
 def mission_requires_camera(config: RaceConfig) -> bool:
     # ET相撲は黒テープ付き力士ボトルの捕捉にカメラを使用する。
+    if config.mission_mode == 'rally-drive':
+        return False
     if config.mission_mode in ('at', 'to', 'hint2', 'hint2-return'):
         return True
     return any(

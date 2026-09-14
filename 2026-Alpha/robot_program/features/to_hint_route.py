@@ -125,7 +125,7 @@ def build_tantou_tree(context, config, include_exit=True):
         RunByGyro(
             context=context,  # 【統合差分】AT終了方位を基準に変換
             name="run_to_black",
-            target=0,
+            target=90,
             power=60,
             pid_p=0.0001,
             pid_i=0.00001,
@@ -326,11 +326,10 @@ def build_tantou_tree(context, config, include_exit=True):
             name="trace_120",
             target=TRACELINE_TARGET_V,
             power=60,
-            pid_p=0.055,
-            pid_i=0.005,
-            pid_d=0.5,
+            pid_p=0.65,
+            pid_i=0.000001,
+            pid_d=0.045,
             trace_side=TraceSide.NORMAL,
-            cutoff_hz=None  # 【統合差分】元sample2と同じ平滑化なし
         ),
 
         IsDistanceEarned(
@@ -365,13 +364,13 @@ def build_tantou_tree(context, config, include_exit=True):
         SpinAround(
             context=context,  # 【統合差分】AT終了方位を基準に変換
             name="right 25 for qr2",
-            target=25,
+            target=115,
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
             pid_p=0.2,
             pid_i=0.00075,
             pid_d=0.03,
-            target_type=HeadingType.RELATIVE
+            target_type=HeadingType.ABSOLUTE
         ),
 
         StopNow(
@@ -437,13 +436,13 @@ def build_tantou_tree(context, config, include_exit=True):
         SpinAround(
             context=context,  # 【統合差分】AT終了方位を基準に変換
             name="right 25 return",
-            target=-25,
+            target=90,
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
             pid_p=0.2,
             pid_i=0.00075,
             pid_d=0.03,
-            target_type=HeadingType.RELATIVE
+            target_type=HeadingType.ABSOLUTE
         ),
 
         StopNow(
@@ -479,7 +478,6 @@ def build_tantou_tree(context, config, include_exit=True):
             pid_i=0.0000009,
             pid_d=0.015,
             trace_side=TraceSide.NORMAL,
-            cutoff_hz=None  # 【統合差分】元sample2と同じ平滑化なし
         ),
 
 

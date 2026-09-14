@@ -23,6 +23,7 @@ def build_mission_children(context, config):
         'hint2',
         'hint2-return',
         'bottle-final',
+        'rally-drive',
         'full',
     ):
         raise ValueError('Unknown mission mode: ' + config.mission_mode)
@@ -36,6 +37,9 @@ def build_mission_children(context, config):
         return [build_lap_gate_phase(context, config), build_hint_collection_phase(context, config)]
     if config.mission_mode == 'bottle-final':
         return [build_bottle_delivery_final_phase(context, config)]
+    if config.mission_mode == 'rally-drive':
+        # Hint取得・Bottle Deliveryを通らず、受信待ちとSEQ実行だけを構成する。
+        return [build_et_rally_phase(context, config)]
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))

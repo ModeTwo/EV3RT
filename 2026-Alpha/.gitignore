@@ -1,2 +1,11 @@
 # 実走の画面ログは個々のPC/Piに保存し、Gitには追加しない。
 /run_logs/
+
+# Keep local verification scripts, but do not share them through Git.
+test_*.py
+*_tests.py
+
+# Rollback snapshots are retained locally only.
+/rollback/
+
+/strategy_logs/

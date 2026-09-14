@@ -12,11 +12,12 @@
 python alpha.py left --mission lap
 python alpha.py left --mission bottle
 python alpha.py left --mission rally
+python alpha.py left --mission rally-drive --rally-hint1 "25,35" --rally-hint2-gate-info "53,54/12,22"
 python alpha.py left --mission sumo
 python alpha.py left --mission finish
 ```
 
-Rightコースは `left` を `right` にします。単体指定時は設定ファイルの他工程フラグにかかわらず、対象だけを選択します。`rally`はヒント取得等のETラリー準備と周回を一組で構成します。設定上の周回数が0の場合、明示的な `rally` 指定では最低1周にします。
+Rightコースは `left` を `right` にします。単体指定時は設定ファイルの他工程フラグにかかわらず、対象だけを選択します。`rally`はヒント取得等のETラリー準備と周回を一組で構成します。`rally-drive`は復号済みHintを手入力し、PC経路計算・通信・受信SEQ走行だけを構成します。設定上の周回数が0の場合、明示的な `rally`または`rally-drive`指定では最低1周にします。
 
 全工程、RE→AT→TO接続試験、設定フラグどおりの起動は次のとおりです。
 
@@ -54,6 +55,7 @@ enable_finish: bool = False
 | LAP | 競技スタート位置 |
 | Bottle Delivery | LAPゲート工程終了位置 |
 | ETラリー | Bottle Delivery／ETラリー準備の開始位置。ヒント取得から実施 |
+| ETラリー走行のみ | ETラリー周回開始位置、経路計算の開始方位0度。復号済みHintを起動引数で指定 |
 | ET相撲 | ETラリー終了位置、所定方位、アーム下端 |
 | FINISH | ET相撲終了位置 |
 
@@ -77,7 +79,7 @@ python alpha.py left --mission bottle --check-tree
 
 未実装動作を実施したことにはなりません。例えばボトル配置がPendingなら、配置せずに次の移動へ進みます。未実装工程の前後で想定位置や保持状態が成立しない可能性があるため、全工程を連続実行する場合は接触・逸脱に注意し、すぐ停止できる状態で試験してください。
 
-QRデコーダーの事前確認は、`rally`、`hint2`、`hint2-return`のようにHint読取を含む場合だけ行います。ET相撲単体ではQRデコーダーは不要ですが、力士ボトルの黒テープを捕捉するため、カメラ撮影・画像処理・プレビュー用スレッドを起動します。
+QRデコーダーの事前確認は、`rally`、`hint2`、`hint2-return`のようにHint読取を含む場合だけ行います。`rally-drive`はカメラもQRデコーダーも起動しません。ET相撲単体ではQRデコーダーは不要ですが、力士ボトルの黒テープを捕捉するため、カメラ撮影・画像処理・プレビュー用スレッドを起動します。
 
 ## 構成だけ確認する
 
