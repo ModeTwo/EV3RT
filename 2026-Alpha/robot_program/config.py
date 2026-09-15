@@ -22,31 +22,47 @@ class RaceConfig:
     start_lap_first_straight_mm: float = 600.0
     # 最初のカーブ以降の距離倍率。別途実測するまでは旧表の長さを維持。
     start_lap_route_scale: float = 1.0
-    # 黒線中心から抽出したPOINTSの形状を維持するため、距離倍率は1.0にする。
-    start_lap_later_turn_distance_scale: float = 1.0
-    # 3番目も同じく元の黒線中心形状を維持する。
-    start_lap_third_turn_distance_scale: float = 1.0
-    # 個別のカーブの距離移動も無効にし、基準POINTSへ戻す。
-    start_lap_second_turn_start_advance_mm: float = 0.0
-    start_lap_third_turn_start_delay_mm: float = 0.0
-    # devREのRunByGyroを基準にする。距離別目標でも同じPID値を使う。
-    start_lap_pid_p: float = 1.1
-    start_lap_pid_i: float = 0.1
+    # devRE完成版のスタート～LAP調整値。
+    start_lap_pid_p: float = 1.8
+    start_lap_pid_i: float = 0.0
     start_lap_pid_d: float = 0.03
-    # devRE基準ではPIDだけで追従するため、追加補正は標準で無効。
-    start_lap_feedforward_gain: float = 0.0
+    # 曲率から旋回出力を先行して与えるdevRE完成版の設定。
+    start_lap_feedforward_gain: float = 1.0
     start_lap_wheel_tread_mm: float = 110.0
     # 横ずれはエンコーダ/IMUの推定値。0mmなら横補正を無効化できる。
-    start_lap_cross_track_lookahead_mm: float = 0.0
+    start_lap_cross_track_lookahead_mm: float = 300.0
     start_lap_max_heading_correction_deg: float = 8.0
     start_lap_log_interval_sec: float = 0.2
-    # 最終直線4575～5611.7mmの中間付近でライン追従へ切り替える。
-    start_lap_line_trace_from_mm: float = 5100.0
-    start_lap_line_target_v: int = 65
-    start_lap_line_power: int = 33
-    start_lap_line_pid_p: float = 0.55
-    start_lap_line_pid_i: float = 0.0000009
-    start_lap_line_pid_d: float = 0.015
+
+    # 青検知開始地点からLAPゲートまでのライン追従。白面ではライン方向へ強く旋回する。
+    start_lap_line_target_v: int = 75
+    # ボトルデリバリー終盤と同じカラーセンサー追従値。
+    start_lap_line_power: int = 60
+    start_lap_line_pid_p: float = 0.65
+    start_lap_line_pid_i: float = 0.000001
+    start_lap_line_pid_d: float = 0.045
+    # 規定距離後は固定旋回せず、カメラでラインへ寄せる。
+    start_lap_camera_before_blue_mm: float = 500.0
+    start_lap_camera_power: int = 50
+    # 2026base/camera_trace_demo.py の実走サンプル値。
+    start_lap_camera_pid_p: float = 2.0
+    start_lap_camera_pid_i: float = 0.0
+    start_lap_camera_pid_d: float = 0.06
+    # ラインへ短く進入するSEEKと、黒捕捉後に0度へ戻すALIGNを分ける。
+    start_lap_camera_max_turn: int = 30
+    start_lap_camera_align_power: int = 35
+    start_lap_camera_tilt_ff_gain: float = 8.0
+    start_lap_camera_ff_cap: float = 8.0
+    start_lap_camera_stable_samples: int = 3
+    start_lap_camera_gyro_kp: float = 0.8
+    start_lap_camera_gyro_turn_cap: float = 25.0
+    # カラーセンサーが黒側を3周期連続で読んだら通常追従へ渡す。
+    start_lap_camera_rejoin_v: int = 65
+    start_lap_camera_rejoin_samples: int = 3
+    start_lap_heading_tolerance_deg: float = 5.0
+    start_lap_blue_heading_stable_samples: int = 3
+    # 青検知は距離と分離する。これは衝突防止の独立した非常停止時間。
+    start_lap_blue_timeout_sec: float = 10.0
     enable_bottle_delivery: bool = True
     enable_et_rally: bool = True
     et_rally_laps: int = 3
@@ -56,6 +72,11 @@ class RaceConfig:
     et_rally_plan_path: Optional[str] = None
     enable_et_sumo: bool = True
     enable_finish: bool = True
+    # 8/20 goal reference: blue marker -> 800mm. Verify on the real course.
+    garage_goal_distance_mm: float = 800.0
+    garage_line_target_v: int = 75
+    garage_blue_timeout_sec: float = 30.0
+    garage_straight_timeout_sec: float = 20.0
     # 直接TCP接続用。SSHポート転送だけならhostを127.0.0.1へ変更する。
     strategy_host: str = "0.0.0.0"
     strategy_port: int = 50000
@@ -64,7 +85,13 @@ class RaceConfig:
     integration: IntegrationSettings = IntegrationSettings()
 
 
+INTEGRATION_MISSIONS = ('at-to', 'to-bottle', 'at-to-bottle',
+                        'bottle-rally', 'rally-sumo', 'sumo-garage')
+MANUAL_RALLY_MISSIONS = ('rally-drive', 'bottle-rally', 'rally-sumo')
+
+
 MISSION_CHOICES = (
+    *INTEGRATION_MISSIONS,
     'at',
     'to',
     'configured',
@@ -99,6 +126,15 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         enable_et_sumo=False,
         enable_finish=False,
     )
+    if mission in INTEGRATION_MISSIONS:
+        if mission in ('bottle-rally', 'rally-sumo'):
+            disabled['enable_et_rally'] = True
+            disabled['et_rally_laps'] = max(1, config.et_rally_laps)
+        if mission in ('rally-sumo', 'sumo-garage'):
+            disabled['enable_et_sumo'] = True
+        if mission == 'sumo-garage':
+            disabled['enable_finish'] = True
+        return replace(config, mission_mode=mission, **disabled)
     if mission in ('at', 'to'):
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'bottle-final':
@@ -135,6 +171,10 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
 
 def mission_requires_qr(config: RaceConfig) -> bool:
     # Hint読取を含まない単体工程ではQRデコーダーを起動条件にしない。
+    if config.mission_mode in ('bottle-rally', 'rally-sumo', 'sumo-garage'):
+        return False
+    if config.mission_mode in INTEGRATION_MISSIONS:
+        return True
     if config.mission_mode == 'rally-drive':
         return False
     return (
@@ -148,6 +188,8 @@ def mission_requires_camera(config: RaceConfig) -> bool:
     # ET相撲は黒テープ付き力士ボトルの捕捉にカメラを使用する。
     if config.mission_mode == 'rally-drive':
         return False
+    if config.mission_mode in INTEGRATION_MISSIONS:
+        return True
     if config.mission_mode in ('at', 'to', 'hint2', 'hint2-return'):
         return True
     return any(

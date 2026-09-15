@@ -16,6 +16,10 @@ from .behaviours.handoff import CaptureAtToHandoff
 
 def build_mission_children(context, config):
     # この関数は統合担当者だけが変更し、各機能担当者はfeatures配下だけを変更する。
+    from .config import INTEGRATION_MISSIONS
+    if config.mission_mode in INTEGRATION_MISSIONS:
+        from .integration_runs import build_integration_children
+        return build_integration_children(context, config)
     if config.mission_mode not in (
         'at',
         'to',

@@ -1,12 +1,14 @@
 """TO担当の編集箇所。非B版tantou3.pyの変数名・コメント・ツリー定義を保持。
 
 【統合差分】sample2の単体機器を作らず共有部品を使用。
-SpinAround/RunByGyroはAT終了方位基準、IsQRDecodedは共有Context保存。
+SpinAround/RunByGyroは起動時からの共通方位基準、IsQRDecodedは共有Context保存。
 各工程のパラメータは下の元コードの位置で編集する。
 """
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..behaviours.section_motion import LocalSpin as SpinAround, LocalDrive as RunByGyro
 from ..behaviours.line_trace import TraceLine
+from ..behaviours.hint2_exit import Hint2Exit
+from ..behaviours.projected_distance import IsProjectedDistanceEarned
 from ..behaviours.conditions import IsDistanceEarned, IsTimePassed
 from ..behaviours.motor_control import StopNow
 from ..behaviours.hint_reader import ReadHintCard as IsQRDecoded
@@ -79,9 +81,9 @@ def build_tantou_tree(context, config, include_exit=True):
         #),
 
     turn_left_55.add_children([
-        # 【統合差分】ジャイロをリセットせずAT終了方位を局所0度とする。
+        # 【統合差分】ジャイロをリセットせず、起動時からの共通方位基準を維持する。
         SpinAround(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="left 55",
             target=90,
             max_power=SPIN_MAX_POWER,
@@ -123,7 +125,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
     go_to_black.add_children([
         RunByGyro(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="run_to_black",
             target=90,
             power=60,
@@ -164,7 +166,7 @@ def build_tantou_tree(context, config, include_exit=True):
     turn_right_125.add_children([
         #ResetDevice(name="device_reset"),
         SpinAround(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="right 125",
             target=0,
             max_power=SPIN_MAX_POWER,
@@ -245,7 +247,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
     go_to_blue_after_qr1.add_children([
         RunByGyro(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="run_after_qr1",
             target=0,
             power=60,
@@ -286,7 +288,7 @@ def build_tantou_tree(context, config, include_exit=True):
     turn_left_90_b.add_children([
         #ResetDevice(name="device_reset"),
         SpinAround(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="left 90 again",
             target=90,
             max_power=SPIN_MAX_POWER,
@@ -332,9 +334,9 @@ def build_tantou_tree(context, config, include_exit=True):
             trace_side=TraceSide.NORMAL,
         ),
 
-        IsDistanceEarned(
-            name="dist_1200",
-            delta_dist=settings.to_hint2_trace_mm  # 元: 1000
+        IsProjectedDistanceEarned(
+            name="dist_1200", context=context, local_heading_deg=90.0,
+            delta_dist=settings.to_hint2_trace_mm  # 直線方向の進捗: 1000mm
         ),
     ])
 
@@ -362,7 +364,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
         #ResetDevice(name="device_reset"),
         SpinAround(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="right 25 for qr2",
             target=115,
             max_power=SPIN_MAX_POWER,
@@ -434,7 +436,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
     return_heading.add_children([
         SpinAround(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="right 25 return",
             target=90,
             max_power=SPIN_MAX_POWER,
@@ -456,42 +458,9 @@ def build_tantou_tree(context, config, include_exit=True):
     ])
 
 
-    # ========================================================
-    # 10. 最終地点まで直進
-    #
-    # 青線を検出するまで走行。
-    #
-    # 安全のため600mmの距離上限も設定。
-    # ========================================================
-
-    go_to_goal = Parallel(
-        name="go_to_goal",
-        policy=ParallelPolicy.SuccessOnOne()
-    )
-
-    go_to_goal.add_children([
-        TraceLine(
-            name="trace_150",
-            target=TRACELINE_TARGET_V,
-            power=50,
-            pid_p=0.55,
-            pid_i=0.0000009,
-            pid_d=0.015,
-            trace_side=TraceSide.NORMAL,
-        ),
-
-
-        #IsColorDetected(
-        #    name="detect_goal_blue",
-        #    color=Color.BLUE
-        #),
-
-        IsDistanceEarned(
-            name="goal_distance_limit",
-            delta_dist=settings.to_exit_trace_mm  # 元: 600
-        ),
-    ])
-
+    # 10. 90度保持→連続白→追加前進→TO基準190度への前進旋回→黒線再取得。
+    # 旋回途中でも黒検出で追従へ移り、距離/時間上限ではFAILURE停止する。
+    go_to_goal = Hint2Exit('hint2 white exit', context, settings)
 
     # ゴールで停止
 

@@ -23,6 +23,12 @@ def _normalize_heading_error(error: float) -> float:
     return (error + 180.0) % 360.0 - 180.0
 
 
+def _nearest_equivalent_heading(target: float, current: float) -> float:
+    # 絶対方位には360度ごとに同じ向きが存在する。
+    # 現在方位から最も近い等価角へ置き換え、PIDへ180度を超える角度差を渡さない。
+    return current + _normalize_heading_error(target - current)
+
+
 class SpinAround(Behaviour):
     # devREの連続PID旋回を基準とする。
     def __init__(self, name: str, target: int, max_power: int, min_power: int,
@@ -47,7 +53,7 @@ class SpinAround(Behaviour):
             if self.target_type == HeadingType.RELATIVE:
                 self.target_heading = current_heading + self.target
             else:
-                self.target_heading = self.target
+                self.target_heading = _nearest_equivalent_heading(self.target, current_heading)
             self.pid = PID(
                 self.pid_p,
                 self.pid_i,
@@ -57,9 +63,10 @@ class SpinAround(Behaviour):
             )
             self.running = True
             self.logger.info(
-                "%+06d %s.spin started at heading=%d for %d"
+                "%+06d %s.spin started at heading=%.1f requested=%.1f resolved=%.1f delta=%.1f"
                 % (runtime.plotter.get_distance(), self.__class__.__name__,
-                   current_heading, self.target_heading)
+                   current_heading, self.target, self.target_heading,
+                   self.target_heading - current_heading)
             )
 
         error = _normalize_heading_error(self.target_heading - current_heading)
@@ -162,7 +169,7 @@ class RunByGyro(Behaviour):
             raise ValueError('distance completion options require a target function')
 
     def update(self) -> Status:
-        # 固定角度モードは従来の制御をそのまま使用する。
+        # 距離プロファイルと固定角度では目標更新方法が異なるため処理を分ける。
         if self.distance_target:
             return self._update_distance_target()
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
@@ -180,7 +187,9 @@ class RunByGyro(Behaviour):
             if self.target_type == HeadingType.RELATIVE:
                 self.target_heading = current_heading + self.target
             else:
-                self.target_heading = self.target
+                # 例: 現在314度、受信目標-44度は円周上では約2度差である。
+                # PIDへ-358度差を渡さず、現在値に近い316度として追従する。
+                self.target_heading = _nearest_equivalent_heading(self.target, current_heading)
             self.pid = PID(
                 self.pid_p,
                 self.pid_i,
@@ -190,11 +199,14 @@ class RunByGyro(Behaviour):
                 output_limits=(-self.power, self.power),
             )
             self.logger.info(
-                "%+06d %s.gyro run started toward heading=%d"
+                "%+06d %s.gyro run started at heading=%.1f requested=%.1f resolved=%.1f delta=%.1f"
                 % (
                     runtime.plotter.get_distance(),
                     self.__class__.__name__,
+                    current_heading,
+                    self.target,
                     self.target_heading,
+                    self.target_heading - current_heading,
                 )
             )
             self.running = True

@@ -21,7 +21,8 @@ class WithStrategyExchange(Decorator):
     def update(self):
         # 子のFeatureがcontext.hint1/hint2へ格納した周期に送信キューへ渡す。
         # 走行中でも受信キューを取り込み、No.11へ到着する前にSEQを保存できる。
-        if self.config.et_rally_strategy_source == "received":
+        if (self.config.et_rally_strategy_source == "received"
+                and self.context.strategy_requests_enabled):
             self.exchange.poll(self.context, "right" if runtime.course == -1 else "left",
                                self.config.et_rally_laps)
         return self.decorated.status
