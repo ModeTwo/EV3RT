@@ -29,8 +29,11 @@ def planner_to_full_start(steps, course):
     return map_headings(steps, lambda angle: RALLY_START_HEADING + sign * angle)
 
 def full_start_to_gyro(steps, mission_mode):
-    # ResetDevice zeros the gyro before driving. Only the standalone rally
+    # ResetDevice zeros the gyro before driving. A rally-entry profile
     # starts physically at the rally entrance. Never use arrival measurements
     # as an origin: that would propagate arrival errors into every target.
-    initial_heading = RALLY_START_HEADING if mission_mode == 'rally-drive' else 0.0
+    # Bottle-final placement faces the delivery line, 180 degrees from full start.
+    initial_heading = (-180.0 if mission_mode == 'bottle-rally' else
+                       RALLY_START_HEADING if mission_mode in ('rally-drive', 'rally-sumo')
+                       else 0.0)
     return map_headings(steps, lambda angle: angle - initial_heading)

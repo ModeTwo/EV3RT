@@ -128,6 +128,55 @@ class IsColorDetected(Behaviour):
         return Status.RUNNING
 
 
+class IsColorDetectedThenHeadingStable(Behaviour):
+    """色を一度検知した後、指定方位が安定してから成功する。"""
+
+    def __init__(
+        self,
+        name: str,
+        color: Color,
+        target_heading_deg: float,
+        tolerance_deg: float,
+        stable_samples: int,
+    ) -> None:
+        super().__init__(name)
+        self.detector = IsColorDetected(name + ' color', color)
+        self.target_heading_deg = target_heading_deg
+        self.tolerance_deg = tolerance_deg
+        self.stable_samples = stable_samples
+        self.color_latched = False
+        self.heading_count = 0
+
+    def update(self) -> Status:
+        runtime.require('plotter', 'gyro_sensor')
+        if not self.color_latched:
+            self.detector.tick_once()
+            self.color_latched = self.detector.status == Status.SUCCESS
+            if not self.color_latched:
+                return Status.RUNNING
+            self.logger.info(
+                '%+06d %s.color latched; waiting for heading'
+                % (runtime.plotter.get_distance(), self.__class__.__name__)
+            )
+
+        heading = -runtime.course * float(runtime.gyro_sensor.get_angle())
+        error = (self.target_heading_deg - heading + 180.0) % 360.0 - 180.0
+        self.heading_count = self.heading_count + 1 if abs(error) <= self.tolerance_deg else 0
+        if self.heading_count >= self.stable_samples:
+            self.logger.info(
+                '%+06d %s.heading stable heading=%.1f error=%.1f'
+                % (runtime.plotter.get_distance(), self.__class__.__name__, heading, error)
+            )
+            return Status.SUCCESS
+        return Status.RUNNING
+
+    def terminate(self, new_status: Status) -> None:
+        if self.detector.status != Status.INVALID:
+            self.detector.stop(Status.INVALID)
+        self.color_latched = False
+        self.heading_count = 0
+
+
 class IsColorTransitionDetected(Behaviour):
     # 指定した開始色を確認した後、終了色へ変化したことを連続検出時間で判定する。
     # 開始色の時間を0にすると、開始色は1回の確定判定だけで通過扱いになる。

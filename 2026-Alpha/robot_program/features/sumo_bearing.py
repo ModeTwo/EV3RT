@@ -55,8 +55,14 @@ def choose_search_bearing(current, offset=50.0, garage=180.0, prefer_clockwise=F
     return plus if plus_gap > minus_gap else minus
 
 
-def initial_sumo_bearing(mission, override=None):
+def initial_sumo_bearing(mission, override=None, course=1):
     # 単体だけ配置方向を指定できる。通し走行は全体スタートの下向き180度を登録する。
-    if override is not None and mission != "sumo":
-        raise ValueError("--sumo-initial-bearing is available only with --mission sumo")
-    return normalize_bearing(override if override is not None else (0.0 if mission == "sumo" else 180.0))
+    if override is not None and mission not in ('sumo', 'sumo-garage'):
+        raise ValueError('--sumo-initial-bearing requires sumo or sumo-garage')
+    if course not in (-1, 1):
+        raise ValueError('Course must be +1 or -1')
+    if mission == 'rally-sumo':
+        # Full-start bearing 180 + physical rotation to rally entrance (-90 course degrees).
+        return normalize_bearing(180.0 + course * 90.0)
+    return normalize_bearing(override if override is not None else
+                             (0.0 if mission in ('sumo', 'sumo-garage') else 180.0))

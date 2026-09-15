@@ -165,13 +165,15 @@ class CaptureSumoBottleWithCamera(Behaviour):
         if self.phase == self.SETTLE:
             self._stop_motors()
             if time.monotonic() >= self.settle_until:
-                # 旋回中に撮影された画像を使わず、新しい撮影セッションを開始する。
-                self.session = runtime.video.begin_sumo_bottle_read()
-                self.last_frame_id = -1
-                self.confirmed_frames = 0
-                self.alignment_checked = True
-                self.phase = self.ACQUIRE
-                self.logger.info("Alignment stopped; reacquiring fresh bottle frames")
+                # 補正は一度だけ。画像再認識へ戻らず、最初に確定した方位で前進する。
+                # 旋回中の車輪移動を含めず、この位置を500mm走行の起点にする。
+                self.phase = self.APPROACH
+                self.total_distance.update()
+                self.approach_started_at = time.monotonic()
+                self.pid.reset()
+                self.context.sumo.camera_capture_bearing_deg = self.target_bearing
+                self.logger.info("Single alignment complete; starting distance drive target=%.1f" % self.target_bearing)
+                self._drive_toward_locked_bearing()
             return Status.RUNNING
         # 方位確定後は画像更新を待たず、毎制御周期で500mm到達を確認する。
         # キャッチ・押し出しを一つの距離へ含め、死角判定による追加走行は行わない。

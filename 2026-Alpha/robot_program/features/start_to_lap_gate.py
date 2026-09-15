@@ -4,18 +4,21 @@
 速度・PID: config.py / モーター制御: behaviours/gyro_drive.py
 """
 
-from ..behaviours.conditions import IsColorDetected, IsDistanceEarned
+from py_trees.common import ParallelPolicy
+from py_trees.composites import Parallel, Sequence
+from py_trees.decorators import Timeout
+
+from ..behaviours.conditions import IsColorDetectedThenHeadingStable
+from ..behaviours.camera_line_trace import RecoverLineByCamera
 from ..behaviours.gyro_drive import RunByGyro
 from ..behaviours.line_trace import TraceLine
 from ..start_lap_calibration import calibrated_profile
 from ..start_lap_profile_v1 import POINTS, BLUE_START_MM, LAP_GATE_MM
 from ..types import HeadingType
-from .bt_imports import Color, Parallel, ParallelPolicy, Sequence, TraceSide
+from .bt_imports import Color, TraceSide
 
 # 終了位置の調整値（mm）。角度追従の調整でも終了位置は変更しない。
 LAP_PASS_MARGIN_MM = 20.0       # LAP単体: ゲートの20mm先で停止
-BLUE_SEARCH_BEFORE_MM = 250.0  # 青予測位置の250mm手前から検知
-BLUE_MISS_MARGIN_MM = 100.0    # 青を見逃した場合: ゲートの100mm先で停止
 
 
 def build_start_to_lap_gate(context, config):
@@ -31,57 +34,109 @@ def build_start_to_lap_gate(context, config):
         POINTS, BLUE_START_MM, LAP_GATE_MM,
         first_straight_mm=config.start_lap_first_straight_mm,
         route_scale=config.start_lap_route_scale,
-        later_turn_distance_scale=config.start_lap_later_turn_distance_scale,
-        third_turn_distance_scale=config.start_lap_third_turn_distance_scale,
-        second_turn_start_advance_mm=config.start_lap_second_turn_start_advance_mm,
-        third_turn_start_delay_mm=config.start_lap_third_turn_start_delay_mm,
     )
 
-    # 2. 黒線中心から作った方位角表で最終直線の途中まで走る。
-    gyro_approach = RunByGyro(
-        name='start_to_line_trace',
+    # 2. 後続工程があれば、青検知開始位置で方位角走行からライン追従へ渡す。
+    follows_bottle = config.enable_bottle_delivery or config.mission_mode in ('hint2', 'hint2-return')
+    if follows_bottle:
+        line_trace_start_mm = max(
+            0.0, blue_start_mm - config.start_lap_camera_before_blue_mm
+        )
+
+        run_to_line_trace = RunByGyro(
+            name='start_to_lap_gate gyro section',
+            target=profile.heading_at,
+            power=config.start_lap_power,
+            pid_p=config.start_lap_pid_p,
+            pid_i=config.start_lap_pid_i,
+            pid_d=config.start_lap_pid_d,
+            target_type=HeadingType.RELATIVE,
+            distance_limit_mm=line_trace_start_mm,
+            feedforward_gain=config.start_lap_feedforward_gain,
+            wheel_tread_mm=config.start_lap_wheel_tread_mm,
+            cross_track_lookahead_mm=config.start_lap_cross_track_lookahead_mm,
+            max_heading_correction_deg=config.start_lap_max_heading_correction_deg,
+            profile_log_interval_sec=config.start_lap_log_interval_sec,
+        )
+
+        camera_recovery = RecoverLineByCamera(
+            name='recover line by camera before lap',
+            power=config.start_lap_camera_power,
+            pid_p=config.start_lap_camera_pid_p,
+            pid_i=config.start_lap_camera_pid_i,
+            pid_d=config.start_lap_camera_pid_d,
+            max_camera_turn=config.start_lap_camera_max_turn,
+            align_power=config.start_lap_camera_align_power,
+            line_v=config.start_lap_camera_rejoin_v,
+            line_samples=config.start_lap_camera_rejoin_samples,
+            trace_side=TraceSide.NORMAL,
+            tilt_ff_gain=config.start_lap_camera_tilt_ff_gain,
+            ff_cap=config.start_lap_camera_ff_cap,
+            heading_tolerance_deg=config.start_lap_heading_tolerance_deg,
+            stable_samples=config.start_lap_camera_stable_samples,
+            gyro_heading_deg=0.0,
+            gyro_kp=config.start_lap_camera_gyro_kp,
+            gyro_turn_cap=config.start_lap_camera_gyro_turn_cap,
+        )
+
+        drive_after_gyro = Sequence(
+            name='camera recovery then color line trace', memory=True
+        )
+        drive_after_gyro.add_children([
+            camera_recovery,
+            TraceLine(
+                name='recover and trace line before lap',
+                target=config.start_lap_line_target_v,
+                power=config.start_lap_line_power,
+                pid_p=config.start_lap_line_pid_p,
+                pid_i=config.start_lap_line_pid_i,
+                pid_d=config.start_lap_line_pid_d,
+                trace_side=TraceSide.NORMAL,
+            ),
+        ])
+
+        # 青はカメラ復帰中から監視する。短い区間で青を踏んでもラッチし、
+        # 方位0度が安定した時点で次工程へ渡す。
+        recover_and_watch_blue = Parallel(
+            name='recover line and watch lap blue marker',
+            policy=ParallelPolicy.SuccessOnOne(),
+        )
+        recover_and_watch_blue.add_children([
+            drive_after_gyro,
+            IsColorDetectedThenHeadingStable(
+                'lap blue marker and heading',
+                Color.BLUE,
+                target_heading_deg=0.0,
+                tolerance_deg=config.start_lap_heading_tolerance_deg,
+                stable_samples=config.start_lap_blue_heading_stable_samples,
+            ),
+        ])
+
+        root = Sequence(name='start_to_lap_gate', memory=True)
+        safe_blue_search = Timeout(
+            name='lap blue marker emergency timeout',
+            child=recover_and_watch_blue,
+            duration=config.start_lap_blue_timeout_sec,
+        )
+        root.add_children([run_to_line_trace, safe_blue_search])
+        return root
+    else:
+        distance_limit_mm = lap_gate_mm + LAP_PASS_MARGIN_MM
+
+    # 3. devRE完成版と同じく、LAPまで一つのRunByGyroで走る。
+    #    heading_atに括弧を付けず、距離から目標方位を得る関数として渡す。
+    return RunByGyro(
+        name='start_to_lap_gate',
         target=profile.heading_at,
         power=config.start_lap_power,
         pid_p=config.start_lap_pid_p,
         pid_i=config.start_lap_pid_i,
         pid_d=config.start_lap_pid_d,
-        target_type=HeadingType.ABSOLUTE,
-        distance_limit_mm=config.start_lap_line_trace_from_mm,
+        target_type=HeadingType.RELATIVE,
+        distance_limit_mm=distance_limit_mm,
         feedforward_gain=config.start_lap_feedforward_gain,
         wheel_tread_mm=config.start_lap_wheel_tread_mm,
         cross_track_lookahead_mm=config.start_lap_cross_track_lookahead_mm,
         max_heading_correction_deg=config.start_lap_max_heading_correction_deg,
         profile_log_interval_sec=config.start_lap_log_interval_sec,
     )
-
-    line_trace = TraceLine(
-        name='trace_line_to_lap_gate',
-        target=config.start_lap_line_target_v,
-        power=config.start_lap_line_power,
-        pid_p=config.start_lap_line_pid_p,
-        pid_i=config.start_lap_line_pid_i,
-        pid_d=config.start_lap_line_pid_d,
-        trace_side=TraceSide.NORMAL,
-        cutoff_hz=None,
-    )
-
-    # 3. 最終直線の途中から黒線へ収束し、青または残距離で終了する。
-    follows_bottle = config.enable_bottle_delivery or config.mission_mode in ('hint2', 'hint2-return')
-    traced_run = Parallel(name='line_trace_until_lap', policy=ParallelPolicy.SuccessOnOne())
-    if follows_bottle:
-        traced_run.add_children([
-            line_trace,
-            IsColorDetected('lap blue marker', Color.BLUE),
-        ])
-    else:
-        traced_run.add_children([
-            line_trace,
-            IsDistanceEarned(
-                'pass lap gate by distance',
-                lap_gate_mm + LAP_PASS_MARGIN_MM - config.start_lap_line_trace_from_mm,
-            ),
-        ])
-
-    root = Sequence(name='start_to_lap_gate', memory=True)
-    root.add_children([gyro_approach, traced_run])
-    return root
