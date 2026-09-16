@@ -133,7 +133,7 @@ class BottleColor(Enum):
 BOTTLE_HSV = {
     BottleColor.RED:    [((  0, 120,  70), ( 10, 255, 255)),
                          ((170, 120,  70), (179, 255, 255))],
-    BottleColor.BLUE:   [((100, 100,  60), (130, 255, 255))],   # tentative
+    BottleColor.BLUE:   [(( 80,  80,  80), (110, 255, 255))],   # BottleColor.BLUE:   [((100, 100,  60), (130, 255, 255))]
     BottleColor.YELLOW: [(( 20, 100,  80), ( 35, 255, 255))],   # tentative
     BottleColor.BLACK:  [((  0,   0,   0), (179, 120,  60))],   # tentative; shape-gated
 }
@@ -414,6 +414,7 @@ class Video(object):
             frame_169 = frame[y0:y0 + crop_h, :]
             img_orig = cv2.resize(frame_169, (FRAME_WIDTH, FRAME_HEIGHT))
             img_hsv  = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HSV)
+
             # Track the locked colour once identified, else scan all four.
             if self._bottle_lock_color is not None:
                 candidates = [self._bottle_lock_color]
@@ -427,6 +428,32 @@ class Video(object):
             best = None   # (area, color, cx, bottom_row, (x,y,w,h), cnt)
             for color in candidates:
                 mask = self._bottle_mask(img_hsv, color)
+                # 青ボトルのHSV値をログ出力
+                if color == BottleColor.BLUE:
+                    pixels = img_hsv[mask > 0]
+
+                    if len(pixels) > 0:
+                        h_mean = int(np.mean(pixels[:, 0]))
+                        s_mean = int(np.mean(pixels[:, 1]))
+                        v_mean = int(np.mean(pixels[:, 2]))
+
+                        h_min = int(np.min(pixels[:, 0]))
+                        h_max = int(np.max(pixels[:, 0]))
+                        s_min = int(np.min(pixels[:, 1]))
+                        s_max = int(np.max(pixels[:, 1]))
+                        v_min = int(np.min(pixels[:, 2]))
+                        v_max = int(np.max(pixels[:, 2]))
+
+                        print(
+                            "BLUE HSV "
+                            f"mean=({h_mean},{s_mean},{v_mean}) "
+                            f"H[{h_min}-{h_max}] "
+                            f"S[{s_min}-{s_max}] "
+                            f"V[{v_min}-{v_max}] "
+                            f"pixels={len(pixels)}"
+                        )
+
+                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self.kernel)
                 mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self.kernel)
                 mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
                 cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
