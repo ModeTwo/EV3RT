@@ -12,6 +12,9 @@ from ..timing import CONTROL_INTERVAL_SEC
 
 ROE_DEGENERATE = 90
 MIN_CURVE_ROWS = 15
+PHASE_SEEK = 'SEEK'
+PHASE_ALIGN = 'ALIGN'
+PHASE_HANDOFF = 'HANDOFF'
 
 
 class RecoverLineByCamera(Behaviour):
@@ -26,6 +29,12 @@ class RecoverLineByCamera(Behaviour):
         pid_d: float,
         max_camera_turn: int,
         align_power: int,
+        handoff_power: int,
+        handoff_target_v: int,
+        handoff_pid_p: float,
+        handoff_turn_cap: float,
+        handoff_v_tolerance: int,
+        handoff_stable_samples: int,
         line_v: int,
         line_samples: int,
         trace_side: TraceSide,
@@ -44,6 +53,11 @@ class RecoverLineByCamera(Behaviour):
         self.power = power
         self.max_camera_turn = max_camera_turn
         self.align_power = align_power
+        self.handoff_power = handoff_power
+        self.handoff_target_v = handoff_target_v
+        self.handoff_turn_cap = handoff_turn_cap
+        self.handoff_v_tolerance = handoff_v_tolerance
+        self.handoff_stable_samples = handoff_stable_samples
         self.line_v = line_v
         self.line_samples = line_samples
         self.trace_side = trace_side
@@ -65,9 +79,18 @@ class RecoverLineByCamera(Behaviour):
             sample_time=CONTROL_INTERVAL_SEC,
             output_limits=(-max_camera_turn, max_camera_turn),
         )
+        # 通常TraceLineへ渡す前だけ使う、穏やかな明度P制御。
+        self.handoff_pid = PID(
+            handoff_pid_p,
+            0.0,
+            0.0,
+            setpoint=handoff_target_v,
+            sample_time=CONTROL_INTERVAL_SEC,
+            output_limits=(-handoff_turn_cap, handoff_turn_cap),
+        )
         self.running = False
         self.dark_count = 0
-        self.line_acquired = False
+        self.phase = PHASE_SEEK
         self.stable_count = 0
         self.last_log_at = None
 
@@ -110,14 +133,14 @@ class RecoverLineByCamera(Behaviour):
         # カメラ操舵を止め、反対向きのジャイロ補正だけで絶対0度へ戻す。
         camera_turn = (
             float(self.pid(theta)) + tilt_ff
-            if insight and not self.line_acquired
+            if insight and self.phase == PHASE_SEEK
             else 0.0
         )
 
         _, _, value = runtime.color_sensor.get_raw_color_hsv()
         self.dark_count = self.dark_count + 1 if value <= self.line_v else 0
-        if not self.line_acquired and self.dark_count >= self.line_samples:
-            self.line_acquired = True
+        if self.phase == PHASE_SEEK and self.dark_count >= self.line_samples:
+            self.phase = PHASE_ALIGN
             self.stable_count = 0
             self.logger.info(
                 '%+06d %s.line acquired; switching SEEK to ALIGN heading=%.1f'
@@ -130,13 +153,50 @@ class RecoverLineByCamera(Behaviour):
         heading = -runtime.course * float(runtime.gyro_sensor.get_angle())
         heading_error = (self.gyro_heading_deg - heading + 180.0) % 360.0 - 180.0
         gyro_turn = 0.0
-        if self.line_acquired:
+        if self.phase != PHASE_SEEK:
             gyro_turn = runtime.course * self.gyro_kp * heading_error
             gyro_turn = max(-self.gyro_turn_cap, min(self.gyro_turn_cap, gyro_turn))
-        base_power = self.align_power if self.line_acquired else self.power
+
+        # ALIGNでは方位だけを0度へ戻す。安定したら、低速HANDOFFで
+        # カラーセンサーを通常TraceLineの目標明度付近へ移す。
+        if self.phase == PHASE_ALIGN:
+            heading_stable = abs(heading_error) <= self.heading_tolerance_deg
+            self.stable_count = self.stable_count + 1 if heading_stable else 0
+            if self.stable_count >= self.stable_samples:
+                self.phase = PHASE_HANDOFF
+                self.stable_count = 0
+                self.handoff_pid.reset()
+                self.logger.info(
+                    '%+06d %s.heading aligned; switching ALIGN to HANDOFF '
+                    'v=%d heading=%.1f'
+                    % (
+                        runtime.plotter.get_distance(), self.__class__.__name__,
+                        value, heading,
+                    )
+                )
+
+        color_turn = 0.0
+        if self.phase == PHASE_HANDOFF:
+            # TraceLineのNORMAL側と同じ操舵を、このクラスの左右出力式へ変換する。
+            color_turn = runtime.course * float(self.handoff_pid(value))
+
+        if self.phase == PHASE_SEEK:
+            base_power = self.power
+        elif self.phase == PHASE_ALIGN:
+            base_power = self.align_power
+        else:
+            base_power = self.handoff_power
         # PID、傾きFF、ジャイロを合算した最終値にも上限を適用する。
-        turn_cap = self.gyro_turn_cap if self.line_acquired else self.max_camera_turn
-        turn = int(max(-turn_cap, min(turn_cap, camera_turn + gyro_turn)))
+        if self.phase == PHASE_SEEK:
+            turn_cap = self.max_camera_turn
+            requested_turn = camera_turn
+        elif self.phase == PHASE_ALIGN:
+            turn_cap = self.gyro_turn_cap
+            requested_turn = gyro_turn
+        else:
+            turn_cap = self.handoff_turn_cap
+            requested_turn = color_turn + gyro_turn
+        turn = int(max(-turn_cap, min(turn_cap, requested_turn)))
         right_power = max(-100, min(100, base_power + turn))
         left_power = max(-100, min(100, base_power - turn))
         runtime.right_motor.set_brake(False)
@@ -144,30 +204,31 @@ class RecoverLineByCamera(Behaviour):
         runtime.right_motor.set_power(right_power)
         runtime.left_motor.set_power(left_power)
 
-        stable = (
-            self.line_acquired
-            and abs(heading_error) <= self.heading_tolerance_deg
-        )
-        self.stable_count = self.stable_count + 1 if stable else 0
+        if self.phase == PHASE_HANDOFF:
+            handoff_stable = (
+                abs(value - self.handoff_target_v) <= self.handoff_v_tolerance
+                and abs(heading_error) <= self.heading_tolerance_deg
+            )
+            self.stable_count = self.stable_count + 1 if handoff_stable else 0
         now = time.monotonic()
         if self.last_log_at is None or now - self.last_log_at >= self.log_interval_sec:
             age_ms = max(0.0, (time.time() - captured_at) * 1000.0)
             self.logger.info(
                 '%+06d camera line phase=%s fid=%d theta=%.1f insight=%d v=%d dark=%d '
-                'tilt=%.2f ff=%.1f gyro=%.1f heading=%.1f stable=%d '
+                'tilt=%.2f ff=%.1f color=%.1f gyro=%.1f heading=%.1f stable=%d '
                 'turn=%d left=%d right=%d age_ms=%.1f'
                 % (
                     runtime.plotter.get_distance(),
-                    'ALIGN' if self.line_acquired else 'SEEK',
+                    self.phase,
                     frame_id, theta, int(insight),
-                    value, self.dark_count, tilt, tilt_ff, gyro_turn, heading,
+                    value, self.dark_count, tilt, tilt_ff, color_turn, gyro_turn, heading,
                     self.stable_count, turn,
                     left_power, right_power, age_ms,
                 )
             )
             self.last_log_at = now
 
-        if self.stable_count >= self.stable_samples:
+        if self.phase == PHASE_HANDOFF and self.stable_count >= self.handoff_stable_samples:
             self.logger.info(
                 '%+06d %s.line handed to color sensor v=%d theta=%.1f heading=%.1f'
                 % (
@@ -184,6 +245,6 @@ class RecoverLineByCamera(Behaviour):
                 motor.set_power(0)
         self.running = False
         self.dark_count = 0
-        self.line_acquired = False
+        self.phase = PHASE_SEEK
         self.stable_count = 0
         self.last_log_at = None

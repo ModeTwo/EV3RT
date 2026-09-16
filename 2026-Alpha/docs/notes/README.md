@@ -273,6 +273,12 @@ PROJECTED_DISTANCEログは0.5秒ごとと完了時にprojected_mm（補正距�
 - ALIGN後から青検知までのカラーセンサー式TraceLineを、ボトルデリバリー終盤と同じ target=75、power=50、P=0.65、I=0.000001、D=0.045、TraceSide.NORMALへ統一した。
 - 既に一致していた目標明度、PID、追従側は維持し、差があったpowerだけ60から50へ変更した。カメラSEEKのPWM50・上限30、ALIGNのPWM35・ジャイロ補正上限25は変更していない。
 
+## 2026-09-16 LAPカラー引渡し安定化 v10
+
+- 実走で通常TraceLineが白V=92または黒中央V=11から始まり、青より前に右へ脱線したため、ALIGNと通常TraceLineの間にHANDOFFを追加した。
+- HANDOFFはPWM35、目標V=75、P=0.3、最終turn上限10でライン端へ穏やかに寄せ、絶対方位0度へのジャイロ補正も同じ上限内で合成する。V=65～85かつ方位0±5度が5周期連続してから通常TraceLineへ渡す。
+- 通常TraceLineはユーザーが戻したPWM60、target=75、P=0.65、I=0.000001、D=0.045、NORMALを維持。ログはphase=HANDOFFとcolor補正値を出す。
+
 
 ## 2026-09-15 TO目標角へのAT終了方位加算を廃止 v1
 
@@ -285,3 +291,114 @@ LocalSpin/LocalDrive、Hint2出口の直進・旋回、投影距離の軸が同�
 - [DEVAK_HANDOFF_v2.md](DEVAK_HANDOFF_v2.md) — 現行devTK作業ツリーのボトル終盤No.7～9、TO共通方位、投影距離、ジャイロ360度境界修正、単体/結合手順と未解決事項。v1は旧版として保持。
 - [DEVAK_STATE_v2.json](DEVAK_STATE_v2.json) — 確認日時・HEAD・未コミット状態・134 PythonのSHA256。コード一式やPi配備済みの証明ではない。
 - 今回実コードではLAPのstart_lap_line_power=60、配送delivery_trace_power=50。過去のLAP50追記との相違をv2へ記録し、設定変更は行っていない。
+
+
+## 2026-09-15 QR1撮像準備の先行・QR1後青検知 v1
+
+TO開始時にQR用撮像設定を非同期で準備し、最初の旋回・565mm直進中にカメラ再オープンと5枚破棄を済ませる。qr_prepareセッションでは復号しない。停止待機後のReadHintCardが新規qrセッションを開始するため、走行中の画像・結果を採用しない。パワー・距離・固定待機は維持。QR1後385mm直進は青検知または距離到達で終了。PC実装、Pi未転送・実機未確認。QR_PREPARE→VID cap openedがTO走行中に出て、read_qr1開始後のelapsedが短くなることを確認する。
+
+
+## 2026-09-15 QR1後青検知のimport漏れ修正
+
+前回追加したIsColorDetectedのconditionsからのimportが不足していたため修正。青または385mmの終了条件は維持。構文だけでは未定義名を検出できないため、検証コードへ呼出し名のimportと定義元の対応確認を追加。PCのpy_trees未導入により実環境インポート・BT全体起動は未検証。Piにはto_hint_route.pyを再配備する必要あり。
+
+
+## 2026-09-15 QR2カメラ準備の先行 v1
+
+カード1後の青/385mm直進と90度旋回を終え、1000mm投影距離のカラーセンサー追従開始直前にPrepareHintCameraを追加。QR2も走行中に撮像準備を行い、停止待機後のReadHintCardが新規セッションの画像で確定する。QR1と同じ既存クラスを使用し、速度・距離・旋回・待機・Hint2出口条件は維持。PC反映済み、Pi未転送・実機未確認。配備対象はrobot_program/features/to_hint_route.py（QR1先行準備版のvideo.py/hint_reader.pyが既に配備済みであること）。QR_PREPAREとVID cap openedがread_qr2より前に出ること、QR_SUCCESS hint=2のelapsed短縮を確認する。
+
+
+## 2026-09-15 QR1→QR2の撮像設定維持 v1（前のQR2先行方式を更新）
+
+read_qr1にkeep_qr_ready=Trueを指定。成功時terminateでLINEへ戻さずqr_prepareへ移り、QR撮像設定を維持しながら旧結果を破棄する。移動中は復号せず、QR2停止後の新規セッションで読取。1000mm追従前の重複準備ノードは撤去。QR2成功と読取中断/失敗はLINEへ戻す。完了済み読取ノードの再無効化では後続カメラ状態を変更しない。配備対象はrobot_program/behaviours/hint_reader.pyとrobot_program/features/to_hint_route.py。既存QR先行版video.pyが前提。PC反映、Pi未転送・実機未確認。QR1成功からQR2開始の間にVID cap openedのMJPG/YUYV往復がないことを実機確認する。
+
+
+## 2026-09-16 AT移動中ボトル認識
+
+bottle_catch2の意図をfeatures/catch_bottleへ移植。AT単体はタッチ（alpha）→PWM45/OPPOSITE追従→青検知、統合はREの青検知後から開始。PWM60/OPPOSITE・目標75・PID .65/.000001/.045で400mm追従しながら色認識。100mm前進・200mm後退・停止認識を撤去。同色3新規フレームで赤/青/黄を確定し、確定後も距離まで走る。400mmで停止・ブレーキし、色未取得ならFAILUREとしてTOへ渡さない。成功時だけ既存AT_TOを記録。新しい認識セッション・古いフレーム拒否・LINEへの復帰を保持。旧距離2設定は互換用に残すが未使用。QR改善は保持。実機未確認のためOPPOSITE追従、青から400mmの停止位置、色取得、TOへの接続位置を確認する。
+
+
+## 2026-09-16 カメラプレビュー非表示モード
+
+起動コマンドへ `--no-preview` を追加する。例: `python alpha.py left --mission full --no-preview`（右はright、普段の他オプションも併用可）。省略時は従来どおり表示する。撮影・QR読取・ボトル認識・カメラ追従は継続し、表示用縮小・文字領域合成・imshow/waitKey・ウィンドウ終了処理だけを省略する。認識途中の図形描画は保持しており、認識高速化の効果は未測定。Videoを直接使うコードは `Video(preview_enabled=False)` でも指定できる。カメラ不要ミッションの撮影停止条件は従来どおり。
+
+PC反映。配備対象はalpha.pyとpy_etrobo_util/video.py。模擬カメラで表示ON/OFFのLINE/BOTTLE/QR観測一致、画像取得失敗時と終了時のGUI呼出し抑止を検証。Pi転送・実カメラ・実走行は未確認。
+
+
+## 2026-09-16 AT元コードの形を保持する修正
+
+ユーザー指示によりcatch_bottleの短縮・共通化を撤回。bottle_catch2のbuild_behaviour_treeからコメント、空行、変数名、引数の並べ方、Parallel/add_childrenの組立順を保持して移植。450表記の不整合のみ有効距離400へ統一。タッチのalpha委譲、統合時の青工程省略、context共有、設定距離、未取得確認とAT_TO記録を【統合差分】で明示。IsDistanceReachedとDetectBottleColorWhileMovingの元の呼出し名を薄い接続クラスで保持。移動中認識・400mm停止など前版の動作は維持。
+
+
+## 2026-09-16 AT色未取得時は青で継続
+
+ユーザー指定により400mm停止後に色が未取得ならBottleColor.BLUE.valueを設定し、ログへdefaulting to BLUEを出してAT_TOへ正常に引き渡す。取得済みの赤・青・黄は保持。前項の未取得FAILURE方針を本変更で更新。元作者のツリー構造、距離、追従、移動中認識は維持。実機未確認。
+
+
+## 2026-09-16 精度確認のため青デフォルトを撤回
+
+ユーザー指示により直前の青補完を撤回。400mm停止時に色未取得ならFAILUREとし、AT_TOを記録せずTOへ進まない。取得済み色は保持。移動中認識と元作者のツリー構造は維持。青デフォルトは現在無効。
+
+
+## 2026-09-16 受領tantou4を選択統合
+
+作者の工程順・変数名・ツリー構造を維持し、最初の直進550mm/PWM55、QR1後340mm、QR2手前1200mm、旋回I=.005、直進P=.001/I=.01を反映。QR2手前は既存の投影距離判定を維持するため添付の積算1200mmと停止位置は同一とは限らない。角度は添付対応sample2未確認のため共通方位90/0/90/115/90を維持し、ResetDeviceは導入しない。QR先行準備・撮像維持・新規セッション・Context保存、QR未読時の待機、Hint2Exitの白→旋回→黒再取得→追従は保持。QR未読リカバリの新規実装は今回含まない。現場で距離・PID・停止位置を検証する。
+
+
+## 2026-09-16 青・グレー区間293mmを絶対0度走行
+
+LAP青検知で方位安定を待たずATへ引渡し、青検知起点の最初293mmをRunByGyroの絶対0度、PWM60、P=1.8/I=0/D=.03で走る（試走初期値）。その後従来のOPPOSITEカラー追従へ戻し、合計400mmで停止する。移動中のボトル認識、未取得時FAILURE、AT_TO記録は維持。AT単体も青検知から同じ処理。距離は積算走行距離で、青の物理先端と検知位置の差は実機で調整する。配備対象はfeatures/catch_bottle.py、features/start_to_lap_gate.py、integration_settings.py。Pi未配備・実機未確認。
+
+
+## 2026-09-16 TOの90度旋回オーバーシュート・直進ドリフトを修正
+
+ユーザー報告（左90°旋回が明らかに90°より大きい、ヒント1読取後の直進が明らかに右にずれる）を添付ログで解析し、原因2件を修正した。
+
+1. `behaviours/gyro_drive.py`の`SpinAround.terminate()`/`RunByGyro.terminate()`が`set_power(0)`のみでブレーキ未設定だった。旋回完了(SUCCESS)直後、次の`StopNow`がブレーキをかけるまでコーストし、運動量でオーバーシュートしていた。両`terminate()`へ`set_brake(True)`を追加し、完了直後に即時ブレーキするよう修正。
+2. `features/to_hint_route.py`の`run_to_black`/`run_after_qr1`（受領tantou4統合時に採用したpid_p=.001/pid_i=.01）は、直進中の数度の姿勢誤差に対する補正がint切り捨てでほぼゼロになり、方位ホールドが実質無効化されていた。ログ上もQR1後の直進でheadingが0度目標から-4→-13度へ拡大し続けている。同ファイル内の旧実装（コメントアウト済み）で使われていたpid_p=1.1/pid_i=.00075/pid_d=.04へ戻した。
+
+検証はPC上でpy_trees/simple_pid/py_etrobo_utilを最小スタブに置換し、`gyro_drive.py`の実クラスを直接importして実施（work/to-hint-brake-pid-fix-v1/verify_gyro_drive_fix.py、ETロボコン側）。terminate()直後の即時ブレーキ、および簡易プラントモデルでの新旧ゲイン比較（旧P=.001は3秒後も誤差-4.0度のまま、新P=1.1は-0.9度まで収束）を確認。実機・実カメラでの再現テストは未実施、PID値は現場再調整が前提。
+
+全変更ファイル（修正）: `robot_program/behaviours/gyro_drive.py`、`robot_program/features/to_hint_route.py`。ETロボコン側HANDOFF.mdにも同内容を記録。Pi転送・実機確認・PIDチューニングが残課題。既存の未コミット変更（alpha.py等）は保持。
+
+
+## 2026-09-16 Hint2Exit(TURN)の早期離脱・距離上限FAILUREを修正
+
+ユーザー添付ログでHint2読取後のTURN→FOLLOW引継ぎ直後にヘディングが大きく振れて脱線する挙動を確認し、ユーザー指示で2点修正した。
+
+1. `behaviours/hint2_exit.py`のTURNフェーズが黒未検出・目標方位未到達のまま距離上限(`to_exit_turn_limit_mm`=500mm)に達すると、従来は`FAILURE`（ミッション失敗）だった。黒線を見失ったまま停止するより復帰の可能性を残すため、`FOLLOW`（ライントレース）へフォールバックするよう変更。
+2. TURN序盤（目標方位=190度local基準までの誤差が大きい間）の一時的な低明度3周期連続検出で即座にFOLLOWへ切り替わっていたため、実ログでは旋回開始87度→112度（誤差103度→78度）というごく早い段階でライントレースへ引き渡され、以後55mmの間にheadingが112→162度と大きく振れていた。新設定`to_exit_turn_black_detect_max_error_deg`（既定60.0度）を追加し、目標方位までの誤差がこの値以下になるまで黒検出カウントを進めないようにした。
+
+検証はPC上でpy_trees/simple_pid/py_etrobo_utilを最小スタブに置換し、`Hint2Exit`の実クラスを直接importして実施（ETロボコン側work/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.py）。誤差103度(ゲート外)でのv低下3周期はTURN継続、誤差55度(ゲート内)なら従来どおりFOLLOWへ遷移、黒未検出のままTURN距離上限に達してもFAILUREにならずFOLLOWへ遷移することを確認。実機・実カメラでの再現テストは未実施、ゲート値は現場再調整が前提。
+
+全変更ファイル（修正）: `robot_program/behaviours/hint2_exit.py`、`robot_program/integration_settings.py`。ETロボコン側HANDOFF.mdにも同内容を記録。Pi転送・実機確認・ゲート値チューニングが残課題。既存の未コミット変更は保持。
+
+
+## 2026-09-16 実走ログ分析: 早期離脱ゲート後の「ライン見失い」FAILUREを確認
+
+上記修正後の実走ログをユーザーから受領。旋回はheading86→131度(誤差59度、新ゲート60度のすぐ内側)で明度低下を検出しFOLLOWへ切替。その後v=11→11→39→99と明度が安定せずheadingが131→184度まで約53度振れ、`ExitTraceLine`の白連続検出が`to_exit_lost_cycles`(15周期)に達し`HINT2_EXIT failed: line lost during low-speed follow`でFAILURE、`alpha.py`のミッション失敗ガードにより`RuntimeError: Mission failed; motors stopped.`で全停止した。TURN→FOLLOW切替自体は意図どおりで、停止原因はFOLLOW側の別の安全装置（白連続検出）であることをユーザーへ回答した。コード変更なし（分析のみ）。
+
+
+## 2026-09-16 TURNを190度まで実施し、黒未検出でもFOLLOWへ引き渡すよう変更
+
+ユーザー指示「190°実施して、条件を満たさなくてもそのままライントレースしてください」により、`behaviours/hint2_exit.py`のTURN→BLACK遷移条件（誤差<=`to_exit_heading_tolerance_deg`で`phase='BLACK'`へ移行し前進しながら黒探索を継続）を変更した。目標方位(190度local基準)まで旋回できた時点で、黒検出条件(3周期連続)を満たしていなくても直ちに`FOLLOW`へ引き渡すようにした。これにより`BLACK`フェーズ（`to_exit_search_limit_mm`等を使う前進探索）はこの経路からは到達しなくなった（コード・設定は残置、明示的な削除は未実施）。
+
+検証は`work/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.py`にTest4を追加し、誤差が許容値(5度)まで縮まった時点でv=99(白のまま、黒未検出)でも`FOLLOW`へ遷移し`black_count`が0のままであることを確認。既存Test1〜3も再確認済み。実機・実カメラでの再現テストは未実施。
+
+全変更ファイル（修正）: `robot_program/behaviours/hint2_exit.py`。ETロボコン側HANDOFF.mdおよびwork/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.pyにも記録。Pi転送・実機での190度到達時FOLLOW引き渡しの確認が残課題。`BLACK`フェーズ関連コードの整理は指示範囲外のため保留。既存の未コミット変更は保持。
+
+
+## 2026-09-16 実走ログ分析: TURN→FOLLOW後の「ライン見失い」FAILUREが再発
+
+190度実施の修正後の実走ログ2件をユーザーから受領。いずれもTURNはheading87→121→132度付近(誤差58〜59度、ゲート60度のすぐ内側)で黒っぽい明度を検出し正常にFOLLOWへ引き渡していたが、その後明度が白へ回復し、`ExitTraceLine`の白連続検出が`to_exit_lost_cycles`(15周期)に達して`line lost during low-speed follow`でFAILURE、ミッション失敗で全停止した。当時残っていた失敗経路（初期化異常／センサー非数／フェーズ共通タイムアウト20秒／WHITE距離上限600mm／FOLLOWのライン見失い15周期）を列挙してユーザーへ回答した。コード変更なし（分析のみ）。
+
+
+## 2026-09-16 Hint2Exit全体を「TURN開始後は停止しない」設計へ変更
+
+ユーザー指示「ターンを始めたら止まることなくライントレース、および次の工程に確実に引き渡すようにしてください」により、`behaviours/hint2_exit.py`の`update()`を再構成した。フェーズ共通タイムアウト(20秒)と各フェーズの距離上限チェックを一本化し、打ち切りが発生した場合に`FAILURE`ではなく必ず次の状態へ前進するようにした：WHITE/OFFSETの打ち切り→TURNへ、TURN/BLACKの打ち切り→FOLLOWへ（既存の黒検出ゲート・190度到達条件と共存）、FOLLOWの打ち切り→SUCCESS（その場の姿勢のまま完了）。FOLLOW内の「白連続検出によるライン見失い」判定も、従来のFAILUREからSUCCESS（見失いを許容してそのまま完了）へ変更した。
+
+初期化時の異常（方位未確定・course不正）とセンサー値が非数(NaN/inf)の場合は、危険な状態でモーターを動かし続けないよう従来どおりFAILUREのまま残した。ユーザー指示の対象は探索・追従の打ち切り条件であり、ハードウェア/設定異常とは別種の問題と判断したため。
+
+検証はETロボコン側work/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.pyにTest5（WHITE距離上限打ち切り→TURNへ前進）とTest6（FOLLOWでライン見失い15周期→SUCCESSで完了）を追加し、既存Test1〜4と合わせて全6件成功。実機・実カメラでの再現テストは未実施。**注意**: 見失った位置のまま次工程（ボトル配置ゾーン判定・搬送）に進むため、大きくコースアウトした状態で完了扱いになる可能性があり、実機での挙動確認を強く推奨する。
+
+全変更ファイル（修正）: `robot_program/behaviours/hint2_exit.py`（タイムアウト/距離上限/ライン見失いをすべて前進・完了扱いへ統一）。ETロボコン側HANDOFF.mdおよびverify_hint2_exit_fix.py（Test5・Test6追加）にも記録。既存の未コミット変更は保持。

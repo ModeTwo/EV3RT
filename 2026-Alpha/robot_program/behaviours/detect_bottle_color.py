@@ -1,4 +1,4 @@
-"""Stationary, fresh-frame red/blue/yellow recognition for AT."""
+"""Fresh-frame red/blue/yellow recognition, stationary or while tracing."""
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 from py_etrobo_util import BottleColor, TargetInterested
@@ -6,9 +6,10 @@ from ..runtime import runtime
 
 
 class DetectBottleColor(Behaviour):
-    def __init__(self, name, context, settings=None, min_area=150, min_frames=3):
+    def __init__(self, name, context, settings=None, min_area=150, min_frames=3, *, while_moving=False):
         super().__init__(name)
         self.context, self.settings = context, settings
+        self.while_moving = while_moving
         self.min_area, self.min_frames = min_area, min_frames
 
     def initialise(self):
@@ -17,9 +18,12 @@ class DetectBottleColor(Behaviour):
         self.last_frame, self.candidate, self.hits = -1, None, 0
 
     def update(self):
-        for motor in (runtime.left_motor, runtime.right_motor):
-            motor.set_power(0)
-            motor.set_brake(True)
+        if not self.while_moving:
+            for motor in (runtime.left_motor, runtime.right_motor):
+                motor.set_power(0)
+                motor.set_brake(True)
+        if self.while_moving and self.context.bottle_color is not None:
+            return Status.RUNNING
         session, frame_id, observation = runtime.video.get_bottle_observation()
         if session != self.session or frame_id <= self.last_frame:
             return Status.RUNNING
@@ -34,7 +38,8 @@ class DetectBottleColor(Behaviour):
             return Status.RUNNING
         self.context.bottle_color = color.value
         self.logger.info('AT bottle_color=%s frame=%d' % (color.value, frame_id))
-        return Status.SUCCESS
+        # Distance, not recognition, ends the moving Parallel.
+        return Status.RUNNING if self.while_moving else Status.SUCCESS
 
     def terminate(self, new_status):
         runtime.video.set_target_interested(TargetInterested.LINE)

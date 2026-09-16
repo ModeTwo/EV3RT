@@ -42,6 +42,11 @@ class PlanGarageReturn(Behaviour):
                  + self.settings.capture_and_push_distance_mm * math.cos(capture_angle)
                  - self.settings.release_reverse_distance_mm * math.cos(reverse_angle))
             target_x = self.settings.garage_line_offset_mm
+            # 緑回避時は直線500mmの仮定ではなく、前進カーブを含む積分終点を使う。
+            if self.settings.green_avoidance_enabled and self.context.sumo.push_end_position_mm is not None:
+                end_x, end_y = self.context.sumo.push_end_position_mm
+                x = end_x - self.settings.release_reverse_distance_mm * math.sin(reverse_angle)
+                y = end_y - self.settings.release_reverse_distance_mm * math.cos(reverse_angle)
             target_y = self.settings.garage_blue_forward_mm - self.settings.garage_rejoin_before_blue_mm
             if x >= target_x or self.settings.garage_rejoin_before_blue_mm <= 0:
                 self.logger.error("Point return geometry invalid; robot must remain before return line")

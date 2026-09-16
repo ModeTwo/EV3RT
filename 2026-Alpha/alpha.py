@@ -1112,14 +1112,15 @@ def initialize_etrobo(backend: str) -> ETRobo:
             .add_device('gyro_sensor', device_type=GyroSensor, port='')
     )
 
-def setup_thread(camera_enabled=True):
+def setup_thread(camera_enabled=True, preview_enabled=True):
     global g_video, g_video_thread
     if not camera_enabled:
         g_video = None
         g_video_thread = None
         print(" -- camera capture, processing and preview disabled")
         return
-    g_video = Video()
+    g_video = Video(preview_enabled=preview_enabled)
+    print(" -- camera preview enabled=%s" % preview_enabled)
 
 
 def start_video_thread():
@@ -1213,6 +1214,8 @@ def _run_main(argv, startup_cleanup):
     g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
     parser = argparse.ArgumentParser()
     parser.add_argument('course', choices=['right', 'left'], help='Course to run')
+    parser.add_argument('--no-preview', action='store_true',
+                        help='Disable camera preview while keeping capture and recognition active')
     parser.add_argument('--logfile', type=str, default=None, help='Path to log file')
     parser.add_argument('--check-tree', action='store_true',
                         help='Build and print the tree without opening devices or camera')
@@ -1329,7 +1332,7 @@ def _run_main(argv, startup_cleanup):
             " -- camera enabled=%s et_sumo=%s"
             % (camera_enabled, mission_config.enable_et_sumo)
         )
-        setup_thread(camera_enabled=camera_enabled)
+        setup_thread(camera_enabled=camera_enabled, preview_enabled=not args.no_preview)
         if camera_enabled and g_video is None:
             # 走行開始後ではなくデバイスdispatch前に初期化不整合を検出する。
             raise RuntimeError("Camera initialization did not provide a Video instance")

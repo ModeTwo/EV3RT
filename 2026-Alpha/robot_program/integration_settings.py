@@ -7,19 +7,20 @@ import math
 
 @dataclass(frozen=True)
 class IntegrationSettings:
-    # 非B走行体の採用元。B版のtantou4.pyの値を混ぜない。
+    # TOは2026-09-16受領tantou4.py.txtを選択的に反映（旧同名B版とは区別）。
     re_source: str = 'gyro_line_0826.py'
-    at_source: str = 'bottle_catch.py'
-    to_source: str = 'tantou3.py'
-    # REが青検知まで担当し、ATは100mm前進から接続する。
+    at_source: str = 'bottle_catch2.py'
+    to_source: str = 'tantou4.py.txt (2026-09-16 received)'
+    # 旧停止認識方式の互換設定（移動中認識では未使用）。
     at_gate_forward_mm: float = 100.0
     at_recognition_reverse_mm: float = 200.0
-    # AT終了位置（緑円の延長線付近）を調整する第1候補。
-    at_to_transfer_trace_mm: float = 560.0
-    # TOが引渡し後に黒線へ接近する区間の距離上限。tantou3.py準拠。
-    to_first_black_limit_mm: float = 565.0
-    to_after_hint1_mm: float = 385.0
-    to_hint2_trace_mm: float = 1000.0  # 元コメントは1200だが有効値は1000
+    # REの青検知後、色認識を並行して行うカラートレース距離。
+    at_to_transfer_trace_mm: float = 400.0
+    at_marker_straight_mm: float = 293.0  # 青検知からグレー丸出口まで絶対0度
+    # TOが引渡し後に黒線へ接近する区間の距離上限。受領tantou4準拠。
+    to_first_black_limit_mm: float = 550.0
+    to_after_hint1_mm: float = 340.0
+    to_hint2_trace_mm: float = 1200.0  # 受領値。終了判定は現行の投影距離を維持
     to_exit_trace_mm: float = 600.0  # Hint2後の白探索上限（到達は失敗）
     # Hint2出口のみ。実機未校正の試走初期値。距離は保持ボトルの占有範囲で調整。
     to_exit_power: int = 50
@@ -42,6 +43,8 @@ class IntegrationSettings:
     to_exit_follow_mm: float = 80.0
     to_exit_phase_timeout_s: float = 20.0
     to_exit_heading_tolerance_deg: float = 5.0
+    # TURN序盤の誤検出を避けるため、目標方位までの残り誤差がこの範囲内に入るまで黒検出を数えない。実機未校正の試走初期値。
+    to_exit_turn_black_detect_max_error_deg: float = 60.0
     to_spin_min_power: int = 55
     to_spin_max_power: int = 60
     # Hint2後の移動完了位置から、黄→青→赤のドロップゾーン前を進む。
@@ -57,6 +60,8 @@ class IntegrationSettings:
     delivery_inward_turn_deg: float = 90.0
 
     def __post_init__(self):
+        if not math.isfinite(self.at_marker_straight_mm) or not 0 < self.at_marker_straight_mm < self.at_to_transfer_trace_mm:
+            raise ValueError("Require 0 < AT marker straight distance < AT total distance")
         if (type(self.to_exit_pivot_min_power) is not int or
                 type(self.to_exit_pivot_max_power) is not int or
                 not 0 < self.to_exit_pivot_min_power <= self.to_exit_pivot_max_power <= 100):
@@ -65,9 +70,12 @@ class IntegrationSettings:
             raise ValueError('Pivot settle time must be nonnegative and below phase timeout')
         for name in ('to_exit_slew_power_per_s', 'to_exit_heading_kp',
                      'to_exit_line_kp', 'to_exit_turn_limit_mm', 'to_exit_search_limit_mm',
-                     'to_exit_follow_mm', 'to_exit_phase_timeout_s', 'to_exit_heading_tolerance_deg'):
+                     'to_exit_follow_mm', 'to_exit_phase_timeout_s', 'to_exit_heading_tolerance_deg',
+                     'to_exit_turn_black_detect_max_error_deg'):
             if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(name + ' must be positive and finite')
+        if not self.to_exit_heading_tolerance_deg <= self.to_exit_turn_black_detect_max_error_deg:
+            raise ValueError('Black-detect gate must not be tighter than the heading tolerance')
         for name in ('to_exit_offset_mm', 'to_exit_white_min_mm'):
             if not math.isfinite(getattr(self, name)) or getattr(self, name) < 0:
                 raise ValueError(name + ' must be nonnegative and finite')

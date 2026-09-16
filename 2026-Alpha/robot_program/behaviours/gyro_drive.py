@@ -89,10 +89,11 @@ class SpinAround(Behaviour):
         return Status.RUNNING
 
     def terminate(self, new_status: Status) -> None:
-        # devREの停止契約を維持する。
+        # devREの停止契約を維持しつつ、終了直後の惰性回転によるオーバーシュートを防ぐため即時ブレーキをかける。
         for motor in (runtime.right_motor, runtime.left_motor):
             if motor is not None:
                 motor.set_power(0)
+                motor.set_brake(True)
         self.running = False
 
 
@@ -306,7 +307,9 @@ class RunByGyro(Behaviour):
 
 
     def terminate(self, new_status: Status) -> None:
+        # 惰性走行によるオーバーシュートを防ぐため即時ブレーキをかける。
         for motor in (runtime.left_motor, runtime.right_motor):
             if motor is not None:
                 motor.set_power(0)
+                motor.set_brake(True)
         self.running = False

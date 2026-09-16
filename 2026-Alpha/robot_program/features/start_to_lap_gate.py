@@ -8,7 +8,7 @@ from py_trees.common import ParallelPolicy
 from py_trees.composites import Parallel, Sequence
 from py_trees.decorators import Timeout
 
-from ..behaviours.conditions import IsColorDetectedThenHeadingStable
+from ..behaviours.conditions import IsColorDetected
 from ..behaviours.camera_line_trace import RecoverLineByCamera
 from ..behaviours.gyro_drive import RunByGyro
 from ..behaviours.line_trace import TraceLine
@@ -67,6 +67,12 @@ def build_start_to_lap_gate(context, config):
             pid_d=config.start_lap_camera_pid_d,
             max_camera_turn=config.start_lap_camera_max_turn,
             align_power=config.start_lap_camera_align_power,
+            handoff_power=config.start_lap_camera_handoff_power,
+            handoff_target_v=config.start_lap_line_target_v,
+            handoff_pid_p=config.start_lap_camera_handoff_pid_p,
+            handoff_turn_cap=config.start_lap_camera_handoff_turn_cap,
+            handoff_v_tolerance=config.start_lap_camera_handoff_v_tolerance,
+            handoff_stable_samples=config.start_lap_camera_handoff_stable_samples,
             line_v=config.start_lap_camera_rejoin_v,
             line_samples=config.start_lap_camera_rejoin_samples,
             trace_side=TraceSide.NORMAL,
@@ -95,21 +101,15 @@ def build_start_to_lap_gate(context, config):
             ),
         ])
 
-        # 青はカメラ復帰中から監視する。短い区間で青を踏んでもラッチし、
-        # 方位0度が安定した時点で次工程へ渡す。
+        # 青はカメラ復帰中から監視し、検知した周期でATへ渡す。
+        # 青から293mmの0度走行を始めるため、ここでは方位安定を待たない。
         recover_and_watch_blue = Parallel(
             name='recover line and watch lap blue marker',
             policy=ParallelPolicy.SuccessOnOne(),
         )
         recover_and_watch_blue.add_children([
             drive_after_gyro,
-            IsColorDetectedThenHeadingStable(
-                'lap blue marker and heading',
-                Color.BLUE,
-                target_heading_deg=0.0,
-                tolerance_deg=config.start_lap_heading_tolerance_deg,
-                stable_samples=config.start_lap_blue_heading_stable_samples,
-            ),
+            IsColorDetected('lap blue marker', Color.BLUE),
         ])
 
         root = Sequence(name='start_to_lap_gate', memory=True)
