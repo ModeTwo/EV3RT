@@ -1,7 +1,6 @@
 """Reusable gyro drive behaviors."""
 
 import time
-from collections import deque
 import math
 from typing import Callable, Union
 
@@ -24,123 +23,77 @@ def _normalize_heading_error(error: float) -> float:
     return (error + 180.0) % 360.0 - 180.0
 
 
+def _nearest_equivalent_heading(target: float, current: float) -> float:
+    # 絶対方位には360度ごとに同じ向きが存在する。
+    # 現在方位から最も近い等価角へ置き換え、PIDへ180度を超える角度差を渡さない。
+    return current + _normalize_heading_error(target - current)
+
+
 class SpinAround(Behaviour):
-    # Heading origin and target semantics are unchanged; stopping uses 40ms pulses.
-    def __init__(self, name, target, max_power, min_power, pid_p, pid_i, pid_d,
-                 target_type, tolerance=2.0, settle_time=0.2,
-                 slowdown_angle=12.0, fine_power=None):
+    # devREの連続PID旋回を基準とする。
+    def __init__(self, name: str, target: int, max_power: int, min_power: int,
+                 pid_p: float, pid_i: float, pid_d: float,
+                 target_type: HeadingType, tolerance: float = 2.0) -> None:
         super().__init__(name)
-        fine_power = min_power if fine_power is None else fine_power
-        if not (0 < min_power <= max_power <= 100 and
-                0 < tolerance < slowdown_angle and settle_time > 0):
-            raise ValueError('Invalid spin power or stopping settings')
-        self.target, self.target_type = target, target_type
-        self.pid_p, self.pid_i, self.pid_d = pid_p, pid_i, pid_d
-        self.min_power, self.max_power = min_power, max_power
-        self.power = int(max(min_power, min(fine_power, max_power)))
-        self.tolerance, self.settle_time = tolerance, settle_time
-        self.slowdown_angle = slowdown_angle
+        self.target = target
+        self.target_type = target_type
+        self.pid_p = pid_p
+        self.pid_i = pid_i
+        self.pid_d = pid_d
+        self.tolerance = tolerance
         self.clamper = SymmetricClamper(min_power, max_power)
         self.running = False
         self.target_heading = 0.0
-        self.pid = None  # Compatibility attribute; pulse control has no PID history.
+        self.pid = None
 
-    def _start(self):
-        runtime.require('gyro_sensor', 'right_motor', 'left_motor')
-        heading = -runtime.course * runtime.gyro_sensor.get_angle()
-        self.goal = (heading + self.target if self.target_type == HeadingType.RELATIVE
-                     else float(self.target))
-        self.target_heading = self.goal
-        self.running = True
-        error = _normalize_heading_error(self.goal - heading)
-        self.direction = 1 if error >= 0 else -1
-        self.state = 'coarse'
-        self.corrections = 0
-        self.samples = deque()
-        self.last_log = float('-inf')
-        self._brake()
+    def update(self) -> Status:
+        runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
+        current_heading = -runtime.course * runtime.gyro_sensor.get_angle()
+        if not self.running:
+            if self.target_type == HeadingType.RELATIVE:
+                self.target_heading = current_heading + self.target
+            else:
+                self.target_heading = _nearest_equivalent_heading(self.target, current_heading)
+            self.pid = PID(
+                self.pid_p,
+                self.pid_i,
+                self.pid_d,
+                setpoint=self.target_heading,
+                sample_time=EXEC_INTERVAL,
+            )
+            self.running = True
+            self.logger.info(
+                "%+06d %s.spin started at heading=%.1f requested=%.1f resolved=%.1f delta=%.1f"
+                % (runtime.plotter.get_distance(), self.__class__.__name__,
+                   current_heading, self.target, self.target_heading,
+                   self.target_heading - current_heading)
+            )
 
-    def _brake(self):
+        error = _normalize_heading_error(self.target_heading - current_heading)
+        if abs(error) < self.tolerance:
+            self.logger.info(
+                "%+06d %s.spin ended at heading=%d"
+                % (runtime.plotter.get_distance(), self.__class__.__name__, current_heading)
+            )
+            return Status.SUCCESS
+
+        # devREと同じPID制御。±180度境界では正規化した誤差方向を優先する。
+        raw_power = float(self.pid(current_heading))
+        if raw_power == 0.0:
+            raw_power = error
+        elif raw_power * error < 0.0:
+            raw_power = -raw_power
+        power = int(self.clamper.clamp(raw_power))
+        runtime.right_motor.set_power(runtime.course * power)
+        runtime.left_motor.set_power(-runtime.course * power)
+        return Status.RUNNING
+
+    def terminate(self, new_status: Status) -> None:
+        # devREの停止契約を維持しつつ、終了直後の惰性回転によるオーバーシュートを防ぐため即時ブレーキをかける。
         for motor in (runtime.right_motor, runtime.left_motor):
             if motor is not None:
                 motor.set_power(0)
                 motor.set_brake(True)
-
-    def _drive(self, direction):
-        runtime.right_motor.set_brake(False)
-        runtime.left_motor.set_brake(False)
-        runtime.right_motor.set_power(runtime.course * direction * self.power)
-        runtime.left_motor.set_power(-runtime.course * direction * self.power)
-
-    def _wait(self, now, heading):
-        self._brake()
-        self.state = 'brake'
-        self.brake_start = now
-        self.samples = deque([(now, heading)])
-
-    def _hold(self, reason):
-        # Latch RUNNING under braking so parent trees cannot retry or advance.
-        self.state = 'hold'
-        self._brake()
-        self.logger.error('pulse turn HOLD: %s; stop and restart the mission' % reason)
-
-    def update(self):
-        if not self.running:
-            self._start()
-        now = time.monotonic()
-        heading = -runtime.course * runtime.gyro_sensor.get_angle()
-        error = _normalize_heading_error(self.goal - heading)
-        before = self.state
-        command = 0
-        result = Status.RUNNING
-        if self.state == 'coarse':
-            if abs(error) <= self.slowdown_angle or error * self.direction <= 0:
-                self._wait(now, heading)
-            else:
-                command = self.direction * self.power
-                self._drive(self.direction)
-        elif self.state == 'pulse':
-            # Preserve the user-tested 40ms pulse; completion is dispatch-quantized.
-            command = self.pulse_direction * self.power
-            if now - self.pulse_started >= 0.040:
-                self._wait(now, heading)
-                command = 0
-        elif self.state == 'brake':
-            self._brake()
-            self.samples.append((now, heading))
-            while len(self.samples) > 2 and now - self.samples[1][0] >= self.settle_time:
-                self.samples.popleft()
-            offsets = [_normalize_heading_error(h - self.samples[0][1]) for _, h in self.samples]
-            stable = (now - self.samples[0][0] >= self.settle_time
-                      and max(offsets) - min(offsets) <= 1.0)
-            if stable:
-                # Every reading in the window must be inside the error band.
-                if all(abs(_normalize_heading_error(self.goal-h)) <= self.tolerance for _, h in self.samples):
-                    self.state = 'done'
-                    result = Status.SUCCESS
-                elif self.corrections >= 12:
-                    self._hold('correction limit reached, error=%.2f' % error)
-                else:
-                    self.corrections += 1
-                    self.state = 'pulse'
-                    self.pulse_started = now
-                    direction = 1 if error > 0 else -1
-                    self.pulse_direction = direction
-                    command = direction * self.power
-                    self._drive(direction)
-            elif now - self.brake_start >= 2.0:
-                self._hold('gyro did not settle under braking')
-        else:
-            self._brake()
-        if self.state != before or now - self.last_log >= .1:
-            self.logger.info('pulse turn state=%s target=%.2f heading=%.2f error=%.2f pwmR=%d pwmL=%d corrections=%d' % (
-                self.state, self.goal, heading, error, runtime.course*command,
-                -runtime.course*command, self.corrections))
-            self.last_log = now
-        return result
-
-    def terminate(self, new_status):
-        self._brake()
         self.running = False
 
 
@@ -149,7 +102,7 @@ class RunByGyro(Behaviour):
 
     target=90.0: 従来どおり一定角度へ走る。
     target=heading_at: 毎周期 heading_at(開始からの距離mm) で目標角を得る。
-    関数を渡す場合はRELATIVEを使い、開始時を0度とする連続角を返す。
+    関数を渡す場合、ABSOLUTEはIMU方位角、RELATIVEは開始時0度の角度を目標にする。
     関数名には括弧を付けない。PIDは開始時に一度だけ生成する。
     """
     def __init__(
@@ -203,8 +156,8 @@ class RunByGyro(Behaviour):
             raise ValueError('path tracking requires a target function')
         if self.distance_target:
             # 距離関数モードだけの契約。固定角度を使う他工程の仕様は維持。
-            if target_type != HeadingType.RELATIVE:
-                raise ValueError('distance target requires HeadingType.RELATIVE')
+            if target_type not in (HeadingType.ABSOLUTE, HeadingType.RELATIVE):
+                raise ValueError('distance target requires a valid HeadingType')
             if distance_limit_mm is None or not math.isfinite(distance_limit_mm) or distance_limit_mm <= 0:
                 raise ValueError('distance_limit_mm must be positive and finite')
             if not math.isfinite(completion_min_mm) or not 0 <= completion_min_mm < distance_limit_mm:
@@ -217,7 +170,7 @@ class RunByGyro(Behaviour):
             raise ValueError('distance completion options require a target function')
 
     def update(self) -> Status:
-        # 固定角度モードは従来の制御をそのまま使用する。
+        # 距離プロファイルと固定角度では目標更新方法が異なるため処理を分ける。
         if self.distance_target:
             return self._update_distance_target()
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
@@ -235,7 +188,9 @@ class RunByGyro(Behaviour):
             if self.target_type == HeadingType.RELATIVE:
                 self.target_heading = current_heading + self.target
             else:
-                self.target_heading = self.target
+                # 例: 現在314度、受信目標-44度は円周上では約2度差である。
+                # PIDへ-358度差を渡さず、現在値に近い316度として追従する。
+                self.target_heading = _nearest_equivalent_heading(self.target, current_heading)
             self.pid = PID(
                 self.pid_p,
                 self.pid_i,
@@ -245,18 +200,19 @@ class RunByGyro(Behaviour):
                 output_limits=(-self.power, self.power),
             )
             self.logger.info(
-                "%+06d %s.gyro run started toward heading=%d"
+                "%+06d %s.gyro run started at heading=%.1f requested=%.1f resolved=%.1f delta=%.1f"
                 % (
                     runtime.plotter.get_distance(),
                     self.__class__.__name__,
+                    current_heading,
+                    self.target,
                     self.target_heading,
+                    self.target_heading - current_heading,
                 )
             )
             self.running = True
 
         turn = int(self.pid(current_heading))
-        runtime.right_motor.set_brake(False)
-        runtime.left_motor.set_brake(False)
         runtime.right_motor.set_power(self.power + runtime.course * turn)
         runtime.left_motor.set_power(self.power - runtime.course * turn)
         return Status.RUNNING
@@ -275,6 +231,8 @@ class RunByGyro(Behaviour):
         if not self.running:
             self.origin_distance = distance
             self.previous_heading = heading
+            self.continuous_heading = heading
+            self.heading_origin = heading
             self.relative_heading = 0.0
             self.path_tracker = (PathTracking(self.cross_track_lookahead_mm, self.max_heading_correction_deg)
                                  if self.cross_track_lookahead_mm > 0 else None)
@@ -288,8 +246,12 @@ class RunByGyro(Behaviour):
         if progress < 0:
             return self._finish_distance_run(Status.FAILURE)
         # 359→0度等の折り返しを解除して開始からの連続角を得る。
-        self.relative_heading += _normalize_heading_error(heading - self.previous_heading)
+        self.continuous_heading += _normalize_heading_error(heading - self.previous_heading)
         self.previous_heading = heading
+        self.relative_heading = self.continuous_heading - self.heading_origin
+        actual_heading = (self.continuous_heading
+                          if self.target_type == HeadingType.ABSOLUTE
+                          else self.relative_heading)
 
         # 2. 終了条件なし: 距離で成功。あり: 検知で成功、距離上限で失敗。
         if self.completion_condition is not None and progress >= self.completion_min_mm:
@@ -305,7 +267,7 @@ class RunByGyro(Behaviour):
         if not math.isfinite(nominal_heading):
             return self._finish_distance_run(Status.FAILURE)
         # 推定横ずれがあるときは、計画の向きへ戻すため小さな追加角度を与える。
-        correction = (self.path_tracker.correction(progress, self.relative_heading, self.target)
+        correction = (self.path_tracker.correction(progress, actual_heading, self.target)
                       if self.path_tracker is not None else 0.0)
         self.target_heading = nominal_heading + correction
         turn_limit = min(self.power, 100-self.power)
@@ -316,7 +278,7 @@ class RunByGyro(Behaviour):
         # FF分を差し引いた範囲に制限し、合計PWMの飽和時も積分を制限する。
         self.pid.output_limits = (-turn_limit-feedforward, turn_limit-feedforward)
         self.pid.setpoint = self.target_heading
-        feedback = self.pid(self.relative_heading)
+        feedback = self.pid(actual_heading)
         turn = max(-turn_limit, min(turn_limit, feedforward+feedback))
 
         # 4. 基本旋回＋PID補正の合計を左右コースへ変換して出力する。
@@ -332,8 +294,8 @@ class RunByGyro(Behaviour):
                 'profile s=%.1f nominal=%.2f target=%.2f actual=%.2f error=%.2f '
                 'xte_est=%.1f correction=%.2f ff=%.2f p=%.2f i=%.2f d=%.2f '
                 'turn=%.2f left=%d right=%d' %
-                (progress, nominal_heading, self.target_heading, self.relative_heading,
-                 self.target_heading-self.relative_heading, xte, correction, feedforward, p, i, d,
+                (progress, nominal_heading, self.target_heading, actual_heading,
+                 self.target_heading-actual_heading, xte, correction, feedforward, p, i, d,
                  turn, round(self.power-runtime.course*turn), round(self.power+runtime.course*turn)))
             self.last_log_time = now
         return Status.RUNNING
@@ -345,7 +307,9 @@ class RunByGyro(Behaviour):
 
 
     def terminate(self, new_status: Status) -> None:
+        # 惰性走行によるオーバーシュートを防ぐため即時ブレーキをかける。
         for motor in (runtime.left_motor, runtime.right_motor):
             if motor is not None:
                 motor.set_power(0)
+                motor.set_brake(True)
         self.running = False

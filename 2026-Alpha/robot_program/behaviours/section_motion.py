@@ -37,7 +37,7 @@ class DriveDistance(Behaviour):
 
 
 class LocalSpin(SpinAround):
-    """Translate TO local absolute targets without resetting the gyro."""
+    """Use TO targets in the common gyro frame without an AT heading offset."""
     def __init__(self, name, context, target, **kwargs):
         self.context, self.local_target = context, target
         super().__init__(name=name, target=target, **kwargs)

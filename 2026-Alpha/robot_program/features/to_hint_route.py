@@ -1,15 +1,19 @@
-"""TO担当の編集箇所。非B版tantou3.pyの変数名・コメント・ツリー定義を保持。
+"""TO担当の編集箇所。受領tantou4.pyの工程順・変数名・ツリー定義を保持。
 
 【統合差分】sample2の単体機器を作らず共有部品を使用。
-SpinAround/RunByGyroはAT終了方位基準、IsQRDecodedは共有Context保存。
+SpinAround/RunByGyroは起動時からの共通方位基準、IsQRDecodedは共有Context保存。
 各工程のパラメータは下の元コードの位置で編集する。
+【統合差分】ResetDeviceは入れず共通方位を維持。QR準備/読取とHint2Exitは現行版。
+添付の角度-90/25/-25は基準を確認できないため採用せず、既存0/115/90を維持。
 """
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..behaviours.section_motion import LocalSpin as SpinAround, LocalDrive as RunByGyro
 from ..behaviours.line_trace import TraceLine
-from ..behaviours.conditions import IsDistanceEarned, IsTimePassed
+from ..behaviours.hint2_exit import Hint2Exit
+from ..behaviours.projected_distance import IsProjectedDistanceEarned
+from ..behaviours.conditions import IsDistanceEarned, IsTimePassed, IsColorDetected
 from ..behaviours.motor_control import StopNow
-from ..behaviours.hint_reader import ReadHintCard as IsQRDecoded
+from ..behaviours.hint_reader import ReadHintCard as IsQRDecoded, PrepareHintCamera
 
 
 def build_tantou_tree(context, config, include_exit=True):
@@ -79,15 +83,15 @@ def build_tantou_tree(context, config, include_exit=True):
         #),
 
     turn_left_55.add_children([
-        # 【統合差分】ジャイロをリセットせずAT終了方位を局所0度とする。
+        # 【統合差分】ジャイロをリセットせず、起動時からの共通方位基準を維持する。
         SpinAround(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="left 55",
             target=90,
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
             pid_p=0.2,
-            pid_i=0.00075,
+            pid_i=0.005,
             pid_d=0.03,
             target_type=HeadingType.ABSOLUTE
         ),
@@ -123,12 +127,12 @@ def build_tantou_tree(context, config, include_exit=True):
 
     go_to_black.add_children([
         RunByGyro(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="run_to_black",
-            target=0,
-            power=60,
-            pid_p=0.0001,
-            pid_i=0.00001,
+            target=90,
+            power=55,
+            pid_p=1.1,
+            pid_i=0.00075,
             pid_d=0.04,
             target_type=HeadingType.ABSOLUTE
         ),
@@ -140,7 +144,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
         IsDistanceEarned(
             name="black_distance_limit",
-            delta_dist=settings.to_first_black_limit_mm  # 元: 565
+            delta_dist=settings.to_first_black_limit_mm  # tantou4: 550
         ),
        # ResetDevice(name="device_reset"),
     ])
@@ -164,13 +168,13 @@ def build_tantou_tree(context, config, include_exit=True):
     turn_right_125.add_children([
         #ResetDevice(name="device_reset"),
         SpinAround(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="right 125",
-            target=0,
+            target=0,  # 【統合差分】添付-90。共通方位の既存値を維持
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
             pid_p=0.2,
-            pid_i=0.00075,
+            pid_i=0.005,
             pid_d=0.03,
             target_type=HeadingType.ABSOLUTE
         ),
@@ -213,7 +217,7 @@ def build_tantou_tree(context, config, include_exit=True):
         #),
 
         IsQRDecoded(
-            name="read_qr1", context=context, hint_number=1
+            name="read_qr1", context=context, hint_number=1, keep_qr_ready=True
         ),
     ])
 
@@ -245,24 +249,24 @@ def build_tantou_tree(context, config, include_exit=True):
 
     go_to_blue_after_qr1.add_children([
         RunByGyro(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="run_after_qr1",
             target=0,
             power=60,
-            pid_p=0.0001,
-            pid_i=0.00001,
+            pid_p=1.1,
+            pid_i=0.00075,
             pid_d=0.04,
             target_type=HeadingType.ABSOLUTE
         ),
 
-        #IsColorDetected(
-        #    name="detect_blue_after_qr1",
-        #    color=Color.BLUE
-        #),
+        IsColorDetected(
+            name="detect_blue_after_qr1",
+            color=Color.BLUE
+        ),
 
         IsDistanceEarned(
             name="distance_after_qr1",
-            delta_dist=settings.to_after_hint1_mm  # 元: 385
+            delta_dist=settings.to_after_hint1_mm  # tantou4: 340
         ),
     ])
 
@@ -286,13 +290,13 @@ def build_tantou_tree(context, config, include_exit=True):
     turn_left_90_b.add_children([
         #ResetDevice(name="device_reset"),
         SpinAround(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="left 90 again",
             target=90,
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
             pid_p=0.2,
-            pid_i=0.00075,
+            pid_i=0.005,
             pid_d=0.03,
             target_type=HeadingType.ABSOLUTE
         ),
@@ -326,16 +330,15 @@ def build_tantou_tree(context, config, include_exit=True):
             name="trace_120",
             target=TRACELINE_TARGET_V,
             power=60,
-            pid_p=0.055,
-            pid_i=0.005,
-            pid_d=0.5,
+            pid_p=0.65,
+            pid_i=0.000001,
+            pid_d=0.045,
             trace_side=TraceSide.NORMAL,
-            cutoff_hz=None  # 【統合差分】元sample2と同じ平滑化なし
         ),
 
-        IsDistanceEarned(
-            name="dist_1200",
-            delta_dist=settings.to_hint2_trace_mm  # 元: 1000
+        IsProjectedDistanceEarned(
+            name="dist_1200", context=context, local_heading_deg=90.0,
+            delta_dist=settings.to_hint2_trace_mm  # 【統合差分】投影距離を維持、tantou4の1200mmを採用
         ),
     ])
 
@@ -363,15 +366,15 @@ def build_tantou_tree(context, config, include_exit=True):
 
         #ResetDevice(name="device_reset"),
         SpinAround(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="right 25 for qr2",
-            target=25,
+            target=115,  # 【統合差分】添付25。共通方位の既存値を維持
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
             pid_p=0.2,
-            pid_i=0.00075,
+            pid_i=0.005,
             pid_d=0.03,
-            target_type=HeadingType.RELATIVE
+            target_type=HeadingType.ABSOLUTE
         ),
 
         StopNow(
@@ -435,15 +438,15 @@ def build_tantou_tree(context, config, include_exit=True):
 
     return_heading.add_children([
         SpinAround(
-            context=context,  # 【統合差分】AT終了方位を基準に変換
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="right 25 return",
-            target=-25,
+            target=90,  # 【統合差分】添付-25。共通方位の既存値を維持
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
             pid_p=0.2,
-            pid_i=0.00075,
+            pid_i=0.005,
             pid_d=0.03,
-            target_type=HeadingType.RELATIVE
+            target_type=HeadingType.ABSOLUTE
         ),
 
         StopNow(
@@ -457,43 +460,10 @@ def build_tantou_tree(context, config, include_exit=True):
     ])
 
 
-    # ========================================================
-    # 10. 最終地点まで直進
-    #
-    # 青線を検出するまで走行。
-    #
-    # 安全のため600mmの距離上限も設定。
-    # ========================================================
-
-    go_to_goal = Parallel(
-        name="go_to_goal",
-        policy=ParallelPolicy.SuccessOnOne()
-    )
-
-    go_to_goal.add_children([
-        TraceLine(
-            name="trace_150",
-            target=TRACELINE_TARGET_V,
-            power=50,
-            pid_p=0.55,
-            pid_i=0.0000009,
-            pid_d=0.015,
-            trace_side=TraceSide.NORMAL,
-            cutoff_hz=None  # 【統合差分】元sample2と同じ平滑化なし
-        ),
-
-
-        #IsColorDetected(
-        #    name="detect_goal_blue",
-        #    color=Color.BLUE
-        #),
-
-        IsDistanceEarned(
-            name="goal_distance_limit",
-            delta_dist=settings.to_exit_trace_mm  # 元: 600
-        ),
-    ])
-
+    # 【統合差分】添付の600mm単純追従に置換せず、現行Hint2Exitを維持。
+    # 10. 90度保持→連続白→追加前進→TO基準190度へのその場旋回→黒線再取得。
+    # 旋回途中でも黒検出で追従へ移り、距離/時間上限ではFAILURE停止する。
+    go_to_goal = Hint2Exit('hint2 white exit', context, settings)
 
     # ゴールで停止
 
@@ -506,6 +476,9 @@ def build_tantou_tree(context, config, include_exit=True):
 # ========================================================
 
     root.add_children([
+        # AT colour recognition is finished; TO uses gyro/colour-sensor driving.
+        # Prepare QR capture during the approach, then start a fresh read at rest.
+        PrepareHintCamera(name="prepare hint1 camera"),
         turn_left_55,
         go_to_black,
         turn_right_125,

@@ -1,0 +1,680 @@
+{
+  "captured_utc": "2026-09-15T08:05:48.377941+00:00",
+  "branch": "devTK",
+  "head": "93d266aa2d50defb2d7f4b15679f53f6435fe499",
+  "origin_devAK_local_ref": "3b8c3e23e1cf34074b898084033365586c1571f2",
+  "git_status_before_document_deployment": "M alpha.py\n M docs/notes/README.md\n M robot_program/behaviours/conditions.py\n M robot_program/behaviours/gyro_drive.py\n M robot_program/behaviours/line_trace.py\n M robot_program/behaviours/section_motion.py\n M robot_program/config.py\n M robot_program/context.py\n M robot_program/delivery_heading.py\n M robot_program/features/capture_sumo_bottle_camera.py\n M robot_program/features/drive_to_garage.py\n M robot_program/features/start_to_lap_gate.py\n M robot_program/features/stop_in_garage.py\n M robot_program/features/sumo_bearing.py\n M robot_program/features/to_hint_route.py\n M robot_program/integration_settings.py\n M robot_program/services/strategy_tree.py\n M robot_program/start_lap_calibration.py\n M robot_program/tree_builder.py\n M shared_communication/heading_frame.py\n?? docs/notes/DEVAK_HANDOFF_v1.md\n?? robot_program/behaviours/camera_line_trace.py\n?? robot_program/behaviours/hint2_exit.py\n?? robot_program/behaviours/projected_distance.py\n?? robot_program/integration_runs.py",
+  "scope": "Python source under alpha.py, robot_program, py_etrobo_util, shared_communication, wireless_device; includes locally ignored Python files; not a deployment archive",
+  "files": [
+    {
+      "path": "alpha.py",
+      "sha256": "520912b6e07906ea4321c2109a8e3b5cae1a96182bc872d02f6b5ca60fed5024",
+      "bytes": 61629
+    },
+    {
+      "path": "py_etrobo_util/__init__.py",
+      "sha256": "c2eed28a7b82bab700df9b3cae9f800d396d4dc1ebd5e1bcfc91a78bb8852ed1",
+      "bytes": 324
+    },
+    {
+      "path": "py_etrobo_util/hint.py",
+      "sha256": "5141178fbcdfbb8e3b74761bbe41722b3059e9a1e83e21e905b49fbe7a1aacf8",
+      "bytes": 2878
+    },
+    {
+      "path": "py_etrobo_util/hint_decoder.py",
+      "sha256": "0c0382e54e9c18b015c4694135f866678df20ba3e3b2f652ee25da97a992d529",
+      "bytes": 1931
+    },
+    {
+      "path": "py_etrobo_util/plotter.py",
+      "sha256": "af0cb56fa768b1cc0a7f19f1cb06d7b40a9a1972b6638d4f493d6348fe162361",
+      "bytes": 3296
+    },
+    {
+      "path": "py_etrobo_util/util.py",
+      "sha256": "d4bcd6884afbc75d57d56e2e8a7f6c8997f715434a00d0828d05832aeb252291",
+      "bytes": 5455
+    },
+    {
+      "path": "py_etrobo_util/video.py",
+      "sha256": "20f2a74779b5dac814cb19215fee46ad66d78795751f8b58de1a92a4f1020803",
+      "bytes": 40453
+    },
+    {
+      "path": "py_etrobo_util/vision_sessions.py",
+      "sha256": "2ce1a718a0655578791748baeffe56b2b7b7933ee84bcb0fc0b2b2581d3ad524",
+      "bytes": 1663
+    },
+    {
+      "path": "robot_program/__init__.py",
+      "sha256": "45a06de64f0d58add124f9b4b110f5cc97bfbcb213bb87070b663198ce94c85b",
+      "bytes": 42
+    },
+    {
+      "path": "robot_program/behaviours/__init__.py",
+      "sha256": "ac2c2bb95301287f9fd635ab5a491a886984cd8d62c3f83525e8f2ccb0e1a294",
+      "bytes": 38
+    },
+    {
+      "path": "robot_program/behaviours/bottle.py",
+      "sha256": "4e3a4f73a18f6f6a75e4de95f9d83325c49f5a83c583621a93887f9582aa99b4",
+      "bytes": 5668
+    },
+    {
+      "path": "robot_program/behaviours/camera_line_trace.py",
+      "sha256": "549889c0bd14d3a231ff1f58d95fb43873d6fbb58c15d8e8b1d054f7dd3bff2e",
+      "bytes": 7456
+    },
+    {
+      "path": "robot_program/behaviours/conditions.py",
+      "sha256": "f46f881ed83c488f155baa7bccebae4ff8e838071245a161fabfb072ec3f7d6e",
+      "bytes": 9505
+    },
+    {
+      "path": "robot_program/behaviours/delivery_turn.py",
+      "sha256": "6ac4ec704ba89ede98f5f2950a366fc9829b8adfc7d91c355cfa1faa6c3e0eab",
+      "bytes": 1469
+    },
+    {
+      "path": "robot_program/behaviours/detect_bottle_color.py",
+      "sha256": "32e55fd437652bcb6a72a48643313a9920467770a7225481e56b80e72f530f24",
+      "bytes": 1751
+    },
+    {
+      "path": "robot_program/behaviours/device_control.py",
+      "sha256": "bcb994660a7e077e93335ba7d5765d6a327bcb33e92dcc00e60a0297e6e9f542",
+      "bytes": 2634
+    },
+    {
+      "path": "robot_program/behaviours/distance_heading_drive.py",
+      "sha256": "a831d5ba9228a68ea95b0da6efbc58b6e814b01453cfff8568990cc63c8128f4",
+      "bytes": 902
+    },
+    {
+      "path": "robot_program/behaviours/gyro_drive.py",
+      "sha256": "f7a5e44b0768c5c7226fcf94e6120536251b3122c3755c30d563f44569b2b2e5",
+      "bytes": 15230
+    },
+    {
+      "path": "robot_program/behaviours/handoff.py",
+      "sha256": "dc2dc12d7f98179694e2046b14a370c4228ca2e035f73c0061112c5ff666b396",
+      "bytes": 1005
+    },
+    {
+      "path": "robot_program/behaviours/hint2_exit.py",
+      "sha256": "f55303eb487767f0f777926e85d217dc92f41bcff34821fcf8018533e7a57e14",
+      "bytes": 7968
+    },
+    {
+      "path": "robot_program/behaviours/hint_reader.py",
+      "sha256": "006abfca2f1446e74d97cc64569f86064f26606c7d1b5e23b8604736cf61454f",
+      "bytes": 3127
+    },
+    {
+      "path": "robot_program/behaviours/line_trace.py",
+      "sha256": "a112106a08d55f58cfae5d9b64a26e4b40fac408519d3b110170d7f75a090d5b",
+      "bytes": 6690
+    },
+    {
+      "path": "robot_program/behaviours/motor_control.py",
+      "sha256": "6f9a402749fc06c7ba1d4386422e6bbcb0cd1bbe0ef24bd9e9c54244bf366a8f",
+      "bytes": 2251
+    },
+    {
+      "path": "robot_program/behaviours/projected_distance.py",
+      "sha256": "cab2dddb07a20e5c2e14c0b635297f5d56fb3e7dd219fff7ecaed4f3db59e44c",
+      "bytes": 2891
+    },
+    {
+      "path": "robot_program/behaviours/section_motion.py",
+      "sha256": "f0c7ce0d317cdb0609b44a455529e948629c6c59d653665a715aa55de2ed3a18",
+      "bytes": 3636
+    },
+    {
+      "path": "robot_program/config.py",
+      "sha256": "e4545ad155548fdf752bc9c5e71e858477878e929dd965fe3920f7c99ca8800c",
+      "bytes": 8489
+    },
+    {
+      "path": "robot_program/context.py",
+      "sha256": "b6b388c2fea92be107e0337ebd02030e28e8b304760663ed9d60a0ae9f44b50c",
+      "bytes": 1724
+    },
+    {
+      "path": "robot_program/decryption_key.py",
+      "sha256": "cc5a2dddf8511b77b9ca5eecf3b4b0b844aa0d238e3774d0dbe2b3949a2714c1",
+      "bytes": 692
+    },
+    {
+      "path": "robot_program/delivery_heading.py",
+      "sha256": "bc71d2fa2a72203d5829a13dbc66596f88555c8d55d32a3709154d2d2585b368",
+      "bytes": 1823
+    },
+    {
+      "path": "robot_program/features/__init__.py",
+      "sha256": "b02403c65b07d27a829a3b5db7ee3278450d0ceb0c1e9c3d50199b936104b336",
+      "bytes": 36
+    },
+    {
+      "path": "robot_program/features/bt_imports.py",
+      "sha256": "c25dc86ca5eab0752acd88848f781576059cc7be1e2cc288157fe09112073cdd",
+      "bytes": 714
+    },
+    {
+      "path": "robot_program/features/capture_sumo_bottle_camera.py",
+      "sha256": "287fb2ca4a7d234e5742f845bc8194d9ac983b492b6240147b2c88d981e2ee52",
+      "bytes": 12988
+    },
+    {
+      "path": "robot_program/features/catch_bottle.py",
+      "sha256": "c0211e7778a8b5d0350b44b4709f3be7cff709d98d6b276993fde678ba358106",
+      "bytes": 4912
+    },
+    {
+      "path": "robot_program/features/correct_rally_heading.py",
+      "sha256": "138ea664aec50d8cf11f2e93f0b4284f68d925c7676043288d6176be4442c914",
+      "bytes": 614
+    },
+    {
+      "path": "robot_program/features/drive_to_garage.py",
+      "sha256": "2abb6496ae123acda0f83fd85e14f6d609bc420393755bc006dcdb9c2da99513",
+      "bytes": 827
+    },
+    {
+      "path": "robot_program/features/drop_bottle.py",
+      "sha256": "4dc196c90b047aeffe9ae4cd1a9d3bfe807c332139ecf6ec8de5e3ce7143bc31",
+      "bytes": 2694
+    },
+    {
+      "path": "robot_program/features/execute_strategy.py",
+      "sha256": "86daf1929a4a7f75cdaa63b88e6a9a43eab3d12bb3cb38cca78dee1f4eb5b5b7",
+      "bytes": 6343
+    },
+    {
+      "path": "robot_program/features/feature_template.py",
+      "sha256": "061766e00f4226dd747144ee28734e21ca6d4dc27541a91a21965542c9a33adf",
+      "bytes": 654
+    },
+    {
+      "path": "robot_program/features/locate_sumo_bottle.py",
+      "sha256": "b902311cdb42f624b6318a35c8818ba44cb488ac6aef8cc47ce373602bc63a6c",
+      "bytes": 23500
+    },
+    {
+      "path": "robot_program/features/move_to_rally_ready.py",
+      "sha256": "3d10a715741ba76600d99f32bc8496c7f16f3056d99d558d9583c7b176e901fa",
+      "bytes": 5872
+    },
+    {
+      "path": "robot_program/features/move_to_sumo_exit.py",
+      "sha256": "0386a59c1f5cce364aa0632a446f134405ce3304b44e9ad432ecbe892f957ec8",
+      "bytes": 18979
+    },
+    {
+      "path": "robot_program/features/move_to_sumo_start.py",
+      "sha256": "6cdf2077e2b3706e705f7f358bd1dc05be545d0af235f3c9340fea176b86e915",
+      "bytes": 8785
+    },
+    {
+      "path": "robot_program/features/push_sumo_bottle.py",
+      "sha256": "9d00e91ebb31ca558b37d86f9b3f049760d3e7954b42962cb5c6b3495e5042fb",
+      "bytes": 4279
+    },
+    {
+      "path": "robot_program/features/receive_strategy.py",
+      "sha256": "f78a09bf61a2f8610c53c1aa178dfd4996a5b5c6310158fcbe53d02e6bb7d56c",
+      "bytes": 1365
+    },
+    {
+      "path": "robot_program/features/select_drop_zone.py",
+      "sha256": "23aac0f02eb5cfb8f70b3a5d2741c5fc53f81632853851482db4ecb5ffd4e173",
+      "bytes": 3815
+    },
+    {
+      "path": "robot_program/features/start_to_lap_gate.py",
+      "sha256": "323be3e62ae24e680fad70c3dff611493b23cf0dd9cd4cde5b9598c80b6d253f",
+      "bytes": 6387
+    },
+    {
+      "path": "robot_program/features/start_to_lap_gate_legacy.py",
+      "sha256": "f5474d325fd81d24276d8f63d0ef7164ed3cae0daca4f639e321fa47074cb665",
+      "bytes": 3298
+    },
+    {
+      "path": "robot_program/features/stop_in_garage.py",
+      "sha256": "1329340a9c4f05e81a40a86408e8cdee658b710562e30326a1d0c44c8908817b",
+      "bytes": 1242
+    },
+    {
+      "path": "robot_program/features/sumo_bearing.py",
+      "sha256": "4035ff9e57c64dd63305e64946b9a2655d4e7c44f6af2a87cedf362db7fea658",
+      "bytes": 3178
+    },
+    {
+      "path": "robot_program/features/sumo_bearing_motion.py",
+      "sha256": "ceb405b50916f59214d73c5831222751a16db8b72f7c7fc8c82460ad7b5f0d5d",
+      "bytes": 3131
+    },
+    {
+      "path": "robot_program/features/to_hint_route.py",
+      "sha256": "692cdf2abafffa1efa39b0fb5ea576712651427acfca56e54cb1af5c9a524c53",
+      "bytes": 13430
+    },
+    {
+      "path": "robot_program/heading_profile.py",
+      "sha256": "a5c6398d9acf3de5e149ee32d2c578d226407b03cf084397329f58a0e3a4045d",
+      "bytes": 1235
+    },
+    {
+      "path": "robot_program/integration_runs.py",
+      "sha256": "2442893efd1af336b2fa175e3c52e4277420cda2a03a48681abdfc3c435e82ed",
+      "bytes": 6015
+    },
+    {
+      "path": "robot_program/integration_settings.py",
+      "sha256": "1c72a99303389a29881c58df260bc7cdffc509158333efa8efec0c996f8ca854",
+      "bytes": 6530
+    },
+    {
+      "path": "robot_program/path_tracking.py",
+      "sha256": "6eca0fb8573a097e56f3aa01d027171a8f1235b8a572cfc86757692744ef48dc",
+      "bytes": 2654
+    },
+    {
+      "path": "robot_program/phases/__init__.py",
+      "sha256": "c1581d2edc44edb7fd2dcc22b2982b477929020ac187416935b7f21ad517b5ec",
+      "bytes": 37
+    },
+    {
+      "path": "robot_program/phases/bottle_and_rally_preparation.py",
+      "sha256": "3c32e4bb1851250eeda55690bfd968c01320773819784e9355ffd28aa8b48cc0",
+      "bytes": 2160
+    },
+    {
+      "path": "robot_program/phases/et_rally.py",
+      "sha256": "3f39b44a39aceb6a26cf7bf72e3583a679eee2ee3cda50b821b73de143ace74a",
+      "bytes": 835
+    },
+    {
+      "path": "robot_program/phases/et_sumo.py",
+      "sha256": "5a125464fafbed5152234095c44e5aa334eba29cf60da796de1a0d3705cfc9a1",
+      "bytes": 693
+    },
+    {
+      "path": "robot_program/phases/finish.py",
+      "sha256": "3785406d21cdfa6b4263828bc0ff2be356ed74a806c04690c83a10950672197e",
+      "bytes": 531
+    },
+    {
+      "path": "robot_program/phases/hint_collection.py",
+      "sha256": "0c595aa27878493b1277b4b7411833301be13ea1900aaad4282ed8a81d8f4593",
+      "bytes": 1365
+    },
+    {
+      "path": "robot_program/phases/lap_gate.py",
+      "sha256": "de9862d5d1cac926a79024cca2b79bf1b89b6e4853a6f348982c8b79e7b26bc2",
+      "bytes": 275
+    },
+    {
+      "path": "robot_program/placeholder.py",
+      "sha256": "902b0fe7f016b0ab3a041a1b2c5a699adfe406e18f5fe9dfb51acf5b0d06998f",
+      "bytes": 507
+    },
+    {
+      "path": "robot_program/runtime.py",
+      "sha256": "e822aae74142645906ec8d1dc576adc9ddd8e2d8486143d5aba3eacffed624ee",
+      "bytes": 1717
+    },
+    {
+      "path": "robot_program/services/__init__.py",
+      "sha256": "e1607a831ea17fbb3aea17c436a6e8b2dbe0019111c21421c62fe068ec0d050d",
+      "bytes": 42
+    },
+    {
+      "path": "robot_program/services/execution_safety.py",
+      "sha256": "9c04835acefa34aaaa5d852becb0807871fe1346bee6107c6386b2dc52fd9814",
+      "bytes": 740
+    },
+    {
+      "path": "robot_program/services/race_timer.py",
+      "sha256": "bc600fb8f2110eb842612bb80eba8e427b5183f3a0a223d778e67a538e486fa0",
+      "bytes": 551
+    },
+    {
+      "path": "robot_program/services/run_log.py",
+      "sha256": "50bfd2eb26e7338b9c009cf4f36ba544e91e960349e287ca1c81f43d5d88cbee",
+      "bytes": 4298
+    },
+    {
+      "path": "robot_program/services/shutdown.py",
+      "sha256": "2cf7fbc5b004928f54a0b4fc8c95973d9d2a9d710d95829278ac01b66ab1599f",
+      "bytes": 1205
+    },
+    {
+      "path": "robot_program/services/strategy_exchange.py",
+      "sha256": "c74649e255d3fdba0185ec13c552c5ca1251d60a09a8148b1f4a5c574a9930de",
+      "bytes": 9770
+    },
+    {
+      "path": "robot_program/services/strategy_tree.py",
+      "sha256": "105f91fb41fe2bea81102587b289da5f6b2c08ff24d04718495b283c7d224da3",
+      "bytes": 1361
+    },
+    {
+      "path": "robot_program/start_lap_calibration.py",
+      "sha256": "8361379986c7a464e4333e6cb565e05ae6e389e1eab324b2a249cf3b50a8877f",
+      "bytes": 1100
+    },
+    {
+      "path": "robot_program/start_lap_profile_v1.py",
+      "sha256": "419b7244ab9e73a2a7d6d1bd9ce40f75ff277028615db1c172670cc4a563f947",
+      "bytes": 20789
+    },
+    {
+      "path": "robot_program/start_lap_profile_v10.py",
+      "sha256": "6b2c45133b9642a6ce22ceb1ec137024e0c01f90beeadbf021d390c28e56f6a9",
+      "bytes": 20628
+    },
+    {
+      "path": "robot_program/start_lap_profile_v12.py",
+      "sha256": "d13c1cdc952a118b4aae194ec2ba170e5152a5221a7e7c9bf1546b9019d03f14",
+      "bytes": 20246
+    },
+    {
+      "path": "robot_program/start_lap_profile_v13.py",
+      "sha256": "8e8dab85fb91429eb61bb8fd319d003a36e9744eda28f9ec8fd5c134331f2ffb",
+      "bytes": 19845
+    },
+    {
+      "path": "robot_program/start_lap_profile_v14.py",
+      "sha256": "d2db9a54ff1e87f5c616d955f25932a1f13cfbc1a5ec796b2d71aa8382d83ed8",
+      "bytes": 19865
+    },
+    {
+      "path": "robot_program/start_lap_profile_v15.py",
+      "sha256": "306fb4d3af5b97367fbf93c7d864a4245dc403b5c8bcc2945615ae95c2380554",
+      "bytes": 20416
+    },
+    {
+      "path": "robot_program/start_lap_profile_v16.py",
+      "sha256": "338d40e929de4b44bebf5d0d1c3eee5b47fa4f4eddc2b45af51d759f54a8c3c7",
+      "bytes": 20143
+    },
+    {
+      "path": "robot_program/start_lap_profile_v17.py",
+      "sha256": "27635016fd53559795e206f14235440974e166fa5f7e897a7e372fcfd0ddeab0",
+      "bytes": 20343
+    },
+    {
+      "path": "robot_program/start_lap_profile_v18.py",
+      "sha256": "99c6d97a0850283ea9cfa1edcc1182e898df4281613b5e778e8e1aa94dac3a84",
+      "bytes": 20149
+    },
+    {
+      "path": "robot_program/start_lap_profile_v19.py",
+      "sha256": "ad02da547277b48c8656b04ae10d1a881634eb4d62c28cd91928540c0f69a961",
+      "bytes": 19938
+    },
+    {
+      "path": "robot_program/start_lap_profile_v2.py",
+      "sha256": "ee41b7ae369955e2211133138f5368f8c05bee25aa46d9c779340ce5f1f43c1c",
+      "bytes": 33680
+    },
+    {
+      "path": "robot_program/start_lap_profile_v20.py",
+      "sha256": "27e818d291b933036c488712ae566854cceaca98b0b21e8a96a655f7306bbdc6",
+      "bytes": 19876
+    },
+    {
+      "path": "robot_program/start_lap_profile_v21.py",
+      "sha256": "9da2ead0e4f68fe155ef4a95c61b9245c87bc36eaa6e52b73bf20cadf54dbdc2",
+      "bytes": 19883
+    },
+    {
+      "path": "robot_program/start_lap_profile_v22.py",
+      "sha256": "60e71e6b31bb4d0a8e98328e15279cf44c60d93c3922ad90300a33a2adbde228",
+      "bytes": 19828
+    },
+    {
+      "path": "robot_program/start_lap_profile_v4.py",
+      "sha256": "318a7c58d536229bc0bb08f7ec8d579b371eeb55521106db9ea35cae22bf81e1",
+      "bytes": 20527
+    },
+    {
+      "path": "robot_program/start_lap_profile_v5.py",
+      "sha256": "60edb4f55918ed17e5e6928402359e1c7ef9d96c2897eee713b6b3c969638044",
+      "bytes": 20095
+    },
+    {
+      "path": "robot_program/start_lap_profile_v6.py",
+      "sha256": "dfd3f1d4b61ddbd4d64cd839b194e2f684352096b2432e861da712cd4fa562b2",
+      "bytes": 20604
+    },
+    {
+      "path": "robot_program/start_lap_profile_v8.py",
+      "sha256": "0de6d2ebb55c2598819ecd0f953a70c350410aff5dde072b24c73fe3e0c4c3c3",
+      "bytes": 20668
+    },
+    {
+      "path": "robot_program/start_lap_profile_v9.py",
+      "sha256": "3eaca1680a55c8c8454dc3f152e99d68cbc92a6d0f25d4e007d828da134cb15d",
+      "bytes": 20420
+    },
+    {
+      "path": "robot_program/start_to_lap_profile_v3.py",
+      "sha256": "fa52fc10887df53abfdfc14a5660789b9dc5e97d097c7f17f2a4254f90ab50d6",
+      "bytes": 35570
+    },
+    {
+      "path": "robot_program/sumo_types.py",
+      "sha256": "f82dc9a19326f55e839a04d494ef8610c8d46a1b97c852fe1d244208b77ccdb1",
+      "bytes": 7299
+    },
+    {
+      "path": "robot_program/tests/__init__.py",
+      "sha256": "95786c608e238766ff1d42dc15d9b58246dec697fc178112bdf3a0e779f30a4c",
+      "bytes": 33
+    },
+    {
+      "path": "robot_program/tests/run_logging_tests.py",
+      "sha256": "d1c4ab4f1d344445088dd6d14684afac278b1ca794cc1ce09a04686935c6317a",
+      "bytes": 5042
+    },
+    {
+      "path": "robot_program/tests/strategy_execution_tests.py",
+      "sha256": "4e84ab58a9f3d9fc5f41b90791fef11355d7a0597ce5d46f359c739d2bd61521",
+      "bytes": 4374
+    },
+    {
+      "path": "robot_program/tests/test_at_to_integration.py",
+      "sha256": "3fba8f64d54f9e650b6047c374fa95500c11b9be00be80cf06c14772c389e3ff",
+      "bytes": 19060
+    },
+    {
+      "path": "robot_program/tests/test_decryption_key.py",
+      "sha256": "7408a3f4f185c2ff401b31f6f5fa22e1888c96a328387960f3b5db9a5b1c3a1e",
+      "bytes": 932
+    },
+    {
+      "path": "robot_program/tests/test_feature_imports.py",
+      "sha256": "51d7db480f98096be9886ff44f977e63c54e042b2c27e37591b43345e7bf0950",
+      "bytes": 1377
+    },
+    {
+      "path": "robot_program/tests/test_foundation.py",
+      "sha256": "382a0cc39b7992b86465f1a7e1f8bc8c606f4b5800f9d1e97363e0712a7756db",
+      "bytes": 13663
+    },
+    {
+      "path": "robot_program/tests/test_gyro_target.py",
+      "sha256": "8f3294e4a292f92567bcd520e86c351ee7f15cb833cf37bacbc9809d0412f9bf",
+      "bytes": 8763
+    },
+    {
+      "path": "robot_program/tests/test_projected_distance.py",
+      "sha256": "dea74540de6dc23dc9a5d419e16884cff23062090553a25fbd1dca7b972097f4",
+      "bytes": 6160
+    },
+    {
+      "path": "robot_program/tests/test_reusable_behaviours.py",
+      "sha256": "fb53bde91528461020773c77fdff574bff33058bbaea461c13d750c72f584456",
+      "bytes": 33950
+    },
+    {
+      "path": "robot_program/tests/test_shutdown.py",
+      "sha256": "18a97f082da3b709ec9d0e1ccc8016614ca949227679d66e838968b9f181fdfe",
+      "bytes": 4247
+    },
+    {
+      "path": "robot_program/tests/test_sumo_bearing.py",
+      "sha256": "de3892562778d701d27c49f344d1fdae649743e390954168f9d7826e52508ca9",
+      "bytes": 8713
+    },
+    {
+      "path": "robot_program/tests/test_sumo_black_bottle.py",
+      "sha256": "f05ec00b2cd512880b915124a31dc64759337d455c4c8ad71d9cb4af1a7661cd",
+      "bytes": 2533
+    },
+    {
+      "path": "robot_program/tests/test_sumo_total_distance.py",
+      "sha256": "0800fe9edcb2f4eb0de12c674dd8ade6b3f4e8eebd0578a05bfafb9aabf2321d",
+      "bytes": 4615
+    },
+    {
+      "path": "robot_program/tests/test_unlimited_tasks.py",
+      "sha256": "22b5989a70b9b1b99634e608a64a54b6a569d69e643efb268fa536914de133bb",
+      "bytes": 2206
+    },
+    {
+      "path": "robot_program/timing.py",
+      "sha256": "0a1bc773c973ec863dbd9ecc91ac3affee6be4c9c0e5f3e4cf21edcaae2a175e",
+      "bytes": 348
+    },
+    {
+      "path": "robot_program/tree_builder.py",
+      "sha256": "665db31a238a8647317e5227a74d9df5286e32d26d7ca729fc94510ac104ff2c",
+      "bytes": 2774
+    },
+    {
+      "path": "robot_program/types.py",
+      "sha256": "3638a2153680ecae740c667d0c2cf8c6ca7e9f4e83ac9e5219c00b4acfcb5e2c",
+      "bytes": 134
+    },
+    {
+      "path": "robot_program/vision/__init__.py",
+      "sha256": "7ab94785de844ac32e2ce4b43698282e1898e3ee2f654ac1fa7477024d02074e",
+      "bytes": 295
+    },
+    {
+      "path": "robot_program/vision/sumo_black_bottle.py",
+      "sha256": "413910f1759b6c057937cc8a08889d2ac45956373c052da5abeba8bf1815528d",
+      "bytes": 4101
+    },
+    {
+      "path": "shared_communication/__init__.py",
+      "sha256": "fe6e29c0a34e2744f16f65a9e33153d573e4aa820d624cacf8c305f085aaab1c",
+      "bytes": 47
+    },
+    {
+      "path": "shared_communication/demo_robot.py",
+      "sha256": "b2d991eb8767158f7e237b5d08940fd690d3881e7b2211839e128ab7c2805639",
+      "bytes": 1718
+    },
+    {
+      "path": "shared_communication/heading_frame.py",
+      "sha256": "fef5a5fae87d6223a30b315035d343040974543bfb7d5c52c4267822bb8111cf",
+      "bytes": 1914
+    },
+    {
+      "path": "shared_communication/hint_decoder.py",
+      "sha256": "8e64cb15f5922933f98154e234ce780224bc790b5ca57c634bfaddd0c6046ebc",
+      "bytes": 1517
+    },
+    {
+      "path": "shared_communication/protocol.py",
+      "sha256": "2b4099d4099d7d793e4719c69cc9b313f7048c626c3997bd368c8b9650d783ad",
+      "bytes": 3384
+    },
+    {
+      "path": "shared_communication/test_exchange.py",
+      "sha256": "3a839f4d99f341788685bc48ccc65a087a92d779de118d4b0cdda7f2aa526e4e",
+      "bytes": 8115
+    },
+    {
+      "path": "shared_communication/test_tree_exchange.py",
+      "sha256": "561f0977c3af7ae25657b943a18c1cd8a7babfefcfd28ee88a788befed308824",
+      "bytes": 1577
+    },
+    {
+      "path": "wireless_device/__init__.py",
+      "sha256": "a21f5029b585f913001182db798dfd6373bf077e4567e22d7411f1b14f291304",
+      "bytes": 44
+    },
+    {
+      "path": "wireless_device/__main__.py",
+      "sha256": "f6456f7256af035bdb22fb26f08925432c3bc8e8ccaba175d926b462c698518c",
+      "bytes": 3217
+    },
+    {
+      "path": "wireless_device/application.py",
+      "sha256": "b4234e96128294fb2224e39433f4518bd0115890a28a2694f64a37d6f876f83a",
+      "bytes": 635
+    },
+    {
+      "path": "wireless_device/et_rally_planner/commands.py",
+      "sha256": "255f7d35fa2a20f50f84fb4e2846a9f77c559946fa7d54cd66575e35e15c401f",
+      "bytes": 4900
+    },
+    {
+      "path": "wireless_device/et_rally_planner/config.py",
+      "sha256": "a860a916e02ff0e703bfe8da3e687d970585b07cdbd0b0a2fe48e9e3553e5a0d",
+      "bytes": 8018
+    },
+    {
+      "path": "wireless_device/et_rally_planner/geometry.py",
+      "sha256": "8a79a319c7b037d7e5edee81835686608f345f882b8a16e697e3b63347972493",
+      "bytes": 2535
+    },
+    {
+      "path": "wireless_device/et_rally_planner/planner.py",
+      "sha256": "49ef4d5991e80f6022a84bb3f9b42415349490e2818e5340f52c4174f5d27467",
+      "bytes": 29130
+    },
+    {
+      "path": "wireless_device/et_rally_planner/rule_route.py",
+      "sha256": "756f18b7773cf4c1f09d9b0909477484fdc77ea7d85c723e56493c62080404cb",
+      "bytes": 73961
+    },
+    {
+      "path": "wireless_device/et_rally_runner.py",
+      "sha256": "34f4dc4150944d91a2cb787328a82e26f2f8025c4d60ad9639915ebdd832320c",
+      "bytes": 4367
+    },
+    {
+      "path": "wireless_device/password_input.py",
+      "sha256": "11fa179e837dfa843e545a408d94ddbe8e5cc3fc501f7c012b812534aa803831",
+      "bytes": 418
+    },
+    {
+      "path": "wireless_device/planner_process.py",
+      "sha256": "dc991e3cd6f8ba1c580cedfa0763d6caf1e558e5df0e33ed182bd7c1c612bae6",
+      "bytes": 2684
+    },
+    {
+      "path": "wireless_device/strategy_planner.py",
+      "sha256": "ebc7518102441d7ef85fecae1a30e8a0155cc429bd6d827185e7662ca886b145",
+      "bytes": 765
+    },
+    {
+      "path": "wireless_device/test_strategy_planner.py",
+      "sha256": "fe78f3849894fa3a8cbf276abc381ea753f2aa46a13d6db5892f223905e09746",
+      "bytes": 11877
+    },
+    {
+      "path": "wireless_device/transport.py",
+      "sha256": "11751ccf5d3abe16821d3f33ecba4bb77c3e027610c50c7724972d88cfc39ffd",
+      "bytes": 6916
+    }
+  ]
+}

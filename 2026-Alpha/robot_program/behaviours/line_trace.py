@@ -38,6 +38,8 @@ class TraceLine(Behaviour):
         recover_v: int = None,
         recover_after: int = 3,
         recover_turn: int = None,
+        recover_reverse: bool = False,
+        recover_power: int = None,
     ) -> None:
         super().__init__(name)
         self.power_max = power
@@ -75,7 +77,10 @@ class TraceLine(Behaviour):
         self.recover_v = recover_v
         self.recover_after = recover_after
         self.recover_turn = recover_turn
+        self.recover_reverse = recover_reverse
+        self.recover_power = recover_power
         self._lost_count = 0
+        self._recovering = False
         self.running = False
 
     def update(self) -> Status:
@@ -132,20 +137,42 @@ class TraceLine(Behaviour):
                 self._lost_count += 1
             else:
                 self._lost_count = 0
+                if self._recovering:
+                    self.logger.info(
+                        "%+06d %s.line recovered v=%d"
+                        % (runtime.plotter.get_distance(), self.__class__.__name__, v_raw)
+                    )
+                self._recovering = False
             if self._lost_count >= self.recover_after and turn != 0:
+                if not self._recovering:
+                    self.logger.warning(
+                        "%+06d %s.line recovery started v=%d"
+                        % (runtime.plotter.get_distance(), self.__class__.__name__, v_raw)
+                    )
+                    self._recovering = True
                 magnitude = (
                     self.power_max if self.recover_turn is None else self.recover_turn
                 )
                 turn = int(math.copysign(magnitude, turn))
+                if self.recover_reverse:
+                    turn = -turn
 
-        base_power = int(round(self.power))
+        base_power = int(round(
+            self.recover_power
+            if self._recovering and self.recover_power is not None
+            else self.power
+        ))
         left_power = max(-100, min(100, base_power + turn))
         right_power = max(-100, min(100, base_power - turn))
+        self.set_motor_power(left_power, right_power)
+        return Status.RUNNING
+
+    def set_motor_power(self, left_power, right_power):
+        # Default path is unchanged; specialised routes may constrain actuator output.
         runtime.right_motor.set_brake(False)
         runtime.left_motor.set_brake(False)
         runtime.right_motor.set_power(right_power)
         runtime.left_motor.set_power(left_power)
-        return Status.RUNNING
 
 
 
@@ -154,3 +181,5 @@ class TraceLine(Behaviour):
             if motor is not None:
                 motor.set_power(0)
         self.running = False
+        self._lost_count = 0
+        self._recovering = False

@@ -16,6 +16,8 @@ class SumoSonarSample:
 
 @dataclass
 class SumoState:
+    # 捕捉開始以後の走行距離と方位から積分した押出終了座標。
+    push_end_position_mm: Optional[tuple] = None
     # 全体または単体試験のResetDevice直後に登録する方位角とジャイロの対応。
     # 各実行の状態を共有しないよう、必ず個別インスタンスを生成する。
     bearing_reference: SumoBearingReference = field(default_factory=SumoBearingReference)
@@ -42,6 +44,22 @@ class SumoState:
 
 @dataclass(frozen=True)
 class SumoSettings:
+    # Falseで緑ゾーン対策追加前の500mm固定方位走行へ戻す。
+    green_avoidance_enabled: bool = True
+    green_boundary_y_mm: float = 520.0
+    # 車体/アーム/ボトル張出しと停止余走を含む余裕。実機寸法で要調整。
+    green_clearance_mm: float = 60.0
+    # 距離による捕捉の仮定。実機のボトル配置・保持深さで要調整。
+    green_capture_distance_mm: float = 150.0
+    green_curve_reserve_mm: float = 50.0
+    # Falseで直前の120度境界・±50度復帰へ戻せる。
+    garage_point_return_enabled: bool = True
+    # 復帰計算距離を超えて黒ラインを探す追加距離。実機で調整する暫定値。
+    garage_search_margin_mm: float = 50.0
+    # 開始位置を原点、復帰ライン側X、初期前方Yとしたコース正規化座標。
+    garage_line_offset_mm: float = 680.0
+    garage_blue_forward_mm: float = 280.0
+    garage_rejoin_before_blue_mm: float = 100.0
     # コース図の上0、右90、下180、左270。時計回りを正とする。
     entry_bearing_deg: float = 0.0
     # RightではNo.15が鏡像の90度へ変換する。
@@ -54,18 +72,15 @@ class SumoSettings:
     # No.15開始位置からの総直進距離。白検知や追加クリアランスは使用しない。
     start_straight_distance_mm: float = 350.0
     # 以下の黒→白判定設定は旧方式の比較用。現行No.15の終了条件には使用しない。
-    line_entry_black_duration_sec: float = 0.0
     line_exit_white_duration_sec: float = 0.5
     # ET相撲開始位置では、共通色分類ではなく生の明度で黒線退出を判定する。
     line_black_max_value: int = 45
     line_white_min_value: int = 65
     line_sensor_log_interval_sec: float = 0.25
-    # 白地を確認した後、ゲートから旋回半径分離れるために追加直進する。
-    post_line_clearance_distance_mm: float = 75.0
-    # SpinAroundがcourseを適用するため、同じ正角度でLeftは左、Rightは右へ旋回する。
-    # 黒ライン終端から各コースの土俵側を向く基準値。
-    ring_turn_deg: float = 90.0
-    navigation_power: int = 50
+    navigation_power: int = 70
+    # 旋回後の惰性を待ち、新規画像で正面への整列を確認する。
+    camera_alignment_settle_sec: float = 0.2
+    camera_alignment_tolerance_deg: float = 5.0
     approach_power: int = 50
     carry_power: int = 50
 
@@ -83,15 +98,6 @@ class SumoSettings:
     camera_max_wheel_power: int = 100
     camera_steer_gain: float = 2.0
     camera_max_steer_power: int = 25
-    camera_drive_log_interval_sec: float = 0.25
-    camera_lost_frame_limit: int = 8
-    camera_near_bottom_row: int = 130
-    # ボトルが画面下端へ達しても、正面から外れていれば捕捉成功にしない。
-    camera_blind_max_theta_deg: float = 8.0
-
-    # 黒テープがカメラ死角へ入った後、最後の方位を維持してアーム内へ押し込む。
-    # 実機のカメラ位置、アーム保持深さに合わせて調整する。
-    camera_blind_capture_distance_mm: float = 150.0  # 旧方式用。現行カメラ走行では未使用。
     # 画像でボトル方位を確定した地点から、キャッチ・押し出し込みで進む総距離。
     capture_and_push_distance_mm: float = 500.0
 
@@ -129,8 +135,6 @@ class SumoSettings:
     release_reverse_power: int = 60
 
     # 離脱後はガレージ側へ旋回してから、その絶対方位を維持して黒ラインまで直進する。
-    # SpinAroundがcourseを適用するため、同じ正角度でLeft／Rightを鏡像化できる。
-    garage_return_turn_deg: float = 50.0
     garage_return_drive_power: int = 60
     # 復帰用黒ラインは生の明度で判定し、未検出時は規定距離で安全停止する。
     garage_line_black_max_value: int = 45

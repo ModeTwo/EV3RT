@@ -8,7 +8,11 @@ TOは工程分割せず元のツリーを直接接続します。[最新版の�
 
 最新の開始距離設定は [START_LAP_CALIBRATION_v4.md](START_LAP_CALIBRATION_v4.md) を参照。
 
+> 2026-09-12 スタート～LAP方位角制御: [方位角制御 v5](START_LAP_ABSOLUTE_HEADING_v5.md)。`build_start_to_lap_gate()`だけを`HeadingType.ABSOLUTE`へ変更し、POINTSの目標角をIMU方位角と直接比較する。他工程のRELATIVE指定は維持する。
+
 > 2026-09-10 [実行ログの自動保存](RUN_LOGGING_v1.md): 通常のalpha.py実行でrun_logsへ日時付きログを保存。Ctrl+C時も終了処理し、.gitignoreでGit対象から除外する。
+
+> 2026-09-12 [ETラリー走行・無線通信単体試験](ET_RALLY_DRIVE_STANDALONE_v1.md): `rally-drive`で復号済みHintを投入し、PC計算・SEQ受信・ETラリー走行だけを実機確認できます。
 
 AT・TO担当者の編集箇所は [AT_TO_SOURCE_STYLE_v1.md](../AT_TO_SOURCE_STYLE_v1.md) を参照してください。
 
@@ -127,7 +131,7 @@ class RaceConfig:
     enable_bottle_delivery: bool = True
     enable_et_rally: bool = True
     et_rally_laps: int = 3
-    et_rally_strategy_source: str = "file"
+    et_rally_strategy_source: str = "received"
     et_rally_plan_path: Optional[str] = None
     enable_et_sumo: bool = True
     enable_finish: bool = True
@@ -150,9 +154,7 @@ class RaceConfig:
 
 `enable_et_rally=False`の場合、`et_rally_laps`の値にかかわらずETラリー周回は実行されません。`et_rally_laps=0`の場合もETラリー周回は実行されません。
 
-現在は無線通信デバイス連携を一時的に横へよけているため、標準設定を`et_rally_strategy_source="file"`としています。`robot_program/tests/plan_seed9392783.json`の固定planを使用し、復号キー入力、PC接続、受信待ちは行いません。
-
-無線通信デバイス連携を再開する場合は`et_rally_strategy_source="received"`へ戻します。PCから受信した`context.strategy`を実行直前にBehavior Treeへ展開し、PCが選択した1～3周分の全SEQを一度だけ実行します。
+無線通信デバイス連携を再開しているため、標準設定は`et_rally_strategy_source="received"`です。PCから受信した`context.strategy`を実行直前にBehavior Treeへ展開し、PCが選択した1～3周分の全SEQを一度だけ実行します。
 
 従来の固定planを使う場合は`et_rally_strategy_source="file"`にします。この場合はPC接続と受信待ちを行いません。`et_rally_plan_path=None`なら`robot_program/tests/plan_seed9392783.json`を使用します。別ファイルを指定する相対パスは`2026-Alpha`直下が基準です。固定planの`steps`全体を一度実行するため、`et_rally_laps`によるJSON内容の切出しは行いません。
 
@@ -165,11 +167,14 @@ class RaceConfig:
 | Bottle Delivery | `python alpha.py left --mission bottle` |
 | Bottle Delivery後半 | `python alpha.py left --mission bottle-final --bottle-color red` |
 | ETラリー準備＋周回 | `python alpha.py left --mission rally` |
+| ETラリー走行＋PC通信のみ | `python alpha.py left --mission rally-drive --rally-hint1 "25,35" --rally-hint2-gate-info "53,54/12,22"` |
 | ET相撲 | `python alpha.py left --mission sumo` |
 | FINISH | `python alpha.py left --mission finish` |
 | 全工程 | `python alpha.py left --mission full` |
 
 `--mission`を省略した場合も`configured`です。Rightコースは`left`を`right`へ置き換えます。どの工程でも共通のキャリブレーションとタッチスタートは先に実行されます。単体工程は上流工程の動作を実行しないため、走行体をその工程の開始位置・開始方位・アーム状態へ手動で置いてから開始してください。
+
+`rally-drive`はETラリー開始位置へ手動配置し、復号済みHintを起動引数で渡して、無線通信デバイスの計算・受信・走行部分だけを試験します。カメラ、QRデコーダー、4桁キー入力、準備工程は起動しません。詳細は[ETラリー走行・無線通信単体試験](ET_RALLY_DRIVE_STANDALONE_v1.md)を参照してください。
 
 `hint2`と`hint2-return`はRE→AT→TO接続試験を維持する専用モードであり、工程フラグを参照しません。未実装の`PendingFeature`は警告を表示して何もせず成功扱いとなり、次の工程へ進みます。詳細は[工程単体実行ガイド](../MISSION_SELECTION_v6.md)を参照してください。
 
@@ -632,3 +637,24 @@ ETラリー有効時は、`alpha.py`が実機初期化と20ms周期開始の前�
 - 途中停止・完了・失敗時はモーター出力0。PWMは0～100内に制限し、後退しない。距離減少・非有限センサー値・course未設定はFAILURE。1秒ごとに距離/目標角/実角/turnを記録する。
 - 表の補間・左右操舵・角度折返し・PWM制限・再開始・中断停止・青検知窓・青見逃し・従来方式の構築を疑似センサーで検証。PIDの実機調整、横ずれ・スリップ・ジャイロドリフト、実際のゲート通過は未検証。方位追従だけでは横位置誤差は補正できない。
 - 生成元/確認図/テストはETロボコン作業リポジトリの `work/distance-heading-v1/`。既存の工程順序とATへの青検知引渡しを照合し維持した。LAP単体の終了だけをゲート通過距離へ明確化した。
+## スタート～LAP 後続カーブ距離調整 v6
+
+最初のカーブは維持し、それ以降の3カーブだけ目標方位角の変化区間を75%へ短縮した。調整は `config.py` の `start_lap_later_turn_distance_scale` を変更する。詳しくは `../docs/notes/robot_program/START_LAP_TURN_DISTANCE_v6.md` を参照。
+## スタート～LAP カーブ別タイミング調整 v7
+
+実走結果に合わせ、2番目は到着点を維持して旋回開始を60mm前倒しし、3番目はカーブ全体を80mm後ろへ移した。調整方法は `START_LAP_CURVE_TIMING_v7.md` を参照。
+## スタート～LAP ピン衝突回避調整 v8
+
+実走軌跡で3番目のカーブが内側へ切れ込みコース外ピンへ衝突したため、3番目だけ距離倍率を1.0へ戻し、開始遅延を250mmへ増やした。詳細は `../docs/notes/robot_program/START_LAP_PIN_AVOIDANCE_v8.md` を参照。
+## スタート～LAP 実走分析 v9
+
+v8でピンへの切込みは解消したが、3番目の旋回開始が遅過ぎて上側へ直進した。旋回半径を広げる倍率1.0は維持し、開始遅延だけ250mmから175mmへ戻した。分析は `START_LAP_TRIAL_ANALYSIS_v9.md` を参照。
+## スタート～LAP 縮尺計測分析 v10
+
+3枚の実走軌跡と黒線の画素差を公式PDFの縮尺へ対応させた。上側カーブの複数点を線形補間した結果、3番目の開始遅延を175mmから120mmへ変更した。距離倍率1.0は固定。詳細は `START_LAP_SCALED_ANALYSIS_v10.md`。
+## スタート～LAP ライン収束設計 v11
+
+方位角だけでは黒線に対する横位置を保証できないため、スタートから400mmをRunByGyroで直進し、最初のカーブ前からTraceLineで青LAPまで黒線端を追従する。詳細は `START_LAP_LINE_HANDOFF_v11.md`。
+## スタート～LAP 黒線中心軌道 v12
+
+距離軸のカーブ変形を解除して、公式PDFの黒線中心から作ったPOINTSへ戻した。RunByGyroで最終直線中間の5100mmまで走り、そこからTraceLineで黒線へ収束して青LAPへ渡す。詳細は `START_LAP_CENTERLINE_HANDOFF_v12.md`。

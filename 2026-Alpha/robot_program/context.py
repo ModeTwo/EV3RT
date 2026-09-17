@@ -26,6 +26,8 @@ class RaceContext:
     selected_rally_laps: Optional[int] = None
     # 通信スレッドは直接書き換えず、BT周期側で受信キューから反映する。
     mission_id: Optional[int] = None
+    # Manual-hint integration runs enable requests only after touch start.
+    strategy_requests_enabled: bool = True
     strategy_status: str = "idle"
     strategy_error: Optional[str] = None
     rally_lap: int = 0
