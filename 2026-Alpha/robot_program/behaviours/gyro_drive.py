@@ -12,7 +12,7 @@ from ..runtime import runtime
 from ..types import HeadingType
 
 
-EXEC_INTERVAL = 0.02
+from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
 
 
 def _normalize_heading_error(error: float) -> float:
@@ -91,6 +91,8 @@ class SpinAround(Behaviour):
         elif raw_power * error < 0.0:
             raw_power = -raw_power
         power = int(self.clamper.clamp(raw_power))
+        runtime.right_motor.set_brake(False)
+        runtime.left_motor.set_brake(False)
         runtime.right_motor.set_power(runtime.course * power)
         runtime.left_motor.set_power(-runtime.course * power)
         return Status.RUNNING
@@ -164,6 +166,15 @@ class RunByGyro(Behaviour):
             self.running = True
 
         turn = int(self.pid(current_heading))
+        runtime.right_motor.set_brake(False)
+        runtime.left_motor.set_brake(False)
         runtime.right_motor.set_power(self.power + runtime.course * turn)
         runtime.left_motor.set_power(self.power - runtime.course * turn)
         return Status.RUNNING
+
+
+    def terminate(self, new_status: Status) -> None:
+        for motor in (runtime.left_motor, runtime.right_motor):
+            if motor is not None:
+                motor.set_power(0)
+        self.running = False

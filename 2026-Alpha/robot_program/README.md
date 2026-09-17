@@ -1,3 +1,7 @@
+> 2026-09-06 復元：①〜④の調整前へ復元済み。相撲・ミッション選択は維持。現状は [復元記録](../RESTORED_BEFORE_RIGHT_TRIAL.md) を優先してください。
+
+> 2026-09-05 v2更新：最新は[RE・AT・TO連続走行版](../INTEGRATION_RUN_v2.md)です。標準alpha.pyはHint2取得後に停止します。周期はtiming.pyのCONTROL_INTERVAL_SECへ統一しました。以下の旧版説明よりv2文書を優先してください。
+> 2026-09-05更新：現在は統合基盤・移植準備版です。最新状況は[統合基盤v1](../INTEGRATION_FOUNDATION_v1.md)を参照してください。未実装工程があるため通常起動は走行前に終了コード2で停止します。下記の「仮処理は成功」「スタートのみ実装済み」等の過去説明より、この案内とv1文書を優先してください。
 # 2026-Alpha 走行体プログラム
 
 ## 1. この構成の目的
@@ -35,6 +39,52 @@ python alpha.py left --logfile logs/run.log
 
 `--logfile`へ出力したログはテキストとして保存されるため、後から生成AIやスクリプトへ渡して解析できます。
 
+### センサー値を常時表示する
+
+実機調整時は、競技プログラムとは別の`sensor_monitor.py`を実行します。コマンド実行で計測を開始し、任意のタイミングで`Ctrl+C`を押すと終了します。計測中は、タッチ、カラーHSVと判定色、距離、ジャイロ、各モーターエンコーダー、IMU静止判定が同じ画面上で更新され続けます。モーター駆動やセンサー値のリセットは行いません。
+
+```text
+python sensor_monitor.py
+```
+
+標準の表示更新間隔は0.1秒です。変更する場合：
+
+```text
+python sensor_monitor.py --interval 0.05
+```
+
+画面表示と同じ値をCSVにも保存する場合：
+
+```text
+python sensor_monitor.py --csv logs/sensors.csv
+```
+
+ANSI画面クリアに対応していない端末では、次の指定で各サンプルを追記表示できます。
+
+```text
+python sensor_monitor.py --no-clear
+```
+
+距離センサー値はmmとして扱うため、ET相撲側の換算係数は`1.0`です。モニターの生値とmm表示が一致することを、既知距離でも確認してください。
+
+### 力士ボトルの黒テープをカメラで確認する
+
+`sumo_bottle_camera_monitor.py`は、走行体を動かさず、USBカメラのプレビュー上で力士ボトルの黒テープと距離センサー値を同時確認する単体プログラムです。ETRoboにはHubとFポートの距離センサーだけを登録し、モーターとアームは登録も操作もしません。
+
+```text
+python sumo_bottle_camera_monitor.py
+```
+
+画面左側が判定枠付きのカメラ画像、右側が黒領域マスクです。黒テープ候補を黄色、異なる3フレームで連続確認した対象を緑で囲み、`DETECTED`と表示します。左側には距離センサーの生値、mm換算値、競技プログラムと同じ50～800mmの有効範囲判定、最新値の経過時間も表示します。`Q`または`Esc`、端末の`Ctrl+C`で終了します。
+
+照明に合わせて黒判定を調整する例：
+
+```text
+python sumo_bottle_camera_monitor.py --black-max-value 80 --min-area 100
+```
+
+力士ボトル専用の判定は`robot_program/vision/sumo_black_bottle.py`に配置し、Bottle Delivery用の赤・青・黄判定を持つ`py_etrobo_util/video.py`とは設定・責務を分離しています。この確認プログラムで閾値を変更しても3色ボトル認識には影響しません。
+
 ## 3. 機能の有効・無効とETラリー周回数
 
 設定は`robot_program/config.py`の`RaceConfig`で変更します。
@@ -42,6 +92,8 @@ python alpha.py left --logfile logs/run.log
 ```python
 @dataclass(frozen=True)
 class RaceConfig:
+    mission_mode: str = "configured"
+    lapgate: bool = True
     enable_bottle_delivery: bool = True
     enable_et_rally: bool = True
     et_rally_laps: int = 3
@@ -53,15 +105,32 @@ class RaceConfig:
 
 | 要求上の設定 | `RaceConfig`のフィールド | 設定値 |
 |---|---|---|
+| スタート～LAPゲート | `lapgate` | `True` / `False` |
 | `ENABLE_BOTTLE_DELIVERY` | `enable_bottle_delivery` | `True` / `False` |
 | `ENABLE_ET_RALLY` | `enable_et_rally` | `True` / `False` |
 | `ET_RALLY_LAPS` | `et_rally_laps` | `0` / `1` / `2` / `3` |
 | `ENABLE_ET_SUMO` | `enable_et_sumo` | `True` / `False` |
 | `ENABLE_FINISH` | `enable_finish` | `True` / `False` |
 
-スタート～LAPゲートは競技の基本工程なので、設定にかかわらず常にツリーへ追加されます。
+`mission_mode="configured"`では、スタート～LAPゲートを含むすべての工程が上記フラグに従います。すべて`False`なら、キャリブレーションとタッチスタートの後に終了し、LAP走行は開始しません。
 
 `enable_et_rally=False`の場合、`et_rally_laps`の値にかかわらずETラリー周回は実行されません。`et_rally_laps=0`の場合もETラリー周回は実行されません。
+
+設定ファイルを変更せずに工程を単体実行する場合は、`alpha.py`の`--mission`を使用します。
+
+| 工程 | コマンド例 |
+|---|---|
+| 設定フラグどおり | `python alpha.py left --mission configured` |
+| LAP | `python alpha.py left --mission lap` |
+| Bottle Delivery | `python alpha.py left --mission bottle` |
+| ETラリー準備＋周回 | `python alpha.py left --mission rally` |
+| ET相撲 | `python alpha.py left --mission sumo` |
+| FINISH | `python alpha.py left --mission finish` |
+| 全工程 | `python alpha.py left --mission full` |
+
+`--mission`を省略した場合も`configured`です。Rightコースは`left`を`right`へ置き換えます。どの工程でも共通のキャリブレーションとタッチスタートは先に実行されます。単体工程は上流工程の動作を実行しないため、走行体をその工程の開始位置・開始方位・アーム状態へ手動で置いてから開始してください。
+
+`hint2`と`hint2-return`はRE→AT→TO接続試験を維持する専用モードであり、工程フラグを参照しません。未実装の`PendingFeature`は警告を表示して何もせず成功扱いとなり、次の工程へ進みます。詳細は[工程単体実行ガイド](../MISSION_SELECTION_v6.md)を参照してください。
 
 ## 4. プログラムが実行される順序
 
@@ -113,7 +182,9 @@ ETRobo.dispatch()
 
 競技固有の走行処理は`alpha.py`へ追加せず、`features/`または`behaviours/`へ配置します。
 
-`ArmDirection`と`ArmUpDownFull`はキャリブレーションでのみ使用するため、共通`behaviours/`へ分割せず`alpha.py`に配置しています。
+`ArmDirection`と`ArmUpDownFull`はキャリブレーションでのみ使用するため、共通`behaviours/`へ分割せず`alpha.py`に配置しています。`ResetDevice`は単体テスト可能な共通Behaviorとして`behaviours/device_control.py`に配置し、`alpha.py`のキャリブレーションから呼び出します。
+
+`ResetDevice`自身がデバイス値をグローバル変数として保持する必要はありません。`runtime`に設定済みの同一デバイス参照を使い、モーターのエンコーダー値とジャイロ角度は各デバイス内部の`reset_count()`／`reset()`でゼロ化します。走行途中で実行すると`Plotter`の累積走行値と基準がずれるため、競技開始前のキャリブレーションでだけ使用してください。
 
 `TraceLineCam`、`IsJunction`、`CatchBottle`は現在の走行戦略と合致しないため、`alpha.py`には配置していません。
 
@@ -270,11 +341,56 @@ root.add_children([PendingFeature(name="feature_name_pending")])
 | `line_trace.py` | `TraceLine` |
 | `gyro_drive.py` | `RunByGyro`、`SpinAround` |
 | `motor_control.py` | `StopNow`、`RunAsInstructed` |
-| `conditions.py` | `IsDistanceEarned`、`IsColorDetected`、`IsTimePassed` |
+| `device_control.py` | `ResetDevice` |
+| `conditions.py` | `IsDistanceEarned`、`IsColorDetected`、`IsColorTransitionDetected`、`IsTimePassed` |
 | `bottle.py` | `IsBottleInsight`、`HasCaughtBottle` |
 | `hint_reader.py` | `ReadHintCard` |
 
 `RunAsInstructed`は従来から使用している名称を維持しています。
+
+### ET相撲 No.15～18
+
+ET相撲は距離センサーを使用せず、カメラで力士ボトルの黒テープを捕捉します。ETラリー終了位置は青円上を想定するため、開始直後はライントレースせず、ジャイロで方位を維持して直進します。黒ラインを確認して白地へ抜けた後、調整可能なクリアランス距離だけ追加直進して土俵方向へ90度旋回し、さらに50mm後退してカメラ視野を広げます。
+
+ET相撲でも、旋回は`behaviours/gyro_drive.py`の`SpinAround`、方位維持走行は`RunByGyro`、距離終了判定は`IsDistanceEarned`、停止は`StopNow`を利用します。Feature内にモーター出力やPID旋回を重複実装しません。
+
+Feature内に残すのは、黒テープの連続フレーム確認、画像中央へ寄せる前進操舵、カメラ死角へ入った後の捕捉距離設定など、ET相撲に固有の処理だけです。P1・P2の2地点推定、座標経路計画、`sumo_geometry.py`は使用しません。旧距離センサー方式のファイルは比較・復帰用に残していますが、ET相撲の実行木からは外しています。
+
+```text
+move_to_sumo_start.py
+├─ 青円上のETラリー終了位置からジャイロ直進
+├─ 黒を確認した後、白を0.5秒連続確認して黒ライン終端と判定
+├─ 白地上を調整可能なクリアランス距離だけ追加直進
+├─ Leftでは左、Rightでは右へ90度旋回して土俵方向を向く
+├─ 両コースで50mm後退して制動停止
+└─ capture_sumo_bottle_camera.py
+   ├─ 静止状態で黒テープを異なる3フレーム連続確認
+   ├─ 首振り旋回をせず、画像角度を0度へ寄せながら前進
+   ├─ 黒テープが画面下端の死角へ入った時の方位を保存
+   └─ 保存方位を維持して調整可能な距離を直進し、下端アーム内へ捕捉
+      └─ move_to_sumo_exit.py
+         ├─ ボトルを保持したまま押し出し側の黒ラインまで直進
+         ├─ 黒ライン検知後、30mm追加直進して押し出す
+         ├─ 旋回せず直線後退してアームから離脱
+         ├─ 後退しながらガレージ側へ緩く曲がり、復帰用黒ラインを検知
+         └─ 短距離ライントレースで姿勢を整えて停止
+```
+
+調整値は`RaceConfig.sumo`の`SumoSettings`へ集約しています。ET相撲開始位置の黒線退出は、共通色分類のWHITEではなくカラーセンサーの生V値を使用します。Vが`line_black_max_value`以下になった後、`line_white_min_value`以上の状態が`line_exit_white_duration_sec`継続した場合に明るい路面へ抜けたと判定します。判定中はHSVと段階を0.25秒間隔でログへ出します。白地確認後は`post_line_clearance_distance_mm`だけ追加直進してから90度旋回します。後退距離は`camera_retreat_distance_mm`（初期値50mm）、後退出力は`camera_retreat_power`（初期値60）です。
+
+カメラは`begin_sumo_bottle_read()`から開始し、黒だけに追跡対象を固定します。Bottle Deliveryは`begin_bottle_read()`で色固定を解除して赤・青・黄を判定するため、ET相撲の黒判定が残りません。同一画像を複数回数えず、異なる3フレームで確定してから前進します。
+
+ET相撲の駆動出力設定はすべて50以上です。相撲単体の`--mission sumo`でも、カメラ撮影・画像処理・プレビュー用スレッドを起動します。黒テープを3秒以内に確定できない場合、または接近が8秒を超えた場合はモーターを停止し、捕捉と後続運搬を省略します。
+
+No.16・17では90度旋回後の探索旋回を行いません。カメラで得た黒テープの角度に応じ、基準PWM75へ最大±25の差を付けて両輪50以上のまま前進操舵します。0.25秒間隔で画像角度、画像下端位置、面積、左右PWMをログへ出します。テープが死角へ入った後は、最後の観測方位を既存の`RunByGyro`へ渡して規定距離だけ直進します。
+
+No.18では、捕捉したボトルを保持したまま黒ラインまで直進し、黒ライン検知後に`push_out_after_line_distance_mm`（初期値30mm）だけ追加直進して押し出します。その後は旋回せず、`release_reverse_distance_mm`（初期値150mm）だけ真っすぐ後退してアームから離脱します。
+
+離脱後は`garage_return_reverse_left_pwm`と`garage_return_reverse_right_pwm`の左右差を使い、後退しながら少しガレージ側へそれて復帰用黒ラインを探します。この左右差はRightコースで鏡像化されます。黒ライン検知後は`line_rejoin_trace_distance_mm`（初期値100mm）だけ既存の`TraceLine`で走り、FINISH工程へ渡せる姿勢に整えて停止します。ガレージ側へ曲がる向き、150mmの離脱距離、100mmの安定化距離はレプリカコースで調整してください。
+
+Contextには工程ごとに`bottle_pushed_out`、`bottle_released`、`line_trace_ready`を記録します。最後は`transport_completed=True`、`bottle_held_at_exit=False`となります。ログでは押し出し線への接近、直線後退による離脱、ガレージ側黒ライン復帰を個別に確認できます。
+
+ET相撲開始時にはアームが下端にあることを上流工程の事後条件とし、ET相撲内ではアームモーターを動かしません。捕捉成功を直接検知するセンサーは使わず、黒テープが死角へ入った後に`camera_blind_capture_distance_mm`へ到達したことを捕捉成立として扱います。50mm後退量、黒テープ閾値、死角後150mmの初期値、出口運搬経路は実機で確認・調整してください。
 
 `alpha.py`の`ArmUpDownFull`は、エンコーダー回転量の変化が5度未満の状態を5周期連続で検知すると、機械端へ到達したと判断してPWMを0にし、ブレーキを有効にします。実行周期が20msの場合、終端到達後の判定時間は約0.1秒です。
 

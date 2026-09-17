@@ -4,6 +4,7 @@ import argparse
 import time
 import threading
 import signal
+from functools import wraps
 import math
 from enum import IntEnum, Enum, auto
 from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSensor, GyroSensor
@@ -17,14 +18,25 @@ from py_trees import (
     logging as log_tree
 )
 from py_etrobo_util import Video, TraceSide, TargetInterested, Plotter, SymmetricClamper, Color, ColorClassifier, LowPassFilter, BottleColor, Hint, HintType
-from robot_program.config import RaceConfig
+from robot_program.config import (
+    MISSION_CHOICES,
+    RaceConfig,
+    config_for_mission,
+    mission_requires_camera,
+    mission_requires_qr,
+)
 from robot_program.context import RaceContext
+from robot_program.behaviours.device_control import ResetDevice
 from robot_program.runtime import runtime as robot_runtime
+from robot_program.services.execution_safety import stop_motors, pending_features
+from robot_program.services.shutdown import Shutdown
+
+g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
 from robot_program.tree_builder import build_mission_children
 
 # constants for defining execution intervals
-EXEC_INTERVAL: float  = 0.02
-VIDEO_INTERVAL: float = 0.02
+from robot_program.timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
+VIDEO_INTERVAL = EXEC_INTERVAL
 
 # constants useful for behavior tree definition
 SPIN_MAX_POWER     = 57
@@ -32,8 +44,6 @@ SPIN_MIN_POWER     = 47
 TRACELINE_TARGET_V = 75
 
 # constants for specific action classes
-GS_MIN_DEFAULT     = 0
-GS_MAX_DEFAULT     = 55
 ARM_SHIFT_PWM      = 35   # ArmUpDownFull
 JUNCT_UPPER_THRESH = 50   # IsJunction 
 JUNCT_LOWER_THRESH = 40   # IsJunction
@@ -94,30 +104,6 @@ class TheEnd(Behaviour):
         if not self.running:
             self.running = True
             self.logger.info("%+06d %s.behavior tree exhausted. ctrl+C shall terminate the program" % (g_plotter.get_distance(), self.__class__.__name__))
-        return Status.RUNNING
-
-
-class ResetDevice(Behaviour):
-    def __init__(self, name: str):
-        super(ResetDevice, self).__init__(name)
-        self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-        self.count = 0
-
-    def update(self) -> Status:
-        if self.count == 0:
-            g_arm_motor.reset_count()
-            g_right_motor.reset_count()
-            g_left_motor.reset_count()
-            g_gyro_sensor.reset()
-            g_video.set_thresholds(GS_MIN_DEFAULT, GS_MAX_DEFAULT)
-            g_video.set_target_interested(TargetInterested.LINE)
-            self.logger.info("%+06d %s.resetting..." % (g_plotter.get_distance(), self.__class__.__name__))
-            self.logger.info("%+06d %s.waiting for IMU to be stationary..." % (g_plotter.get_distance(), self.__class__.__name__))
-        elif self.count > 3:
-            self.logger.info("%+06d %s.complete" % (g_plotter.get_distance(), self.__class__.__name__))
-            return Status.SUCCESS
-        if g_hub.hub_imu_is_stationary():
-            self.count += 1
         return Status.RUNNING
 
 
@@ -945,12 +931,25 @@ class HasCaughtBottle(Behaviour):
         return Status.SUCCESS if caught else Status.FAILURE
 
 
+def stop_before_backend_exit(callback):
+    @wraps(callback)
+    def guarded(*args, **kwargs):
+        try:
+            return callback(*args, **kwargs)
+        except BaseException:
+            # The backend has not yet stopped its USB receiver here.
+            g_shutdown.stop("control callback exit")
+            raise
+    return guarded
+
+
 class TraverseBehaviourTree(object):
     # ETRoboから渡された実機参照を初回だけ保存し、以後はBTを周期実行する。
     def __init__(self, tree: BehaviourTree) -> None:
         self.tree = tree
         self.last_log_time = None
         self.running = False
+    @stop_before_backend_exit
     def __call__(
         self,
         hub: Hub,
@@ -986,10 +985,17 @@ class TraverseBehaviourTree(object):
                 video=g_video,
                 course=g_course,
             )
+            if g_video is not None:
+                start_video_thread()
             print(" -- TraverseBehaviorTree initialization complete")
             self.running = True
         else:
+            if g_video_thread is not None and g_video_thread.error is not None:
+                raise RuntimeError("Camera processing failed") from g_video_thread.error
             self.tree.tick_once()
+            if self.tree.status == Status.FAILURE:
+                errors = g_shutdown.stop("mission failed")
+                raise RuntimeError("Mission failed; motors stopped. " + "; ".join(errors))
             g_plotter.plot(hub, arm_motor, right_motor, left_motor, touch_sensor, color_sensor, sonar_sensor, gyro_sensor)
             # log estimated position every 1 second
             #if self.last_log_time == None or time.time() - self.last_log_time >= 1.0:
@@ -999,14 +1005,22 @@ class TraverseBehaviourTree(object):
 
 class VideoThread(threading.Thread):
     def __init__(self):
-        super().__init__()
+        super().__init__(daemon=True)
         self._stop_event = threading.Event()
         self.prev_time = time.time()
+        self.error = None
 
     def stop(self):
         self._stop_event.set()
 
     def run(self):
+        try:
+            self.process_frames()
+        except Exception as error:
+            self.error = error
+            self._stop_event.set()
+
+    def process_frames(self):
         while not self._stop_event.is_set():
             g_video.process(g_plotter, g_hub, g_arm_motor, g_right_motor, g_left_motor, g_color_sensor, g_sonar_sensor, g_gyro_sensor)
             current_time = time.time()
@@ -1016,7 +1030,7 @@ class VideoThread(threading.Thread):
                 time.sleep(VIDEO_INTERVAL - elapsed_time)
 
 
-def build_behaviour_tree() -> BehaviourTree:
+def build_behaviour_tree(mission_config=None) -> BehaviourTree:
     # alpha.pyには競技全体の基本順序を残し、各工程の詳細は機能別ファイルから取得する。
     root = Sequence(name="2026 alpha", memory=True)
     calibration = Sequence(name="calibration", memory=True)
@@ -1033,7 +1047,7 @@ def build_behaviour_tree() -> BehaviourTree:
     start.add_children([IsTouchOn(name="touch start")])
 
     mission_context = RaceContext()
-    mission_config = RaceConfig()
+    mission_config = mission_config or RaceConfig()
     root.add_children(
         [
             calibration,
@@ -1056,52 +1070,126 @@ def initialize_etrobo(backend: str) -> ETRobo:
             .add_device('gyro_sensor', device_type=GyroSensor, port='')
     )
 
-def setup_thread():
+def setup_thread(camera_enabled=True):
     global g_video, g_video_thread
+    if not camera_enabled:
+        g_video = None
+        g_video_thread = None
+        print(" -- camera capture, processing and preview disabled")
+        return
     g_video = Video()
 
+
+def start_video_thread():
+    global g_video_thread
+    # Device references are configured before camera processing starts.
     print(" -- starting VideoThread...")
     g_video_thread = VideoThread()
     g_video_thread.start()
 
-def cleanup_thread():
+def _cleanup_thread_resources():
     global g_video, g_video_thread
-    print(" -- stopping VideoThread...")
-    g_video_thread.stop()
-    g_video_thread.join()
+    print(" -- stopping VideoThread...", flush=True)
+    if g_video_thread is not None:
+        g_video_thread.stop()
+        if g_video_thread.ident is not None:
+            g_video_thread.join(timeout=2.0)
+            if g_video_thread.is_alive():
+                print(" -- camera thread did not stop within 2 seconds; skipping concurrent close", file=sys.stderr, flush=True)
+                return
+        g_video_thread = None
+    if g_video is not None:
+        g_video.close()
+    g_video = None
 
-    del g_video
+def cleanup_thread():
+    # Native camera / X server calls can wait indefinitely.
+    worker = threading.Thread(target=_cleanup_thread_resources,
+                              name="camera-cleanup", daemon=True)
+    worker.start()
+    worker.join(timeout=5.0)
+    if worker.is_alive():
+        print(" -- camera cleanup timed out; exiting", file=sys.stderr, flush=True)
+
 
 def sig_handler(signum, frame) -> None:
-    sys.exit(1)
+    # Bypass the backend KeyboardInterrupt handler and its receiver join.
+    if g_shutdown.requested:
+        return
+    g_shutdown.stop("signal %d" % signum)
+    raise SystemExit(128 + signum)
 
-if __name__ == '__main__':
+
+def main(argv=None):
+    global g_course, g_shutdown
+    g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
     parser = argparse.ArgumentParser()
     parser.add_argument('course', choices=['right', 'left'], help='Course to run')
     parser.add_argument('--logfile', type=str, default=None, help='Path to log file')
-    args = parser.parse_args()
+    parser.add_argument('--check-tree', action='store_true',
+                        help='Build and print the tree without opening devices or camera')
+    parser.add_argument(
+        '--mission',
+        choices=MISSION_CHOICES,
+        default='configured',
+        help='Mission profile; configured uses the switches in RaceConfig',
+    )
+    args = parser.parse_args(argv)
+    g_course = -1 if args.course == 'right' else 1
 
-    if args.course == 'right':
-        g_course = -1
-    else:
-        g_course = 1
+    # 未実装ノードは明示警告するが、PendingFeature自身のSUCCESSで後続工程へ進める。
+    print(" -- shutdown-v8 control interval=%.3fs mission=%s" % (EXEC_INTERVAL, args.mission))
+    mission_config = config_for_mission(args.mission)
+    tree = build_behaviour_tree(mission_config)
+    pending = pending_features(tree)
+    if args.check_tree:
+        print(display_tree.unicode_tree(tree))
+    if pending:
+        print(" -- WARNING: skipped unimplemented features: " + ", ".join(pending),
+              file=sys.stderr)
+    if args.check_tree:
+        return 0
 
-    setup_thread()
-
-    #log_tree.level = log_tree.Level.DEBUG
-    tree = build_behaviour_tree()
-    #display_tree.render_dot_tree(tree)
-
-    signal.signal(signal.SIGTERM, sig_handler)
-
+    previous_sigint = signal.signal(signal.SIGINT, sig_handler)
+    previous_sigterm = signal.signal(signal.SIGTERM, sig_handler)
+    previous_sigtstp = signal.signal(signal.SIGTSTP, sig_handler) if hasattr(signal, "SIGTSTP") else None
     try:
+        # ET相撲の実行木は力士ボトル捕捉にカメラを必須とする。
+        # config.pyだけが旧版のまま配備された場合でも、ET相撲有効時にvideo=Noneを渡さない。
+        camera_enabled = (
+            mission_requires_camera(mission_config)
+            or mission_config.enable_et_sumo
+        )
+        print(
+            " -- camera enabled=%s et_sumo=%s"
+            % (camera_enabled, mission_config.enable_et_sumo)
+        )
+        setup_thread(camera_enabled=camera_enabled)
+        if camera_enabled and g_video is None:
+            # 走行開始後ではなくデバイスdispatch前に初期化不整合を検出する。
+            raise RuntimeError("Camera initialization did not provide a Video instance")
+        if mission_requires_qr(mission_config):
+            g_video.require_qr_decoder()
         etrobo = initialize_etrobo(backend='raspike_art')
         etrobo.add_handler(TraverseBehaviourTree(tree))
         etrobo.dispatch(interval=EXEC_INTERVAL, logfile=args.logfile)
     finally:
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-        cleanup_thread()
-        signal.signal(signal.SIGTERM, signal.SIG_DFL)
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
-        print(" -- exiting...")
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        if hasattr(signal, "SIGTSTP"):
+            signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+        try:
+            # Never send motor commands after dispatch has closed reception.
+            print(" -- SHUTDOWN camera cleanup begin (no motor resend)", flush=True)
+            cleanup_thread()
+        finally:
+            if previous_sigtstp is not None:
+                signal.signal(signal.SIGTSTP, previous_sigtstp)
+            signal.signal(signal.SIGTERM, previous_sigterm)
+            signal.signal(signal.SIGINT, previous_sigint)
+        print(" -- exiting... shutdown-v8", flush=True)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
