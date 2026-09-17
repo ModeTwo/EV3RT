@@ -128,6 +128,100 @@ class IsColorDetected(Behaviour):
         return Status.RUNNING
 
 
+class IsColorPassed(Behaviour):
+    # 指定色に入り、その後その色から抜けた(通り抜けた)時点で成功する。
+    def __init__(self, name: str, color: Color):
+        super().__init__(name)
+        self.color = color
+        self.prev_color = Color.UNKNOWN
+        self.classifier = ColorClassifier()
+        self.running = False
+        self.entered = False
+
+    def update(self) -> Status:
+        runtime.require("plotter", "color_sensor")
+        cur_dist = runtime.plotter.get_distance()
+        if not self.running:
+            self.running = True
+            self.entered = False
+            self.logger.info(
+                "%+06d %s.waiting to pass through color=%s"
+                % (cur_dist, self.__class__.__name__, self.color.value)
+            )
+
+        h, s, v = runtime.color_sensor.get_raw_color_hsv()
+        detected_color = self.classifier.classify(h, s, v)
+        if detected_color != self.prev_color:
+            self.logger.info(
+                "%+06d %s.color changed from %s to %s"
+                % (cur_dist, self.__class__.__name__, self.prev_color.value, detected_color.value)
+            )
+            self.prev_color = detected_color
+
+        if not self.entered:
+            if detected_color == self.color:
+                self.entered = True
+                self.logger.info(
+                    "%+06d %s.entered color=%s"
+                    % (cur_dist, self.__class__.__name__, self.color.value)
+                )
+            return Status.RUNNING
+
+        if detected_color != self.color:
+            self.logger.info(
+                "%+06d %s.passed through color=%s"
+                % (cur_dist, self.__class__.__name__, self.color.value)
+            )
+            return Status.SUCCESS
+        return Status.RUNNING
+
+    def terminate(self, new_status: Status) -> None:
+        # enteredはここでリセットしない。他のBehaviourがこのインスタンスの
+        # enteredを安全上限の無効化条件として参照するため、通過成功直後の
+        # terminateでFalseへ戻すと「まだ入っていない」と誤認させてしまう。
+        # 同じインスタンスが本当に再実行される場合は、update()側のrunning
+        # チェックで開始時に改めてenteredをFalseへ初期化する。
+        self.running = False
+        self.prev_color = Color.UNKNOWN
+
+
+class IsDistanceEarnedUntilColorEntered(Behaviour):
+    # guard(IsColorPassed等)がまだ対象色に入っていない間だけ距離を計測して
+    # 安全上限として成功する。guardが色に入った(entered=True)後は、この
+    # Behaviour自体は成功しなくなり(RUNNINGを返し続ける)、安全上限が無効化される。
+    def __init__(self, name: str, delta_dist: int, guard: IsColorPassed):
+        super().__init__(name)
+        self.delta_dist = delta_dist
+        self.guard = guard
+        self.running = False
+        self.orig_dist = 0
+
+    def update(self) -> Status:
+        if self.guard.entered:
+            # 対象色に入った後は安全上限を無効化し、以後は本来の成功条件(guard側)に委ねる。
+            return Status.RUNNING
+        runtime.require("plotter")
+        if not self.running:
+            self.running = True
+            self.orig_dist = runtime.plotter.get_distance()
+            self.logger.info(
+                "%+06d %s.accumulation started for delta=%d"
+                % (self.orig_dist, self.__class__.__name__, self.delta_dist)
+            )
+
+        cur_dist = runtime.plotter.get_distance()
+        if abs(cur_dist - self.orig_dist) >= self.delta_dist:
+            self.logger.info(
+                "%+06d %s.delta distance earned"
+                % (cur_dist, self.__class__.__name__)
+            )
+            return Status.SUCCESS
+        return Status.RUNNING
+
+    def terminate(self, new_status: Status) -> None:
+        self.running = False
+
+
 class IsColorDetectedThenHeadingStable(Behaviour):
     """色を一度検知した後、指定方位が安定してから成功する。"""
 

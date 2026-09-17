@@ -19,13 +19,38 @@ class IntegrationSettings:
     at_marker_straight_mm: float = 293.0  # 青検知からグレー丸出口まで絶対0度
     # TOが引渡し後に黒線へ接近する区間の距離上限。受領tantou4準拠。
     to_first_black_limit_mm: float = 550.0
-    to_after_hint1_mm: float = 340.0
+    # ヒント1後は青検知を待たず、緑を通り抜けてから固定距離だけ直進する。
+    # 緑検知は近距離で起きるはずのため、検知できない場合は320mmで打ち切って
+    # 次工程(90度旋回→カメラトレース)へ進む(実機未校正)。
+    to_after_hint1_green_pass_mm: float = 320.0
+    to_after_hint1_safety_limit_mm: float = 320.0
     to_hint2_trace_mm: float = 1200.0  # 受領値。終了判定は現行の投影距離を維持
+    # 左90度旋回後、色センサーtrace_120へ渡す前にカメラでライン中央へ寄せる。
+    # LAP前のRecoverLineByCamera(config.start_lap_camera_*)と同じ値を初期値として流用。実機未校正。
+    to_after_hint1_camera_power: int = 50
+    to_after_hint1_camera_pid_p: float = 2.0
+    to_after_hint1_camera_pid_i: float = 0.0
+    to_after_hint1_camera_pid_d: float = 0.06
+    to_after_hint1_camera_max_turn: int = 30
+    to_after_hint1_camera_align_power: int = 35
+    to_after_hint1_camera_handoff_power: int = 35
+    to_after_hint1_camera_handoff_pid_p: float = 0.3
+    to_after_hint1_camera_handoff_turn_cap: float = 10.0
+    to_after_hint1_camera_handoff_v_tolerance: int = 10
+    to_after_hint1_camera_handoff_stable_samples: int = 5
+    to_after_hint1_camera_tilt_ff_gain: float = 8.0
+    to_after_hint1_camera_ff_cap: float = 8.0
+    to_after_hint1_camera_heading_tolerance_deg: float = 5.0
+    to_after_hint1_camera_stable_samples: int = 3
+    to_after_hint1_camera_gyro_kp: float = 0.8
+    to_after_hint1_camera_gyro_turn_cap: float = 25.0
+    to_after_hint1_camera_rejoin_v: int = 65
+    to_after_hint1_camera_rejoin_samples: int = 3
     to_exit_trace_mm: float = 600.0  # Hint2後の白探索上限（到達は失敗）
     # Hint2出口のみ。実機未校正の試走初期値。距離は保持ボトルの占有範囲で調整。
     to_exit_power: int = 50
     to_exit_turn_power: int = 25  # 内輪も前進。基準出力未満を維持。
-    to_exit_pivot_min_power: int = 55
+    to_exit_pivot_min_power: int = 60
     to_exit_pivot_max_power: int = 60
     to_exit_pivot_settle_s: float = 0.15  # 前進停止後にその場旋回を開始。
     to_exit_slew_power_per_s: float = 120.0
@@ -45,7 +70,7 @@ class IntegrationSettings:
     to_exit_heading_tolerance_deg: float = 5.0
     # TURN序盤の誤検出を避けるため、目標方位までの残り誤差がこの範囲内に入るまで黒検出を数えない。実機未校正の試走初期値。
     to_exit_turn_black_detect_max_error_deg: float = 60.0
-    to_spin_min_power: int = 55
+    to_spin_min_power: int = 60
     to_spin_max_power: int = 60
     # Hint2後の移動完了位置から、黄→青→赤のドロップゾーン前を進む。
     delivery_trace_target_v: int = 75
@@ -91,8 +116,25 @@ class IntegrationSettings:
                 raise ValueError(name + ' must be a positive integer')
         if not self.to_exit_turn_power < self.to_exit_power or self.to_exit_power + self.to_exit_turn_power > 100:
             raise ValueError('Exit outputs must stay forward and within 100')
+        for name in ('to_after_hint1_camera_power', 'to_after_hint1_camera_max_turn',
+                     'to_after_hint1_camera_align_power', 'to_after_hint1_camera_handoff_power',
+                     'to_after_hint1_camera_handoff_v_tolerance', 'to_after_hint1_camera_handoff_stable_samples',
+                     'to_after_hint1_camera_stable_samples', 'to_after_hint1_camera_rejoin_v',
+                     'to_after_hint1_camera_rejoin_samples'):
+            if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
+                raise ValueError(name + ' must be a positive integer')
+        for name in ('to_after_hint1_camera_pid_p', 'to_after_hint1_camera_pid_d',
+                     'to_after_hint1_camera_handoff_pid_p', 'to_after_hint1_camera_handoff_turn_cap',
+                     'to_after_hint1_camera_tilt_ff_gain', 'to_after_hint1_camera_ff_cap',
+                     'to_after_hint1_camera_heading_tolerance_deg', 'to_after_hint1_camera_gyro_kp',
+                     'to_after_hint1_camera_gyro_turn_cap'):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(name + ' must be positive and finite')
+        if not math.isfinite(self.to_after_hint1_camera_pid_i) or self.to_after_hint1_camera_pid_i < 0:
+            raise ValueError('to_after_hint1_camera_pid_i must be nonnegative and finite')
         for name in ('at_gate_forward_mm', 'at_recognition_reverse_mm',
-                     'at_to_transfer_trace_mm', 'to_first_black_limit_mm', 'to_after_hint1_mm',
+                     'at_to_transfer_trace_mm', 'to_first_black_limit_mm',
+                     'to_after_hint1_green_pass_mm', 'to_after_hint1_safety_limit_mm',
                      'to_hint2_trace_mm', 'to_exit_trace_mm',
                      'delivery_marker_full_width_mm', 'delivery_marker_half_width_mm',
                      'delivery_drop_distance_mm'):

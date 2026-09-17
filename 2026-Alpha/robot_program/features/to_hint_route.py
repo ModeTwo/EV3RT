@@ -9,9 +9,10 @@ SpinAround/RunByGyroは起動時からの共通方位基準、IsQRDecodedは共�
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..behaviours.section_motion import LocalSpin as SpinAround, LocalDrive as RunByGyro
 from ..behaviours.line_trace import TraceLine
+from ..behaviours.camera_line_trace import RecoverLineByCamera
 from ..behaviours.hint2_exit import Hint2Exit
 from ..behaviours.projected_distance import IsProjectedDistanceEarned
-from ..behaviours.conditions import IsDistanceEarned, IsTimePassed, IsColorDetected
+from ..behaviours.conditions import IsDistanceEarned, IsTimePassed, IsColorDetected, IsColorPassed, IsDistanceEarnedUntilColorEntered
 from ..behaviours.motor_control import StopNow
 from ..behaviours.hint_reader import ReadHintCard as IsQRDecoded, PrepareHintCamera
 
@@ -217,7 +218,9 @@ def build_tantou_tree(context, config, include_exit=True):
         #),
 
         IsQRDecoded(
-            name="read_qr1", context=context, hint_number=1, keep_qr_ready=True
+            # 【統合差分】QR1成功直後にカメラをLINEモードへ戻し、直進・旋回中に
+            # カメラ切替(約3.4秒)を隠す。QR2向けの再準備は後段のカメラ復帰後に行う。
+            name="read_qr1", context=context, hint_number=1, keep_qr_ready=False
         ),
     ])
 
@@ -231,15 +234,34 @@ def build_tantou_tree(context, config, include_exit=True):
 
 
     # ========================================================
-    # 4. QR1 → 青線
+    # 4. QR1 → 緑通過後320mm
     #
     # QR1読み取り後、
     # ・直進
-    # ・青線検出
-    # ・150mm到達
+    # ・緑以外の色から緑に入り、緑を通り抜けたら、そこから320mm直進
+    # ・(保険)緑にまだ入っていない間だけ有効な安全上限距離。
+    #   緑に入った後は無効化し、緑を見続けても打ち切られない。
     #
     # を同時に監視する。
     # ========================================================
+
+    pass_through_green_after_qr1 = IsColorPassed(
+        name="pass_through_green_after_qr1",
+        color=Color.GREEN
+    )
+
+    green_pass_then_320mm = Sequence(
+        name="green_pass_then_320mm",
+        memory=True
+    )
+    green_pass_then_320mm.add_children([
+        pass_through_green_after_qr1,
+
+        IsDistanceEarned(
+            name="distance_after_green",
+            delta_dist=settings.to_after_hint1_green_pass_mm  # 緑通過後320mm
+        ),
+    ])
 
     go_to_blue_after_qr1 = Parallel(
         name="go_to_blue_after_qr1",
@@ -259,14 +281,13 @@ def build_tantou_tree(context, config, include_exit=True):
             target_type=HeadingType.ABSOLUTE
         ),
 
-        IsColorDetected(
-            name="detect_blue_after_qr1",
-            color=Color.BLUE
-        ),
+        green_pass_then_320mm,
 
-        IsDistanceEarned(
-            name="distance_after_qr1",
-            delta_dist=settings.to_after_hint1_mm  # tantou4: 340
+        IsDistanceEarnedUntilColorEntered(
+            # 緑を見つけるまでの安全上限。緑に入った後は無効化される(実機未校正)。
+            name="distance_after_qr1_safety_limit",
+            delta_dist=settings.to_after_hint1_safety_limit_mm,
+            guard=pass_through_green_after_qr1
         ),
     ])
 
@@ -313,19 +334,57 @@ def build_tantou_tree(context, config, include_exit=True):
 
 
     # ========================================================
-    # 6. 1200mmライントレース
+    # 6. カメラでライン中央へ寄せてから1200mmライントレース
     #
-    # ライントレースしながら1200mm走行する。
+    # 【統合差分】90度旋回直後は色センサーtrace_120だけでは追従開始距離が
+    # 足りず脱線するため、LAP前と同じRecoverLineByCamera(camera_recovery)で
+    # カメラ操舵→方位安定→色センサーへの低速引渡しを行ってから、
+    # 従来のtrace_120(色センサー)へ接続する。
+    # カメラはQR1直後にLINEへ戻し済み(read_qr1のkeep_qr_ready=False)。
+    # camera_recovery成功直後にQR2向け撮像を再準備し、残りのtrace_120走行
+    # (数秒〜十数秒)へ約3.4秒のカメラ切替を重ねる。
     #
-    # 1200mm到達で終了。
+    # 1200mm(カメラ復帰区間を含む投影距離)到達で終了。
     # ========================================================
 
-    line_trace_120 = Parallel(
-        name="line_trace_120",
-        policy=ParallelPolicy.SuccessOnOne()
+    camera_recovery_after_hint1 = RecoverLineByCamera(
+        name="recover line by camera after hint1",
+        power=settings.to_after_hint1_camera_power,
+        pid_p=settings.to_after_hint1_camera_pid_p,
+        pid_i=settings.to_after_hint1_camera_pid_i,
+        pid_d=settings.to_after_hint1_camera_pid_d,
+        max_camera_turn=settings.to_after_hint1_camera_max_turn,
+        align_power=settings.to_after_hint1_camera_align_power,
+        handoff_power=settings.to_after_hint1_camera_handoff_power,
+        handoff_target_v=TRACELINE_TARGET_V,
+        handoff_pid_p=settings.to_after_hint1_camera_handoff_pid_p,
+        handoff_turn_cap=settings.to_after_hint1_camera_handoff_turn_cap,
+        handoff_v_tolerance=settings.to_after_hint1_camera_handoff_v_tolerance,
+        handoff_stable_samples=settings.to_after_hint1_camera_handoff_stable_samples,
+        line_v=settings.to_after_hint1_camera_rejoin_v,
+        line_samples=settings.to_after_hint1_camera_rejoin_samples,
+        trace_side=TraceSide.NORMAL,
+        tilt_ff_gain=settings.to_after_hint1_camera_tilt_ff_gain,
+        ff_cap=settings.to_after_hint1_camera_ff_cap,
+        heading_tolerance_deg=settings.to_after_hint1_camera_heading_tolerance_deg,
+        stable_samples=settings.to_after_hint1_camera_stable_samples,
+        # 【統合差分】LAP前の流用元は0度だが、この区間は"left 90 again"で絶対方位90度へ
+        # 旋回済みで、trace_120の前進方向もdist_1200と同じ90度。0度のままだと
+        # ALIGN/HANDOFFがtrace_120の進行方向と直角の向きへ引き込んでしまう。
+        gyro_heading_deg=90.0,
+        gyro_kp=settings.to_after_hint1_camera_gyro_kp,
+        gyro_turn_cap=settings.to_after_hint1_camera_gyro_turn_cap,
     )
 
-    line_trace_120.add_children([
+    camera_recovery_then_trace_120 = Sequence(
+        name="camera_recovery_then_trace_120",
+        memory=True
+    )
+    camera_recovery_then_trace_120.add_children([
+        camera_recovery_after_hint1,
+
+        PrepareHintCamera(name="prepare hint2 camera"),
+
         TraceLine(
             name="trace_120",
             target=TRACELINE_TARGET_V,
@@ -335,6 +394,15 @@ def build_tantou_tree(context, config, include_exit=True):
             pid_d=0.045,
             trace_side=TraceSide.NORMAL,
         ),
+    ])
+
+    line_trace_120 = Parallel(
+        name="line_trace_120",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
+
+    line_trace_120.add_children([
+        camera_recovery_then_trace_120,
 
         IsProjectedDistanceEarned(
             name="dist_1200", context=context, local_heading_deg=90.0,
