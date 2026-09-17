@@ -402,3 +402,77 @@ LAP青検知で方位安定を待たずATへ引渡し、青検知起点の最初
 検証はETロボコン側work/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.pyにTest5（WHITE距離上限打ち切り→TURNへ前進）とTest6（FOLLOWでライン見失い15周期→SUCCESSで完了）を追加し、既存Test1〜4と合わせて全6件成功。実機・実カメラでの再現テストは未実施。**注意**: 見失った位置のまま次工程（ボトル配置ゾーン判定・搬送）に進むため、大きくコースアウトした状態で完了扱いになる可能性があり、実機での挙動確認を強く推奨する。
 
 全変更ファイル（修正）: `robot_program/behaviours/hint2_exit.py`（タイムアウト/距離上限/ライン見失いをすべて前進・完了扱いへ統一）。ETロボコン側HANDOFF.mdおよびverify_hint2_exit_fix.py（Test5・Test6追加）にも記録。既存の未コミット変更は保持。
+
+
+## 2026-09-17 ヒント1後にカメラでライン復帰してからtrace_120へ接続
+
+ユーザー報告「ヒント1後の直進+90度旋回のあと、距離が短すぎてライントレースできない」を受け、LAP前の`RecoverLineByCamera`（`behaviours/camera_line_trace.py`）をTOのヒント1後にも流用した。事前にタイムロス試算（カメラモード切替コスト実測約3.4秒、QR1成功〜line_trace_120開始までの隠せる時間は実測4.8〜9.3秒）をユーザーへ提示し、実装続行の指示を受けている。
+
+`features/to_hint_route.py`の`line_trace_120`内を、従来の`TraceLine(trace_120)`単体から`Sequence([camera_recovery_after_hint1, PrepareHintCamera(hint2), trace_120])`へ差し替えた。90度旋回直後にカメラでライン中央・方位0度へ寄せ(SEEK→ALIGN→HANDOFF)、色センサーへ安定して引渡した直後にヒント2向けQR撮像準備を再開し、残り1200mm(投影距離)を色センサーtrace_120で走る。パラメータはLAP前の`config.start_lap_camera_*`と同じ値を初期値として、`integration_settings.py`に新規追加した`to_after_hint1_camera_*`（18項目、実機未校正）から取得する。
+
+カメラ切替コストを移動時間に重ねるため、`read_qr1`の`keep_qr_ready`を`True`から`False`へ変更した。QR1成功直後にカメラがLINEモードへ戻り、その後の340mm直進+90度旋回中に切替(非同期、約3.4秒)が完了することを狙う。これにより従来の「QR1→QR2撮像維持」構造は終了し、往復切替が復活する。
+
+検証はpy_trees/simple_pid/py_etrobo_utilを最小スタブに置換し、`build_tantou_tree()`の構築・子ノード順序・`read_qr1.keep_qr_ready`、および`RecoverLineByCamera`実クラスの模擬tick(SEEK→ALIGN→HANDOFF→SUCCESS)を確認した（ETロボコン側work/camera-recovery-after-hint1-v1/verify_camera_recovery.py）。実機・実カメラ・実際の切替時間の計測は未実施。
+
+全変更ファイル（修正）: `robot_program/features/to_hint_route.py`、`robot_program/integration_settings.py`。ETロボコン側HANDOFF.mdおよびverify_camera_recovery.pyにも記録。Pi転送・実機での切替タイミング確認、camera_recoveryのパラメータチューニング、QR2側への影響確認が残課題。既存の未コミット変更は保持。
+
+
+## 2026-09-17 camera_recovery_after_hint1のALIGN目標方位バグを修正
+
+ユーザーから実走ログ2件（340mm版「ラインにすぐ乗れずうねうね」、340→360mm変更版「乗った気がしたがライン垂直にコース外へ」）を受けて分析した結果、`camera_recovery_after_hint1`の`gyro_heading_deg`をLAP前実装から`0.0`のまま流用していたバグを発見した。この区間は`turn_left_90_b`で絶対方位90度へ旋回した直後で、`dist_1200`も`local_heading_deg=90.0`を前進方向としているため、`0.0`のままだとALIGN/HANDOFFがtrace_120の進行方向と直角の向きへ引き込んでいた。ログでも360mm版はALIGN中にheadingが73→…→5と0度へ収束しており、「垂直に切り込みコース外へ」と一致する。
+
+`features/to_hint_route.py`の`camera_recovery_after_hint1`構築で`gyro_heading_deg`を`0.0`→`90.0`に修正した。検証はwork/camera-recovery-after-hint1-v1/verify_camera_recovery.pyに`gyro_heading_deg == 90.0`の確認を追加し、既存3チェックと合わせ全4件成功。実機での再現テストは未実施であり、方位バグの影響でこれまでの2走は距離(340mm/360mm)の妥当性判断には使えないため、修正後にあらためて評価が必要。
+
+全変更ファイル（修正）: `robot_program/features/to_hint_route.py`。ETロボコン側HANDOFF.mdおよびverify_camera_recovery.pyにも記録。既存の未コミット変更は保持。
+
+
+## 2026-09-17 実走ログ分析: camera_recoveryのSEEK不安定性、コード変更なし
+
+方位バグ修正後の実走ログ3件を分析。SEEKフェーズの所要時間(3秒〜8秒超)と獲得時heading(90度目標に対し18〜79度と大きくばらつく)が実行ごとに大きく異なり、遅い場合は1200mmの投影距離予算をSEEKだけで使い切り、`trace_120`(色センサー本来の追従)が一度も実行されないケースもあった。「カメラ復帰の首振りは何か」という質問にも回答: 画像取得の遅延(age_ms十数〜140ms)、pid_p=2.0によるmax_camera_turn=30への飽和、前進しながらの強旋回、の3点が重なった遅延フィードバックのオーバーシュートと説明した。分析のみでコード変更なし。
+
+
+## 2026-09-17 ヒント1後を「緑通過→320mm直進」方式へ変更
+
+ユーザー指示「緑以外の色から、緑に入って、緑を通り抜けてから320mm直進して既存処理に戻りたい」により、QR1後の直進終了条件を、実質機能していなかった青検知（実走ログで一度も検知されていなかった）から、緑の通過検知＋固定320mm直進へ置き換えた。
+
+`behaviours/conditions.py`に`IsColorPassed`を新規追加。指定色(GREEN)に一度も入っていない間はRUNNINGを維持し、緑に入った後、緑以外の色へ変わった時点でSUCCESSする(＝緑を通り抜けたことを検知)。`features/to_hint_route.py`の`go_to_blue_after_qr1`を`[run_after_qr1(直進), green_pass_then_320mm([pass_through_green_after_qr1, distance_after_green(320mm)]), distance_after_qr1_safety_limit(緑未検知時の安全上限900mm)]`のParallel(SuccessOnOne)へ再構成した。旧`to_after_hint1_mm`(340mm固定)は削除し、`integration_settings.py`に`to_after_hint1_green_pass_mm`(=320.0)・`to_after_hint1_safety_limit_mm`(=900.0)を新規追加した。
+
+検証はpy_trees/simple_pid/py_etrobo_utilを最小スタブに置換し、ツリー構築順序、`IsColorPassed`実クラスの状態遷移(白→緑→緑→白でRUNNING→RUNNING→RUNNING→SUCCESS、緑に一度も入らない場合は他の色変化があってもSUCCESSしないこと)を確認した（ETロボコン側work/green-pass-after-hint1-v1/verify_green_pass.py）。実機・実カメラでの再現テストは未実施。
+
+全変更ファイル（修正）: `robot_program/behaviours/conditions.py`（`IsColorPassed`追加）、`robot_program/features/to_hint_route.py`、`robot_program/integration_settings.py`。ETロボコン側HANDOFF.mdおよびverify_green_pass.pyにも記録。Pi転送・実機での緑通過検知の信頼性確認、安全上限900mm・追加320mmの妥当性確認が残課題。既存の未コミット変更は保持。
+
+
+## 2026-09-17 緑未検知時の安全上限を900mm→320mmへ変更
+
+ユーザー指示「緑を検知するならばすぐのはずなので、緑を検知しなかった場合の上限は320mmとして、検知しなくても次の工程である90°旋回からカメラトレースに行くようにしてください」により、`to_after_hint1_safety_limit_mm`を900.0→320.0へ変更した。安全上限が緑通過後距離(320mm)より大きい必要があるとしていた検証も削除し、両者が同値でも(緑検知後の「通過+320mm」より安全上限が先に効いてもよい)成立するようにした。
+
+検証はwork/green-pass-after-hint1-v1/verify_green_pass.pyの期待値を900.0→320.0へ更新し、既存チェックと合わせ全3件成功。実機での再現テストは未実施。
+
+全変更ファイル（修正）: `robot_program/integration_settings.py`。ETロボコン側HANDOFF.mdおよびverify_green_pass.pyにも記録。既存の未コミット変更は保持。
+
+
+## 2026-09-17 実走ログ分析: 安全上限が緑通過ロジックより先に成立するバグを確認
+
+実走ログ2件（緑検知は正常だが目標より5〜7cm短い位置で90度旋回開始、カメラトレースでの速度低下による黒線離脱）を分析。原因は`distance_after_qr1_safety_limit`(start基準320mm)と`distance_after_green`(緑通過後基準320mm)が同じParallelで並走し、緑が近距離(15〜30mm)で見つかるため安全上限が常に先に成立していたこと。SEEK/ALIGN/HANDOFFの役割と設計方針についてもユーザーへ回答した。コード変更なし(分析のみ)。
+
+
+## 2026-09-17 緑検知後は安全上限を無効化するよう変更
+
+ユーザー指示「緑を検知したら安全上限を外してください」により、安全上限を「緑にまだ入っていない間だけ有効」な仕組みへ変更した。`behaviours/conditions.py`に`IsDistanceEarnedUntilColorEntered`を追加。guard(IsColorPassedインスタンス)の`entered`がFalseの間だけ距離を計測して成功し、`entered`がTrueになった後は永久にRUNNINGを返し続けて無効化される。`features/to_hint_route.py`で`pass_through_green_after_qr1`を変数として保持し、`distance_after_qr1_safety_limit`をこれをguardとする新behaviourへ変更した。
+
+検証はwork/green-pass-after-hint1-v1/verify_green_pass.pyに、guardが入らなければ320mmで通常どおり成功、guardが入った後はどれだけ距離が伸びても永久にRUNNINGのままであることを追加確認。この過程で検証スクリプト自身のtick_once()スタブに、INVALID→RUNNINGの初回遷移でも誤ってterminate()を呼ぶバグ(検証スクリプト側のみの不具合)を見つけて修正した。全5件成功。実機での再現テストは未実施。
+
+全変更ファイル（修正）: `robot_program/behaviours/conditions.py`（`IsDistanceEarnedUntilColorEntered`追加）、`robot_program/features/to_hint_route.py`。ETロボコン側HANDOFF.mdおよびverify_green_pass.pyにも記録。Pi転送・実機での実走確認が残課題。既存の未コミット変更は保持。
+
+
+## 2026-09-17 IsColorPassed.terminate()が安全上限を誤って再度有効化するバグを修正
+
+実走ログ(緑侵入610→緑通過684の直後、安全上限が位置926で成立)から「緑を再検知していないか」という疑問を調査。実際はセンサーの再検知ではなく、`IsColorPassed.terminate()`が`SUCCESS`直後に`self.entered = False`へリセットしていたバグだった。`distance_after_qr1_safety_limit`は同じインスタンスの`.entered`を見て自身を無効化する設計だが、緑通過成功の瞬間にpy_treesが呼ぶ`terminate(SUCCESS)`で`entered`がFalseへ戻り、安全上限が「緑をまだ見つけていない」と誤認して開始位置から320mm(位置926付近、本来の完了予定1004より約80mm早い)で打ち切られていた。
+
+`behaviours/conditions.py`の`IsColorPassed.terminate()`から`self.entered = False`を削除した。同じインスタンスが本当に再実行される場合は`update()`側の初期化ブロックで改めてリセットされるため、terminate()側でのリセットは不要かつ有害だった。
+
+検証はwork/green-pass-after-hint1-v1/verify_green_pass.pyに、tick_once()でSUCCESS/terminate()を経てもenteredがTrueのまま保持されることの回帰チェックと、green_pass_then_320mm+guard付き安全上限の実配線を手動ループで再現するEnd-to-Endテストを追加。全7件成功。実機での再現テストは未実施。
+
+なお、本セッション外で`integration_settings.py`の`to_exit_pivot_min_power`・`to_spin_min_power`が55→60へ変更されているのを確認した。本セッションでは行っておらず、ユーザー側の調整として現状のまま維持している。
+
+全変更ファイル（修正）: `robot_program/behaviours/conditions.py`。ETロボコン側HANDOFF.mdおよびverify_green_pass.pyにも記録。既存の未コミット変更は保持。
