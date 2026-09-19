@@ -1,11 +1,59 @@
 """Reusable device initialization behaviors."""
 
+from enum import IntEnum
+
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 
 from py_etrobo_util import TargetInterested
 
 from ..runtime import runtime
+
+
+class ArmDirection(IntEnum):
+    UP = -1
+    DOWN = 1
+
+
+class ArmUpDownFull(Behaviour):
+    # アームをどちらか一方の機械的な限界まで動かしてブレーキで固定する。
+    # 元はキャリブレーション専用でalpha.pyに配置していたが、et_rally工程の
+    # 開始時にも使うため、runtime経由の共通Behaviorとしてこちらへ移した。
+    ARM_SHIFT_PWM = 35
+    STALL_TOLERANCE = 5
+    STALL_TICKS = 20
+
+    def __init__(self, name: str, direction: ArmDirection) -> None:
+        super().__init__(name)
+        self.direction = direction
+        self.running = False
+
+    def update(self) -> Status:
+        runtime.require("arm_motor", "plotter")
+        if not self.running:
+            self.running = True
+            self.prev_degree = runtime.arm_motor.get_count()
+            self.logger.info(
+                "%+06d %s.start position is %d"
+                % (runtime.plotter.get_distance(), self.__class__.__name__, self.prev_degree)
+            )
+            self.count = 0
+            runtime.arm_motor.set_power(self.ARM_SHIFT_PWM * self.direction)
+        else:
+            cur_degree = runtime.arm_motor.get_count()
+            if abs(cur_degree - self.prev_degree) < self.STALL_TOLERANCE:
+                if self.count > self.STALL_TICKS:
+                    runtime.arm_motor.set_power(0)
+                    runtime.arm_motor.set_brake(True)
+                    self.logger.info(
+                        "%+06d %s.position set to %d"
+                        % (runtime.plotter.get_distance(), self.__class__.__name__, cur_degree)
+                    )
+                    return Status.SUCCESS
+                else:
+                    self.count += 1
+            self.prev_degree = cur_degree
+        return Status.RUNNING
 
 
 class ResetDevice(Behaviour):

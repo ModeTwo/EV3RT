@@ -46,6 +46,13 @@ class IntegrationSettings:
     to_after_hint1_camera_gyro_turn_cap: float = 25.0
     to_after_hint1_camera_rejoin_v: int = 65
     to_after_hint1_camera_rejoin_samples: int = 3
+    # SEEKがカラーセンサーの黒検知だけに依存すると、カメラが中心と見ている
+    # 対象と実際の色センサー位置がずれた場合に1200mm予算を使い切るまで
+    # 滞留する(実機で複数回確認)。theta安定、または距離上限でもALIGNへ
+    # 進めるフォールバックを追加する。実機未校正の試走初期値。
+    to_after_hint1_camera_seek_theta_tolerance_deg: float = 5.0
+    to_after_hint1_camera_seek_stable_samples: int = 8
+    to_after_hint1_camera_seek_distance_limit_mm: float = 450.0
     to_exit_trace_mm: float = 600.0  # Hint2後の白探索上限（到達は失敗）
     # Hint2出口のみ。実機未校正の試走初期値。距離は保持ボトルの占有範囲で調整。
     to_exit_power: int = 50
@@ -78,10 +85,13 @@ class IntegrationSettings:
     # 青ラインの手前端から抜ける距離と、中央から抜ける距離を分けて調整する。
     delivery_marker_full_width_mm: float = 120.0
     delivery_marker_half_width_mm: float = 60.0
-    delivery_drop_distance_mm: float = 250.0
-    delivery_drive_power: int = 50
+    delivery_drop_distance_first_mm: float = 100.0
+    delivery_drive_first_power: int = 50
+    delivery_drop_distance_second_mm: float = 100.0
+    delivery_drive_second_power: int = 50
     # ライン進行方向からドロップゾーン側へ向く角度。ラリー内側とは反対側。
-    delivery_drop_turn_deg: float = -90.0
+    delivery_drop_turn_deg_first: float = -45.0
+    delivery_drop_turn_deg_second: float = -90.0
     delivery_inward_turn_deg: float = 90.0
 
     def __post_init__(self):
@@ -120,14 +130,15 @@ class IntegrationSettings:
                      'to_after_hint1_camera_align_power', 'to_after_hint1_camera_handoff_power',
                      'to_after_hint1_camera_handoff_v_tolerance', 'to_after_hint1_camera_handoff_stable_samples',
                      'to_after_hint1_camera_stable_samples', 'to_after_hint1_camera_rejoin_v',
-                     'to_after_hint1_camera_rejoin_samples'):
+                     'to_after_hint1_camera_rejoin_samples', 'to_after_hint1_camera_seek_stable_samples'):
             if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
                 raise ValueError(name + ' must be a positive integer')
         for name in ('to_after_hint1_camera_pid_p', 'to_after_hint1_camera_pid_d',
                      'to_after_hint1_camera_handoff_pid_p', 'to_after_hint1_camera_handoff_turn_cap',
                      'to_after_hint1_camera_tilt_ff_gain', 'to_after_hint1_camera_ff_cap',
                      'to_after_hint1_camera_heading_tolerance_deg', 'to_after_hint1_camera_gyro_kp',
-                     'to_after_hint1_camera_gyro_turn_cap'):
+                     'to_after_hint1_camera_gyro_turn_cap', 'to_after_hint1_camera_seek_theta_tolerance_deg',
+                     'to_after_hint1_camera_seek_distance_limit_mm'):
             if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(name + ' must be positive and finite')
         if not math.isfinite(self.to_after_hint1_camera_pid_i) or self.to_after_hint1_camera_pid_i < 0:
@@ -137,15 +148,15 @@ class IntegrationSettings:
                      'to_after_hint1_green_pass_mm', 'to_after_hint1_safety_limit_mm',
                      'to_hint2_trace_mm', 'to_exit_trace_mm',
                      'delivery_marker_full_width_mm', 'delivery_marker_half_width_mm',
-                     'delivery_drop_distance_mm'):
+                     'delivery_drop_distance_first_mm', 'delivery_drop_distance_second_mm'):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f'{name} must be a positive finite distance')
-        for name in ('delivery_trace_power', 'delivery_drive_power'):
+        for name in ('delivery_trace_power', 'delivery_drive_first_power', 'delivery_drive_second_power'):
             value = getattr(self, name)
             if not isinstance(value, int) or not 1 <= value <= 100:
                 raise ValueError(f'{name} must be an integer from 1 to 100')
-        for name in ('delivery_drop_turn_deg', 'delivery_inward_turn_deg'):
+        for name in ('delivery_drop_turn_deg_first', 'delivery_drop_turn_deg_second', 'delivery_inward_turn_deg'):
             if not math.isfinite(getattr(self, name)):
                 raise ValueError(f'{name} must be finite')
 

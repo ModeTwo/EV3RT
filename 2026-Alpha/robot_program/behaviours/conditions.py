@@ -127,6 +127,62 @@ class IsColorDetected(Behaviour):
                 self.prev_color = detected_color
         return Status.RUNNING
 
+class IsBlackDetected(Behaviour):
+    def __init__(
+        self,
+        name: str,
+        black_threshold: float,
+        required_frames: int = 5
+    ):
+        super(IsBlackDetected, self).__init__(name)
+
+        self.black_threshold = black_threshold
+        self.required_frames = required_frames
+
+        self.detect_count = 0
+        self.running = False
+
+    def initialise(self):
+        self.detect_count = 0
+        self.running = False
+
+    def update(self) -> Status:
+
+        if not self.running:
+            self.running = True
+            self.logger.info(
+                "%s.detection started threshold=%.1f frames=%d"
+                % (
+                    self.__class__.__name__,
+                    self.black_threshold,
+                    self.required_frames
+                )
+            )
+
+        _, _, v = runtime.color_sensor.get_raw_color_hsv()
+
+        if v <= self.black_threshold:
+            self.detect_count += 1
+        else:
+            self.detect_count = 0
+
+        if self.detect_count >= self.required_frames:
+
+            self.logger.info(
+                "%s BLACK detected v=%.1f count=%d"
+                % (
+                    self.__class__.__name__,
+                    v,
+                    self.detect_count
+                )
+            )
+
+            return Status.SUCCESS
+
+        return Status.RUNNING
+
+    def terminate(self, new_status):
+        self.detect_count = 0
 
 class IsColorPassed(Behaviour):
     # 指定色に入り、その後その色から抜けた(通り抜けた)時点で成功する。

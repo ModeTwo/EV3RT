@@ -4,7 +4,7 @@ import math
 
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 
-from ..behaviours.conditions import IsDistanceEarned
+from ..behaviours.conditions import IsDistanceEarned,IsColorDetected
 from .sumo_bearing_motion import RunAtBearing, SpinToBearing, current_bearing
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.motor_control import RunAsInstructed, StopNow
@@ -260,7 +260,19 @@ def build_move_to_sumo_exit(context, config):
     # No.18：前工程で合計500mm走行済み。直線後退で離脱し、ガレージ側黒ラインへ復帰する。
     settings = config.sumo
     return_plan = PlanGarageReturn(context, settings)
-
+    
+    blue_trace = Parallel(name="blue_trace", policy=ParallelPolicy.SuccessOnOne())
+    blue_trace.add_children(
+        [
+            TraceLine(name="sensor trace normal edge", target=65,
+                power=70, power_min=33,
+                pid_p=0.65, pid_i=0.000001, pid_d=0.045,
+                err_lo=6, err_hi=16, decel_per_s=350, gains_slow=(0.65, 0.045), gains_fast=(0.55, 0.065),
+                recover_v=97, recover_after=3, recover_turn=35,
+                trace_side=TraceSide.NORMAL),
+            IsColorDetected(name="check color", color=Color.BLUE),
+        ]
+    )
     # キャッチと押し出しは前工程の合計500mmに含まれるため、ここでは直線後退から開始する。
 
     # ボトルを押した向きのまま直線後退し、アームから確実に離脱する。
@@ -416,6 +428,7 @@ def build_move_to_sumo_exit(context, config):
             StopNow(name="stop after garage-side black line search"),
             # 実行順6：検知成功時だけ短距離ライントレースし、FINISH工程へ引き渡す。
             handle_line_search_result,
+            blue_trace,
         ]
     )
 
