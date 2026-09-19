@@ -44,27 +44,45 @@ class DetectBottleColorWhileMoving(DetectBottleColor):
 
 
 def build_catch_bottle(context, config):
-
     """
-    タッチスタート
-      ↓
-    ライントレース + 青ライン検知
-      ↓
-    青ラインを検知
-      ↓
-    ライントレース継続
-     + ボトル色認識
-     + 400MM走行距離監視
-      ↓
-    400MM到達
-      ↓
-    停止
+    単体実行（mission_mode == "at"）
+        青ラインまでライントレース
+            ↓
+        青ライン検知
+            ↓
+        ライントレース継続
+          + ボトル色認識
+          + 400mm走行距離監視
+            ↓
+        400mm到達
+            ↓
+        停止
+            ↓
+        ボトル色確認
+            ↓
+        TOへ引き渡し
+
+    統合実行
+        RE側ですでに青ライン検知済み
+            ↓
+        ライントレース
+          + ボトル色認識
+          + 400mm走行距離監視
+            ↓
+        400mm到達
+            ↓
+        停止
+            ↓
+        ボトル色確認
+            ↓
+        TOへ引き渡し
     """
 
-    # 【統合差分】元の有効値・担当者報告に合わせ、450表記は400へ統一。
+    # 設定
     settings = config.integration
     TRACELINE_TARGET_V = 75
 
+    # ルートSequence
     root = Sequence(
         name="blue and bottle test",
         memory=True
@@ -87,15 +105,23 @@ def build_catch_bottle(context, config):
 
                 target=TRACELINE_TARGET_V,
 
-                power=45,
+                power=75,
+                power_min=50,
 
-                pid_p=0.65,
+                err_lo=6.0,
+                err_hi=22.0,
+
+                accel_per_s=80.0,
+                decel_per_s=180.0,
+
+                pid_p=0.50,
                 pid_i=0.000001,
                 pid_d=0.045,
 
                 trace_side=TraceSide.OPPOSITE
             ),
 
+            # 青ライン検知
             IsColorDetected(
                 name="check blue",
                 color=Color.BLUE
@@ -103,80 +129,54 @@ def build_catch_bottle(context, config):
         ]
     )
 
+
     # ==========================================
-    # ② 青ライン検知後
+    # 青ライン検知後
     #
-    # ・ライントレース
-    # ・ボトル色認識
-    # ・400mm走行距離監視
+    # ・ジャイロで400mm直進
+    # ・走行しながらボトル色認識
     #
-    # を同時に実行する
+    # 400mm到達まで並行実行する
     # ==========================================
 
     trace_detect_bottle_400mm = Parallel(
-        name="trace and detect bottle for 400mm",
-
-        # IsDistanceReached がSUCCESSになったら
-        # このParallelを終了する
+        name="gyro drive and detect bottle for 400mm",
         policy=ParallelPolicy.SuccessOnOne()
     )
 
-
-    # 青検知地点を起点に293mmは明度を操舵へ使用しない。
-    cross_marker = Parallel(name='AT zero heading across blue and gray',
-                            policy=ParallelPolicy.SuccessOnOne())
-    cross_marker.add_children([
-        MarkerZeroDrive(name='AT marker absolute zero', target=0, power=60,
-                  pid_p=1.8, pid_i=0.0, pid_d=0.03,
-                  target_type=HeadingType.ABSOLUTE),
-        IsDistanceEarned(name='AT marker 293mm', delta_dist=settings.at_marker_straight_mm),
-    ])
-    marker_then_trace = Sequence(name='AT marker straight then line trace', memory=True)
-    marker_then_trace.add_children([cross_marker,
-        TraceLine(
-                name="trace after blue",
-
-                target=TRACELINE_TARGET_V,
-
-                power=60,
-
-                pid_p=0.65,
-                pid_i=0.000001,
-                pid_d=0.045,
-
-                trace_side=TraceSide.OPPOSITE
-            ),
-    ])
-
     trace_detect_bottle_400mm.add_children(
         [
-             # --------------------------------------
-            # ライントレース
             # --------------------------------------
-            marker_then_trace,
-
+            # 青ライン検知後はライントレースせず、
+            # ジャイロを使って絶対0度方向へ直進
+            # --------------------------------------
+            MarkerZeroDrive(
+                name="AT gyro straight after blue",
+                target=0,
+                power=60,
+                pid_p=1.2,
+                pid_i=0.0,
+                pid_d=0.03,
+                target_type=HeadingType.ABSOLUTE
+            ),
 
             # --------------------------------------
             # 走行しながらボトル色認識
             # --------------------------------------
             DetectBottleColorWhileMoving(
                 name="detect bottle while moving",
-                context=context,  # 【統合差分】取得色の共有先
-
+                context=context,
                 min_area=150,
                 min_frames=3
             ),
 
-
             # --------------------------------------
-            # 青ライン検知地点から400mm進んだか監視
+            # 青ライン検知地点から400mm進んだら終了
             # --------------------------------------
             IsDistanceReached(
                 name="check 400mm after blue",
-
-                distance_mm=settings.at_to_transfer_trace_mm  # 元: 400
+                distance_mm=settings.at_to_transfer_trace_mm
             ),
-
         ]
     )
 
@@ -214,7 +214,8 @@ def build_catch_bottle(context, config):
     )
 
 
-    # 【統合差分】色未取得は停止後に失敗とし、取得済みだけTOへ渡す。
+    # ボトル色が正常に取得できているか確認
     root.add_child(RequireBottleColor(context))
+    # ボトル色が正常に取得できているか確認
     root.add_child(CaptureAtToHandoff("AT_TO capture boundary", context))
     return root

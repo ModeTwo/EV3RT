@@ -20,10 +20,19 @@ class PlanGarageReturn(Behaviour):
         self.target_bearing = None
         self.search_limit_mm = None
 
+        # ボトルから離脱後に横へ退避するときの絶対方位。
+        self.avoid_bearing = None
+
     def update(self):
         # 押し出し完了直後、後退する前の実測方位で一度だけ計画する。
         pushed = current_bearing(self.context)
         relative = (-runtime.course * (pushed - self.settings.entry_bearing_deg)) % 360.0
+        # 押し出した方向に対してコース外側へ90度向け、
+        # 黒ライン探索前にボトルの進路から横へ退避する。
+        self.avoid_bearing = (
+            pushed - runtime.course * 90.0
+        ) % 360.0
+
         self.search_limit_mm = self.settings.garage_line_search_max_distance_mm
         if self.settings.garage_point_return_enabled:
             # 直線各区間の設定距離で後退後の位置を近似する試作。
@@ -42,11 +51,31 @@ class PlanGarageReturn(Behaviour):
                  + self.settings.capture_and_push_distance_mm * math.cos(capture_angle)
                  - self.settings.release_reverse_distance_mm * math.cos(reverse_angle))
             target_x = self.settings.garage_line_offset_mm
-            # 緑回避時は直線500mmの仮定ではなく、前進カーブを含む積分終点を使う。
-            if self.settings.green_avoidance_enabled and self.context.sumo.push_end_position_mm is not None:
+            if (
+                self.settings.green_avoidance_enabled
+                and self.context.sumo.push_end_position_mm is not None
+            ):
                 end_x, end_y = self.context.sumo.push_end_position_mm
-                x = end_x - self.settings.release_reverse_distance_mm * math.sin(reverse_angle)
-                y = end_y - self.settings.release_reverse_distance_mm * math.cos(reverse_angle)
+                x = (
+                    end_x
+                    - self.settings.release_reverse_distance_mm
+                    * math.sin(reverse_angle)
+                )
+                y = (
+                    end_y
+                    - self.settings.release_reverse_distance_mm
+                    * math.cos(reverse_angle)
+                )
+            # 100mm後退後、横へ120mm退避した位置を反映する。
+            avoid_relative = (
+                -runtime.course
+                * (self.avoid_bearing - self.settings.entry_bearing_deg)
+            ) % 360.0
+            avoid_angle = math.radians(avoid_relative)
+
+            x += self.settings.garage_avoid_distance_mm * math.sin(avoid_angle)
+            y += self.settings.garage_avoid_distance_mm * math.cos(avoid_angle)
+            
             target_y = self.settings.garage_blue_forward_mm - self.settings.garage_rejoin_before_blue_mm
             if x >= target_x or self.settings.garage_rejoin_before_blue_mm <= 0:
                 self.logger.error("Point return geometry invalid; robot must remain before return line")
@@ -78,6 +107,11 @@ class PlanGarageReturn(Behaviour):
         if self.target_bearing is None:
             raise RuntimeError("Garage return bearing has not been planned")
         return self.target_bearing
+
+    def avoidance_bearing(self):
+        if self.avoid_bearing is None:
+            raise RuntimeError("Garage avoidance bearing has not been planned")
+        return self.avoid_bearing
 
 
 class PlannedGarageDistance(IsDistanceEarned):
@@ -287,6 +321,29 @@ def build_move_to_sumo_exit(context, config):
             IsDistanceEarned(name="sumo bottle release reverse distance", delta_dist=settings.release_reverse_distance_mm),
         ]
     )
+    # ボトルから離脱後、黒ライン探索経路へ入る前に横へ退避する。
+    garage_avoid_drive = Parallel(
+        name="move sideways away from released sumo bottle",
+        policy=ParallelPolicy.SuccessOnOne(),
+    )
+
+    garage_avoid_drive.add_children(
+        [
+            RunAtBearing(
+                name="hold sumo bottle avoidance heading",
+                context=context,
+                bearing=return_plan.avoidance_bearing,
+                power=settings.garage_avoid_power,
+                pid_p=settings.drive_pid_p,
+                pid_i=settings.drive_pid_i,
+                pid_d=settings.drive_pid_d,
+            ),
+            IsDistanceEarned(
+                name="sumo bottle avoidance distance",
+                delta_dist=settings.garage_avoid_distance_mm,
+            ),
+        ]
+    )
 
     # 候補選択による旋回後の方位を保持し、直進で黒ラインを探す。
     garage_line_detector = DetectDarkGarageLine(
@@ -407,9 +464,33 @@ def build_move_to_sumo_exit(context, config):
             ),
             ConfigureCourseIndependentReversePwm("configure straight reverse release pwm", release_reverse_motor, settings.release_reverse_power),
             release_reverse,
-            StopNow(name="stop after sumo bottle release reverse"),
-            MarkSumoExitState("mark sumo bottle released", context, "released"),
-            # 実行順3：後退完了時の方位±50度のうち、ガレージ方位180度から遠い候補を選ぶ。
+           StopNow(name="stop after sumo bottle release reverse"),
+           MarkSumoExitState(
+                "mark sumo bottle released",
+                context,
+                "released",
+            ),
+
+            # 押し出したボトルの進路から横へ逃げる。
+            SpinToBearing(
+                name="turn away from released sumo bottle",
+                context=context,
+                bearing=return_plan.avoidance_bearing,
+                max_power=settings.turn_max_power,
+                min_power=settings.turn_min_power,
+                pid_p=settings.turn_pid_p,
+                pid_i=settings.turn_pid_i,
+                pid_d=settings.turn_pid_d,
+                tolerance=settings.heading_tolerance_deg,
+            ),
+
+            StopNow(name="stop before sumo bottle avoidance drive"),
+
+            garage_avoid_drive,
+
+            StopNow(name="stop after sumo bottle avoidance drive"),
+
+            # 退避完了後、ガレージ側黒ラインへ向く。
             SpinToBearing(
                 name="turn toward garage before line search",
                 context=context,
@@ -421,6 +502,7 @@ def build_move_to_sumo_exit(context, config):
                 pid_d=settings.turn_pid_d,
                 tolerance=settings.heading_tolerance_deg,
             ),
+
             # 実行順4：旋回完了位置で制動し、後続直進が保持する絶対方位を確定する。
             StopNow(name="stop after garage heading turn"),
             # 実行順5：旋回後の絶対方位を維持して直進し、復帰用黒ラインを検知する。
