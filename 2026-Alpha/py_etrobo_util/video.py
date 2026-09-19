@@ -139,7 +139,8 @@ BOTTLE_HSV = {
 }
 
 class Video(object):
-    def __init__(self):
+    def __init__(self, *, preview_enabled=True):
+        self.preview_enabled = preview_enabled
         self._vision_sessions = VisionSessions()
         self._worker_stop = threading.Event()
         self._closed = False
@@ -365,7 +366,8 @@ class Video(object):
         ret, frame = self.cap.read()
 
         if frame is None:
-            cv2.waitKey(1)
+            if self.preview_enabled:
+                cv2.waitKey(1)
             return
         t_cap = time.time()          # capture time for this frame
         self.frame_id += 1
@@ -739,6 +741,10 @@ class Video(object):
             #        x, y, w, h, self.range_of_edges, self.theta,
             #        int(self.target_insight), (time.time() - t_cap) * 1000))
 
+        # Recognition and observations above remain active without a display.
+        if not self.preview_enabled:
+            return
+
         # BELOW IS COMMON FOR ALL TARGETS
         # shrink the processed image straight to the monitor (transmission) size.
         # img_orig may be IN_FRAME (QR branch) or FRAME_* (LINE/BOTTLE); resizing
@@ -812,6 +818,12 @@ class Video(object):
         if zxingcpp is None:
             raise RuntimeError('zxingcpp is required for the Hint1/Hint2 mission')
 
+    def prepare_qr_camera(self):
+        """Prepare capture without accepting or decoding any QR observation."""
+        self.require_qr_decoder()
+        self.set_target_interested(TargetInterested.QRCODE, observation_mode="qr_prepare")
+        print("QR_PREPARE requested; capture only, no decoded result")
+
     def begin_qr_read(self):
         self.require_qr_decoder()
         self.set_target_interested(TargetInterested.QRCODE)
@@ -847,9 +859,9 @@ class Video(object):
         self.trace_side = trace_side
         return
 
-    def set_target_interested(self, target_interested: TargetInterested) -> None:
+    def set_target_interested(self, target_interested: TargetInterested, *, observation_mode=None) -> None:
         mode = {TargetInterested.QRCODE: 'qr', TargetInterested.BOTTLE: 'bottle'}.get(target_interested, 'line')
-        self._vision_sessions.start(mode)
+        self._vision_sessions.start(observation_mode or mode)
         self.target_interested = target_interested
         with self._frame_lock:
             self._latest_gray = None
@@ -876,7 +888,8 @@ class Video(object):
             worker.join(timeout=2.0)
         if self.cap is not None:
             self.cap.release()
-        cv2.destroyAllWindows()
+        if self.preview_enabled:
+            cv2.destroyAllWindows()
 
     def is_target_insight(self) -> bool:
         return self.target_insight
