@@ -31,7 +31,10 @@ class ExitTraceLine(TraceLine):
 
 
 class Hint2Exit(Behaviour):
-    """Keep motion and failure limits in one node; never treat a limit as success."""
+    """Keep motion and progress limits in one node; once TURN starts, every limit or
+    lost-line condition advances the phase instead of failing, so the tree always
+    reaches FOLLOW and then SUCCESS. Only an invalid setup or a non-finite sensor
+    reading still fails outright."""
 
     def __init__(self, name, context, settings):
         super().__init__(name)
@@ -95,15 +98,24 @@ class Hint2Exit(Behaviour):
         distance = abs(runtime.plotter.get_distance() - self.start_distance)
         if not all(math.isfinite(x) for x in (raw_angle, v, distance)):
             return self.fail('non-finite sensor value')
-        if time.monotonic() - self.start_time >= s.to_exit_phase_timeout_s:
-            return self.fail(self.phase + ' timeout')
         limit = {'WHITE': s.to_exit_trace_mm,
                  'OFFSET': s.to_exit_offset_mm + 50.0,
                  'TURN': s.to_exit_turn_limit_mm,
                  'BLACK': s.to_exit_search_limit_mm,
                  'FOLLOW': s.to_exit_follow_mm + 50.0}[self.phase]
-        if distance >= limit:
-            return self.fail(self.phase + ' distance limit')
+        timed_out = time.monotonic() - self.start_time >= s.to_exit_phase_timeout_s
+        if timed_out or distance >= limit:
+            # どのフェーズで打ち切りになっても停止させず、常に前進させて最終的にFOLLOWを完了させる。
+            if self.phase in ('WHITE', 'OFFSET'):
+                self.enter('TURN')
+                return Status.RUNNING
+            if self.phase in ('TURN', 'BLACK'):
+                self.enter('FOLLOW')
+                self.trace.tick_once()
+                return Status.RUNNING
+            self.logger.info('HINT2_EXIT line acquisition complete (forced by %s)'
+                             % ('timeout' if timed_out else 'distance limit'))
+            return Status.SUCCESS
 
         current = -runtime.course * raw_angle
         if time.monotonic() - self.last_log >= 0.2:
@@ -130,22 +142,27 @@ class Hint2Exit(Behaviour):
         elif self.phase in ('TURN', 'BLACK'):
             # Same TO absolute frame as return_heading=90, mirrored by course.
             error = angle_error(self.turn_heading, current)
-            self.black_count = self.black_count + 1 if v <= s.to_exit_black_v else 0
+            # 旋回序盤(目標方位まで遠い間)の偽検出でFOLLOWへ早期離脱しないよう、
+            # 目標方位に十分近づくまでは黒検出のカウントを開始しない。
+            black_eligible = abs(error) <= s.to_exit_turn_black_detect_max_error_deg
+            self.black_count = self.black_count + 1 if (black_eligible and v <= s.to_exit_black_v) else 0
             if self.black_count >= s.to_exit_detect_cycles:
                 self.enter('FOLLOW')
                 # Tick the real shared PID behaviour immediately; no wait for 190 degrees.
                 self.trace.tick_once()
                 return Status.RUNNING
             if self.phase == 'TURN' and abs(error) <= s.to_exit_heading_tolerance_deg:
-                # Preserve a partially observed black run at the heading boundary.
-                count = self.black_count
-                self.enter('BLACK')
-                self.black_count = count
+                # 190度まで旋回できれば、黒検出条件を満たしていなくてもそのままライントレースへ渡す。
+                self.enter('FOLLOW')
+                self.trace.tick_once()
+                return Status.RUNNING
         else:
             # Same NORMAL edge polarity as TraceLine; bounded low-power acquisition.
             self.white_count = self.white_count + 1 if v >= s.to_exit_white_v else 0
             if self.white_count >= s.to_exit_lost_cycles:
-                return self.fail('line lost during low-speed follow')
+                # ラインを見失っても停止せず、この時点の姿勢のまま次工程へ引き渡す。
+                self.logger.info('HINT2_EXIT line acquisition complete (line lost tolerated)')
+                return Status.SUCCESS
             if distance >= s.to_exit_follow_mm:
                 self.logger.info('HINT2_EXIT line acquisition complete')
                 return Status.SUCCESS

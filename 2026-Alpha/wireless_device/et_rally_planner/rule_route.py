@@ -50,10 +50,17 @@ MIN_ENTRY_AVOID_OFFSET_CM = config.ROBOT_REAR_OVERHANG_CM
 
 
 def gate_entry_exit(gate, sign):
-    """gateを法線方向signの側(+1 or -1)から通過する場合のentry/exitを返す。"""
+    """gateを法線方向signの側(+1 or -1)から通過する場合のentry/exitを返す。
+
+    exit側はconfig.GATE_EXIT_OFFSET_CM(ROBOT_REAR_OVERHANG_CM+T字パーツの
+    到達距離)を使う。ROBOT_REAR_OVERHANG_CMそのままだと、支柱の足元の
+    T字パーツをpivot_turn_safeでカプセルとして正しく考慮した際、
+    exit直後に旋回する経路の多くが安全マージンを使い果たしてしまうため
+    (2026-09-15、詳細はconfig.GATE_EXIT_OFFSET_CMのコメント参照)。
+    """
     n = geo.scale(gate.normal, sign)
     entry = geo.add(gate.center, geo.scale(n, config.ROBOT_FRONT_OVERHANG_CM))
-    exit_ = geo.sub(gate.center, geo.scale(n, config.ROBOT_REAR_OVERHANG_CM))
+    exit_ = geo.sub(gate.center, geo.scale(n, config.GATE_EXIT_OFFSET_CM))
     return entry, exit_
 
 
@@ -80,6 +87,44 @@ def _project_param(a, b, p):
     return geo.dot(geo.sub(p, a), ab) / ab_len2
 
 
+def _segment_post_distance(a, b, post):
+    """線分ab(直進区間、旋回軸の軌跡)と支柱postの最短距離。
+
+    2026-09-17: 支柱のT字パーツ(post.arm_dir、pivot_turn_safeの
+    カプセル型チェック参照)が、直進区間の安全性チェック(この関数の
+    呼び出し元、_find_blocking_post/verify_straight_clearance)では
+    一切考慮されていなかった不具合が、実機での接触(seed=9392783、
+    黄色ゲート右支柱のT字パーツに車体前方が接触)で発覚した。
+    旋回時はpivot_turn_safeがカプセル対応済みだったが、直進時は
+    支柱の生座標(点)にしか距離を見ておらず、T字パーツの存在が
+    透明になっていた。
+
+    postにarm_dirがあれば、支柱中心を通りarm_dir方向に±POST_PIVOT_
+    ARM_HALF_LENGTH_CM伸びる線分(T字パーツ)全体と線分abの最短距離
+    (geo.segment_segment_distance)を、なければ従来通り点との距離
+    (geo.point_segment_distance)を返す。
+
+    2026-09-17追記: 上記のT字パーツ対応を実装した後も、実機で同じ箇所
+    (seed=9392783、黄色ゲート右支柱)への接触(かすり)が再発した。原因は
+    ゲートが人の手で設置されるため実際の支柱位置に誤差があり、理論値
+    ギリギリ(修正後の実測クリアランス6.89cm、閾値7.85cmで「安全」判定)
+    では設置誤差を吸収できないため。そのためT字パーツとの距離判定に
+    限り、POST_ARM_STRAIGHT_MARGIN_CM分だけ距離を厳しめに見せる(実際の
+    幾何学的距離から差し引いて返す)。呼び出し元は従来通り
+    STRAIGHT_CLEARANCE_CMと比較するだけでよく、閾値側を触る必要はない。
+    支柱本体(arm_dirなし)や旋回時のpivot_turn_safeには影響しない、
+    直進区間とT字パーツの組み合わせだけに絞った変更。
+    """
+    arm_dir = getattr(post, "arm_dir", (0.0, 0.0))
+    if arm_dir[0] or arm_dir[1]:
+        half = config.POST_PIVOT_ARM_HALF_LENGTH_CM
+        seg_a = geo.sub(post, geo.scale(arm_dir, half))
+        seg_b = geo.add(post, geo.scale(arm_dir, half))
+        raw = geo.segment_segment_distance(a, b, seg_a, seg_b)
+        return raw - config.POST_ARM_STRAIGHT_MARGIN_CM
+    return geo.point_segment_distance(post, a, b)
+
+
 def _find_blocking_post(a, b, all_posts, exclude=(), anchor_a_post=None, anchor_b_post=None):
     """線分abに一番手前(aに近い側)でぶつかる支柱を返す。なければNone。
 
@@ -102,7 +147,7 @@ def _find_blocking_post(a, b, all_posts, exclude=(), anchor_a_post=None, anchor_
     for post in all_posts:
         if any(geo.distance(post, ex) < 1e-6 for ex in exclude):
             continue
-        d = geo.point_segment_distance(post, a, b)
+        d = _segment_post_distance(a, b, post)
         if d >= STRAIGHT_CLEARANCE_CM:
             continue
         t = _project_param(a, b, post)
@@ -136,6 +181,14 @@ def resolve_segment(a, b, all_gates, all_posts, target_gate=None,
     別ゲートの支柱と正確に重なって行き詰まるケースや、新たな旋回安全性
     違反が発生するケースが見つかり、この長方形オフセット方式より安定性が
     低かったため不採用とした。)
+
+    2026-09-15: exclude_a/exclude_bへのblocking_postの無条件除外を、
+    anchor_a_post/anchor_b_post方式(端点の近くでしか除外しない)に変更する
+    案を試したが、pre_pointが同じ支柱・同じゲート法線方向から再構築され
+    続けて無限に近い再帰(max_depth到達)を起こすケースが見つかり、
+    ロールバックした(ユーザー確認済み)。この長方形オフセット方式は、
+    「侵入予定ゲート自身の支柱にstartからの直線が別途近すぎる」ケースを
+    正しく検出できない既知の制約として残っている。
     """
     if depth > max_depth:
         raise RuntimeError(
@@ -263,10 +316,10 @@ def _try_extend_with_propagation(
         new_point = geo.add(point, shift)
         d = float("inf")
         if prev_pt is not None:
-            d = min(d, geo.point_segment_distance(target_post, prev_pt, new_point))
+            d = min(d, _segment_post_distance(prev_pt, new_point, target_post))
         if next_pt is not None:
             effective_next = geo.add(next_pt, shift) if next_pt_propagates else next_pt
-            d = min(d, geo.point_segment_distance(target_post, new_point, effective_next))
+            d = min(d, _segment_post_distance(new_point, effective_next, target_post))
         return d
 
     if min_dist(max_extension) < needed_clearance:
@@ -304,7 +357,7 @@ def _try_extend_with_propagation(
         for p in all_posts:
             if geo.distance(p, target_post) < 1e-6:
                 continue
-            d = geo.point_segment_distance(p, a_pt, b_pt)
+            d = _segment_post_distance(a_pt, b_pt, p)
             if d >= STRAIGHT_CLEARANCE_CM:
                 continue
             # pがこの区間の端点自身のアンカー支柱で、かつ実際にその端点の
@@ -411,6 +464,59 @@ def _segment_crosses_gate_leg(a, b, gate):
         return None
     direction_sign = 1.0 if d2 > d1 else -1.0
     return cross_pt, direction_sign
+
+
+def _maximal_collinear_runs(points):
+    """points(単純な(x,y)のリスト)を、進行方向が変わらない区間ごとに
+    分割し、[(start_idx, end_idx), ...]を返す(隣り合う区間はend_idxと
+    次のstart_idxを共有する)。距離0の区間(同じ点の重複)はスキップする。
+
+    2026-09-15、複数のゲートのentry/exitが偶然同一直線上に並ぶ配置
+    (例: 赤と黄がグリッド上同じ列にあり、赤entryが黄entry-exit間に来る
+    ケース)で、「1回の旋回なしの直進で複数ゲートを跨いで正式に通過する」
+    経路を認識するために追加。_span_covers_gate_crossingと組み合わせて使う。
+    """
+    n = len(points)
+    runs = []
+    i = 0
+    while i < n - 1:
+        base = geo.sub(points[i + 1], points[i])
+        base_len = geo.norm(base)
+        if base_len < 1e-9:
+            i += 1
+            continue
+        base_unit = geo.scale(base, 1.0 / base_len)
+        k = i + 1
+        while k + 1 < n:
+            seg = geo.sub(points[k + 1], points[k])
+            seg_len = geo.norm(seg)
+            if seg_len < 1e-9:
+                break
+            seg_unit = geo.scale(seg, 1.0 / seg_len)
+            if abs(seg_unit[0] - base_unit[0]) > 1e-6 or abs(seg_unit[1] - base_unit[1]) > 1e-6:
+                break
+            k += 1
+        runs.append((i, k))
+        i = k
+    return runs
+
+
+def _span_covers_gate_crossing(a_pt, b_pt, gate):
+    """直線a_pt->b_ptが、gateの正式なentry->exit(どちらかのsign)を、
+    a_ptからb_ptへ向かう向きで内包しているかを判定する。
+    a_pt/b_pt自身がentry/exitと一致している必要はなく(それより外側まで
+    伸びていてもよい)、entry/exitが同一直線上に、この順番で乗っていれば
+    よい。内包していれば(gate, sign)を、していなければNoneを返す。
+    """
+    for sign in (1.0, -1.0):
+        entry, exit_ = gate_entry_exit(gate, sign)
+        t_entry = geo.collinear_param(a_pt, b_pt, entry)
+        t_exit = geo.collinear_param(a_pt, b_pt, exit_)
+        if t_entry is None or t_exit is None:
+            continue
+        if -1e-6 <= t_entry <= t_exit <= 1 + 1e-6:
+            return gate, sign
+    return None
 
 
 def _gate_official_directions(waypoints, labels, all_gates):
@@ -543,6 +649,82 @@ def verify_gate_crossing_directions(waypoints, labels, all_gates):
     return violations
 
 
+def verify_gate_passage_order(waypoints, all_gates, gate_order=None):
+    """経路上で発生する「正式な形(そのゲートの中心を垂直に通るentry->exitの
+    形、公式ステージの通過だけでなく、経路の途中でたまたま同じ形になる
+    非公式な通過も含む)」の通過を全て時系列で洗い出し、競技規約5.17.3の
+    ゲート通過順序ルール(赤→青→黄の既定の順番で通過することで1周回が
+    成立し、既定の順番以外の通過は進行中の周回をリセットする。ただし
+    同色の連続通過は1回とみなす)に従って、実際に何周ぶん成立するかを
+    シミュレートする。
+
+    2026-09-15に発覚した不具合: resolve_segment/_resolve_via_other_gateは
+    「物理的に安全で、かつそのゲート自身の正式なentry/exitの形であること」
+    しかチェックしておらず、「今どの周回のどの順番を消化中か」を見ていない。
+    そのため、例えば青ゲート通過後(次は黄色を期待している状態)に、
+    無関係な赤ゲートを(他ゲート経由の迂回、あるいはたまたまの直線が)
+    正式な形で通過してしまうことがあり、この場合競技規約上その周回の
+    進行がリセットされてしまう。実際に600件中39件で、これが原因で
+    3周とも1周も成立しない(!)経路が見つかった。
+
+    経路生成側の迂回ロジック自体を「target_gate/prev_gate以外の正式通過を
+    禁止する」ように直す案も試したが、迂回の選択肢が大きく狭まり、
+    物理安全性チェックが600件中486件まで後退したため不採用とした
+    (_candidate_crossing_safeのコメント参照)。代わりにこの関数で
+    「実際に何周成立するか」を検証し、plan_route_with_anchors側の
+    8通りの侵入方向探索で、成立周回数が最大になる組み合わせを優先する
+    形にしている(迂回ロジック自体は変更していないので、signの組み合わせ
+    次第では、この問題が解消しないまま残ることもある)。
+
+    2026-09-15追記: 複数ゲートのentry/exitが偶然同一直線上に並ぶ配置
+    (seed=237571: 赤entryが黄entry-exit間に来るケース)では、経路が
+    「黄entry -> 赤entry -> 赤exit」のように、黄自身のexit地点を明示的な
+    停止点として経由しないまま直進することがある(赤exitへ向かう区間が
+    黄exitの座標を内包しているため、黄の通過はそこで暗に完了している)。
+    隣接する2点の完全一致だけを見ていた旧実装ではこれを見逃す
+    (黄entryと赤entryの間の区間・赤entryと赤exitの間の区間のどちらも、
+    黄自身のentry->exitと完全一致しないため)。_maximal_collinear_runsで
+    同一直線上の区間をまとめてから_span_covers_gate_crossingで判定する
+    ことで、この「内包された通過」も正しく検出する。
+
+    戻り値: 実際に成立した周回数(int)。config.LAPS未満なら要注意。
+    """
+    if gate_order is None:
+        gate_order = config.GATE_ORDER
+
+    sequence = []
+    for start, end in _maximal_collinear_runs(waypoints):
+        hits = []
+        for gate in all_gates:
+            hit = _span_covers_gate_crossing(waypoints[start], waypoints[end], gate)
+            if hit is None:
+                continue
+            _, sign = hit
+            _, exit_ = gate_entry_exit(gate, sign)
+            t_exit = geo.collinear_param(waypoints[start], waypoints[end], exit_)
+            hits.append((t_exit, gate.color))
+        hits.sort(key=lambda h: h[0])
+        sequence.extend(color for _, color in hits)
+
+    expected_idx = 0
+    completed_laps = 0
+    prev_color = None
+    for color in sequence:
+        if color == prev_color:
+            continue  # 同色の連続通過は1回とみなす(規約5.17.3)
+        if color == gate_order[expected_idx]:
+            expected_idx += 1
+            if expected_idx == len(gate_order):
+                completed_laps += 1
+                expected_idx = 0
+        else:
+            # 既定の順番以外の通過: 進行中の周回はリセットする。ただし
+            # 今回の通過自体が1番目(赤)なら、そのままそこから再スタートする。
+            expected_idx = 1 if color == gate_order[0] else 0
+        prev_color = color
+    return completed_laps
+
+
 def verify_straight_clearance(waypoints, all_posts, anchors=None):
     """経路上の各直進区間が、支柱に十分な距離(STRAIGHT_CLEARANCE_CM)を
     保っているかを機械的に確認する。anchorsを渡した場合、その区間の
@@ -555,23 +737,40 @@ def verify_straight_clearance(waypoints, all_posts, anchors=None):
     _find_blocking_postでは元々t考慮していたが、こちらの検証用関数だけ
     考慮していなかったため、実際には直っていない違反を「0件」と誤って
     報告していた)。
-    戻り値: 違反のリスト[(index, post, dist), ...] (空なら全て安全)。
+
+    2026-09-16: 隣接する2区間(waypoints[i]->[i+1]、[i+1]->[i+2])が実は
+    旋回なしで完全に同一直線上にある(_maximal_collinear_runs参照)配置
+    (seed=5642644/1734262: 別々の支柱を避けるために順に作られた2つの
+    迂回点が、たまたま同じ直線上に並んでしまうケース)では、各区間を
+    個別に見ると、支柱への最接近点がその区間の端点(=直線上の途中の
+    旋回しない点)にちょうど一致し、そこがどちらか一方の区間の
+    アンカーと一致するため、両方の区間で「端点だから除外」判定が
+    成立してしまい、実際には旋回せず直進で支柱のすぐそばを通過して
+    いるにもかかわらず、検出をすり抜けていた(必要7.85cmに対し実際は
+    2.6cmしかない例が2件見つかった)。そのため、個々の区間ではなく
+    _maximal_collinear_runsでまとめた直進区間全体に対して支柱との距離を
+    確認する(直線の内部にある人工的な分割点は、旋回を伴わない限り
+    実際の進路には影響しないため)。アンカー除外も、その直進区間全体の
+    始点・終点(=実際に旋回する点)のアンカーだけを見る。
+
+    戻り値: 違反のリスト[(index, post, dist), ...] (空なら全て安全。
+    indexは違反が見つかった直進区間の開始インデックス)。
     """
     violations = []
-    for i in range(len(waypoints) - 1):
-        a, b = waypoints[i], waypoints[i + 1]
-        anchor_a_post = anchors[i][0] if anchors is not None and anchors[i] is not None else None
-        anchor_b_post = anchors[i + 1][0] if anchors is not None and anchors[i + 1] is not None else None
+    for start, end in _maximal_collinear_runs(waypoints):
+        run_a, run_b = waypoints[start], waypoints[end]
+        anchor_a_post = anchors[start][0] if anchors is not None and anchors[start] is not None else None
+        anchor_b_post = anchors[end][0] if anchors is not None and anchors[end] is not None else None
         for post in all_posts:
-            d = geo.point_segment_distance(post, a, b)
+            d = _segment_post_distance(run_a, run_b, post)
             if d >= STRAIGHT_CLEARANCE_CM - 1e-9:
                 continue
-            t_raw = _project_param(a, b, post)
+            t_raw = _project_param(run_a, run_b, post)
             if anchor_a_post is not None and geo.distance(post, anchor_a_post) < 1e-6 and t_raw <= 0:
                 continue
             if anchor_b_post is not None and geo.distance(post, anchor_b_post) < 1e-6 and t_raw >= 1:
                 continue
-            violations.append((i, post, d))
+            violations.append((start, post, d))
     return violations
 
 
@@ -944,7 +1143,7 @@ def _candidate_straight_clear_safe(result, all_posts):
     return not verify_straight_clearance(points, all_posts, anchors)
 
 
-def _candidate_crossing_safe(result, all_gates, gate_signs):
+def _candidate_crossing_safe(result, all_gates, gate_signs, target_gate=None, prev_gate=None):
     """resultの各区間が、いずれかのゲートの脚を結ぶ線を、そのゲートの
     公式な通過方向(gate_signsで分かっている)と逆向きに横切っていないかを
     確認する。gate_signsがNoneの場合は判定できないので常にTrue。
@@ -963,8 +1162,59 @@ def _candidate_crossing_safe(result, all_gates, gate_signs):
     誤差を考えると危険なため、機械的に候補から除外し、後段の
     _resolve_via_other_gateフォールバック(そのゲートを正式なentry/exitで
     経由する形)に任せる。
+
+    2026-09-15: target_gate/prev_gate以外の色を正式な形で経由すること自体を
+    ここで一律禁止する案も試したが(競技規約5.17.3のゲート通過順序ルール
+    対策)、600件中486件まで物理安全性チェックが後退した(近接した
+    entry/exit間でほぼ180度旋回を強いられるケースが噴出したため)。
+    影響を受けるのは元々600件中39件だけなので、ここは変更せず、
+    plan_route_with_anchors側のスコアリングで「ゲート通過順序」を
+    別途チェックし、順序が壊れないsignの組み合わせを優先させる形に
+    変更した(verify_gate_passage_order参照)。
+
+    2026-09-15追記: 複数ゲートのentry/exitが偶然同一直線上に並ぶ配置
+    (例: 赤と黄が同じ列にあり、赤entryが黄entry-exit間に来るケース、
+    seed=237571)では、resultの中に「別ゲート(黄)のentry->exitを内包する
+    直進区間の途中に、このgate(target)の脚を跨ぐ」形の区間が現れることが
+    ある。この場合もその内包しているゲート自身の脚を跨ぐのは正式な通過の
+    一部であり、除外してよい(_maximal_collinear_runs/
+    _span_covers_gate_crossing参照)。
+
+    さらに、target_gateが分かっている場合(呼び出し元は常にresultの最後の
+    点=target_gateのentryとして呼ぶ)、target_gate自身のexit(まだresultには
+    含まれない、呼び出し元がこの後すぐ追加する点)を仮想的に延長して
+    判定する。上記のケースで、黄のexitがresult自身の範囲(黄entry〜赤entry)
+    を超えて、この後に続く赤entry〜赤exitの区間内に来る配置があるため
+    (実際にseed=237571で発生)、これを考慮しないと黄の通過を認識できない。
     """
     points = [pt for pt, _ in result]
+    check_points = points
+    lead = 0
+    if prev_gate is not None and gate_signs is not None and points:
+        prev_sign = gate_signs.get(id(prev_gate))
+        if prev_sign is not None:
+            prev_entry, prev_exit = gate_entry_exit(prev_gate, prev_sign)
+            if geo.distance(points[0], prev_exit) < 1e-6:
+                check_points = [prev_entry] + check_points
+                lead = 1
+    if target_gate is not None and points:
+        b = points[-1]
+        for sign in (1.0, -1.0):
+            entry, exit_ = gate_entry_exit(target_gate, sign)
+            if geo.distance(b, entry) < 1e-6:
+                check_points = check_points + [exit_]
+                break
+    runs = _maximal_collinear_runs(check_points)
+
+    def _gate_covered_at(i, gate):
+        i = i + lead
+        for start, end in runs:
+            if not (start <= i < end):
+                continue
+            if _span_covers_gate_crossing(check_points[start], check_points[end], gate) is not None:
+                return True
+        return False
+
     for i in range(len(points) - 1):
         a_pt, b_pt = points[i], points[i + 1]
         for gate in all_gates:
@@ -981,11 +1231,14 @@ def _candidate_crossing_safe(result, all_gates, gate_signs):
                     break
             if is_official_pair:
                 continue
+            if _gate_covered_at(i, gate):
+                continue
             return False
     return True
 
 
-def _resolve_via_other_gate(a, b, all_gates, all_posts, target_gate, other_gate, other_sign, gate_signs=None):
+def _resolve_via_other_gate(a, b, all_gates, all_posts, target_gate, other_gate, other_sign, prev_gate=None,
+                             gate_signs=None):
     """target_gate以外のゲート(other_gate)を、other_signの方向で経由して
     からbへ向かう経路を構築する。
 
@@ -1004,11 +1257,35 @@ def _resolve_via_other_gate(a, b, all_gates, all_posts, target_gate, other_gate,
     脚を斜めに横切ってしまうケースを見逃していた)。ただし、これ以上
     「別のゲートを経由する」フォールバックへは進まない
     (allow_via_other=Falseで無限の連鎖を防ぐ)。
+
+    2026-09-15追記: bがother_entry->other_exitの直線上(その範囲内)に
+    乗っている配置(seed=237571: 赤entryが黄entry-exit間に来るケース)
+    では、通常通りother_exitまで進んでからbへ向かうと、bがother_exitより
+    手前にあるため後退(最悪ほぼ180度の反転)が必要になってしまう。
+    この場合はother_exit自体には立ち寄らず、other_entryからbまで直進する
+    候補を優先的に試す(other_gate自身の正式な通過は、bから先で
+    other_exitの座標を通過点として内包する形で別途成立する。
+    _candidate_crossing_safe/verify_gate_passage_orderのコメント参照)。
     """
     other_entry, other_exit = gate_entry_exit(other_gate, other_sign)
+
+    t_b = geo.collinear_param(other_entry, other_exit, b)
+    if t_b is not None and -1e-6 <= t_b <= 1 + 1e-6:
+        other_gate_excluded = [g for g in all_gates if g is not other_gate]
+        if (_find_blocking_post(other_entry, b, all_posts) is None
+                and not _segment_crosses_any_gate_leg(other_entry, b, other_gate_excluded)):
+            try:
+                to_other = _resolve_top_level_segment(
+                    a, other_entry, all_gates, all_posts, other_gate, prev_gate,
+                    gate_signs=gate_signs, allow_via_other=False,
+                )
+                return to_other[:-1] + [(other_entry, None), (b, None)]
+            except RuntimeError:
+                pass
+
     try:
         to_other = _resolve_top_level_segment(
-            a, other_entry, all_gates, all_posts, other_gate, None,
+            a, other_entry, all_gates, all_posts, other_gate, prev_gate,
             gate_signs=gate_signs, allow_via_other=False,
         )
     except RuntimeError:
@@ -1021,6 +1298,528 @@ def _resolve_via_other_gate(a, b, all_gates, all_posts, target_gate, other_gate,
     except RuntimeError:
         return None
     return to_other[:-1] + [(other_entry, None), (other_exit, None)] + to_b[1:]
+
+
+def _required_entry_heading_deg(b, target_gate):
+    """bへ正式な向きで侵入するために必要な進行方向(度)。
+    target_gateがNoneの場合はゴールへの到着なのでGOAL_HEADING_DEGを使う
+    (_entry_arrival_pivot_safeと同じ考え方)。
+    """
+    if target_gate is None:
+        return config.GOAL_HEADING_DEG
+    sign = 1.0 if _signed_offset(b, target_gate) >= 0 else -1.0
+    travel_dir = geo.scale(target_gate.normal, -sign)
+    return math.degrees(math.atan2(travel_dir[1], travel_dir[0]))
+
+
+def _try_repair_candidate_offsets(result, all_posts, max_iterations=3):
+    """候補resultが旋回安全性(_candidate_internal_pivot_safe)または
+    直進クリアランス(_candidate_straight_clear_safe)のどちらかに違反する
+    場合、resultの中継点(anchor付き、_try_extendで動かせる点)を延長
+    修正できないか試す。
+
+    2026-09-15: resolve_segment(長方形オフセット)が作る「侵入予定ゲート
+    自身の支柱を避ける迂回点」は、直進クリアランス用のMIN_ENTRY_AVOID_
+    OFFSET_CM(17.5cm、ROBOT_REAR_OVERHANG_CM)だけ支柱から離した点だが、
+    これだけでは次の2つのケースに対応できないことがある(実際に見つかった
+    不具合、いずれもこの迂回点自体は支柱から正確に17.5cm離れている):
+      (a) その迂回点自体で大きな旋回が起きる場合、旋回に必要な距離
+          (config.POST_AVOID_RADIUS_CM、約21.3cm)には足りない
+          (seed=1737994)。
+      (b) そこへ向かう直前の区間(a->迂回点)が、迂回点の元になったのと
+          同じ支柱に区間の途中で近づきすぎる。resolve_segmentの再帰は
+          この迂回点自体を「意図して近い点」として除外するため、この
+          近接を見逃す(seed=6781816)。
+    _fix_pivot_violations/verify_straight_clearanceは経路全体を組み立てた
+    後にしか働かないため、この迂回点は_resolve_top_level_segmentの候補
+    選定の時点で「安全でない候補」として丸ごと捨てられてしまい、直す機会
+    すら与えられないまま、より遠回りな迂回に頼らざるを得なくなっていた。
+    この関数は_fix_pivot_violationsと同じ_try_extendの仕組みを、候補
+    選定の時点で(その候補内の全ての可動点に対して)先に試すことで、
+    そのような候補を捨てる前に救えないか試みる(_try_extendは支柱からの
+    距離を伸ばす操作なので、(a)(b)どちらのケースにも効く)。修正できても
+    できなくても、修正を試みた後のresultを返す(呼び出し元で改めて
+    _candidate_internal_pivot_safe/_candidate_straight_clear_safeを
+    確認すること)。
+    """
+    points = [pt for pt, _ in result]
+    anchors = [a for _, a in result]
+    for _ in range(max_iterations):
+        current = list(zip(points, anchors))
+        if _candidate_internal_pivot_safe(current, all_posts) and _candidate_straight_clear_safe(current, all_posts):
+            break
+        made_progress = False
+        for i in range(1, len(points) - 1):
+            if anchors[i] is None:
+                continue
+            if _try_extend(points, i, anchors, all_posts):
+                made_progress = True
+        if not made_progress:
+            break
+    return list(zip(points, anchors))
+
+
+def _try_midpoint_post_detour(a, b, all_gates, all_posts, target_gate):
+    """a->bの直進が支柱P1にぶつかり、resolve_segmentと同じ式でP1を
+    避ける迂回点を作っても、その先が別ゲートの支柱P2にぶつかってしまう
+    配置(seed=6416989: 青ゲートを避けた迂回点が、たまたま赤ゲートを
+    避けようとする計算で青ゲート自身の支柱の座標に戻ってきてしまう)
+    では、P1・P2それぞれを個別に避けようとするとうまくいかないことが
+    ある(_resolve_segment_via_parallel_extensionのdocstring「座標が
+    偶然grid上で揃っている配置でのみ起きる、rectangle offset方式の
+    弱点」も参照)。
+
+    この関数は代わりに、P1とP2が共有している座標軸(X座標が一致していれば
+    Y軸、Y座標が一致していればX軸。両ゲートの向きが違っても、支柱2点が
+    たまたま軸を共有していればよい)のちょうど中間(どちらの支柱からも
+    均等な距離)まで直進してから、その位置のまま垂直な方向に
+    (_try_parallel_extension_axisと同じ仕組みで)抜け道を探す。
+    P1とP2が座標軸を共有していない場合は対象外としてNoneを返す。
+
+    見つかれば[(a,None),(corner1,anchor),...,(b,None)]を、
+    見つからなければNoneを返す。
+    """
+    blocking1 = _find_blocking_post(a, b, all_posts)
+    if blocking1 is None:
+        return None
+    gate1 = _post_owner_gate(blocking1, all_gates)
+    if gate1 is None:
+        return None
+
+    if gate1 is target_gate:
+        b_offset = _signed_offset(b, gate1)
+        offset_sign = 1.0 if b_offset >= 0 else -1.0
+        offset1 = offset_sign * max(abs(b_offset), MIN_ENTRY_AVOID_OFFSET_CM)
+    else:
+        offset1 = _signed_offset(a, gate1)
+    pre1 = geo.add(blocking1, geo.scale(gate1.normal, offset1))
+
+    blocking2 = _find_blocking_post(pre1, b, all_posts, exclude=[blocking1])
+    if blocking2 is None:
+        return None
+    gate2 = _post_owner_gate(blocking2, all_gates)
+    if gate2 is None or gate2 is gate1:
+        return None
+
+    # blocking1とblocking2が共有している座標軸を探す(X一致ならY軸、
+    # Y一致ならX軸)。ゲート自体の向き(normal/direction)ではなく、
+    # 支柱2点の実際の位置関係だけで判定する。
+    if abs(blocking1[0] - blocking2[0]) < 1e-6:
+        axis = (0.0, 1.0)
+        lateral = (1.0, 0.0)
+    elif abs(blocking1[1] - blocking2[1]) < 1e-6:
+        axis = (1.0, 0.0)
+        lateral = (0.0, 1.0)
+    else:
+        return None
+
+    mid_val = (geo.dot(blocking1, axis) + geo.dot(blocking2, axis)) / 2.0
+    a_val = geo.dot(a, axis)
+    corner1 = geo.add(a, geo.scale(axis, mid_val - a_val))
+
+    if (_find_blocking_post(a, corner1, all_posts) is not None
+            or _segment_crosses_any_gate_leg(a, corner1, all_gates)):
+        return None
+
+    fully_clear, fallback = _try_parallel_extension_axis(corner1, b, all_gates, all_posts, target_gate, lateral)
+    tail = fully_clear if fully_clear is not None else fallback
+    if tail is None:
+        return None
+
+    nearest_post = min(all_posts, key=lambda p: geo.distance(corner1, p))
+    anchor = (nearest_post, _post_owner_gate(nearest_post, all_gates))
+    return [(a, None), (corner1, anchor)] + tail[1:]
+
+
+def _try_loop_detour(a, b, all_gates, all_posts, target_gate, prev_gate, gate_signs,
+                      max_extension=150.0, step=5.0):
+    """aを出発する向き(prev_gateからの退出方向)と、bへの正式な侵入に
+    必要な向き(_required_entry_heading_deg)が同じ軸上にある(平行、
+    向きが同じでも真逆でも)配置(seed=6781816/6199669)向けの、
+    探索的な迂回候補。
+
+    L字コーナー(_try_axis_aligned_corner)は「aを通り出発方向の直線」と
+    「bを通り侵入方向の直線」の交点を求めるが、この2直線が平行だと交点が
+    存在しない(向きが同じ場合も、真逆の場合も同様)。実際に見つかった
+    パターンは向きが同じ場合(例: 出発方向も侵入方向も南向きだが、bが
+    aよりさらに南、つまり一旦bを通り過ぎてから戻ってくる形が必要)
+    だったため、真逆だけでなく同じ向きの平行も対象に含める。
+
+    aから出発方向へ少しずつ距離を伸ばし、その各地点から
+    (_try_axis_aligned_cornerと同じ仕組みで)出発方向と垂直な2方向を
+    それぞれ試して、bへ安全に到達できる組み合わせが最初に見つかった
+    ところで打ち切る。既存のL字コーナーが「1点の計算」なのに対し、
+    こちらは「複数の地点を試す」探索になっている。
+
+    departure方向とentry方向が平行でない場合(=既存のL字コーナーで
+    間に合うはずの配置)は、対象外としてNoneを返す。
+    """
+    if prev_gate is None or gate_signs is None:
+        return None
+    prev_sign = gate_signs.get(id(prev_gate))
+    if prev_sign is None:
+        return None
+    departure_dir = geo.scale(prev_gate.normal, -prev_sign)
+
+    required_heading = _required_entry_heading_deg(b, target_gate)
+    rad = math.radians(required_heading)
+    entry_axis = (math.cos(rad), math.sin(rad))
+
+    # departureとentryが平行(向きが同じでも真逆でも、内積の絶対値が1に
+    # 近い)場合だけを対象にする。垂直に近い配置は既存のL字コーナー
+    # (1点の交点計算)で間に合うはず。
+    if abs(abs(geo.dot(departure_dir, entry_axis)) - 1.0) > 0.1:
+        return None
+
+    # bへ最終的にentry_axis方向で(旋回なしで)侵入できる「足場」P を、
+    # bからentry_axisと逆向きに(=侵入方向の手前側に)ずらした位置に探す。
+    # 単純にaからdeparture_dir方向へ進むだけでは、bがaから見て
+    # departure_dirと逆側にある場合(seed=6199669: 出発は南向きだが
+    # bは北側にあり、南へ進むほどbから遠ざかる)に永久に届かないため、
+    # 「bの手前側」を基準に足場を探す設計にした。
+    def _post_anchor(pt):
+        nearest_post = min(all_posts, key=lambda p: geo.distance(pt, p))
+        return (nearest_post, _post_owner_gate(nearest_post, all_gates))
+
+    def _segment_ok(p1, p2):
+        return (_find_blocking_post(p1, p2, all_posts) is None
+                and not _segment_crosses_any_gate_leg(p1, p2, all_gates))
+
+    found = []
+    d = step
+    while d <= max_extension:
+        staging = geo.add(b, geo.scale(entry_axis, -d))
+
+        # aから足場stagingへの経路(直行、またはL字1回)を試す。
+        approach_options = [[a, staging]]
+        corner_h = (staging[0], a[1])
+        corner_v = (a[0], staging[1])
+        approach_options.append([a, corner_h, staging])
+        approach_options.append([a, corner_v, staging])
+
+        for approach in approach_options:
+            if any(not _segment_ok(approach[i], approach[i + 1]) for i in range(len(approach) - 1)):
+                continue
+            if not _segment_ok(staging, b):
+                continue
+            candidate = [(a, None)]
+            for pt in approach[1:]:
+                candidate.append((pt, _post_anchor(pt)))
+            candidate.append((b, None))
+            if (_candidate_internal_pivot_safe(candidate, all_posts)
+                    and _candidate_straight_clear_safe(candidate, all_posts)
+                    and _departure_pivot_safe(candidate, prev_gate, gate_signs, all_posts)):
+                found.append(candidate)
+                break  # このdでは以降の(より遠回りな)approach_optionsは不要
+
+        # departure_dir方向にaから足場corner_vまで直進したあと、bまで斜めに
+        # 直進する候補も試す(seed=1641564: 足場からtangent方向・entry_axis
+        # 方向の2辺で迂回するより、corner_vから直接bへ斜めに向かう方が
+        # 大幅に短くなるケースが実際にあった)。bへの到達時の旋回は
+        # ゼロにならないが、それは呼び出し元の_fully_safe内の
+        # _entry_arrival_pivot_safeが別途確認する。
+        if _segment_ok(a, corner_v) and _segment_ok(corner_v, b):
+            candidate = [(a, None), (corner_v, _post_anchor(corner_v)), (b, None)]
+            if (_candidate_internal_pivot_safe(candidate, all_posts)
+                    and _candidate_straight_clear_safe(candidate, all_posts)
+                    and _departure_pivot_safe(candidate, prev_gate, gate_signs, all_posts)):
+                found.append(candidate)
+
+        d += step
+    if not found:
+        return None
+    return min(found, key=_segment_result_length)
+
+
+def _try_extend_through_covered_gate(a, all_gates, all_posts, prev_gate, gate_signs):
+    """aが直前に通過したゲート(prev_gate)のexitである場合、prev_gate自身の
+    entry->exit区間の中に、別のゲート(other_gate)の正式なentry->exitが
+    丸ごと収まっている配置(seed=720696: 黄の真上に赤があり、黄entry->exit
+    の直進区間の中に赤entry->exitがすっぽり収まっているケース)では、
+    prev_gateのexit(=a)へ向かう直進の中で、すでに正式な形でother_gateも
+    通過している(_span_covers_gate_crossing/verify_gate_passage_order
+    参照、隣接waypointである必要はなく、直線に収まっていればよい)。
+
+    2026-09-15: これを「常に優先する」形で無条件に適用したところ、赤と黄が
+    同じ列にある配置では8通りのsignの組み合わせすべてでこの整列が
+    発生してしまい、本来問題なかった組み合わせにまで不要な迂回を
+    強制してしまって全体が悪化した(ロールバック済み)。そのため、
+    ここでは他の候補(直接goalへ向かう、等)と同列の「候補の一つ」として
+    返すだけにとどめ、_resolve_top_level_segment側の安全性・距離比較で、
+    実際に有利な場合だけ自然に選ばれるようにする。
+
+    見つかれば([(a, None), (other_entry, None), (other_exit, None)], other_gate)を、
+    見つからなければ(None, None)を返す(呼び出し元がother_exitから先の
+    区間を別途解決する)。
+    """
+    if prev_gate is None or gate_signs is None:
+        return None, None
+    prev_sign = gate_signs.get(id(prev_gate))
+    if prev_sign is None:
+        return None, None
+    prev_entry, prev_exit = gate_entry_exit(prev_gate, prev_sign)
+    if geo.distance(prev_exit, a) > 1e-6:
+        return None, None
+    for other_gate in all_gates:
+        if other_gate is prev_gate:
+            continue
+        for other_sign in (1.0, -1.0):
+            other_entry, other_exit = gate_entry_exit(other_gate, other_sign)
+            # other_entryがprev_gate自身のentry->exit区間の中に(端点含めて)
+            # 乗っており、かつother_exitがそこからさらに同じ向きへ進んだ先に
+            # ある(t_exit > t_entry、逆向きのゲートを誤って拾わないため)
+            # 場合だけを対象にする。other_exit自体はprev_exitより先に出て
+            # いて構わない(そここそがこの関数の存在意義)。
+            t_entry = geo.collinear_param(prev_entry, prev_exit, other_entry)
+            if t_entry is None or not (-1e-6 <= t_entry <= 1 + 1e-6):
+                continue
+            t_exit = geo.collinear_param(prev_entry, prev_exit, other_exit)
+            if t_exit is None or t_exit <= t_entry + 1e-6:
+                continue
+            other_gates_excluded = [g for g in all_gates if g is not prev_gate and g is not other_gate]
+            if (_find_blocking_post(a, other_exit, all_posts) is not None
+                    or _segment_crosses_any_gate_leg(a, other_exit, other_gates_excluded)):
+                continue
+            # other_entry自体はprev_entry->prev_exitの区間内に収まって
+            # いる(=すでに実質的に通過済み)ため、ここで改めて停止点として
+            # 経由する必要はない(むしろaより手前にあるため、経由すると
+            # その場で反転が必要になってしまう)。aからother_exitへ直進する
+            # だけでよく、other_gateの正式な通過は_candidate_crossing_safe/
+            # verify_gate_passage_order側が、この直進区間をprev_entryまで
+            # 遡って(prev_gate引数経由で)判定することで認識する。
+            return [(a, None), (other_exit, None)], other_gate
+    return None, None
+
+
+def _try_axis_aligned_corner(a, b, all_gates, all_posts, target_gate, axis):
+    """aからaxis方向にまっすぐ進み、bへの正式な侵入方向(_required_entry_
+    heading_deg)の直線とちょうど交わる1点だけで旋回し、そこからbへ直進する
+    L字型の候補を試す。
+
+    軸方向延長(_resolve_segment_via_parallel_extension)は「最初に見つかった、
+    支柱にぶつからない点」で妥協するため、そこからbへの区間が正式な侵入
+    方向とずれた斜めの直線になり、結局entry到達時の旋回で安全性違反を
+    起こすことがある(実際に見つかった不具合、seed=23758: スタート直後、
+    黄ゲートの上を素通りしてから1回だけ左に90度旋回して赤entryへ向かう
+    経路が可能なのに、途中で妥協した点から斜めに向かってしまい、entry
+    到達時に黄ゲートの支柱へ旋回で接触しかける経路が採用されていた)。
+
+    この関数はその代わりに、2直線(aを通りaxis方向の直線、bを通り
+    正式侵入方向の直線)の交点を直接計算することで、corner->bの旋回が
+    ちょうど0度(=旋回不要)になる候補を1つ試す。無効(交点が後ろ向き・
+    支柱に近すぎる・どこかのゲートの脚を斜めに横切る)ならNoneを返す。
+    """
+    required_heading = _required_entry_heading_deg(b, target_gate)
+    rad = math.radians(required_heading)
+    entry_axis = (math.cos(rad), math.sin(rad))
+
+    denom = axis[0] * entry_axis[1] - axis[1] * entry_axis[0]
+    if abs(denom) < 1e-9:
+        return None
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    t = (dx * entry_axis[1] - dy * entry_axis[0]) / denom
+    if t <= 1e-6:
+        return None
+    corner = geo.add(a, geo.scale(axis, t))
+
+    if (_find_blocking_post(a, corner, all_posts) is not None
+            or _find_blocking_post(corner, b, all_posts) is not None
+            or _segment_crosses_any_gate_leg(a, corner, all_gates)
+            or _segment_crosses_any_gate_leg(corner, b, all_gates)):
+        return None
+
+    nearest_post = min(all_posts, key=lambda p: geo.distance(corner, p))
+    anchor = (nearest_post, _post_owner_gate(nearest_post, all_gates))
+    return [(a, None), (corner, anchor), (b, None)]
+
+
+def _try_gate_bypass_detour(a, b, all_gates, all_posts, target_gate):
+    """bへの正式な侵入方向(entry_axis)の直線上に、いずれかのゲート
+    (target_gate自身に限らない)の支柱がちょうど乗ってしまう配置
+    (seed=6199669: 黄exitから赤entryへ向かう際、entry_axisの直線が
+    赤ゲート自身の脚の真上を通ってしまうケース。seed=9207916:
+    3周目の黄exitからゴールへ向かう際、entry_axis上に赤ゲート自身の脚が
+    ある、あるいは途中のtangent方向の直線が別ゲート(青)の脚をかすめて
+    しまうケース、target_gateがNone=ゴール到着でも同様に起こる)向けの
+    迂回。_try_axis_aligned_cornerが「正式なentry/exit以外の形でどこかの
+    ゲートの脚を横切る」候補として除外してしまう配置が対象。
+
+    aから、いずれかのゲートの支柱の並び方向(tangent、entry_axisと垂直)に
+    直進し、その支柱を十分な余裕を持って通り過ぎた位置まで進む → そこから
+    entry_axis方向に、bよりさらに手前(ゲートから離れる側)の高さまで
+    直進する → tangent方向にbと同じ位置まで直進する → 最後にbまで
+    entry_axis方向に直進する、という4本の直線(いずれもentry_axisか
+    tangentのどちらかに平行で、斜めの区間は一切ない)を試す。
+
+    bの高さ(entry自身)でtangent方向に戻ると、bがゲートからわずか
+    ROBOT_FRONT_OVERHANG_CM(7.5cm)しか離れていないため、通り過ぎた
+    はずの支柱にその高さで再接近してしまう(実際に見つかった不具合:
+    bと同じ高さで戻る3本構成だと、支柱からの距離が7.5cmしかなく
+    STRAIGHT_CLEARANCE_CM(7.85cm)を割ってしまい候補にならなかった)。
+    そのため、tangent方向に戻る高さをbよりさらに離す。
+
+    target_gateだけでなく全ゲートそれぞれの支柱を回り込み候補として試す
+    (どちらの支柱を回り込むかも2通り)。安全なものを全て候補として返し、
+    _resolve_top_level_segment側で他候補と合わせて距離で比較される。
+    """
+    required_heading = _required_entry_heading_deg(b, target_gate)
+    rad = math.radians(required_heading)
+    entry_axis = (math.cos(rad), math.sin(rad))
+    tangent = (-entry_axis[1], entry_axis[0])
+
+    buffer = STRAIGHT_CLEARANCE_CM + config.SAFETY_MARGIN_CM
+    clear_margin = STRAIGHT_CLEARANCE_CM + config.SAFETY_MARGIN_CM
+
+    a_axis = geo.dot(a, entry_axis)
+    b_axis = geo.dot(b, entry_axis)
+    b_tan = geo.dot(b, tangent)
+    clear_axis = b_axis - clear_margin
+
+    results = []
+    for bypass_gate in all_gates:
+        post_tangents = [geo.dot(p, tangent) for p in bypass_gate.posts()]
+        for bypass_tan in (min(post_tangents) - buffer, max(post_tangents) + buffer):
+            corner1 = geo.add(geo.scale(entry_axis, a_axis), geo.scale(tangent, bypass_tan))
+            corner2 = geo.add(geo.scale(entry_axis, clear_axis), geo.scale(tangent, bypass_tan))
+            corner3 = geo.add(geo.scale(entry_axis, clear_axis), geo.scale(tangent, b_tan))
+            segs = ((a, corner1), (corner1, corner2), (corner2, corner3), (corner3, b))
+            if any(_find_blocking_post(p1, p2, all_posts) is not None
+                   or _segment_crosses_any_gate_leg(p1, p2, all_gates) for p1, p2 in segs):
+                continue
+            nearest1 = min(all_posts, key=lambda p: geo.distance(corner1, p))
+            nearest2 = min(all_posts, key=lambda p: geo.distance(corner2, p))
+            nearest3 = min(all_posts, key=lambda p: geo.distance(corner3, p))
+            results.append([
+                (a, None),
+                (corner1, (nearest1, _post_owner_gate(nearest1, all_gates))),
+                (corner2, (nearest2, _post_owner_gate(nearest2, all_gates))),
+                (corner3, (nearest3, _post_owner_gate(nearest3, all_gates))),
+                (b, None),
+            ])
+    return results
+
+
+def _try_axis_first_bypass_detour(a, b, all_gates, all_posts, target_gate, prev_gate, gate_signs, step=5.0):
+    """aが直前に通過したゲート(prev_gate)の延長上にあり(aのtangent座標が
+    別ゲートの正式なentry/exitの列とたまたま一致する)、そのままentry_axis
+    方向に直進を続けると別のゲートを正式に(covered、_candidate_crossing_
+    safe参照)通過できる配置(seed=9207916: 黄exit直後に赤entry/exitの
+    列に乗っており、そのまま直進すれば赤を正式に通過できるのに、
+    _try_gate_bypass_detourは「aの高さでまずtangent方向」という順序
+    固定のため、aの高さが別ゲート(赤)の支柱に近すぎて候補にならない)
+    向けの迂回。
+
+    aからentry_axis方向にbの手前まで直進(aのtangent座標を保つ) →
+    tangent方向にbのtangent座標まで直進 → 最後entry_axis方向でbへ直進、
+    という3本の直線を試す。切り替え高さ(t)の候補は、固定刻みの
+    ステップ探索だけでは、安全な範囲が数cmしかない(別ゲートの支柱の
+    すぐ外側)ケースを飛び越えてしまう(実際に見つかった不具合:
+    有効なtの範囲が83.15〜86.1cmの約3cm幅しかなく、5cm刻みの探索では
+    一度も命中しなかった)。そのため、各ゲートの支柱のentry_axis座標
+    ±マージンという「ちょうど支柱をかわせるはずの」値を直接候補に加え、
+    ステップ探索はそれ以外の配置への保険として残す。
+
+    bがaよりentry_axis方向で手前(逆側)にある場合は対象外(その場合は
+    _try_loop_detour/_try_gate_bypass_detourの対象)。
+    """
+    if prev_gate is None or gate_signs is None:
+        return None
+    required_heading = _required_entry_heading_deg(b, target_gate)
+    rad = math.radians(required_heading)
+    entry_axis = (math.cos(rad), math.sin(rad))
+    tangent = (-entry_axis[1], entry_axis[0])
+
+    a_axis = geo.dot(a, entry_axis)
+    a_tan = geo.dot(a, tangent)
+    b_axis = geo.dot(b, entry_axis)
+    b_tan = geo.dot(b, tangent)
+
+    if b_axis <= a_axis + 1e-6:
+        return None
+
+    margin = config.POST_AVOID_RADIUS_CM
+    t_candidates = []
+    for gate in all_gates:
+        for post in gate.posts():
+            post_axis = geo.dot(post, entry_axis)
+            for cand in (post_axis - margin, post_axis + margin):
+                if a_axis < cand <= b_axis:
+                    t_candidates.append(cand)
+    t_candidates.sort()
+    t_candidates += [a_axis + step * i for i in range(1, int((b_axis - a_axis) / step) + 1)]
+
+    for t in t_candidates:
+        corner1 = geo.add(geo.scale(entry_axis, t), geo.scale(tangent, a_tan))
+        corner2 = geo.add(geo.scale(entry_axis, t), geo.scale(tangent, b_tan))
+        if (_find_blocking_post(a, corner1, all_posts) is None
+                and _find_blocking_post(corner1, corner2, all_posts) is None
+                and _find_blocking_post(corner2, b, all_posts) is None):
+            nearest1 = min(all_posts, key=lambda p: geo.distance(corner1, p))
+            nearest2 = min(all_posts, key=lambda p: geo.distance(corner2, p))
+            candidate = [
+                (a, None),
+                (corner1, (nearest1, _post_owner_gate(nearest1, all_gates))),
+                (corner2, (nearest2, _post_owner_gate(nearest2, all_gates))),
+                (b, None),
+            ]
+            if (_candidate_internal_pivot_safe(candidate, all_posts)
+                    and _candidate_crossing_safe(candidate, all_gates, gate_signs,
+                                                  target_gate=target_gate, prev_gate=prev_gate)):
+                return candidate
+    return None
+
+
+def _try_departure_aligned_corner(a, b, all_gates, all_posts, target_gate, prev_gate, gate_signs):
+    """出発方向(departure_dir、prev_gateからの退出方向)とbへの侵入方向
+    (entry_axis)が垂直に近い(_try_axis_aligned_cornerの通常の対象)配置で、
+    aを通り出発方向の直線とbを通り侵入方向の直線の交点で1回だけ旋回する
+    候補を試す。_try_axis_aligned_cornerとの違いは、a->corner区間が
+    別ゲート自身の脚を「非公式な形」で横切ると判定されてもそこで諦めず、
+    _candidate_crossing_safeのcovered判定(prev_gateからの延長で正式な
+    通過とみなせるかどうか)に委ねる点(seed=9207916: 黄exit直後の区間が
+    赤entry/exitの列にちょうど乗っており、そのまま出発方向へ直進すれば
+    赤を正式に通過できるのに、_try_axis_aligned_cornerの厳密な脚横断
+    チェックでは非公式な横断として除外されてしまっていた)。
+
+    departure_dirとentry_axisが平行に近い場合は_try_loop_detourの対象
+    のためNoneを返す。
+    """
+    if prev_gate is None or gate_signs is None:
+        return None
+    prev_sign = gate_signs.get(id(prev_gate))
+    if prev_sign is None:
+        return None
+    departure_dir = geo.scale(prev_gate.normal, -prev_sign)
+
+    required_heading = _required_entry_heading_deg(b, target_gate)
+    rad = math.radians(required_heading)
+    entry_axis = (math.cos(rad), math.sin(rad))
+
+    if abs(abs(geo.dot(departure_dir, entry_axis)) - 1.0) < 0.1:
+        return None  # 平行に近い配置は_try_loop_detourの対象
+
+    denom = departure_dir[0] * entry_axis[1] - departure_dir[1] * entry_axis[0]
+    if abs(denom) < 1e-9:
+        return None
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    t = (dx * entry_axis[1] - dy * entry_axis[0]) / denom
+    if t <= 1e-6:
+        return None
+    corner = geo.add(a, geo.scale(departure_dir, t))
+
+    if (_find_blocking_post(a, corner, all_posts) is not None
+            or _find_blocking_post(corner, b, all_posts) is not None):
+        return None
+
+    nearest_post = min(all_posts, key=lambda p: geo.distance(corner, p))
+    anchor = (nearest_post, _post_owner_gate(nearest_post, all_gates))
+    candidate = [(a, None), (corner, anchor), (b, None)]
+    if (_candidate_internal_pivot_safe(candidate, all_posts)
+            and _departure_pivot_safe(candidate, prev_gate, gate_signs, all_posts)
+            and _candidate_crossing_safe(candidate, all_gates, gate_signs,
+                                          target_gate=target_gate, prev_gate=prev_gate)):
+        return candidate
+    return None
 
 
 def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gate, gate_signs=None,
@@ -1055,6 +1854,9 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
     rect_result = None
     try:
         rect_result = resolve_segment(a, b, all_gates, all_posts, target_gate=target_gate)
+        if not (_candidate_internal_pivot_safe(rect_result, all_posts)
+                and _candidate_straight_clear_safe(rect_result, all_posts)):
+            rect_result = _try_repair_candidate_offsets(rect_result, all_posts)
     except RuntimeError:
         pass
 
@@ -1063,17 +1865,65 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
         axis_result = _resolve_segment_via_parallel_extension(
             a, b, all_gates, all_posts, target_gate, prev_gate
         )
+        if axis_result is not None and not (
+            _candidate_internal_pivot_safe(axis_result, all_posts)
+            and _candidate_straight_clear_safe(axis_result, all_posts)
+        ):
+            axis_result = _try_repair_candidate_offsets(axis_result, all_posts)
     except RuntimeError:
         pass
 
-    candidates = [r for r in (rect_result, axis_result) if r is not None]
+    corner_results = [
+        _try_axis_aligned_corner(a, b, all_gates, all_posts, target_gate, axis)
+        for axis in ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0))
+    ]
+
+    midpoint_result = None
+    try:
+        midpoint_result = _try_midpoint_post_detour(a, b, all_gates, all_posts, target_gate)
+    except RuntimeError:
+        pass
+
+    loop_result = None
+    try:
+        loop_result = _try_loop_detour(a, b, all_gates, all_posts, target_gate, prev_gate, gate_signs)
+    except RuntimeError:
+        pass
+
+    bypass_results = []
+    try:
+        bypass_results = _try_gate_bypass_detour(a, b, all_gates, all_posts, target_gate)
+    except RuntimeError:
+        pass
+
+    axis_first_result = None
+    try:
+        axis_first_result = _try_axis_first_bypass_detour(
+            a, b, all_gates, all_posts, target_gate, prev_gate, gate_signs
+        )
+    except RuntimeError:
+        pass
+
+    departure_corner_result = None
+    try:
+        departure_corner_result = _try_departure_aligned_corner(
+            a, b, all_gates, all_posts, target_gate, prev_gate, gate_signs
+        )
+    except RuntimeError:
+        pass
+
+    candidates = [
+        r for r in (rect_result, axis_result, midpoint_result, loop_result, axis_first_result,
+                    departure_corner_result, *corner_results, *bypass_results)
+        if r is not None
+    ]
 
     def _fully_safe(r):
         return (
             _entry_arrival_pivot_safe(r, target_gate, all_posts)
             and _departure_pivot_safe(r, prev_gate, gate_signs, all_posts)
             and _candidate_internal_pivot_safe(r, all_posts)
-            and _candidate_crossing_safe(r, all_gates, gate_signs)
+            and _candidate_crossing_safe(r, all_gates, gate_signs, target_gate=target_gate, prev_gate=prev_gate)
             and _candidate_straight_clear_safe(r, all_posts)
         )
 
@@ -1088,10 +1938,31 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
                 continue
             via_result = _resolve_via_other_gate(
                 a, b, all_gates, all_posts, target_gate, other_gate, other_sign,
-                gate_signs=gate_signs,
+                prev_gate=prev_gate, gate_signs=gate_signs,
             )
             if via_result is not None and _fully_safe(via_result):
                 safe_candidates.append(via_result)
+
+        # aへ到達するのに使った直進(prev_gateのentry->exit)の中に、別の
+        # ゲートが丸ごと収まっている配置(seed=720696)では、そのゲートの
+        # exitまではすでに実質的に到達しているとみなせる。そこから改めて
+        # bへの区間を解決した候補も試す(_try_extend_through_covered_gateの
+        # docstring参照。allow_via_other=Falseで無限の連鎖を防ぐ)。
+        covered_head, covered_gate = _try_extend_through_covered_gate(
+            a, all_gates, all_posts, prev_gate, gate_signs
+        )
+        if covered_head is not None:
+            other_exit = covered_head[-1][0]
+            try:
+                tail = _resolve_top_level_segment(
+                    other_exit, b, all_gates, all_posts, target_gate, covered_gate,
+                    gate_signs=gate_signs, allow_via_other=False,
+                )
+                covered_result = covered_head[:-1] + tail
+                if _fully_safe(covered_result):
+                    safe_candidates.append(covered_result)
+            except RuntimeError:
+                pass
 
     if not candidates and not safe_candidates:
         raise RuntimeError("迂回経路を見つけられませんでした")
@@ -1132,7 +2003,9 @@ def _build_route_with_signs(gates_by_color, signs):
 
     current = config.START_POS_CM
     prev_gate = None
-    for stage_idx, (lap, color, gate) in enumerate(stage_sequence):
+    stage_idx = 0
+    while stage_idx < len(stage_sequence):
+        lap, color, gate = stage_sequence[stage_idx]
         sign = signs[stage_idx]
         entry, exit_ = gate_entry_exit(gate, sign)
 
@@ -1149,13 +2022,62 @@ def _build_route_with_signs(gates_by_color, signs):
         true_points.append(entry)
         anchors.append(None)
 
-        waypoints.append(exit_)
-        labels.append(f"lap{lap}-{color}-exit")
-        true_points.append(exit_)
-        anchors.append(None)
+        # 次のステージのentry/exitが、今のゲートのentry->exitと同一直線上に
+        # 並んでしまい、今のexit(固定点)が次のゲートのentry-exit区間の
+        # "内側"に来る配置(seed=237571: 赤の真上に黄があり、黄exitが
+        # 赤entry-exit間に来るケース)では、通常通りexitで停止してから
+        # 次のentryへ向かおうとすると、次のentryがexitより手前にあるため
+        # ほぼ180度の反転が2回(exit到達時・次のentry到達時)必要になって
+        # しまう。この場合、exit/次のentryを単独の停止点(=旋回点)にはせず、
+        # 今のentryから次のexitまでを1本の直進としてつなぐ(exit・次の
+        # entry自体は、正式な通過の記録としてはこの直進区間上の通過点と
+        # して残る。_span_covers_gate_crossing/_maximal_collinear_runs参照)。
+        merged = False
+        if stage_idx + 1 < len(stage_sequence):
+            next_lap, next_color, next_gate = stage_sequence[stage_idx + 1]
+            next_sign = signs[stage_idx + 1]
+            next_entry, next_exit = gate_entry_exit(next_gate, next_sign)
+            covers_this = _span_covers_gate_crossing(entry, next_exit, gate)
+            covers_next = _span_covers_gate_crossing(entry, next_exit, next_gate)
+            if covers_this is not None and covers_next is not None:
+                other_gates = [g for g in all_gates if g is not gate and g is not next_gate]
+                if (_find_blocking_post(entry, next_exit, all_posts) is None
+                        and not _segment_crosses_any_gate_leg(entry, next_exit, other_gates)):
+                    # exit_(今のゲート)とnext_entry(次のゲート)は、どちらが
+                    # 空間的に手前(entryに近い)かは配置次第(このケースでは
+                    # next_entryの方がexit_より手前)なので、直線上の
+                    # パラメータで実際の順番に並べ直す。
+                    middle = [
+                        (geo.collinear_param(entry, next_exit, exit_), exit_, f"lap{lap}-{color}-exit"),
+                        (geo.collinear_param(entry, next_exit, next_entry), next_entry,
+                         f"lap{next_lap}-{next_color}-entry"),
+                    ]
+                    middle.sort(key=lambda item: item[0])
+                    for _, pt, lab in middle:
+                        waypoints.append(pt)
+                        labels.append(lab)
+                        true_points.append(pt)
+                        anchors.append(None)
 
-        current = exit_
-        prev_gate = gate
+                    waypoints.append(next_exit)
+                    labels.append(f"lap{next_lap}-{next_color}-exit")
+                    true_points.append(next_exit)
+                    anchors.append(None)
+
+                    current = next_exit
+                    prev_gate = next_gate
+                    stage_idx += 2
+                    merged = True
+
+        if not merged:
+            waypoints.append(exit_)
+            labels.append(f"lap{lap}-{color}-exit")
+            true_points.append(exit_)
+            anchors.append(None)
+
+            current = exit_
+            prev_gate = gate
+            stage_idx += 1
 
     segment = _resolve_top_level_segment(
         current, config.GOAL_POS_CM, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs
@@ -1267,18 +2189,26 @@ def plan_route_with_anchors(gates_by_color):
     「旋回安全性違反0件(ゴール到着時の旋回は_entry_arrival_pivot_safeが
     候補選定の時点で既に考慮しているが、それでも避けられない配置が
     万一残った場合に備え、妥当性判定では例外的に許容する)」かつ
-    「どのゲートも公式な通過以外で脚を結ぶ線を横切っていない」を満たす
-    候補の中から、総移動距離 + 旋回角合計×TURN_COST_PER_DEGREE_CM が
-    最小のものを選ぶ。
+    「どのゲートも公式な通過以外で脚を結ぶ線を横切っていない」かつ
+    「competition規約5.17.3のゲート通過順序ルール上、3周とも成立する
+    (verify_gate_passage_order参照)」を満たす候補の中から、
+    総移動距離 + 旋回角合計×TURN_COST_PER_DEGREE_CM が最小のものを選ぶ。
     単純な距離だけで比較すると、実質その場でほぼ反転するような経路
     (角度は変えずに黄色ゲートに正面から突っ込むように侵入方向を選んだ
     結果、entry地点でほぼ180度旋回が必要になるケース)を、距離が短いと
     いうだけで誤って選んでしまう不具合が実際に見つかったため、旋回角も
     評価に含めている。
-    どの組み合わせも「ゴール以外」の違反を解消できなかった場合は、
-    違反件数が最も少ない候補を(それでも直せなかった旨は
-    verify_pivot_safety/verify_straight_clearance/verify_gate_crossing_
-    directionsで別途確認できる形で)返す。
+    2026-09-15: ゲート通過順序を優先度の最上位(is_validの次)に置いている。
+    経路生成側の迂回ロジック自体はゲート通過順序を考慮していない
+    (verify_gate_passage_orderのdocstring参照)ため、8通りのうち
+    成立周回数が最大のsignの組み合わせを選ぶことで、選べるならこの問題を
+    回避する。ただし8通り全てで周回が壊れる配置では、この方式では解消
+    しきれずに残ることがある。
+    どの組み合わせも「ゴール以外」の違反を解消できず、かつ3周成立も
+    できなかった場合は、違反件数が最も少ない・成立周回数が最も多い候補を
+    (それでも直せなかった旨はverify_pivot_safety/verify_straight_clearance/
+    verify_gate_crossing_directions/verify_gate_passage_orderで別途確認
+    できる形で)返す。
 
     戻り値: (waypoints, anchors, labels, true_points)
     """
@@ -1300,6 +2230,7 @@ def plan_route_with_anchors(gates_by_color):
         pivot_violations = verify_pivot_safety(waypoints, all_posts)
         straight_violations = verify_straight_clearance(waypoints, all_posts, anchors)
         crossing_violations = verify_gate_crossing_directions(waypoints, labels, all_gates)
+        completed_laps = verify_gate_passage_order(waypoints, all_gates)
         # ゴール到着時の旋回安全性は_entry_arrival_pivot_safeが候補選定の
         # 時点で既に考慮しているため、通常はここで違反として残らない。
         # それでも万一残った場合に備えた安全弁として、妥当性判定からは除外する。
@@ -1311,14 +2242,22 @@ def plan_route_with_anchors(gates_by_color):
         turn_sum = _route_turn_sum_deg(waypoints)
         score = dist + config.TURN_COST_PER_DEGREE_CM * turn_sum
 
-        candidate = (is_valid, -violation_count, -score, waypoints, anchors, labels, true_points)
-        if best is None or candidate[:3] > best[:3]:
+        # is_valid/violation_countの定義・優先順位(物理安全性)は変えず、
+        # completed_lapsをそれらの"後"(-scoreの"前")に挿入する。
+        # 2026-09-15の最初の実装ではcompleted_lapsをviolation_countより
+        # 先に比較していたが、これだと「8通り全部で物理違反が出る」配置で
+        # 周回成立を安全性より優先してしまい、stress_test側で186/200まで
+        # 後退した。物理安全性は既存通り最優先のまま、violation_countが
+        # 同点の候補同士の中でだけ周回成立数を比較する形に修正した。
+        # 8通りの候補生成ロジック自体には一切手を入れていない。
+        candidate = (is_valid, -violation_count, completed_laps, -score, waypoints, anchors, labels, true_points)
+        if best is None or candidate[:4] > best[:4]:
             best = candidate
 
     if best is None:
         raise RuntimeError("どの侵入側の組み合わせでも経路を構築できませんでした")
 
-    _, _, _, waypoints, anchors, labels, true_points = best
+    _, _, _, _, waypoints, anchors, labels, true_points = best
 
     return waypoints, anchors, labels, true_points
 

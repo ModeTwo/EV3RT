@@ -51,6 +51,12 @@ class RaceConfig:
     # ラインへ短く進入するSEEKと、黒捕捉後に0度へ戻すALIGNを分ける。
     start_lap_camera_max_turn: int = 30
     start_lap_camera_align_power: int = 35
+    # ALIGN後、通常PIDを始める前にライン端の目標明度へ穏やかに寄せる。
+    start_lap_camera_handoff_power: int = 35
+    start_lap_camera_handoff_pid_p: float = 0.3
+    start_lap_camera_handoff_turn_cap: float = 10.0
+    start_lap_camera_handoff_v_tolerance: int = 10
+    start_lap_camera_handoff_stable_samples: int = 5
     start_lap_camera_tilt_ff_gain: float = 8.0
     start_lap_camera_ff_cap: float = 8.0
     start_lap_camera_stable_samples: int = 3

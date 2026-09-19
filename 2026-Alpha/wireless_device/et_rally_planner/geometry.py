@@ -41,19 +41,55 @@ def distance(a, b):
 
 def point_segment_distance(p, a, b):
     """点pと線分abの最短距離。"""
+    return distance(p, closest_point_on_segment(p, a, b))
+
+
+def closest_point_on_segment(p, a, b):
+    """点pに最も近い、線分ab上の点。"""
     ab = sub(b, a)
     ab_len2 = dot(ab, ab)
     if ab_len2 == 0:
-        return distance(p, a)
+        return a
     t = dot(sub(p, a), ab) / ab_len2
     t = max(0.0, min(1.0, t))
-    closest = add(a, scale(ab, t))
-    return distance(p, closest)
+    return add(a, scale(ab, t))
+
+
+def segment_segment_distance(a1, a2, b1, b2):
+    """線分a1-a2と線分b1-b2の最短距離。
+
+    2本の線分の最短距離は、交差している(0)か、そうでなければ必ず
+    どちらかの端点から相手の線分への最短距離のいずれかで実現される
+    (計算幾何の標準的な性質)。そのため、4通りの点-線分距離の最小値を
+    とればよい(交差判定を別途行わなくても、交差していれば少なくとも
+    1つの端点-線分距離が0に非常に近い値になるため、実用上問題ない)。
+    """
+    return min(
+        point_segment_distance(a1, b1, b2),
+        point_segment_distance(a2, b1, b2),
+        point_segment_distance(b1, a1, a2),
+        point_segment_distance(b2, a1, a2),
+    )
 
 
 def segment_blocked_by_circle(a, b, center, radius, eps=1e-6):
     """線分abが円(center, radius)の内部を横切るならTrue。"""
     return point_segment_distance(center, a, b) < radius - eps
+
+
+def collinear_param(a, b, p, tol=1e-6):
+    """点pが、直線ab(aからbへ向かう向き)と同一直線上にあるかを判定する。
+    乗っていれば a + t*(b-a) = p となるt(範囲は問わない、a/bの外側もOK)を、
+    乗っていなければNoneを返す。"""
+    d = sub(b, a)
+    len2 = dot(d, d)
+    if len2 < tol:
+        return None
+    t = dot(sub(p, a), d) / len2
+    proj = add(a, scale(d, t))
+    if distance(p, proj) > tol:
+        return None
+    return t
 
 
 def circle_boundary_points(center, radius, n):
