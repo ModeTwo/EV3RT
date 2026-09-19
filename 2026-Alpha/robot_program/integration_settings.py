@@ -90,7 +90,7 @@ class IntegrationSettings:
     delivery_drop_distance_second_mm: float = 100.0
     delivery_drive_second_power: int = 50
     # ライン進行方向からドロップゾーン側へ向く角度。ラリー内側とは反対側。
-    delivery_drop_turn_deg_first: float = -45.0
+    delivery_drop_turn_deg_first: float = -30.0
     delivery_drop_turn_deg_second: float = -90.0
     delivery_inward_turn_deg: float = 90.0
 
