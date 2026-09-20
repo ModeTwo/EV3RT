@@ -11,7 +11,13 @@ from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSen
 # 57.05較正後に102.9cmで再実測(3回、+8mm/+5mm/+5mm、誤差率+0.78%/+0.49%/+0.49%)
 # したところ、まだ僅かに過走行が残っていたため、多数派だった+0.49%を採用して
 # 追加補正(2段階目、57.05 * 1.0049)。
-TIRE_DIAMETER: float = 56.87
+TIRE_DIAMETER: float = 57.33
+# ETラリー工程専用のタイヤ径。2026-09-19: RunByGyroにGYRO_SCALE_FACTORを適用した後の
+# 実機テストで、100cm指令に対し実測99.2cm(誤差-0.8%、過少走行)と判明したため
+# 57.33 * 0.992 に較正した。1回のみの試行なので暫定値。繰り返しテストの結果で再計算すること。
+# 他工程(ライントレース等)の距離には影響させないため、Plotter.tire_diameterを
+# ETラリー工程の開始時だけこの値へ切り替え、終了時に元へ戻す(phases/et_rally.py)。
+ET_RALLY_TIRE_DIAMETER: float = 56.87
 # WHEEL_TREAD: 2026-09-12に実測(左右タイヤの接地面中心間の距離、11.7cm)。
 # et_rally_planner側でのその場旋回の位置ズレ調査(SpinAroundByEncoder、
 # sample_comment.py参照)に使う。
@@ -33,6 +39,8 @@ GYRO_SCALE_FACTOR: float = 1.00635
 class Plotter(object):
     def __init__(self) -> None:
         self.running = False
+        # 通常は共通の較正値。ETラリー工程だけ開始時にET_RALLY_TIRE_DIAMETERへ切り替える。
+        self.tire_diameter = TIRE_DIAMETER
         self.distance = 0.0
         self.loc_x = 0.0
         self.loc_y = 0.0
@@ -64,8 +72,8 @@ class Plotter(object):
         # second. Wheel encoders remain the right source for this.)
         cur_ang_r = right_motor.get_count()
         cur_ang_l = left_motor.get_count()
-        delta_dist_r = math.pi * TIRE_DIAMETER * (cur_ang_r - self.prev_ang_r) / 360.0
-        delta_dist_l = math.pi * TIRE_DIAMETER * (cur_ang_l - self.prev_ang_l) / 360.0
+        delta_dist_r = math.pi * self.tire_diameter * (cur_ang_r - self.prev_ang_r) / 360.0
+        delta_dist_l = math.pi * self.tire_diameter * (cur_ang_l - self.prev_ang_l) / 360.0
         delta_dist = (delta_dist_r + delta_dist_l) / 2.0
         if (delta_dist >= 0.0):
             self.distance += delta_dist
