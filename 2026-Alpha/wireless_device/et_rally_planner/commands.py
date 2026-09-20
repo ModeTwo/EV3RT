@@ -40,7 +40,7 @@ def waypoints_to_commands(waypoints, start_heading_deg=config.START_HEADING_DEG,
 
     # 最終姿勢をゴール向きに合わせる
     final_turn = _heading_delta_to_turn_command(heading, goal_heading_deg)
-    if abs(final_turn) > 1e-6:
+    if config.GOAL_FINAL_TURN and abs(final_turn) > 1e-6:
         commands.append(("turn", round(final_turn, 2)))
 
     return commands
@@ -53,7 +53,7 @@ def _heading_delta_to_turn_command(from_heading_deg, to_heading_deg):
 
 
 def waypoints_to_plan(waypoints, labels=None, start_heading_deg=config.START_HEADING_DEG,
-                       goal_heading_deg=config.GOAL_HEADING_DEG):
+                       goal_heading_deg=config.GOAL_HEADING_DEG, probes=None):
     """実機の絶対方位ベースの制御部品(RunByGyro/SpinAround等、target_type=ABSOLUTE)に
     そのまま渡せる形式のステップ列を作る。move/turnコマンド列(waypoints_to_commands)との違いは、
     各区間の「直前からの旋回量」ではなく「その区間の絶対方位」を持つ点(誤差が後続区間に
@@ -93,9 +93,23 @@ def waypoints_to_plan(waypoints, labels=None, start_heading_deg=config.START_HEA
             "distance_mm": round(dist_cm * 10.0, 1),
             "label": label,
         })
+        # probes: {waypoint index: checkpoints.find_reset_probesの結果}。このwaypointに
+        # 着いた直後(旋回する前)に、進行方向のまま床の黒線まで往復する位置リセット。
+        if probes and i in probes:
+            p = probes[i]
+            nominal_mm = round(p["nominal_cm"] * 10.0, 1)
+            steps.append({
+                "type": "probe",
+                "target_heading_deg": shifted(segment_heading),
+                "nominal_mm": nominal_mm,
+                "max_mm": round(nominal_mm + config.PROBE_TOLERANCE_MM, 1),
+                "min_mm": 0.0,
+                "line": p["line"],
+                "label": "probe:" + p["line"],
+            })
         heading = segment_heading
 
-    if abs(geo.normalize_deg(goal_heading_deg - heading)) > 1e-6:
+    if config.GOAL_FINAL_TURN and abs(geo.normalize_deg(goal_heading_deg - heading)) > 1e-6:
         steps.append({"type": "turn", "target_heading_deg": shifted(goal_heading_deg), "label": "goal"})
 
     return steps

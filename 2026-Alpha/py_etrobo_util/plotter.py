@@ -11,7 +11,7 @@ from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSen
 # 57.05較正後に102.9cmで再実測(3回、+8mm/+5mm/+5mm、誤差率+0.78%/+0.49%/+0.49%)
 # したところ、まだ僅かに過走行が残っていたため、多数派だった+0.49%を採用して
 # 追加補正(2段階目、57.05 * 1.0049)。
-TIRE_DIAMETER: float = 57.33
+TIRE_DIAMETER: float = 56.87
 # WHEEL_TREAD: 2026-09-12に実測(左右タイヤの接地面中心間の距離、11.7cm)。
 # et_rally_planner側でのその場旋回の位置ズレ調査(SpinAroundByEncoder、
 # sample_comment.py参照)に使う。
