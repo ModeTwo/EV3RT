@@ -28,34 +28,63 @@ def build_drop_bottle(context, config):
     )
 
     # 2. ライン進行方向からドロップゾーン側へ90度旋回する。
-    turn_toward_drop_zone = to_turn(
+    turn_toward_drop_zone_first = to_turn(
         "turn toward bottle drop zone",
         context,
         settings,
-        settings.delivery_drop_turn_deg,
+        settings.delivery_drop_turn_deg_first,
     )
 
     # 3. ボトルを置くため、ドロップゾーンへ規定距離だけ前進する。
-    drive_into_drop_zone = DriveDistance(
+    drive_into_drop_zone_first = DriveDistance(
         "enter bottle drop zone",
-        settings.delivery_drop_distance_mm,
-        settings.delivery_drive_power,
+        settings.delivery_drop_distance_first_mm,
+        settings.delivery_drive_first_power,
+    )
+        # 2. ライン進行方向からドロップゾーン側へ90度旋回する。
+    turn_toward_drop_zone_second = to_turn(
+        "turn toward bottle drop zone",
+        context,
+        settings,
+        settings.delivery_drop_turn_deg_second,
+    )
+
+    # 3. ボトルを置くため、ドロップゾーンへ規定距離だけ前進する。
+    drive_into_drop_zone_second = DriveDistance(
+        "enter bottle drop zone",
+        settings.delivery_drop_distance_second_mm,
+        settings.delivery_drive_second_power,
     )
 
     # 4. 前進した距離と同じ距離を後退し、青ライン中央へ戻る。
-    reverse_to_blue_line = DriveDistance(
+    reverse_to_blue_line_first = DriveDistance(
         "leave bottle drop zone",
-        settings.delivery_drop_distance_mm,
-        -settings.delivery_drive_power,
+        settings.delivery_drop_distance_first_mm,
+        -settings.delivery_drive_first_power,
     )
 
     # 5. 次の青ラインへ進めるよう、元のライン進行方向へ向きを戻す。
-    turn_back_to_line = to_turn(
+    turn_back_to_line_first = to_turn(
+        "turn back to drop zone line",
+        context,
+        settings,
+        settings.delivery_drop_turn_deg_first,  # 絶対方位: ライン進行方向へ戻る
+    )
+    # 4. 前進した距離と同じ距離を後退し、青ライン中央へ戻る。
+    reverse_to_blue_line_second = DriveDistance(
+        "leave bottle drop zone",
+        settings.delivery_drop_distance_second_mm,
+        -settings.delivery_drive_second_power,
+    )
+
+    # 5. 次の青ラインへ進めるよう、元のライン進行方向へ向きを戻す。
+    turn_back_to_line_second = to_turn(
         "turn back to drop zone line",
         context,
         settings,
         0.0,  # 絶対方位: ライン進行方向へ戻る
     )
+    
 
     # 6. ここまでの制御が完了したことを後続工程へ記録する。
     mark_delivery_complete = MarkBottleDelivered(
@@ -66,10 +95,14 @@ def build_drop_bottle(context, config):
     root.add_children(
         [
             move_to_blue_line_center,
-            turn_toward_drop_zone,
-            drive_into_drop_zone,
-            reverse_to_blue_line,
-            turn_back_to_line,
+            turn_toward_drop_zone_first,
+            drive_into_drop_zone_first,
+            turn_toward_drop_zone_second,
+            drive_into_drop_zone_second,
+            reverse_to_blue_line_first,
+            turn_back_to_line_first,
+            reverse_to_blue_line_second,
+            turn_back_to_line_second,
             mark_delivery_complete,
         ]
     )

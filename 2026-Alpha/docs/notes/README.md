@@ -476,3 +476,90 @@ LAP青検知で方位安定を待たずATへ引渡し、青検知起点の最初
 なお、本セッション外で`integration_settings.py`の`to_exit_pivot_min_power`・`to_spin_min_power`が55→60へ変更されているのを確認した。本セッションでは行っておらず、ユーザー側の調整として現状のまま維持している。
 
 全変更ファイル（修正）: `robot_program/behaviours/conditions.py`。ETロボコン側HANDOFF.mdおよびverify_green_pass.pyにも記録。既存の未コミット変更は保持。
+
+2026-09-18更新: ヒント1後のカメラ復帰(`recover line by camera after hint1`)のSEEK段が、色センサーの黒検知(`dark_count`)を一度も得られないまま1200mm予算(`dist_1200`)を使い切って強制終了する不具合を、実走ログ3件(左右コース双方)で確認した。theta(カメラ中心誤差)がheading≈90〜93°付近で長距離(約780mm)にわたり安定していたにもかかわらず色センサーは黒を検知しなかったため、カメラが中心と見ている対象と色センサーの実位置がずれている可能性がある。カメラ切替タイミング自体は当該ログでは十分な余裕(約1.9秒)があり原因ではないことも確認した。
+
+対策として`robot_program/behaviours/camera_line_trace.py`の`RecoverLineByCamera`にSEEK専用の2段フォールバックを追加した。(1) thetaが`seek_theta_tolerance_deg`以内に`seek_stable_samples`回連続して収まった場合、黒検知を待たずにALIGNへ進める(heading stable fallback)。(2) それでも進まない場合、SEEK開始からの距離が`seek_distance_limit_mm`に達したら強制的にALIGNへ進める(distance limit fallback、Hint2Exit同様「打ち切ったら次工程へ進む」設計)。いずれも新規キーワード引数はデフォルトで無効(`seek_stable_samples=0`、`seek_distance_limit_mm=None`)のため、LAP前の既存呼び出し元(`start_to_lap_gate.py`)は変更なし。
+
+`robot_program/integration_settings.py`に`to_after_hint1_camera_seek_theta_tolerance_deg=5.0`・`to_after_hint1_camera_seek_stable_samples=8`・`to_after_hint1_camera_seek_distance_limit_mm=450.0`(実機未校正の試走初期値)を追加し、`to_hint_route.py`の`camera_recovery_after_hint1`へ配線した。
+
+検証は新規`work/seek-fallback-after-hint1-v1/verify_seek_fallback.py`(ETロボコン側)に、黒未検知でもtheta収束なら少ない距離でheading stable fallbackが発火すること、theta振動が続く場合はdistance limit fallbackが上限付近で発火すること、両パラメータ未指定なら変更前と同じ挙動(SEEKに無期限に留まる)を保つこと、の3件。既存のcamera_recovery/green_pass/hint2_exit検証スクリプトも再実行し全件成功(回帰なし)。実機・実カメラでの再現テストは未実施。
+
+全変更ファイル（修正）: `robot_program/behaviours/camera_line_trace.py`、`robot_program/integration_settings.py`、`robot_program/features/to_hint_route.py`。ETロボコン側HANDOFF.mdおよび新規`work/seek-fallback-after-hint1-v1/verify_seek_fallback.py`にも記録。既存の未コミット変更は保持。
+
+2026-09-18更新: `RecoverLineByCamera`(SEEK→ALIGN→HANDOFF、上記のSEEKフォールバック含む)を単体で実機検証するため、alpha.pyから完全に分離した新規`recover_line_test.py`を追加した。動作順序はResetDevice→タッチ待ち→0.3秒静定→RecoverLineByCamera(ヒント1後のTO区間と同じ`to_after_hint1_camera_*`設定を流用、`gyro_heading_deg`だけは置いた向きを基準にするため0.0)→色センサーTraceLineで指定距離(既定80mm)走行→StopNow→待機(Ctrl+Cで終了)。CLIは`course`必須、`--trace-mm`/`--trace-power`/`--no-preview`/`--logfile`が指定可能。
+
+検証は新規`work/recover-line-standalone-test-v1/verify_recover_line_test.py`(ETロボコン側)に、`etrobo_python`含む全依存をスタブ化した上でのツリー構成順序・gyro_heading_deg=0.0・SEEKフォールバック設定の一致・CLI引数の伝播、の4件。`python -m py_compile`でのバイトコンパイルも成功。実機での実行は未実施。
+
+全変更ファイル（新規）: `recover_line_test.py`。ETロボコン側HANDOFF.mdおよび新規`work/recover-line-standalone-test-v1/verify_recover_line_test.py`にも記録。既存の未コミット変更は保持。
+
+2026-09-18追記: 実機実行で`AttributeError: 'BehaviourTree' object has no attribute 'tick_once'`が発生したため修正した。原因は`build_tree()`がrootを不要な`py_trees.trees.BehaviourTree(root)`でラップして返していたこと(実際のBehaviourTreeにはtick_once()が無く、tick()/tick_tock()のみ)。本プロジェクトの他の全ツリービルダーと同様、raw rootを直接返すよう修正した。検証スクリプト側の`BehaviourTree`スタブがこの食い違いを隠していたため削除し、Sequence/Parallelスタブへ簡略版のtick挙動と、実機と同じ経路でroot.tick_once()を複数回呼ぶ回帰テストを追加した。全変更ファイル（修正）: `recover_line_test.py`。
+
+
+## 2026-09-18 start_to_lap_gate.pyを他featureと同じ「root→add_children→return root」構造へ整理
+
+ユーザー指示により`robot_program/features/start_to_lap_gate.py`の`build_start_to_lap_gate()`を再構成した。変更前は`follows_bottle`分岐だけ`root = Sequence(...)`を作って`return root`し、`else`分岐は`root`を経由せず`RunByGyro(...)`を直接`return`していて、2分岐で構造が異なっていた。変更後は両分岐とも同じ`root`変数へ結果(`follows_bottle`時はSequence、それ以外は単体のRunByGyro)を代入するだけにし、関数末尾の`return root`一箇所へ統一した。`RunByGyro`/`Sequence`/`Parallel`/`Timeout`の生成順序・引数・値は無変更(git diffで構築ロジック自体に差分がないことを確認済み、純粋な制御フロー整理)。
+
+検証はPython構文解析と`git diff --check`のみ(戻り値の型・子ノード構成が変更前と完全に同一のため、実機的な回帰リスクはない)。全変更ファイル（修正）: `robot_program/features/start_to_lap_gate.py`。ETロボコン側HANDOFF.mdにも記録。既存の未コミット変更は保持。
+
+
+## 2026-09-19 【案】後退50cm→+90°旋回→前進→180°旋回への変更（safe_blue_searchはroot除外）
+
+ユーザーが手動で`start_to_lap_gate.py`へ複数の変更(カーブ減速クラス`RunByGyroSpeedDownatCurve`、後退用クラス`RunByGyroMinusBack`、70cm後退の追加、`distance_limit_mm`のハードコード化等)を加えていたため、まず現状を読み直して報告した。前回整理した「root一本化」構造も、ユーザーの手動編集で元の「follows_bottle分岐内return root／elseの末尾return」という2分岐不揃いの形に戻っていた。
+
+続けてユーザー指示「一旦停止後、50cm後退に変更、そのあと+90°旋回、青か黒を検知するか55cm進むまでRunByGyroで前進、180°旋回。この修正は案で、いつでも前の状態に戻れるように」に従い変更した。編集前に`start_to_lap_gate.before.py`(ETロボコン側work/start-to-lap-turn90-v1/)へ全文バックアップを保存した。
+
+変更内容: `back_by_gyro`の後退距離を700mm→500mmへ変更。後退後に「+90度旋回(SpinAround)→停止→前進(RunByGyro絶対90度保持、青検知/黒検知/550mm上限のいずれか先着で終了、Parallel SuccessOnOne)→停止→180度旋回(SpinAround)→停止」を新規追加。旧来の`safe_blue_search`(カメラ復帰+青検知監視、AT/ボトルキャッチのhint経由ルートへの引継ぎ用)は、ユーザーが示した新しい流れ(後退→旋回90→前進→旋回180→そのあと相撲→ボトルキャッチ)と経路が異なると判断してroot.add_childrenから除外したが、構築コード自体は削除せず残しているため、`root.add_children`の末尾へ差し戻すだけで旧経路に復帰できる。**この置き換え判断はユーザー意図の完全な確認が取れていない点を明記済み。**「そのあとET相撲→ボトルキャッチ」への接続は本ファイルの責務を超えるため今回は未着手(`phases/`・`integration_runs.py`側の話)。
+
+検証はPC上でpy_trees/simple_pid/py_etrobo_utilを最小スタブに置換し、`build_start_to_lap_gate`を実際に呼び出して木構造を検査(ETロボコン側work/start-to-lap-turn90-v1/verify_start_to_lap_turn90.py)。mode='full'/'hint2'/'hint2-return'でrootの子ノード順・後退500mm・前進上限550mm・旋回90/180度を確認、mode='lap'(未変更の分岐)が従来通りであることも確認。全4ケース成功。実機・実カメラでの再現テストは未実施。
+
+全変更ファイル（修正）: `robot_program/features/start_to_lap_gate.py`。ETロボコン側HANDOFF.md、work/start-to-lap-turn90-v1/(バックアップ・検証スクリプト)にも記録。既存の未コミット変更は保持。
+
+
+## 2026-09-19 advance_after_turn90を黒即停止・青+2cmの非対称な終了条件へ変更
+
+ユーザー指示「黒を検知した時は即座に止まりたいが、青を検知した時は2cmだけ前に進みたい」により、直前に追加した`advance_after_turn90`の終了条件を非対称化した。変更前は`Parallel(SuccessOnOne)`直下に`IsColorDetected(BLUE)`と`IsColorDetected(BLACK)`を並べていたため、どちらでも即座に終了していた。変更後は`IsColorDetected(BLACK)`は直下に残し即停止を維持し、`IsColorDetected(BLUE)`は新設のSequence`stop_after_blue_plus_20mm`(memory=True)の1番目の子にして、2番目の子に`IsDistanceEarned(delta_dist=20.0)`(新定数`ADVANCE_AFTER_TURN90_BLUE_EXTRA_MM`)を追加した。Sequenceは青検知が成功した時点からIsDistanceEarnedが20mmを計測し始めるため、「青検知→さらに2cm進んで停止」を実現する。既存のRunByGyro(前進保持)と550mm安全上限は無変更。
+
+検証はwork/start-to-lap-turn90-v1/verify_start_to_lap_turn90.pyを更新し、黒検知が単独ノードとして即停止扱いのまま、青検知がSequence(`blue then 20mm more`)内でdelta_dist=20.0のIsDistanceEarnedと組になっていることを確認。既存の他テストも再確認し全件成功。実機・実カメラでの再現テストは未実施。
+
+全変更ファイル（修正）: `robot_program/features/start_to_lap_gate.py`。ETロボコン側HANDOFF.mdおよびverify_start_to_lap_turn90.pyにも記録。既存の未コミット変更は保持。
+
+2026-09-19更新: ヒント1後の`run_to_black`(75度直進)+`detect_black`(`IsBlackDetected`)による黒検知後、黒検知の成否に関わらず絶対方位90度へ`turn_to_90_before_trace`(`SpinAround`)で旋回し直してから650mmライントレースへ進むよう変更した。ET相撲のガレージ復帰(`move_to_sumo_exit.py`の`DetectDarkGarageLine`)にある「検知後に既知方位へ旋回」構造を参考にしたが、見つからない場合を失敗にする`FailWhenGarageLineWasNotFound`相当の判定はユーザー指示により導入していない。
+
+併せて、90度成分1200mmでヒント2読み取り方向へ旋回する判定(`IsProjectedDistanceEarned`)の基準点を、75度直進の開始位置(black_or_550が最初にtickされる瞬間)に戻した。`line_trace_120_with_cap`(Parallel)として`line_trace_120`(black_or_550→turn_to_90_before_trace→stop→wait→trace_650_parallel)と`dist_1200_from_75deg_start`を直接の兄弟にし、両者が同じ最初のtickから計測を開始する構造にした。
+
+検証は新規`work/sumo-style-hint1-recovery-v1/verify_hint1_black_recovery.py`(ETロボコン側)に、ツリー構造(dist_1200_from_75deg_startの兄弟配置、turn_to_90_before_traceの絶対方位90度)と、`IsProjectedDistanceEarned`の基準点の違いによる進捗計算の差を数値で確認する3件。既存の未コミット変更前の状態はETロボコン側`work/sumo-style-hint1-recovery-v1/backup/`にバックアップ済み(gitの直前コミットにもカメラ復帰版が残っている)。
+
+なお、`trace_650_parallel`内の`distance_650`(delta_dist=650、trace_650自身の開始位置基準の生距離)は、外側の`dist_1200_from_75deg_start`とは別の独立した打ち切り条件として残したままにしている。75度区間の開始位置を正しく基準にした外側の1200mm上限が導入された今、650という値のままだとほぼ確実にこちらが先に成立し、外側の上限が実質機能しなくなる可能性が高い。650がどの根拠の値だったか不明なため、ユーザー確認までは変更していない。
+
+全変更ファイル（修正）: `robot_program/features/to_hint_route.py`。ETロボコン側HANDOFF.mdおよび新規`work/sumo-style-hint1-recovery-v1/verify_hint1_black_recovery.py`にも記録。既存の未コミット変更は保持。
+
+2026-09-19追記: `distance_650`(650mm)が外側の1200mmより先に成立してしまう問題について、ユーザー指示により`distance_650`と`trace_650_parallel`を削除し、終了条件を外側の`dist_1200_from_75deg_start`(1200mm)だけへ一本化した。`trace_650`はParallelラップのないbareなTraceLineリーフになった。全変更ファイル（修正）: `robot_program/features/to_hint_route.py`。
+
+2026-09-19追記: ユーザー指示「斜めに向いてから170mmくらいで復帰処理に切り替えてください」により、`black_distance_limit`(斜め方向直進中に黒検知が成立しなかった場合の距離上限)を550mm→170mmへ短縮した。本セッション外の編集で`run_to_black`のtarget(斜め方向)が75度→45度、`wait_after_turn_to_90`のdelta_timeが0.5秒→0.2秒へ変わっているのも確認済み(本セッションでは変更していない)。全変更ファイル（修正）: `robot_program/features/to_hint_route.py`。
+
+2026-09-19追記: ヒント2読み取りが遅い問題を確認した。`hint_reader.py`の`ReadHintCard`は初回tickで`begin_qr_read()`(カメラをQRCODE用へ再オープン、約3.4秒)を呼び、その時間が読み取りの`elapsed`に丸ごと乗ってしまう。QR1はルート先頭の`PrepareHintCamera("prepare hint1 camera")`で走行中に前倒し再オープンして隠しているが、QR2向けの同じ呼び出し(`PrepareHintCamera("prepare hint2 camera")`)は`camera_recovery_then_trace_120`(コメントアウト済み)にしか残っておらず、新しい`black_or_550`→`turn_to_90_before_trace`→`trace_650`の流れには無かった。`line_trace_120`の`wait_after_turn_to_90`と`trace_650`の間に`prepare hint2 camera`を追加し、trace_650の走行時間へ切替コストを重ねるようにした。全変更ファイル（修正）: `robot_program/features/to_hint_route.py`。
+
+
+## 2026-09-19 正式な工程順変更: LAPゲート通過後にET相撲→ボトルキャッチの順へ
+
+ユーザー指示「正式に、LAPゲートを超えたら相撲を実施して、そのあとでボトルキャッチに行くように順序を変えてください」により、ミッション全体の工程順を一元管理する`robot_program/tree_builder.py`の`build_mission_children()`を変更した。このファイルは冒頭コメントで「統合担当者だけが変更し、各機能担当者はfeatures配下だけを変更する」と明記されている工程順の一元管理箇所。
+
+変更前: LAPゲート → (ボトル取得+ヒント読取+配置の準備工程) → ETラリー → ET相撲 → FINISH。
+変更後: LAPゲート → **ET相撲** → (ボトル取得+ヒント読取+配置の準備工程) → ETラリー → FINISH。`build_et_sumo_phase(...)`の呼び出しを`build_lap_gate_phase(...)`の直後、`build_bottle_and_rally_preparation_phase(...)`より前へ移動しただけで、各フェーズ内部のロジックは無変更。
+
+前回(2026-09-18/19)の`start_to_lap_gate.py`側の変更は「この修正は案」という前提でLAP直後に後退・旋回・前進・旋回を試作追加したものだったが、今回は「正式に」という明示があったため、`tree_builder.py`側の工程順そのものを恒久的に変更する対応とした。編集前に`git status`で本ファイルが無変更(コミット済み状態と同一)だったことを確認済みのため、`git diff`/`git checkout`でいつでも変更前の状態を再現できる。
+
+検証はETロボコン側`work/mission-order-sumo-before-bottle-v1/verify_mission_order.py`で、各フェーズビルダーをラベルを返すだけのセンチネル関数へ差し替え、`build_mission_children()`の返す順序だけを検査。mission='full'/'configured'で`['LAP','SUMO','BOTTLE_AND_RALLY_PREP','RALLY','FINISH']`の順になること、`enable_et_sumo=False`ではSUMOだけが抜けること、を確認。全3件成功(ディスパッチ順序のみの検証で、各フェーズ内部の走行ロジックは対象外)。
+
+全変更ファイル（修正）: `robot_program/tree_builder.py`（`build_et_sumo_phase`の呼び出し位置をLAPゲート直後へ移動）。ETロボコン側HANDOFF.mdおよび新規work/mission-order-sumo-before-bottle-v1/verify_mission_order.pyにも記録。
+
+**残課題**: 実機・実コースでの「LAP→相撲→ボトルキャッチ」通し走行確認。相撲終了後にボトルキャッチ(AT)の開始位置・向きへ物理的に正しく移動できるかは未検証で、コース配置次第で追加の移動工程が必要になる可能性がある。前回の`start_to_lap_gate.py`側の試作(後退50cm→旋回90→前進→旋回180)との役割分担も要整理(両方が「相撲へ向かう」ためのものなら重複の可能性がある)。既存の未コミット変更は保持。
+
+## 2026-09-20 Hint2Exit WHITEフェーズに方位角90度への投影距離210mmの制約を追加
+
+ユーザー指示「絶対方位90°を保持したまま直進に、方位角90°の向きに210mmという制約を付けたい」により、`Hint2Exit`のWHITEフェーズ(絶対方位90度保持での直進)に、方位角90度方向への投影距離が210mmに達したら(生の走行距離・黒検知の成否に関わらず)TURNへ進む制約を追加した。`to_hint_route.py`の`dist_1200_from_75deg_start`(`IsProjectedDistanceEarned`)と同じ符号規約・投影計算を、単一クラスの状態機械である`Hint2Exit`の内部に直接実装している。
+
+新設定`to_exit_white_straight_projected_limit_mm`(既定210.0)を`integration_settings.py`に追加。検証は`work/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.py`に追加したTest5bで、生の走行距離が600mm上限より遥かに小さくても投影距離210mmだけでWHITEからTURNへ進むことを確認(既存6件と合わせ全7件成功)。既存の`to_exit_trace_mm`(600mm、生の走行距離によるWHITE上限)は変更していないが、210mmの方が大幅に小さいため実質使われなくなる可能性が高い(要ユーザー判断)。
+
+全変更ファイル（修正）: `robot_program/behaviours/hint2_exit.py`、`robot_program/integration_settings.py`。ETロボコン側HANDOFF.mdおよび`work/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.py`にも記録。既存の未コミット変更は保持。

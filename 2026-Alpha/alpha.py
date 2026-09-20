@@ -6,7 +6,7 @@ import threading
 import signal
 from functools import wraps
 import math
-from enum import IntEnum, Enum, auto
+from enum import Enum, auto
 from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSensor, GyroSensor
 from simple_pid import PID
 from py_trees.trees import BehaviourTree
@@ -29,7 +29,7 @@ from robot_program.config import (
 from robot_program.context import RaceContext
 from robot_program.delivery_heading import RegisterDeliveryHeading, initial_delivery_heading
 from robot_program.decryption_key import read_decryption_key
-from robot_program.behaviours.device_control import ResetDevice
+from robot_program.behaviours.device_control import ArmDirection, ArmUpDownFull, ResetDevice
 from robot_program.features.sumo_bearing import initial_sumo_bearing
 from robot_program.features.sumo_bearing_motion import RegisterSumoBearing
 from robot_program.runtime import runtime as robot_runtime
@@ -58,8 +58,7 @@ BOTTLE_COLOR_VALUE_BY_NAME = {
 }
 
 # constants for specific action classes
-ARM_SHIFT_PWM      = 35   # ArmUpDownFull
-JUNCT_UPPER_THRESH = 50   # IsJunction 
+JUNCT_UPPER_THRESH = 50   # IsJunction
 JUNCT_LOWER_THRESH = 40   # IsJunction
 ROE_DEGEN          = 90   # TraceLineCam: span above this = line ~tangent
 CURV_MIN_ROWS_SEP  = 15   # TraceLineCam: need this many rows between near/far to trust the slope
@@ -77,10 +76,6 @@ g_video = None
 g_video_thread = None
 g_course = 0
 
-
-class ArmDirection(IntEnum):
-    UP = -1
-    DOWN = 1
 
 class JState(Enum):
     INITIAL = auto()
@@ -118,34 +113,6 @@ class TheEnd(Behaviour):
         if not self.running:
             self.running = True
             self.logger.info("%+06d %s.behavior tree exhausted. ctrl+C shall terminate the program" % (g_plotter.get_distance(), self.__class__.__name__))
-        return Status.RUNNING
-
-
-class ArmUpDownFull(Behaviour):
-    def __init__(self, name: str, direction: ArmDirection):
-        super(ArmUpDownFull, self).__init__(name)
-        self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-        self.direction = direction
-        self.running = False
-
-    def update(self) -> Status:
-        if not self.running:
-            self.running = True
-            self.prev_degree = g_arm_motor.get_count()
-            self.logger.info("%+06d %s.start position is %d" % (g_plotter.get_distance(), self.__class__.__name__, self.prev_degree))
-            self.count = 0
-            g_arm_motor.set_power(ARM_SHIFT_PWM * self.direction)
-        else:
-            cur_degree = g_arm_motor.get_count()
-            if abs(cur_degree - self.prev_degree) < 5:
-                if self.count > 20:
-                    g_arm_motor.set_power(0)
-                    g_arm_motor.set_brake(True)
-                    self.logger.info("%+06d %s.position set to %d" % (g_plotter.get_distance(), self.__class__.__name__, cur_degree))
-                    return Status.SUCCESS
-                else:
-                    self.count += 1
-            self.prev_degree = cur_degree
         return Status.RUNNING
 
 

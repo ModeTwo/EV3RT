@@ -48,6 +48,9 @@ class RecoverLineByCamera(Behaviour):
         gyro_kp: float = 0.3,
         gyro_turn_cap: float = 8.0,
         log_interval_sec: float = 0.25,
+        seek_theta_tolerance_deg: float = 5.0,
+        seek_stable_samples: int = 0,
+        seek_distance_limit_mm=None,
     ) -> None:
         super().__init__(name)
         self.power = power
@@ -71,6 +74,18 @@ class RecoverLineByCamera(Behaviour):
         self.gyro_kp = gyro_kp
         self.gyro_turn_cap = gyro_turn_cap
         self.log_interval_sec = log_interval_sec
+        # SEEKがカラーセンサーの黒検知(dark_count)だけに依存すると、カメラが
+        # 中心だと見ている対象と実際の色センサーの位置がずれている場合に
+        # 永久にSEEKへ留まってしまう(実機で複数回確認済み)。theta(カメラの
+        # 中心誤差)が一定時間安定した場合、あるいは距離上限に達した場合も
+        # ALIGNへ進めるフォールバックを追加する。seek_stable_samples<=0または
+        # seek_distance_limit_mm=Noneでそれぞれ無効化され、既存呼び出し元
+        # (LAP前のcamera_recovery)の挙動は変えない。
+        self.seek_theta_tolerance_deg = seek_theta_tolerance_deg
+        self.seek_stable_samples = seek_stable_samples
+        self.seek_distance_limit_mm = seek_distance_limit_mm
+        self.seek_stable_count = 0
+        self.seek_start_dist = 0
         self.pid = PID(
             pid_p,
             pid_i,
@@ -110,6 +125,8 @@ class RecoverLineByCamera(Behaviour):
                 camera_side = TraceSide.CENTER
             runtime.video.set_trace_side(camera_side)
             self.running = True
+            self.seek_start_dist = runtime.plotter.get_distance()
+            self.seek_stable_count = 0
             self.logger.info(
                 '%+06d %s.camera recovery started side=%s'
                 % (runtime.plotter.get_distance(), self.__class__.__name__, camera_side.name)
@@ -139,16 +156,33 @@ class RecoverLineByCamera(Behaviour):
 
         _, _, value = runtime.color_sensor.get_raw_color_hsv()
         self.dark_count = self.dark_count + 1 if value <= self.line_v else 0
-        if self.phase == PHASE_SEEK and self.dark_count >= self.line_samples:
-            self.phase = PHASE_ALIGN
-            self.stable_count = 0
-            self.logger.info(
-                '%+06d %s.line acquired; switching SEEK to ALIGN heading=%.1f'
-                % (
-                    runtime.plotter.get_distance(), self.__class__.__name__,
-                    -runtime.course * float(runtime.gyro_sensor.get_angle()),
+
+        if self.phase == PHASE_SEEK:
+            theta_stable = bool(insight) and abs(theta) <= self.seek_theta_tolerance_deg
+            self.seek_stable_count = self.seek_stable_count + 1 if theta_stable else 0
+            seek_dist = abs(runtime.plotter.get_distance() - self.seek_start_dist)
+            advance_reason = None
+            if self.dark_count >= self.line_samples:
+                advance_reason = 'line acquired'
+            elif self.seek_stable_samples > 0 and self.seek_stable_count >= self.seek_stable_samples:
+                # 色センサーが黒を検知しなくても、カメラのtheta(中心誤差)が
+                # 一定サンプル安定していれば十分近いと判断してALIGNへ進める。
+                advance_reason = 'heading stable fallback'
+            elif self.seek_distance_limit_mm is not None and seek_dist >= self.seek_distance_limit_mm:
+                # dark_countもtheta安定も得られないまま一定距離を使い切った場合、
+                # SEEKに留まり続けて1200mm予算を消費し尽くすよりは、ALIGN以降へ
+                # 進めて色センサーへの引渡しを試みる(実機で複数回確認した滞留対策)。
+                advance_reason = 'distance limit fallback'
+            if advance_reason is not None:
+                self.phase = PHASE_ALIGN
+                self.stable_count = 0
+                self.logger.info(
+                    '%+06d %s.%s; switching SEEK to ALIGN heading=%.1f'
+                    % (
+                        runtime.plotter.get_distance(), self.__class__.__name__, advance_reason,
+                        -runtime.course * float(runtime.gyro_sensor.get_angle()),
+                    )
                 )
-            )
 
         heading = -runtime.course * float(runtime.gyro_sensor.get_angle())
         heading_error = (self.gyro_heading_deg - heading + 180.0) % 360.0 - 180.0
@@ -247,4 +281,5 @@ class RecoverLineByCamera(Behaviour):
         self.dark_count = 0
         self.phase = PHASE_SEEK
         self.stable_count = 0
+        self.seek_stable_count = 0
         self.last_log_at = None

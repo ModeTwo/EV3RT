@@ -228,7 +228,7 @@ ETRobo.dispatch()
 
 競技固有の走行処理は`alpha.py`へ追加せず、`features/`または`behaviours/`へ配置します。
 
-`ArmDirection`と`ArmUpDownFull`はキャリブレーションでのみ使用するため、共通`behaviours/`へ分割せず`alpha.py`に配置しています。`ResetDevice`は単体テスト可能な共通Behaviorとして`behaviours/device_control.py`に配置し、`alpha.py`のキャリブレーションから呼び出します。
+`ArmDirection`と`ArmUpDownFull`は、当初キャリブレーション専用として`alpha.py`に配置していましたが、ETラリー開始前にもアームを上げ直すため使用するようになり、`behaviours/device_control.py`へ移して`alpha.py`のキャリブレーションと`phases/et_rally.py`の両方から呼び出す共通Behaviorとしました。`ResetDevice`も同じファイルに、単体テスト可能な共通Behaviorとして配置し、`alpha.py`のキャリブレーションから呼び出します。
 
 `ResetDevice`自身がデバイス値をグローバル変数として保持する必要はありません。`runtime`に設定済みの同一デバイス参照を使い、モーターのエンコーダー値とジャイロ角度は各デバイス内部の`reset_count()`／`reset()`でゼロ化します。走行途中で実行すると`Plotter`の累積走行値と基準がずれるため、競技開始前のキャリブレーションでだけ使用してください。
 
@@ -387,7 +387,7 @@ root.add_children([PendingFeature(name="feature_name_pending")])
 | `line_trace.py` | `TraceLine` |
 | `gyro_drive.py` | `RunByGyro`、`SpinAround` |
 | `motor_control.py` | `StopNow`、`RunAsInstructed` |
-| `device_control.py` | `ResetDevice` |
+| `device_control.py` | `ResetDevice`、`ArmUpDownFull` |
 | `conditions.py` | `IsDistanceEarned`、`IsColorDetected`、`IsColorTransitionDetected`、`IsTimePassed` |
 | `bottle.py` | `IsBottleInsight`、`HasCaughtBottle`、`SelectBottleDropZone`、配置先判定・完了記録 |
 | `hint_reader.py` | `ReadHintCard` |

@@ -77,12 +77,12 @@ class SumoSettings:
     line_black_max_value: int = 45
     line_white_min_value: int = 65
     line_sensor_log_interval_sec: float = 0.25
-    navigation_power: int = 70
+    navigation_power: int = 80
     # 旋回後の惰性を待ち、新規画像で正面への整列を確認する。
     camera_alignment_settle_sec: float = 0.2
     camera_alignment_tolerance_deg: float = 5.0
-    approach_power: int = 50
-    carry_power: int = 50
+    approach_power: int = 60
+    carry_power: int = 60
 
     # 土俵方向へ90度旋回した直後、カメラ視野を広げるため素早く後退する。
     camera_retreat_distance_mm: float = 80.0
@@ -133,6 +133,9 @@ class SumoSettings:
     # 直線後退でアームの保持深さ、ボトル直径、安全余裕をまとめて確保する。
     release_reverse_distance_mm: float = 100.0
     release_reverse_power: int = 60
+    # ボトル離脱後、黒ライン探索へ入る前に横方向へ退避する。
+    garage_avoid_distance_mm: float = 120.0
+    garage_avoid_power: int = 50
 
     # 離脱後はガレージ側へ旋回してから、その絶対方位を維持して黒ラインまで直進する。
     garage_return_drive_power: int = 60

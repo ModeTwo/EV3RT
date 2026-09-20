@@ -43,6 +43,23 @@ import config
 import geometry as geo
 
 
+class Post(tuple):
+    """支柱の位置(x, y)を表す、通常の2-tupleと完全互換のサブクラス。
+
+    支柱の足元にはT字パーツ(ゲート法線方向に±POST_PIVOT_ARM_HALF_LENGTH_CM
+    伸びる直径2cmの棒)が付いている(config.POST_PIVOT_ARM_HALF_LENGTH_CM参照)。
+    これをpivot_turn_safeでカプセル状の障害物として扱うため、法線方向の
+    単位ベクトルをarm_dir属性として追加で持たせる。タプル自体はあくまで
+    (x, y)の2要素のみで構成されるため、添字アクセス・geo関数・JSON化など
+    既存コードからは普通の(x, y)タプルと区別なく扱える。
+    """
+
+    def __new__(cls, point, arm_dir=(0.0, 0.0)):
+        obj = super().__new__(cls, (point[0], point[1]))
+        obj.arm_dir = arm_dir
+        return obj
+
+
 class Gate:
     """1つのゲート(支柱2本1組)を表すクラス。
 
@@ -79,8 +96,12 @@ class Gate:
         return (-dy, dx)
 
     def posts(self):
-        """2本の支柱の座標(cm)をリストで返す。障害物としての位置に使う。"""
-        return [self.foot_a, self.foot_b]
+        """2本の支柱の座標(cm)をリストで返す。障害物としての位置に使う。
+
+        各支柱をPost(arm_dir=ゲート法線の単位ベクトル)として返し、
+        T字パーツの向きをpivot_turn_safe側で参照できるようにしている。
+        """
+        return [Post(self.foot_a, self.normal), Post(self.foot_b, self.normal)]
 
     def valid_half_length(self, angle_deg=0.0):
         """ロボットが安全に通過できる、中心からの片側最大距離。
@@ -414,19 +435,54 @@ def pivot_turn_safe(point, heading_in_deg, heading_out_deg, all_posts):
     その弧の範囲内」の両方を満たす場合のみ危険と判定する(距離だけで一律に
     判定すると、実際の旋回角が小さいケースまで安全域を過大評価し、隣接
     グリッドのゲートなどで通過候補が全滅する不具合が実際に発生したため)。
+
+    支柱の足元のT字パーツ(ゲート法線方向に±POST_PIVOT_ARM_HALF_LENGTH_CM
+    伸びる棒、Gate.posts()参照)を考慮するため、post.arm_dirが
+    ゼロベクトルでなければ「支柱中心を通りarm_dir方向に伸びる線分」との
+    最近接点を使って距離・角度を計算する(=カプセル型のチェック)。半径は
+    POST_RADIUS_CMのまま変えていない(T字パーツ自体も支柱と同じ直径2cmの
+    棒のため)。arm_dirを持たない(普通の(x, y)タプルの)postは従来通り
+    点として扱う。一度「全方向に太い円柱」として実装し、ゲート開口部が
+    狭くなりすぎて600件中0件しか安全な経路が見つからなくなったことがある
+    (config.POST_PIVOT_ARM_HALF_LENGTH_CMのコメント参照)ため、必ず
+    「特定方向にだけ伸びた細い棒」のモデルを保つこと。
+
+    heading_in_degからheading_out_degへの旋回がちょうど180度(ゴール到着時の
+    完全な反転など)の場合、geo.normalize_degが常に-180度側に正規化して
+    しまうため、実際には左右どちらに回ってもよい(同じ最終的な向きになる)
+    にもかかわらず、片方向(正規化された側)の弧しか判定していなかった。
+    そのため、危険な支柱がたまたま正規化される側にだけあり、逆方向(実機なら
+    そちらへ回せば接触しない)に回れば安全なケースを、不要に「危険」と判定
+    して迂回を強制していた。180度ちょうどの場合だけ、ごくわずかに角度を
+    ずらした2方向(左回り・右回り相当)をそれぞれ判定し、どちらか一方が
+    安全ならOKとする。
     """
-    for radius, offset in _CORNER_SPECS:
-        needed = radius + config.POST_RADIUS_CM + config.SAFETY_MARGIN_CM
-        arc_start = heading_in_deg + offset
-        arc_end = heading_out_deg + offset
-        for post in all_posts:
-            d = geo.distance(point, post)
-            if d >= needed:
-                continue
-            post_angle = math.degrees(math.atan2(post[1] - point[1], post[0] - point[0]))
-            if geo.angle_in_arc(post_angle, arc_start, arc_end):
-                return False
-    return True
+    def _clear(h_out):
+        for radius, offset in _CORNER_SPECS:
+            needed = radius + config.POST_RADIUS_CM + config.SAFETY_MARGIN_CM
+            arc_start = heading_in_deg + offset
+            arc_end = h_out + offset
+            for post in all_posts:
+                arm_dir = getattr(post, "arm_dir", (0.0, 0.0))
+                if arm_dir[0] or arm_dir[1]:
+                    half = config.POST_PIVOT_ARM_HALF_LENGTH_CM
+                    seg_a = geo.sub(post, geo.scale(arm_dir, half))
+                    seg_b = geo.add(post, geo.scale(arm_dir, half))
+                    nearest = geo.closest_point_on_segment(point, seg_a, seg_b)
+                else:
+                    nearest = post
+                d = geo.distance(point, nearest)
+                if d >= needed:
+                    continue
+                post_angle = math.degrees(math.atan2(nearest[1] - point[1], nearest[0] - point[0]))
+                if geo.angle_in_arc(post_angle, arc_start, arc_end):
+                    return False
+        return True
+
+    turn = geo.normalize_deg(heading_out_deg - heading_in_deg)
+    if abs(abs(turn) - 180.0) < 1e-6:
+        return _clear(heading_out_deg - 0.01) or _clear(heading_out_deg + 0.01)
+    return _clear(heading_out_deg)
 
 
 def dijkstra_with_turns(nodes, adjacency, start_id, goal_id, start_heading_deg, goal_heading_deg,

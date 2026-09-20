@@ -12,7 +12,7 @@ from ..behaviours.line_trace import TraceLine
 from ..behaviours.camera_line_trace import RecoverLineByCamera
 from ..behaviours.hint2_exit import Hint2Exit
 from ..behaviours.projected_distance import IsProjectedDistanceEarned
-from ..behaviours.conditions import IsDistanceEarned, IsTimePassed, IsColorDetected, IsColorPassed, IsDistanceEarnedUntilColorEntered
+from ..behaviours.conditions import IsDistanceEarned, IsTimePassed, IsColorDetected, IsBlackDetected, IsColorPassed, IsDistanceEarnedUntilColorEntered
 from ..behaviours.motor_control import StopNow
 from ..behaviours.hint_reader import ReadHintCard as IsQRDecoded, PrepareHintCamera
 
@@ -105,7 +105,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
         IsTimePassed(
             name="wait_left_e",
-            delta_time=0.5
+            delta_time=0.2
         ),
     ])
 
@@ -188,7 +188,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
         IsTimePassed(
             name="wait_right",
-            delta_time=0.5
+            delta_time=0.2
         ),
     ])
 
@@ -259,7 +259,8 @@ def build_tantou_tree(context, config, include_exit=True):
 
         IsDistanceEarned(
             name="distance_after_green",
-            delta_dist=settings.to_after_hint1_green_pass_mm  # 緑通過後320mm
+            #delta_dist=settings.to_after_hint1_green_pass_mm  # 緑通過後320mm
+            delta_dist=200
         ),
     ])
 
@@ -313,7 +314,8 @@ def build_tantou_tree(context, config, include_exit=True):
         SpinAround(
             context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="left 90 again",
-            target=90,
+            #target=90,
+            target=45,
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
             pid_p=0.2,
@@ -328,7 +330,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
         IsTimePassed(
             name="wait_left_b",
-            delta_time=0.5
+            delta_time=0.2
         ),
     ])
 
@@ -347,76 +349,198 @@ def build_tantou_tree(context, config, include_exit=True):
     # 1200mm(カメラ復帰区間を含む投影距離)到達で終了。
     # ========================================================
 
-    camera_recovery_after_hint1 = RecoverLineByCamera(
-        name="recover line by camera after hint1",
-        power=settings.to_after_hint1_camera_power,
-        pid_p=settings.to_after_hint1_camera_pid_p,
-        pid_i=settings.to_after_hint1_camera_pid_i,
-        pid_d=settings.to_after_hint1_camera_pid_d,
-        max_camera_turn=settings.to_after_hint1_camera_max_turn,
-        align_power=settings.to_after_hint1_camera_align_power,
-        handoff_power=settings.to_after_hint1_camera_handoff_power,
-        handoff_target_v=TRACELINE_TARGET_V,
-        handoff_pid_p=settings.to_after_hint1_camera_handoff_pid_p,
-        handoff_turn_cap=settings.to_after_hint1_camera_handoff_turn_cap,
-        handoff_v_tolerance=settings.to_after_hint1_camera_handoff_v_tolerance,
-        handoff_stable_samples=settings.to_after_hint1_camera_handoff_stable_samples,
-        line_v=settings.to_after_hint1_camera_rejoin_v,
-        line_samples=settings.to_after_hint1_camera_rejoin_samples,
-        trace_side=TraceSide.NORMAL,
-        tilt_ff_gain=settings.to_after_hint1_camera_tilt_ff_gain,
-        ff_cap=settings.to_after_hint1_camera_ff_cap,
-        heading_tolerance_deg=settings.to_after_hint1_camera_heading_tolerance_deg,
-        stable_samples=settings.to_after_hint1_camera_stable_samples,
-        # 【統合差分】LAP前の流用元は0度だが、この区間は"left 90 again"で絶対方位90度へ
-        # 旋回済みで、trace_120の前進方向もdist_1200と同じ90度。0度のままだと
-        # ALIGN/HANDOFFがtrace_120の進行方向と直角の向きへ引き込んでしまう。
-        gyro_heading_deg=90.0,
-        gyro_kp=settings.to_after_hint1_camera_gyro_kp,
-        gyro_turn_cap=settings.to_after_hint1_camera_gyro_turn_cap,
+    #camera_recovery_after_hint1 = RecoverLineByCamera(
+        #name="recover line by camera after hint1",
+        #power=settings.to_after_hint1_camera_power,
+        #pid_p=settings.to_after_hint1_camera_pid_p,
+        #pid_i=settings.to_after_hint1_camera_pid_i,
+        #pid_d=settings.to_after_hint1_camera_pid_d,
+        #max_camera_turn=settings.to_after_hint1_camera_max_turn,
+        #align_power=settings.to_after_hint1_camera_align_power,
+        #handoff_power=settings.to_after_hint1_camera_handoff_power,
+        #handoff_target_v=TRACELINE_TARGET_V,
+        #handoff_pid_p=settings.to_after_hint1_camera_handoff_pid_p,
+        #handoff_turn_cap=settings.to_after_hint1_camera_handoff_turn_cap,
+        #handoff_v_tolerance=settings.to_after_hint1_camera_handoff_v_tolerance,
+        #handoff_stable_samples=settings.to_after_hint1_camera_handoff_stable_samples,
+        #line_v=settings.to_after_hint1_camera_rejoin_v,
+        #line_samples=settings.to_after_hint1_camera_rejoin_samples,
+        #trace_side=TraceSide.NORMAL,
+        #tilt_ff_gain=settings.to_after_hint1_camera_tilt_ff_gain,
+        #ff_cap=settings.to_after_hint1_camera_ff_cap,
+        #heading_tolerance_deg=settings.to_after_hint1_camera_heading_tolerance_deg,
+        #stable_samples=settings.to_after_hint1_camera_stable_samples,
+        ## 【統合差分】LAP前の流用元は0度だが、この区間は"left 90 again"で絶対方位90度へ
+        ## 旋回済みで、trace_120の前進方向もdist_1200と同じ90度。0度のままだと
+        ## ALIGN/HANDOFFがtrace_120の進行方向と直角の向きへ引き込んでしまう。
+        #gyro_heading_deg=90.0,
+        #gyro_kp=settings.to_after_hint1_camera_gyro_kp,
+        #gyro_turn_cap=settings.to_after_hint1_camera_gyro_turn_cap,
+    #)
+#
+    #camera_recovery_then_trace_120 = Sequence(
+        #name="camera_recovery_then_trace_120",
+        #memory=True
+    #)
+    #camera_recovery_then_trace_120.add_children([
+        #camera_recovery_after_hint1,
+#
+        #PrepareHintCamera(name="prepare hint2 camera"),
+#
+        #TraceLine(
+            #name="trace_120",
+            #target=TRACELINE_TARGET_V,
+            #power=60,
+            #pid_p=0.65,
+            #pid_i=0.000001,
+            #pid_d=0.045,
+            #trace_side=TraceSide.NORMAL,
+        #),
+    #])
+#
+    #line_trace_120 = Parallel(
+        #name="line_trace_120",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)
+#
+    #line_trace_120.add_children([
+        #camera_recovery_then_trace_120,
+#
+        #IsProjectedDistanceEarned(
+            #name="dist_1200", context=context, local_heading_deg=90.0,
+            ##delta_dist=settings.to_hint2_trace_mm  # 【統合差分】投影距離を維持、tantou4の1200mmを採用
+            #delta_dist=650
+        #),
+    #])
+    
+    # --- camera recovery を使わない簡易版の line_trace_120 定義 ---
+    # ==========================================
+    # ① 黒線検知 OR 550mm走行
+    # ==========================================
+    
+    black_or_550 = Parallel(
+        name="black_or_550",
+        policy=ParallelPolicy.SuccessOnOne()
     )
-
-    camera_recovery_then_trace_120 = Sequence(
-        name="camera_recovery_then_trace_120",
-        memory=True
+    
+    run_to_black = RunByGyro(
+        context=context,
+        name="run_to_black",
+        target=45,
+        power=50,
+        pid_p=1.1,
+        pid_i=0.00075,
+        pid_d=0.04,
+        target_type=HeadingType.ABSOLUTE
     )
-    camera_recovery_then_trace_120.add_children([
-        camera_recovery_after_hint1,
-
-        PrepareHintCamera(name="prepare hint2 camera"),
-
-        TraceLine(
-            name="trace_120",
-            target=TRACELINE_TARGET_V,
-            power=60,
-            pid_p=0.65,
-            pid_i=0.000001,
-            pid_d=0.045,
-            trace_side=TraceSide.NORMAL,
-        ),
+    
+    detect_black = IsBlackDetected(
+        name="detect_black",
+        black_threshold=settings.to_exit_black_v,
+        required_frames=25
+    )
+    
+    black_distance_limit = IsDistanceEarned(
+        name="black_distance_limit",
+        delta_dist=200
+    )
+    
+    black_or_550.add_children([
+        run_to_black,
+        detect_black,
+        black_distance_limit,
     ])
 
-    line_trace_120 = Parallel(
+    # ==========================================
+    # ①終了後、黒検知の有無に関わらず絶対方位90度へ向き直してから
+    # 650mmライントレースへ進む(ET相撲のガレージ復帰と同じ「検知→既知方位へ
+    # 旋回」構造。見つからなかった場合も失敗にはせず、90度で試行を続ける)。
+    # ==========================================
+
+    turn_to_90_before_trace = SpinAround(
+        context=context,
+        name="turn_to_90_before_trace",
+        target=90,
+        max_power=SPIN_MAX_POWER,
+        min_power=SPIN_MIN_POWER,
+        pid_p=0.2,
+        pid_i=0.005,
+        pid_d=0.03,
+        target_type=HeadingType.ABSOLUTE
+    )
+
+    stop_after_turn_to_90 = StopNow(
+        name="stop_after_turn_to_90"
+    )
+
+    wait_after_turn_to_90 = IsTimePassed(
+        name="wait_after_turn_to_90",
+        delta_time=0.2
+    )
+
+    # ==========================================
+    # ② ①終了後 → ライントレース
+    # 【統合差分】独自の650mm上限は削除。終了は外側のdist_1200_from_75deg_start
+    # (75度直進の開始位置を基準にした90度成分1200mm)だけに一本化する。
+    # ==========================================
+
+    trace_650 = TraceLine(
+        name="trace_650",
+        target=TRACELINE_TARGET_V,
+        power=60,
+        pid_p=0.65,
+        pid_i=0.000001,
+        pid_d=0.045,
+        trace_side=TraceSide.NORMAL,
+    )
+
+
+    # ==========================================
+    # ③ 順番に実行
+    # ==========================================
+
+    line_trace_120 = Sequence(
         name="line_trace_120",
-        policy=ParallelPolicy.SuccessOnOne()
+        memory=True
     )
 
     line_trace_120.add_children([
-        camera_recovery_then_trace_120,
-
-        IsProjectedDistanceEarned(
-            name="dist_1200", context=context, local_heading_deg=90.0,
-            delta_dist=settings.to_hint2_trace_mm  # 【統合差分】投影距離を維持、tantou4の1200mmを採用
-        ),
+        black_or_550,
+        turn_to_90_before_trace,
+        stop_after_turn_to_90,
+        wait_after_turn_to_90,
+        # 【統合差分】QR2用のカメラ切替(~3.4秒)をtrace_650の走行時間に重ねて隠す。
+        # camera_recovery_then_trace_120(コメントアウト済み)にあった
+        # PrepareHintCamera("prepare hint2 camera")と同じ配置・目的。
+        # これが無いと、read_qr2開始時に初めて切替が始まり、切替コストが
+        # そのままQR2読み取りのelapsed時間に乗ってしまう。
+        PrepareHintCamera(name="prepare hint2 camera"),
+        trace_650,
     ])
 
-
-    # 1200mm地点で停止
-
-    stop_at_1200 = StopNow(
-        name="stop_trace_120"
+    # 75度直進の開始位置(black_or_550が最初にtickされる瞬間)を基準に、
+    # 90度成分で1200mm進んだら全体を打ち切る(旧プログラムの1200mm相当)。
+    # trace_650自体には独自の終了条件がないため、これが唯一の終了条件になる。
+    dist_1200_from_75deg_start = IsProjectedDistanceEarned(
+        name="dist_1200_from_75deg_start",
+        context=context,
+        local_heading_deg=90.0,
+        delta_dist=settings.to_hint2_trace_mm,
     )
 
+    line_trace_120_with_cap = Parallel(
+        name="line_trace_120_with_cap",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
+    line_trace_120_with_cap.add_children([
+        line_trace_120,
+        dist_1200_from_75deg_start,
+    ])
+
+    # 650mm到達後に停止
+    stop_at_650 = StopNow(
+        name="stop_after_650"
+    )
 
     # ========================================================
     # 7. 1200mm地点 → 右30°
@@ -451,7 +575,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
         IsTimePassed(
             name="wait_after_qr2_turn",
-            delta_time=0.5
+            delta_time=0.2
         ),
     ])
 
@@ -523,7 +647,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
         IsTimePassed(
             name="wait_return_heading",
-            delta_time=0.5
+            delta_time=0.2
         ),
     ])
 
@@ -555,8 +679,8 @@ def build_tantou_tree(context, config, include_exit=True):
         go_to_blue_after_qr1,
         stop_at_blue,
         turn_left_90_b,
-        line_trace_120,
-        stop_at_1200,
+        line_trace_120_with_cap,
+        stop_at_650,
         turn_right_qr2,
         qr2_read,
 
