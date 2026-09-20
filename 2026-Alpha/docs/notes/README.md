@@ -555,3 +555,11 @@ LAP青検知で方位安定を待たずATへ引渡し、青検知起点の最初
 全変更ファイル（修正）: `robot_program/tree_builder.py`（`build_et_sumo_phase`の呼び出し位置をLAPゲート直後へ移動）。ETロボコン側HANDOFF.mdおよび新規work/mission-order-sumo-before-bottle-v1/verify_mission_order.pyにも記録。
 
 **残課題**: 実機・実コースでの「LAP→相撲→ボトルキャッチ」通し走行確認。相撲終了後にボトルキャッチ(AT)の開始位置・向きへ物理的に正しく移動できるかは未検証で、コース配置次第で追加の移動工程が必要になる可能性がある。前回の`start_to_lap_gate.py`側の試作(後退50cm→旋回90→前進→旋回180)との役割分担も要整理(両方が「相撲へ向かう」ためのものなら重複の可能性がある)。既存の未コミット変更は保持。
+
+## 2026-09-20 Hint2Exit WHITEフェーズに方位角90度への投影距離210mmの制約を追加
+
+ユーザー指示「絶対方位90°を保持したまま直進に、方位角90°の向きに210mmという制約を付けたい」により、`Hint2Exit`のWHITEフェーズ(絶対方位90度保持での直進)に、方位角90度方向への投影距離が210mmに達したら(生の走行距離・黒検知の成否に関わらず)TURNへ進む制約を追加した。`to_hint_route.py`の`dist_1200_from_75deg_start`(`IsProjectedDistanceEarned`)と同じ符号規約・投影計算を、単一クラスの状態機械である`Hint2Exit`の内部に直接実装している。
+
+新設定`to_exit_white_straight_projected_limit_mm`(既定210.0)を`integration_settings.py`に追加。検証は`work/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.py`に追加したTest5bで、生の走行距離が600mm上限より遥かに小さくても投影距離210mmだけでWHITEからTURNへ進むことを確認(既存6件と合わせ全7件成功)。既存の`to_exit_trace_mm`(600mm、生の走行距離によるWHITE上限)は変更していないが、210mmの方が大幅に小さいため実質使われなくなる可能性が高い(要ユーザー判断)。
+
+全変更ファイル（修正）: `robot_program/behaviours/hint2_exit.py`、`robot_program/integration_settings.py`。ETロボコン側HANDOFF.mdおよび`work/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.py`にも記録。既存の未コミット変更は保持。

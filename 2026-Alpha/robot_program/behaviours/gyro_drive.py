@@ -30,10 +30,19 @@ def _nearest_equivalent_heading(target: float, current: float) -> float:
 
 
 class SpinAround(Behaviour):
-    # devREの連続PID旋回を基準とする。
-    def __init__(self, name: str, target: int, max_power: int, min_power: int,
-                 pid_p: float, pid_i: float, pid_d: float,
-                 target_type: HeadingType, tolerance: float = 2.0) -> None:
+    # 指定した絶対角度または現在角度からの相対角度まで、その場で旋回する。
+    def __init__(
+        self,
+        name: str,
+        target: int,
+        max_power: int,
+        min_power: int,
+        pid_p: float,
+        pid_i: float,
+        pid_d: float,
+        target_type: HeadingType,
+        tolerance: float = 2.0,
+    ) -> None:
         super().__init__(name)
         self.target = target
         self.target_type = target_type
@@ -53,7 +62,7 @@ class SpinAround(Behaviour):
             if self.target_type == HeadingType.RELATIVE:
                 self.target_heading = current_heading + self.target
             else:
-                self.target_heading = _nearest_equivalent_heading(self.target, current_heading)
+                self.target_heading = self.target
             self.pid = PID(
                 self.pid_p,
                 self.pid_i,
@@ -63,21 +72,28 @@ class SpinAround(Behaviour):
             )
             self.running = True
             self.logger.info(
-                "%+06d %s.spin started at heading=%.1f requested=%.1f resolved=%.1f delta=%.1f"
-                % (runtime.plotter.get_distance(), self.__class__.__name__,
-                   current_heading, self.target, self.target_heading,
-                   self.target_heading - current_heading)
+                "%+06d %s.spin started at heading=%d for %d"
+                % (
+                    runtime.plotter.get_distance(),
+                    self.__class__.__name__,
+                    current_heading,
+                    self.target_heading,
+                )
             )
 
         error = _normalize_heading_error(self.target_heading - current_heading)
         if abs(error) < self.tolerance:
             self.logger.info(
                 "%+06d %s.spin ended at heading=%d"
-                % (runtime.plotter.get_distance(), self.__class__.__name__, current_heading)
+                % (
+                    runtime.plotter.get_distance(),
+                    self.__class__.__name__,
+                    current_heading,
+                )
             )
             return Status.SUCCESS
 
-        # devREと同じPID制御。±180度境界では正規化した誤差方向を優先する。
+        # PIDの出力方向は維持しつつ、角度境界をまたぐ場合は正規化した誤差方向を採用する。
         raw_power = float(self.pid(current_heading))
         if raw_power == 0.0:
             raw_power = error
@@ -89,11 +105,11 @@ class SpinAround(Behaviour):
         return Status.RUNNING
 
     def terminate(self, new_status: Status) -> None:
-        # devREの停止契約を維持しつつ、終了直後の惰性回転によるオーバーシュートを防ぐため即時ブレーキをかける。
-        for motor in (runtime.right_motor, runtime.left_motor):
-            if motor is not None:
-                motor.set_power(0)
-                motor.set_brake(True)
+        # 旋回完了または中断時にモーター出力を残さない。
+        if runtime.right_motor is not None:
+            runtime.right_motor.set_power(0)
+        if runtime.left_motor is not None:
+            runtime.left_motor.set_power(0)
         self.running = False
 
 

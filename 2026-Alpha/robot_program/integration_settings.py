@@ -54,6 +54,10 @@ class IntegrationSettings:
     to_after_hint1_camera_seek_stable_samples: int = 8
     to_after_hint1_camera_seek_distance_limit_mm: float = 450.0
     to_exit_trace_mm: float = 600.0  # Hint2後の白探索上限（到達は失敗）
+    # WHITEフェーズの直進距離を、生の走行距離ではなく方位角90度方向への
+    # 投影距離で制約する(to_hint_route.pyのdist_1200_from_75deg_startと
+    # 同じ考え方)。実機未校正の試走初期値。
+    to_exit_white_straight_projected_limit_mm: float = 210.0
     # Hint2出口のみ。実機未校正の試走初期値。距離は保持ボトルの占有範囲で調整。
     to_exit_power: int = 50
     to_exit_turn_power: int = 25  # 内輪も前進。基準出力未満を維持。
@@ -106,7 +110,7 @@ class IntegrationSettings:
         for name in ('to_exit_slew_power_per_s', 'to_exit_heading_kp',
                      'to_exit_line_kp', 'to_exit_turn_limit_mm', 'to_exit_search_limit_mm',
                      'to_exit_follow_mm', 'to_exit_phase_timeout_s', 'to_exit_heading_tolerance_deg',
-                     'to_exit_turn_black_detect_max_error_deg'):
+                     'to_exit_turn_black_detect_max_error_deg', 'to_exit_white_straight_projected_limit_mm'):
             if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(name + ' must be positive and finite')
         if not self.to_exit_heading_tolerance_deg <= self.to_exit_turn_black_detect_max_error_deg:

@@ -442,7 +442,7 @@ def build_tantou_tree(context, config, include_exit=True):
     
     black_distance_limit = IsDistanceEarned(
         name="black_distance_limit",
-        delta_dist=170
+        delta_dist=200
     )
     
     black_or_550.add_children([
