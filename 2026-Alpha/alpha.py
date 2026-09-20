@@ -6,7 +6,7 @@ import threading
 import signal
 from functools import wraps
 import math
-from enum import IntEnum, Enum, auto
+from enum import Enum, auto
 from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSensor, GyroSensor
 from simple_pid import PID
 from py_trees.trees import BehaviourTree
@@ -20,16 +20,22 @@ from py_trees import (
 from py_etrobo_util import Video, TraceSide, TargetInterested, Plotter, SymmetricClamper, Color, ColorClassifier, LowPassFilter, BottleColor, Hint, HintType
 from robot_program.config import (
     MISSION_CHOICES,
+    MANUAL_RALLY_MISSIONS,
     RaceConfig,
     config_for_mission,
     mission_requires_camera,
     mission_requires_qr,
 )
 from robot_program.context import RaceContext
-from robot_program.behaviours.device_control import ResetDevice
+from robot_program.delivery_heading import RegisterDeliveryHeading, initial_delivery_heading
+from robot_program.decryption_key import read_decryption_key
+from robot_program.behaviours.device_control import ArmDirection, ArmUpDownFull, ResetDevice
+from robot_program.features.sumo_bearing import initial_sumo_bearing
+from robot_program.features.sumo_bearing_motion import RegisterSumoBearing
 from robot_program.runtime import runtime as robot_runtime
 from robot_program.services.execution_safety import stop_motors, pending_features
 from robot_program.services.shutdown import Shutdown
+from robot_program.services.strategy_tree import WithStrategyExchange
 
 g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
 from robot_program.tree_builder import build_mission_children
@@ -43,9 +49,16 @@ SPIN_MAX_POWER     = 57
 SPIN_MIN_POWER     = 47
 TRACELINE_TARGET_V = 75
 
+# Bottle Delivery後半単体試験で、入力名とプログラム内部の色を対応させる。
+BOTTLE_COLOR_NAMES = ('red', 'blue', 'yellow')
+BOTTLE_COLOR_VALUE_BY_NAME = {
+    'red': BottleColor.RED.value,
+    'blue': BottleColor.BLUE.value,
+    'yellow': BottleColor.YELLOW.value,
+}
+
 # constants for specific action classes
-ARM_SHIFT_PWM      = 35   # ArmUpDownFull
-JUNCT_UPPER_THRESH = 50   # IsJunction 
+JUNCT_UPPER_THRESH = 50   # IsJunction
 JUNCT_LOWER_THRESH = 40   # IsJunction
 ROE_DEGEN          = 90   # TraceLineCam: span above this = line ~tangent
 CURV_MIN_ROWS_SEP  = 15   # TraceLineCam: need this many rows between near/far to trust the slope
@@ -63,10 +76,6 @@ g_video = None
 g_video_thread = None
 g_course = 0
 
-
-class ArmDirection(IntEnum):
-    UP = -1
-    DOWN = 1
 
 class JState(Enum):
     INITIAL = auto()
@@ -104,34 +113,6 @@ class TheEnd(Behaviour):
         if not self.running:
             self.running = True
             self.logger.info("%+06d %s.behavior tree exhausted. ctrl+C shall terminate the program" % (g_plotter.get_distance(), self.__class__.__name__))
-        return Status.RUNNING
-
-
-class ArmUpDownFull(Behaviour):
-    def __init__(self, name: str, direction: ArmDirection):
-        super(ArmUpDownFull, self).__init__(name)
-        self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-        self.direction = direction
-        self.running = False
-
-    def update(self) -> Status:
-        if not self.running:
-            self.running = True
-            self.prev_degree = g_arm_motor.get_count()
-            self.logger.info("%+06d %s.start position is %d" % (g_plotter.get_distance(), self.__class__.__name__, self.prev_degree))
-            self.count = 0
-            g_arm_motor.set_power(ARM_SHIFT_PWM * self.direction)
-        else:
-            cur_degree = g_arm_motor.get_count()
-            if abs(cur_degree - self.prev_degree) < 5:
-                if self.count > 20:
-                    g_arm_motor.set_power(0)
-                    g_arm_motor.set_brake(True)
-                    self.logger.info("%+06d %s.position set to %d" % (g_plotter.get_distance(), self.__class__.__name__, cur_degree))
-                    return Status.SUCCESS
-                else:
-                    self.count += 1
-            self.prev_degree = cur_degree
         return Status.RUNNING
 
 
@@ -1030,7 +1011,15 @@ class VideoThread(threading.Thread):
                 time.sleep(VIDEO_INTERVAL - elapsed_time)
 
 
-def build_behaviour_tree(mission_config=None) -> BehaviourTree:
+def build_behaviour_tree(
+    mission_config=None,
+    decryption_key=None,
+    sumo_initial_bearing=180.0,
+    bottle_color=None,
+    rally_hint1=None,
+    rally_hint2_gate_info=None,
+    delivery_initial_heading=None,
+) -> BehaviourTree:
     # alpha.pyには競技全体の基本順序を残し、各工程の詳細は機能別ファイルから取得する。
     root = Sequence(name="2026 alpha", memory=True)
     calibration = Sequence(name="calibration", memory=True)
@@ -1046,16 +1035,36 @@ def build_behaviour_tree(mission_config=None) -> BehaviourTree:
     )
     start.add_children([IsTouchOn(name="touch start")])
 
-    mission_context = RaceContext()
+    mission_context = RaceContext(
+        bottle_color=bottle_color,
+        decryption_key=decryption_key,
+        hint1=rally_hint1,
+        hint2_gate_info=rally_hint2_gate_info,
+    )
     mission_config = mission_config or RaceConfig()
+    if mission_config.mission_mode in ('bottle-rally', 'rally-sumo'):
+        mission_context.strategy_requests_enabled = False
+    if mission_config.enable_et_sumo or mission_config.enable_finish:
+        # 既存ResetDevice完了直後に相撲用の方位対応だけを保存する。他工程の基準は変更しない。
+        calibration.add_child(RegisterSumoBearing(
+            "register sumo bearing after reset", mission_context, sumo_initial_bearing))
+    calibration.add_child(RegisterDeliveryHeading(
+        "register bottle heading after reset", mission_context,
+        initial_delivery_heading(mission_config.mission_mode)
+        if delivery_initial_heading is None else delivery_initial_heading))
+    mission_children = build_mission_children(mission_context, mission_config)
     root.add_children(
         [
             calibration,
             start,
-            *build_mission_children(mission_context, mission_config),
+            *mission_children,
             TheEnd(name="end"),
         ]
     )
+    if mission_config.enable_et_rally and mission_config.et_rally_laps > 0:
+        # 初期化とタッチ待ちを含む全体を包み、タッチ前にTCP接続を確認できるようにする。
+        # Hintの送信は従来どおりHint1/Hint2が揃った後だけ行う。
+        root = WithStrategyExchange(root, mission_context, mission_config)
     return root
 
 def initialize_etrobo(backend: str) -> ETRobo:
@@ -1070,14 +1079,15 @@ def initialize_etrobo(backend: str) -> ETRobo:
             .add_device('gyro_sensor', device_type=GyroSensor, port='')
     )
 
-def setup_thread(camera_enabled=True):
+def setup_thread(camera_enabled=True, preview_enabled=True):
     global g_video, g_video_thread
     if not camera_enabled:
         g_video = None
         g_video_thread = None
         print(" -- camera capture, processing and preview disabled")
         return
-    g_video = Video()
+    g_video = Video(preview_enabled=preview_enabled)
+    print(" -- camera preview enabled=%s" % preview_enabled)
 
 
 def start_video_thread():
@@ -1120,11 +1130,59 @@ def sig_handler(signum, frame) -> None:
     raise SystemExit(128 + signum)
 
 
-def main(argv=None):
-    global g_course, g_shutdown
+def read_bottle_color_for_final_mission(mission, color_argument, check_tree):
+    # 通常ミッションでは色の手入力を使わない。
+    if mission not in ('bottle-final', 'to-bottle', 'bottle-rally'):
+        if color_argument is not None:
+            raise ValueError(
+                '--bottle-color requires bottle-final, to-bottle or bottle-rally'
+            )
+        return None
+
+    # コマンドで色を省略した場合だけ、走行開始前に端末から入力する。
+    color_name = color_argument
+    if color_name is None and not check_tree:
+        color_name = input('Bottle color (red/blue/yellow): ').strip().lower()
+
+    # ツリー表示だけの場合は分岐を実行しない。Contextには有効な仮値を入れておく。
+    if color_name is None:
+        color_name = 'red'
+
+    if color_name not in BOTTLE_COLOR_VALUE_BY_NAME:
+        raise ValueError('Bottle color must be red, blue, or yellow')
+
+    print(' -- %s color=%s' % (mission, color_name))
+    return BOTTLE_COLOR_VALUE_BY_NAME[color_name]
+
+
+def read_rally_drive_hints(mission, hint1, hint2_gate_info, check_tree):
+    # QR工程を省く単体・結合モードだけ手入力Hintを受け付ける。
+    if mission not in MANUAL_RALLY_MISSIONS:
+        if hint1 is not None or hint2_gate_info is not None:
+            raise ValueError(
+                '--rally-hint1 and --rally-hint2-gate-info require '
+                '--mission rally-drive, bottle-rally or rally-sumo'
+            )
+        return None, None
+
+    # ツリー確認では通信を開始しないため、形式だけ満たす固定値を使用する。
+    if check_tree:
+        return hint1 or '25,35', hint2_gate_info or '53,54/12,22'
+    if not hint1 or not hint2_gate_info:
+        raise ValueError(
+            'This mission requires --rally-hint1 and '
+            '--rally-hint2-gate-info'
+        )
+    return hint1, hint2_gate_info
+
+
+def _run_main(argv, startup_cleanup):
+    global g_course, g_key, g_shutdown
     g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
     parser = argparse.ArgumentParser()
     parser.add_argument('course', choices=['right', 'left'], help='Course to run')
+    parser.add_argument('--no-preview', action='store_true',
+                        help='Disable camera preview while keeping capture and recognition active')
     parser.add_argument('--logfile', type=str, default=None, help='Path to log file')
     parser.add_argument('--check-tree', action='store_true',
                         help='Build and print the tree without opening devices or camera')
@@ -1134,13 +1192,74 @@ def main(argv=None):
         default='configured',
         help='Mission profile; configured uses the switches in RaceConfig',
     )
+    parser.add_argument(
+        '--bottle-color',
+        choices=BOTTLE_COLOR_NAMES,
+        default=None,
+        help='Held bottle color for bottle-final, to-bottle or bottle-rally',
+    )
+    parser.add_argument("--sumo-initial-bearing", type=float, default=None,
+                        help="Placement bearing for sumo or sumo-garage: up=0, clockwise positive")
+    parser.add_argument(
+        '--rally-hint1',
+        default=None,
+        help='Decoded Hint 1 coordinates for rally-drive, bottle-rally or rally-sumo',
+    )
+    parser.add_argument(
+        '--rally-hint2-gate-info',
+        default=None,
+        help='Decoded Hint 2 coordinates for rally-drive, bottle-rally or rally-sumo',
+    )
+    parser.add_argument('--delivery-initial-heading', type=float, default=None,
+                        help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
+    if args.mission == 'to-bottle':
+        if args.delivery_initial_heading is None:
+            if args.check_tree:
+                args.delivery_initial_heading = 0.0
+            else:
+                parser.error('to-bottle requires --delivery-initial-heading for the physical placement')
+        if not math.isfinite(args.delivery_initial_heading):
+            parser.error('--delivery-initial-heading must be finite')
+    elif args.delivery_initial_heading is not None:
+        parser.error('--delivery-initial-heading is available only with --mission to-bottle')
+    try:
+        sumo_initial_bearing = initial_sumo_bearing(args.mission, args.sumo_initial_bearing,
+                                                    -1 if args.course == 'right' else 1)
+    except ValueError as error:
+        parser.error(str(error))
     g_course = -1 if args.course == 'right' else 1
 
     # 未実装ノードは明示警告するが、PendingFeature自身のSUCCESSで後続工程へ進める。
     print(" -- shutdown-v8 control interval=%.3fs mission=%s" % (EXEC_INTERVAL, args.mission))
     mission_config = config_for_mission(args.mission)
-    tree = build_behaviour_tree(mission_config)
+    try:
+        bottle_color = read_bottle_color_for_final_mission(
+            mission=args.mission,
+            color_argument=args.bottle_color,
+            check_tree=args.check_tree,
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    try:
+        rally_hint1, rally_hint2_gate_info = read_rally_drive_hints(
+            mission=args.mission,
+            hint1=args.rally_hint1,
+            hint2_gate_info=args.rally_hint2_gate_info,
+            check_tree=args.check_tree,
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    decryption_key = None
+    tree = build_behaviour_tree(
+        mission_config,
+        decryption_key=decryption_key,
+        sumo_initial_bearing=sumo_initial_bearing,
+        bottle_color=bottle_color,
+        rally_hint1=rally_hint1,
+        rally_hint2_gate_info=rally_hint2_gate_info,
+        delivery_initial_heading=args.delivery_initial_heading,
+    )
     pending = pending_features(tree)
     if args.check_tree:
         print(display_tree.unicode_tree(tree))
@@ -1149,6 +1268,22 @@ def main(argv=None):
               file=sys.stderr)
     if args.check_tree:
         return 0
+    from robot_program.config import INTEGRATION_MISSIONS
+    if args.mission in INTEGRATION_MISSIONS and pending:
+        parser.error('Integration verification cannot run with unimplemented features')
+
+    if (mission_config.enable_et_rally
+            and mission_config.et_rally_laps > 0
+            and mission_config.et_rally_strategy_source == "received"):
+        # 同じ通信サーバーを走行中も使う。ここではHintをキューへ投入しない。
+        startup_cleanup.callback(tree.exchange.close)
+        print(" -- Waiting for PC connection before password input...", flush=True)
+        tree.exchange.wait_for_connection()
+        print(" -- PC TCP connection confirmed", flush=True)
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            decryption_key = read_decryption_key()
+            tree.context.decryption_key = decryption_key
+            g_key = decryption_key
 
     previous_sigint = signal.signal(signal.SIGINT, sig_handler)
     previous_sigterm = signal.signal(signal.SIGTERM, sig_handler)
@@ -1164,7 +1299,7 @@ def main(argv=None):
             " -- camera enabled=%s et_sumo=%s"
             % (camera_enabled, mission_config.enable_et_sumo)
         )
-        setup_thread(camera_enabled=camera_enabled)
+        setup_thread(camera_enabled=camera_enabled, preview_enabled=not args.no_preview)
         if camera_enabled and g_video is None:
             # 走行開始後ではなくデバイスdispatch前に初期化不整合を検出する。
             raise RuntimeError("Camera initialization did not provide a Video instance")
@@ -1191,5 +1326,14 @@ def main(argv=None):
     return 0
 
 
+def main(argv=None):
+    # 接続待ち・キー入力中のCtrl+C/例外でもソケットを閉じる。
+    from contextlib import ExitStack
+    with ExitStack() as startup_cleanup:
+        return _run_main(argv, startup_cleanup)
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    # 画面ログを実行ごとに保存する。既存--logfile(機器ログ)とは別。
+    from robot_program.services.run_log import run_with_log
+    sys.exit(run_with_log(main))

@@ -1,50 +1,26 @@
-"""Feature 20 subtree factory."""
-
-from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
-from ..behaviours.line_trace import TraceLine
-from ..behaviours.conditions import IsColorDetected, IsDistanceEarned
-from ..behaviours.gyro_drive import RunByGyro
+"""Feature 20: drive from the blue marker into the garage and brake."""
+from .bt_imports import Parallel, ParallelPolicy, Sequence
+from py_trees.decorators import Timeout
+from ..behaviours.conditions import IsDistanceEarned
 from ..behaviours.motor_control import StopNow
-
-TRACELINE_TARGET_V = 75  # Existing alpha.py nominal target; garage tuning unverified.
+from .sumo_bearing_motion import RunAtBearing
 
 
 def build_stop_in_garage(context, config):
-    # No.20 ガレージ内停止と停止保持を担当する。
     root = Sequence(name="stop_in_garage", memory=True)
-
-    #ゴール01（ライントレース）
-    goal_01 = Parallel(name="goal 01", policy=ParallelPolicy.SuccessOnOne())
-
-    #ゴール02（ジャイロ走行）
-    goal_02 = Parallel(name="goal 02", policy=ParallelPolicy.SuccessOnOne())
-
-    
-    # goal_01:ライントレースで進む→青いマーカーまで進む
-    goal_01.add_children(
-       [
-           TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V, power=50,
-           pid_p=0.55, pid_i=0.0000009, pid_d=0.015, trace_side=TraceSide.NORMAL),
-           IsColorDetected(name="check color", color=Color.BLUE),
-       ]
-    )
-
-    # goal_02：ゴールまで角度0°で直進 → 距離650mmで成功
-    goal_02.add_children(
-        [
-           RunByGyro(
-             name="run straight",
-                    target=0,
-                power=60,
-                 pid_p=1.1,
-                 pid_i=0.1,
-                 pid_d=0.03,
-                target_type=HeadingType.ABSOLUTE
-            ),
-             IsDistanceEarned(name="check distance", delta_dist=650),
-         ]
-     )
-
-    root.add_children([goal_01, goal_02, StopNow(name="garage final brake")])
-    
+    straight = Parallel(name="garage straight", policy=ParallelPolicy.SuccessOnOne())
+    straight.add_children([
+        # Reference absolute 0 means garage direction. Use the registered course
+        # bearing so sumo-only and full runs share the same physical direction.
+        RunAtBearing(name="garage straight bearing", context=context,
+                     bearing=config.sumo.garage_bearing_deg,
+                     power=60, pid_p=1.1, pid_i=0.1, pid_d=0.03),
+        IsDistanceEarned(name="distance from garage blue",
+                         delta_dist=config.garage_goal_distance_mm),
+    ])
+    root.add_children([
+        Timeout(name="garage straight timeout", child=straight,
+                duration=config.garage_straight_timeout_sec),
+        StopNow(name="garage final brake"),
+    ])
     return root

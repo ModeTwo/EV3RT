@@ -3,7 +3,7 @@
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 
 from ..behaviours.conditions import IsDistanceEarned
-from ..behaviours.gyro_drive import RunByGyro, SpinAround
+from .sumo_bearing_motion import RunAtBearing, SpinToBearing, current_bearing
 from ..behaviours.motor_control import RunAsInstructed, StopNow
 
 
@@ -100,77 +100,54 @@ class InitializeSumoState(Behaviour):
         runtime.require("plotter", "gyro_sensor")
         state = self.context.sumo
         state.started_at = time.monotonic()
-        state.search_heading_deg = (
-            -runtime.course * runtime.gyro_sensor.get_angle()
-        ) % 360.0
+        state.search_bearing_deg = current_bearing(self.context)
         state.sonar_samples.clear()
         state.bottle_bearing_deg = None
         state.bottle_distance_mm = None
         state.approach_distance_mm = 0.0
-        state.camera_capture_heading_deg = None
+        state.camera_capture_bearing_deg = None
         state.skipped = False
         state.bottle_captured = False
         state.bottle_pushed_out = False
         state.bottle_released = False
         state.transport_completed = False
         state.bottle_held_at_exit = False
+        state.garage_line_found = False
         state.line_trace_ready = False
         state.failure_reason = None
         self.logger.info(
-            "%+06d %s.camera capture reference heading=%.1f"
+            "%+06d %s.camera capture bearing=%.1f"
             % (
                 runtime.plotter.get_distance(),
                 self.__class__.__name__,
-                state.search_heading_deg,
+                state.search_bearing_deg,
             )
         )
         return Status.SUCCESS
 
 
 def build_move_to_sumo_start(context, config):
-    # No.15：青円上のETラリー終了位置から直進し、黒ラインを抜けてから土俵方向を向く。
+    # No.15：初期位置から350mm直進して停止し、土俵側へコース図の土俵方位へ旋回する。
     settings = config.sumo
 
     drive = Parallel(
-        name="drive across black line to white area",
+        name="drive configured distance from rally exit",
         policy=ParallelPolicy.SuccessOnOne(),
     )
     drive.add_children(
         [
-            RunByGyro(
+            RunAtBearing(
                 name="run straight from rally exit",
-                target=0,
+                context=context,
+                bearing=settings.entry_bearing_deg,
                 power=settings.navigation_power,
                 pid_p=settings.drive_pid_p,
                 pid_i=settings.drive_pid_i,
                 pid_d=settings.drive_pid_d,
-                target_type=HeadingType.RELATIVE,
-            ),
-            IsBlackThenBrightSurface(
-                name="detect black line exit into white area",
-                settings=settings,
-            ),
-        ]
-    )
-
-    clearance_drive = Parallel(
-        name="drive clearance distance after leaving black line",
-        policy=ParallelPolicy.SuccessOnOne(),
-    )
-    clearance_drive.add_children(
-        [
-            RunByGyro(
-                name="run straight for sumo turn clearance",
-                target=0,
-                power=settings.navigation_power,
-                pid_p=settings.drive_pid_p,
-                pid_i=settings.drive_pid_i,
-                pid_d=settings.drive_pid_d,
-                target_type=HeadingType.RELATIVE,
             ),
             IsDistanceEarned(
-                name="sumo turn clearance distance",
-                delta_dist=settings.post_line_clearance_distance_mm,
+                name="sumo initial straight distance",
+                delta_dist=settings.start_straight_distance_mm,
             ),
         ]
     )
@@ -197,40 +174,36 @@ def build_move_to_sumo_start(context, config):
     root = Sequence(name="move_to_sumo_start", memory=True)
     root.add_children(
         [
-            # 実行順1：青円上ではライントレースせず、現在方位をジャイロで維持して直進する。
-            # 黒を規定時間確認してから白が規定時間続いた時だけ、黒ラインを抜けたと判定する。
+            # 実行順1：設定した進入方位を維持し、初期位置から合計350mm進む。色判定は行わない。
             drive,
-            # 実行順2：白地の確認位置で一度制動し、追加直進距離の起点を明確にする。
-            StopNow(name="stop after leaving black line"),
-            # 実行順3：ゲートから旋回半径分離れるため、調整可能な距離を現在方位のまま直進する。
-            clearance_drive,
-            # 実行順4：追加直進後に制動し、この位置を90度旋回の中心にする。
-            StopNow(name="stop after sumo turn clearance"),
-            # 実行順5：SpinAroundのcourse反転により、Leftは左、Rightは右へ90度旋回して土俵側を向く。
-            SpinAround(
+            # 実行順2：距離到達後に制動し、この位置で旋回する。75mmの追加直進は入れない。
+            StopNow(name="stop after sumo initial straight"),
+            # 実行順3：Leftは方位270度、Rightは方位90度の土俵側を向く。
+            SpinToBearing(
                 name="turn 90 degrees toward sumo ring",
-                target=settings.ring_turn_deg,
+                context=context,
+                bearing=lambda: (settings.ring_bearing_left_deg if runtime.course > 0
+                                 else (-settings.ring_bearing_left_deg) % 360.0),
                 max_power=settings.turn_max_power,
                 min_power=settings.turn_min_power,
                 pid_p=settings.turn_pid_p,
                 pid_i=settings.turn_pid_i,
                 pid_d=settings.turn_pid_d,
-                target_type=HeadingType.RELATIVE,
                 tolerance=settings.heading_tolerance_deg,
             ),
-            # 実行順6：旋回完了位置を確定してから、カメラ視野を広げる後退へ移る。
+            # 実行順4：旋回完了位置を確定してから、カメラ視野を広げる後退へ移る。
             StopNow(name="stop at sumo search position"),
-            # 実行順7：左右コースにかかわらず、両輪が後退するPWMへ設定する。
+            # 実行順5：左右コースにかかわらず、両輪が後退するPWMへ設定する。
             ConfigureCameraRetreatPwm(
                 name="configure sumo camera retreat pwm",
                 motor_command=camera_retreat_command,
                 power=settings.camera_retreat_power,
             ),
-            # 実行順8：回転せず50mm後退し、土俵全体と黒テープを画角へ入れやすくする。
+            # 実行順6：設定距離だけ後退し、土俵全体と黒テープを画角へ入れやすくする。
             camera_retreat,
-            # 実行順9：画像取得前に完全停止し、モーションブラーを抑える。
+            # 実行順7：画像取得前に完全停止し、モーションブラーを抑える。
             StopNow(name="stop at sumo camera capture position"),
-            # 実行順10：停止時の正面方位を、カメラ捕捉と死角進入後の基準として保存する。
+            # 実行順8：停止時の正面方位を、カメラ捕捉と死角進入後の基準として保存する。
             InitializeSumoState(name="initialize sumo camera capture", context=context),
         ]
     )

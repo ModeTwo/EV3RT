@@ -1,13 +1,6 @@
-#0904更新バージョン
-#青色欄トレースを追加した
-#8/26更新バージョン
-#0820バージョンの、ライントレースの最後、直線部分を速くしてみた
-#以下、0820バージョン
-#ジャイロ走行からSpinAroundを消してみる
-#追加! ライントレース、最初はゆっくりで、途中から早くしてみる
-#rootがsequenceなのでsquareの構成はなくてもいいのでは？まあいいか
+#09/11作成バージョン
+#角度を累積距離の関数にした
 
-#STARTからカーブまでジャイロ走行⇒カーブから青いマーカーまでライントレースの処理
 import sys
 import argparse
 import time
@@ -46,6 +39,7 @@ TRACELINE_TARGET_V = 65     # ライントレース時の目標とする輝度�
 MAX_POWER = 100
 MIN_POWER = 50
 
+
 # アームの移動方向を定義する列挙型（UPならマイナス方向、DOWNならプラス方向にモーターを回す）
 class ArmDirection(IntEnum):
     UP = -1
@@ -77,6 +71,88 @@ g_sonar_sensor: SonarSensor = None  # 超音波センサー（障害物の距離
 g_gyro_sensor: GyroSensor = None    # ジャイロセンサー（車体の向き測定用）
 g_course: int = 0                  # 走行コース（右なら -1、左なら 1 を掛けて左右のモーター出力を反転させる）
 g_key: str = None                  # 暗号解読等で使用する、入力されたキー文字列
+
+# --- 距離と角度テーブル（ジャイロ走行の参照用） ---
+S = [
+  0.0,
+  375.0,
+  875.0,
+  940.9,
+  1016.0,
+  1109.2,
+  1195.1,
+  1674.2,
+  1780.5,
+  1839.4,
+  1905.3,
+  1971.1,
+  2367.0,
+  2452.9,
+  2528.0,
+  2621.2,
+  2707.1,
+  2985.0,
+  3239.3,
+  3453.8,
+  3691.3,
+  3928.9,
+  4183.2,
+  4408.5,
+  4501.7,
+  4594.9,
+  4660.8,
+  5577.4,
+]
+
+Theta = [
+  0.0,
+  0.0,
+  -18.4,
+  -33.7,
+  -63.4,
+  -76.0,
+  -90.0,
+  -101.3,
+  -135.0,
+  -161.6,
+  -161.6,
+  180.0,
+  -166.0,
+  -146.3,
+  -116.6,
+  -104.0,
+  -77.0,
+  -55.0,
+  -29.1,
+  -15.3,
+  -15.3,
+  -35.0,
+  -56.3,
+  -26.6,
+  -26.6,
+  -18.4,
+  0.0,
+  0.0,
+]
+
+
+def heading_at(s):
+    n = len(S)
+
+    if s <= S[0]:
+        return Theta[0]
+    if s >= S[n-1]:
+        return Theta[n-1]
+
+    for i in range(n - 1):
+        if S[i] <= s <= S[i+1]:
+            break
+
+    t = (s - S[i]) / (S[i+1] - S[i])
+    angle = Theta[i] + t * (Theta[i+1] - Theta[i])
+
+    return angle
+
 
 
 # =============================================================================
@@ -684,38 +760,59 @@ class VideoThread(threading.Thread):
             if elapsed_time < VIDEO_INTERVAL:
                 time.sleep(VIDEO_INTERVAL - elapsed_time)
 
-  class TraceLineBlue(Behaviour):
-       """青色ラインでトレース"""
-       def __init__(self,name: str, target_h: int, power: int,
-                           pid_p: float, pid_i: float, pid_d: float,
-                           trace_side: TraceSide):
-             super(TraceLineBlue, self).__init__(name)
-             self.power = power
-             self.trace_side = trace_side
-             self.pid = PID(pid_p,pid_i,pid_d,
-                                    setpoint = target_h,
-                                    sample_time = EXEC_INTERVAL,
-                                    output_limits=(-power,power))
-             self.runninng = False
+#0911追加
+class CourseShapeGyro(Behaviour):
+    """
+    距離に応じて角度を変化させながら走るジャイロ走行ノード
+    （heading_at(s) を参照してコース形状をトレースする）
+    """
+    def __init__(self, name: str, power: int,
+                 pid_p: float, pid_i: float, pid_d: float) -> None:
+        super(CourseShapeGyro, self).__init__(name)
+        self.power = power
+        self.pid_p = pid_p
+        self.pid_i = pid_i
+        self.pid_d = pid_d
+        self.running = False
+        self.last_log_time = None
 
-       def update(self) -> Status:
-             if not self.runninng:
-                  self.running = True
-                  self.logger.info("%+06d %s.blue trace started" % 
-                                           (g_plotter.get_distance(), self.__class__.__name__))       
+    def update(self) -> Status:
+        # 現在の走行距離（mm → cm）
+        s = g_plotter.get_distance() / 10.0
 
-             h, s, v = g_color_sensor.get_raw_color_hsv()          
+        # 距離に応じた目標角度（heading_at が角度を返す）
+        target_heading = heading_at(s)
 
-            # 青ラインの境界を Hue で PID 制御       
-             if self.trace_side == TraceSide.NORMAL:           
-                 turn = (-1) * g_course * int(self.pid(h))         
-             else:            
-                   turn = g_course * int(self.pid(h))         
+        # 現在のジャイロ角度
+        current_heading = (-1) * g_course * g_gyro_sensor.get_angle()
 
-             g_right_motor.set_power(self.power - turn)        
-             g_left_motor.set_power(self.power + turn)         
+        # デバッグログ（1秒ごと）
+        if self.last_log_time is None or time.time() - self.last_log_time >= 1.0:
+            self.logger.info("%+06d %s.current heading=%d target=%d" %
+                             (g_plotter.get_distance(), self.__class__.__name__,
+                              current_heading, target_heading))
+            self.last_log_time = time.time()
 
-             return Status.RUNNING 
+        # PID 初期化（初回のみ）
+        if not self.running:
+            self.pid = PID(self.pid_p, self.pid_i, self.pid_d,
+                           setpoint=target_heading,
+                           sample_time=EXEC_INTERVAL,
+                           output_limits=(-self.power, self.power))
+            self.running = True
+
+        # PID setpoint を毎フレーム更新（距離に応じて角度が変わるため）
+        self.pid.setpoint = target_heading
+
+        # PID による旋回量
+        turn = int(self.pid(current_heading))
+
+        # モーター出力
+        g_right_motor.set_power(self.power + g_course * turn)
+        g_left_motor.set_power(self.power - g_course * turn)
+
+        return Status.RUNNING
+
 
 
 def build_behaviour_tree() -> BehaviourTree:
@@ -723,18 +820,18 @@ def build_behaviour_tree() -> BehaviourTree:
     root = Sequence(name="2026 base", memory=True)              # すべての根本となる親シーケンス（順番に実行、クリアしたものは記憶（memory））
     calibration = Sequence(name="calibration", memory=True)    # 機材リセット・調整用の子シーケンス
     start = Parallel(name="start", policy=ParallelPolicy.SuccessOnOne()) # 並行処理ノード（どれか1つがSUCCESSになればクリア）
-    edge_01 = Parallel(name="edge_01", policy=ParallelPolicy.SuccessOnOne())#parallelでmemory=trueは持っていないが、sequenceに組み込むことでparallelの結果も覚えられる。
-    edge_02 = Parallel(name="edge_02", policy=ParallelPolicy.SuccessOnOne())
-    edge_03 = Parallel(name="edge_03", policy=ParallelPolicy.SuccessOnOne())
-    edge_04 = Parallel(name="edge_04", policy=ParallelPolicy.SuccessOnOne())
-    edge_05 = Parallel(name="edge_05", policy=ParallelPolicy.SuccessOnOne())
+    start_to_lap=Parallel(name="start_to_lap", policy=ParallelPolicy.SuccessOnOne())
+    #edge_01 = Parallel(name="edge_01", policy=ParallelPolicy.SuccessOnOne())#parallelでmemory=trueは持っていないが、sequenceに組み込むことでparallelの結果も覚えられる。
+    #edge_02 = Parallel(name="edge_02", policy=ParallelPolicy.SuccessOnOne())
+    #edge_03 = Parallel(name="edge_03", policy=ParallelPolicy.SuccessOnOne())
+    #edge_04 = Parallel(name="edge_04", policy=ParallelPolicy.SuccessOnOne())
+    #edge_05 = Parallel(name="edge_05", policy=ParallelPolicy.SuccessOnOne())
     # ジャイロ走行全体
-    square = Sequence(name="square", memory=True)
+    #square = Sequence(name="square", memory=True)
     
-    lap2_1 = Parallel(name="lap2_1", policy=ParallelPolicy.SuccessOnOne())#カーブ箇所のライントレース 最初はゆっくり
-    lap2_2 = Parallel(name="lap2_2", policy=ParallelPolicy.SuccessOnOne())#カーブ箇所のライントレース 速度上げる
-    lap2_3 = Parallel(name="lap2_3", policy=ParallelPolicy.SuccessOnOne())#LAP直前の直線部分
-    lap2_3_blue = Parallel(name="lap2_3_blue", policy=ParallelPolicy.SuccessOnOne())#LAP直前の直線部分
+    #lap2_1 = Parallel(name="lap2_1", policy=ParallelPolicy.SuccessOnOne())#カーブ箇所のライントレース 最初はゆっくり
+    #lap2_2 = Parallel(name="lap2_2", policy=ParallelPolicy.SuccessOnOne())#カーブ箇所のライントレース 速度上げる
+    #lap2_3 = Parallel(name="lap2_3", policy=ParallelPolicy.SuccessOnOne())#LAP直前の直線部分
     lap3 = Parallel(name="lap3", policy=ParallelPolicy.SuccessOnOne())
     carry1 = Parallel(name="carry1", policy=ParallelPolicy.SuccessOnOne())
     carry2 = Parallel(name="carry2", policy=ParallelPolicy.SuccessOnOne())
@@ -764,145 +861,19 @@ def build_behaviour_tree() -> BehaviourTree:
     )
 
 
-     # edge_01：角度0°で直進 → 距離500で成功
-    edge_01.add_children(
+     # 角度は累積距離（曲線の長さ）の関数
+    start_to_lap.add_children(
         [
-            RunByGyro(
-                name="run straight",
-                target=0,
-                power=70,
+            CourseShapeGyro(
+                name="course shape gyro",
+                power=60,
                 pid_p=1.1,
                 pid_i=0.1,
                 pid_d=0.03,
-                target_type=HeadingType.ABSOLUTE
             ),
-            IsDistanceEarned(name="check distance", delta_dist=500),
+            IsDistanceEarned(name="check distance", delta_dist=5577.4),
         ]
     )
-
-     # edge_02：角度45°で直進 → 距離200で成功
-    edge_02.add_children(
-        [
-            RunByGyro(
-                name="run straight",
-                target=-45,
-                power=70,
-                pid_p=1.1,
-                pid_i=0.1,
-                pid_d=0.03,
-                target_type=HeadingType.ABSOLUTE
-            ),
-            IsDistanceEarned(name="check distance", delta_dist=200),
-        ]
-    )
-
-     # edge_03：角度90°で直進 → 距離550で成功
-    edge_03.add_children(
-        [
-            RunByGyro(
-                name="run straight",
-                target=-90,
-                power=70,
-                pid_p=1.1,
-                pid_i=0.1,
-                pid_d=0.03,
-                target_type=HeadingType.ABSOLUTE
-            ),
-            IsDistanceEarned(name="check distance", delta_dist=550),
-        ]
-    )
-
-    
-    # edge_04：角度135°で直進 → 距離200で成功
-    edge_04.add_children(
-        [
-            RunByGyro(
-                name="run straight",
-                target=-135,
-                power=70,
-                pid_p=1.1,
-                pid_i=0.1,
-                pid_d=0.03,
-                target_type=HeadingType.ABSOLUTE
-            ),
-            IsDistanceEarned(name="check distance", delta_dist=200),
-        ]
-    )
-
-     
-    # edge_05：角度180°で直進 → 距離200で成功
-    edge_05.add_children(
-         [
-             RunByGyro(
-                 name="run straight",
-                 target=-180,
-                 power=60, #ここだけ60
-                 pid_p=1.1,
-                 pid_i=0.1,
-                 pid_d=0.03,
-                 target_type=HeadingType.ABSOLUTE
-                ),
-                IsDistanceEarned(name="check distance", delta_dist=200),
-        ]
-    )
-
-    
-     # ジャイロ走行区間の構成（直進→回転→直進→回転…）
-    square.add_children(
-        [
-            edge_01,
-            edge_02,
-            edge_03,
-            edge_04,
-            edge_05
-           
-        ]
-    )
-
-    #lap2_1（ライントレース。50mmまではpower=33でゆっくり進む）
-    lap2_1.add_children(
-        [
-            TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V, power=33,
-                pid_p=0.55, pid_i=0.0000009, pid_d=0.015, trace_side=TraceSide.NORMAL),
-            IsDistanceEarned(name="check distance", delta_dist=50)
-        ]
-    )
-
-
-     #lap2_2（ライントレース。カーブ部分）2700?
-    lap2_2.add_children(
-        [
-            TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V, power=50,
-                pid_p=0.55, pid_i=0.0000009, pid_d=0.015, trace_side=TraceSide.NORMAL),
-            IsDistanceEarned(name="check distance", delta_dist=2700),
-        ]
-    )
-
-    #lap2_3（ライントレース。LAP直線の直線部分）
-    lap2_3.add_children(
-        [
-            TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V, power=60,
-                pid_p=0.55, pid_i=0.0000009, pid_d=0.045, trace_side=TraceSide.NORMAL),
-            IsColorDetected(name="check color", color=Color.BLUE),
-        ]
-    )
-
-   #lap2_3_blue (青色部分をライントレース）
-    lap2_3_blue.add_children(
-        [
-            TraceLineBlue(name = "trace along blue", target_h=200, power=40,
-                 pid_p=0.55, pid_i=0.0000009, pid_d=0.045, trace_side=TraceSide.NORMAL)
-    
-    """
-    #lap2_4（青色検知したら、次の黒までライントレース。）
-    lap2_4.add_children(
-        [
-            TraceLine(name="sensor trace normal edge", target=TRACELINE_TARGET_V, power=60,
-                pid_p=0.55, pid_i=0.0000009, pid_d=0.045, trace_side=TraceSide.NORMAL),
-            IsColorDetected(name="check color", color=Color.BLACK),
-        ]
-    )
-    """
 
     """
     power:前進のパワー
@@ -1030,11 +1001,11 @@ def build_behaviour_tree() -> BehaviourTree:
         [
             calibration,      # ① 起動時のアーム・ジャイロ初期化
             start,               # ② タッチセンサー押し下げでのスタート待ち
-            square,           #ジャイロ走行
-            lap2_1,           #カーブ箇所のライントレース 最初はゆっくり
-            lap2_2,           #カーブ箇所のライントレース 速度上げる
-            lap2_3,           #LAP直前の直線部分をライントレースで速度上げる
-            lap2_3_blue,  #青色でライントレース
+            start_to_lap, #角度は累積距離の関数
+            #square,           #ジャイロ走行
+            #lap2_1,           #カーブ箇所のライントレース 最初はゆっくり
+            #lap2_2,           #カーブ箇所のライントレース 速度上げる
+            #lap2_3,           #LAP直前の直線部分をライントレースで速度上げる
             lap3,               # ④ 青いマーカーからジャイロ直進でボトルをキャッチしに行く
             carry1,            # ⑤ ボトルを乗せたまま青線までトレース
             carry2,            # ⑥ 直角にジャイロ直進して青線を越える
