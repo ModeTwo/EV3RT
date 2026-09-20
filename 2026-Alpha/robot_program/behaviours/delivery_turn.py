@@ -30,6 +30,6 @@ def delivery_turn(name, context, settings, target):
         DeliveryPulseTurn(name+' spin', context, target,
                           settings.to_spin_min_power, settings.to_spin_max_power),
         StopNow(name=name+' brake'),
-        IsTimePassed(name=name+' settle', delta_time=.5),
+        # IsTimePassed(name=name+' settle', delta_time=.5),
     ])
     return root

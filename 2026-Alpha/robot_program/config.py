@@ -51,6 +51,12 @@ class RaceConfig:
     # ラインへ短く進入するSEEKと、黒捕捉後に0度へ戻すALIGNを分ける。
     start_lap_camera_max_turn: int = 30
     start_lap_camera_align_power: int = 35
+    # ALIGN後、通常PIDを始める前にライン端の目標明度へ穏やかに寄せる。
+    start_lap_camera_handoff_power: int = 35
+    start_lap_camera_handoff_pid_p: float = 0.3
+    start_lap_camera_handoff_turn_cap: float = 10.0
+    start_lap_camera_handoff_v_tolerance: int = 10
+    start_lap_camera_handoff_stable_samples: int = 5
     start_lap_camera_tilt_ff_gain: float = 8.0
     start_lap_camera_ff_cap: float = 8.0
     start_lap_camera_stable_samples: int = 3
@@ -67,7 +73,7 @@ class RaceConfig:
     enable_et_rally: bool = True
     et_rally_laps: int = 3
     # received: PCから受信したSEQ、file: 従来の固定plan JSONを実行する。
-    et_rally_strategy_source: str = "received"
+    et_rally_strategy_source: str = "file"
     # Noneならtests/plan_seed9392783.json。相対パスは2026-Alpha直下を基準にする。
     et_rally_plan_path: Optional[str] = None
     enable_et_sumo: bool = True

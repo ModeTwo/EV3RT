@@ -10,8 +10,8 @@ from ..behaviours.gyro_drive import RunByGyro, SpinAround
 from ..behaviours.conditions import IsDistanceEarned
 
 
-SPIN_MAX_POWER = 57         # その場回旋（スピン）するときの最大モーター出力
-SPIN_MIN_POWER = 47         # その場回旋（スピン）するときの最低モーター出力
+SPIN_MAX_POWER = 70         # その場回旋（スピン）するときの最大モーター出力
+SPIN_MIN_POWER = 60         # その場回旋（スピン）するときの最低モーター出力
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PLAN_PATH = Path(__file__).resolve().parents[1] / "tests" / "plan_seed9392783.json"
 
@@ -86,7 +86,7 @@ def _finite_number(value, field_name):
     return value
 
 
-def steps_from_strategy(strategy, move_power=50, move_pid=(1.1, 0.00075, 0.04),
+def steps_from_strategy(strategy, move_power=70, move_pid=(1.1, 0.00075, 0.04),
                         turn_max_power=SPIN_MAX_POWER, turn_min_power=SPIN_MIN_POWER,
                         turn_pid=(0.2, 0.00075, 0.03)):
     """Convert a received or file-loaded strategy to behaviour tree nodes."""
@@ -147,7 +147,7 @@ def steps_from_strategy(strategy, move_power=50, move_pid=(1.1, 0.00075, 0.04),
     return nodes
 
 
-def steps_from_plan(plan_path, move_power=50, move_pid=(1.1, 0.00075, 0.04),
+def steps_from_plan(plan_path, move_power=70, move_pid=(1.1, 0.00075, 0.04),
                     turn_max_power=SPIN_MAX_POWER, turn_min_power=SPIN_MIN_POWER,
                     turn_pid=(0.2, 0.00075, 0.03)):
     """Compatibility helper that converts the legacy plan JSON."""

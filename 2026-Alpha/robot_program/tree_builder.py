@@ -47,13 +47,14 @@ def build_mission_children(context, config):
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))
+    # 正式な工程順: LAPゲート通過後はET相撲を先に行い、そのあとでボトルキャッチ(AT)へ進む。
+    if config.enable_et_sumo:
+        children.append(build_et_sumo_phase(context, config))
     # ボトル取得とヒント読取は同じ走行区間で行うため、一つの準備工程として扱う。
     if config.enable_bottle_delivery or config.enable_et_rally:
         children.append(build_bottle_and_rally_preparation_phase(context, config))
     if config.enable_et_rally and config.et_rally_laps > 0:
         children.append(build_et_rally_phase(context, config))
-    if config.enable_et_sumo:
-        children.append(build_et_sumo_phase(context, config))
-    if config.enable_finish:
-        children.append(build_finish_phase(context, config))
+    # if config.enable_finish:
+    #     children.append(build_finish_phase(context, config))
     return children
