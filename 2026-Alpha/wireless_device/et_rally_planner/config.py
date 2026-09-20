@@ -126,7 +126,14 @@ START_HEADING_DEG = 180.0   # -x方向を向く
 
 # ゴール: スタートと同じ考え方で、グリッド(0,3)-(0,4)を結ぶ線の中心点から
 # 垂直にGOAL_OFFSET_CMだけ離れた点。
-GOAL_POS_CM = (0 * GRID_PITCH_CM - GOAL_OFFSET_CM, 3.5 * GRID_PITCH_CM)
+# 2026-09-20: ゴール地点を、従来のゴール(X=GOAL_LINE_X_CM, Y=3.5*GRID_PITCH_CM)から
+# X方向に-61cm、Y方向に-115cm移動した(X=-75.8cm, Y=-28.9cm)。
+# (2026-09-20: 当初X-58cmだったものを、さらに-3cm動かして-61cmにした。)
+# 従来の位置に戻すときは GOAL_SHIFT_CM を (0.0, 0.0) にする。
+GOAL_SHIFT_CM = (-61.0, -115.0)
+# 従来のゴール位置のX座標(GOAL_SHIFT_CMを足す前の基準)。
+GOAL_LINE_X_CM = 0 * GRID_PITCH_CM - GOAL_OFFSET_CM
+GOAL_POS_CM = (GOAL_LINE_X_CM + GOAL_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + GOAL_SHIFT_CM[1])
 GOAL_HEADING_DEG = 90.0     # +y方向を向く
 
 # 「支柱のすぐ周りだけ」の迂回ノードだと、複数の障害物を大きく回り込んで
@@ -160,3 +167,29 @@ LAPS = 3
 
 # --- turn()コマンドの符号規約 ---
 # 右旋回(時計回り)を正、左旋回(反時計回り)を負とする(暫定)
+
+
+# 2026-09-20: entry直前の直進(横移動を含む)で、車体footprintがtarget_gate自身の
+# T字パーツから確保したい距離(cm)の「目標」(rule_route._try_raise_approach_run_for_arm)。
+# 届かなければrule_route.MIN_BODY_CLEARANCE_FOR_STRONG_CM(3.0cm)を下限とする。
+# 0なら無効(従来と完全に同じ経路になる)。60シードで比較したところ、有効にすると
+# 平均+7.6cm(約1%)の遠回りで、3cm未満のゲート進入が28.6%から14.7%に減ったため、
+# 2026-09-20に既定で有効(4.0)にした。--arm-clearance=0 で無効にできる。
+ARM_BODY_CLEARANCE_TARGET_CM = 4.0
+
+# 2026-09-20: ゴール地点に到達した後の旋回(GOAL_HEADING_DEGへ向く)を行うか。
+# False: ゴール地点に着いた時点で終了し、向きは問わない(旋回ステップを出さない、
+# 経路計画でもゴールでの旋回安全性は見ない)。
+GOAL_FINAL_TURN = False
+
+# 2026-09-20: T字パーツとの車体クリアランスの評価(rule_route._segment_body_clearance)で
+# 使う、車体の後端の張り出し(cm)。0なら「旋回軸より後ろは見ない」(車体の前方だけ
+# 評価)。従来の評価に戻すときは ROBOT_REAR_OVERHANG_CM にする。
+ROBOT_REAR_OVERHANG_FOR_CLEARANCE_CM = 0.0
+
+# 2026-09-20: target_gate以外のゲートのT字パーツにも、車体前方のクリアランスを
+# ARM_BODY_CLEARANCE_MIN_CM以上確保する候補を優先する(rule_route._resolve_top_level_segment)。
+# ARM_OTHER_GATES_LENGTH_BUDGET_CM: そのために許容する遠回り(最短候補からの増加分、cm)。
+ARM_CLEARANCE_OTHER_GATES = False  # 2026-09-20: 影響が大きい(68%の経路が変わり平均+2.2%)割に効果が小さいため一旦無効
+ARM_BODY_CLEARANCE_MIN_CM = 3.0
+ARM_OTHER_GATES_LENGTH_BUDGET_CM = 60.0

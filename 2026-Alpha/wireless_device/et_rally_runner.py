@@ -14,8 +14,9 @@ def _parse_position(value):
     if len(value) != 2 or any(character not in "12345" for character in value):
         raise ValueError("Gate positions must be two digits from 1 to 5")
     x, y = int(value[0]), int(value[1])
-    # 公式表記は左上がG1-1、計算ロジックは左下が(0, 0)なので境界で変換する。
-    return x - 1, 5 - y
+    # 公式表記(X,Yとも1〜5)を、計算ロジックのグリッド(左コースのplanner座標、X,Yとも0〜4)へ
+    # 1ずつずらして変換する。右コースのX反転はcalculate()側で行う。
+    return x - 1, y - 1
 
 
 def _parse_gate_text(value):
