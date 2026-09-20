@@ -193,3 +193,14 @@ ROBOT_REAR_OVERHANG_FOR_CLEARANCE_CM = 0.0
 ARM_CLEARANCE_OTHER_GATES = False  # 2026-09-20: 影響が大きい(68%の経路が変わり平均+2.2%)割に効果が小さいため一旦無効
 ARM_BODY_CLEARANCE_MIN_CM = 3.0
 ARM_OTHER_GATES_LENGTH_BUDGET_CM = 60.0
+
+# 2026-09-20: 「斜めに進んでから、entryの軸に乗って直進する」候補
+# (rule_route._try_diagonal_to_entry_axis)。entryの手前D(cm)の点へ斜めに進む。
+DIAGONAL_ENTRY_ENABLED = True
+DIAGONAL_ENTRY_D_MIN_CM = 8.0
+DIAGONAL_ENTRY_D_MAX_CM = 48.0
+DIAGONAL_ENTRY_D_STEP_CM = 8.0
+# 斜め+ゲートの脇の線+entry軸(a -> p1 -> c -> b)の候補のパラメータ。
+DIAGONAL_BYPASS_D_LIST_CM = (8.0,)
+DIAGONAL_BYPASS_T_STEP_CM = 8.0
+DIAGONAL_BYPASS_T_MAX_CM = 48.0
