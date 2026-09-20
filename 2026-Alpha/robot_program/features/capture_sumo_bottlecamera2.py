@@ -242,25 +242,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
             return Status.RUNNING
         self.last_frame_id = frame_id
 
-        insight, color, cx, theta, bottom_row, area, in_blind = observation
-
-        if insight and color == BottleColor.BLACK:
-            self.logger.info(
-                "SUMO BLACK DETECT "
-                "frame=%d cx=%s theta=%.1f bottom=%s area=%.1f blind=%s bearing=%.1f"
-                % (
-                    frame_id,
-                    cx,
-                    theta,
-                    bottom_row,
-                    area,
-                    in_blind,
-                    self._current_bearing(),
-                )
-            )
-        
-        
-
+        insight, color, _cx, theta, bottom_row, area, in_blind = observation
         valid = (
             insight
             and color == BottleColor.BLACK

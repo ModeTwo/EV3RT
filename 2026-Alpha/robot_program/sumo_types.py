@@ -133,6 +133,9 @@ class SumoSettings:
     # 直線後退でアームの保持深さ、ボトル直径、安全余裕をまとめて確保する。
     release_reverse_distance_mm: float = 100.0
     release_reverse_power: int = 60
+    # ボトル離脱後、黒ライン探索へ入る前に横方向へ退避する。
+    garage_avoid_distance_mm: float = 120.0
+    garage_avoid_power: int = 50
 
     # 離脱後はガレージ側へ旋回してから、その絶対方位を維持して黒ラインまで直進する。
     garage_return_drive_power: int = 60
