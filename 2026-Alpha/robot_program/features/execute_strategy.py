@@ -97,7 +97,7 @@ def _finite_number(value, field_name):
     return value
 
 
-def steps_from_strategy(strategy, move_power=70, move_pid=(4.0, 0.6, 0.06),
+def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         turn_main_power=SPIN_MAX_POWER,
                         turn_fine_max_power=60, turn_fine_min_power=50,
                         turn_fine_tolerance_deg=0.5,
