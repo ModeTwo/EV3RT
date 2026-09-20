@@ -8,6 +8,7 @@ from pathlib import Path
 from .bt_imports import Failure, HeadingType, Parallel, ParallelPolicy, Sequence
 from ..behaviours.et_rally_drive import EtRallyRunByGyro, EtRallySpinAroundByEncoder
 from ..behaviours.conditions import IsDistanceEarned
+from ..runtime import runtime
 from ..et_rally_compensation import apply_caster_drag_compensation, apply_lateral_drift_compensation
 
 
@@ -135,6 +136,14 @@ def steps_from_strategy(strategy, move_power=70, move_pid=(4.0, 0.6, 0.06),
                 raise ValueError("distance_mm must be greater than zero")
             checked["distance_mm"] = distance
         steps.append(checked)
+    # 横ズレはロボット固有の向き(物理的に常に右)に出る。runtime.courseが-1(右コース)だと
+    # 「headingが増える向き」が物理的に逆になる(heading=-course*ジャイロ角)ため、
+    # sample_comment.pyで較正した左コース基準のまま使うとA/B方向と補正の向きが逆になる。
+    # 右コースではA/B係数を入れ替え、補正の符号も反転して物理的に同じ向きにする。
+    if runtime.course == -1:
+        lateral_drift_mm_per_deg_a, lateral_drift_mm_per_deg_b = (
+            lateral_drift_mm_per_deg_b, lateral_drift_mm_per_deg_a)
+        lateral_drift_sign = -lateral_drift_sign
     steps = apply_caster_drag_compensation(
         steps, mm_per_deg=caster_drag_mm_per_deg, initial_heading_deg=initial_heading_deg)
     steps = apply_lateral_drift_compensation(

@@ -24,6 +24,12 @@ from ..types import HeadingType
 # ETラリー工程の間はPlotter.tire_diameterもこの値になる(phases/et_rally.py)。
 TIRE_DIAMETER = ET_RALLY_TIRE_DIAMETER
 
+# sample_comment.pyは制御周期0.03秒で較正した。robot_programの周期(0.02秒)でも
+# 同じ「時間」で判定するため、tick数・1tickあたりの角度で持つ閾値を周期比で換算する。
+_TUNED_INTERVAL_SEC = 0.03
+_STALL_TICK_LIMIT = math.ceil(7 * _TUNED_INTERVAL_SEC / EXEC_INTERVAL - 1e-9)  # 0.03s x 7 = 約0.2秒
+_STALL_PROGRESS_DEG = 0.3 * EXEC_INTERVAL / _TUNED_INTERVAL_SEC  # 1tickあたり0.3度=10度/秒未満
+
 
 class EtRallySpinAroundByEncoder(Behaviour):
     """左右のタイヤの回転量(エンコーダ)を揃えて回すことで、「その場旋回」であること
@@ -177,9 +183,9 @@ class EtRallySpinAroundByEncoder(Behaviour):
         # 負けて動けていないと判断し、動くことが分かっているパワーまで
         # 引き上げる(一度上げたら、このノードが終わるまで下げない)。
         heading_progress = abs((current_heading - self.prev_heading_for_stall + 180.0) % 360.0 - 180.0)
-        if heading_progress < 0.3:
+        if heading_progress < _STALL_PROGRESS_DEG:
             self.stall_ticks += 1
-            if self.stall_ticks > 7:  # 0.03s x 7 = 約0.2秒進捗なし(2026-09-12: 元は15=0.45秒、体感の停止時間を減らすため短縮)
+            if self.stall_ticks > _STALL_TICK_LIMIT:  # 約0.2秒進捗なし(2026-09-12: 元は15tick=0.45秒、体感の停止時間を減らすため短縮)
                 self.escalated = True
                 self.logger.info("%+06d %s.stalled in fine-trim, escalating power" % (
                     runtime.plotter.get_distance(), self.__class__.__name__))
