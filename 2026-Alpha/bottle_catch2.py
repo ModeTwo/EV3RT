@@ -836,7 +836,7 @@ class DetectBottleColorWhileMoving(Behaviour):
     ・モーターには触らない
     ・色を認識したら g_bottle_color に保存する
     ・認識後も RUNNING を返し続ける
-    ・450mm走行完了は IsDistanceReached に任せる
+    ・400mm走行完了は IsDistanceReached に任せる
     """
 
     def __init__(
@@ -891,7 +891,7 @@ class DetectBottleColorWhileMoving(Behaviour):
         # ------------------------------------------
         # すでに色を確定していた場合
         # ------------------------------------------
-        # 450mm走り終わるまではParallelを終了させないため、
+        # 400mm走り終わるまではParallelを終了させないため、
         # SUCCESSではなくRUNNINGを返す
         if self.detected:
             return Status.RUNNING
@@ -1048,9 +1048,9 @@ def build_behaviour_tree():
       ↓
     ライントレース継続
      + ボトル色認識
-     + 450MM走行距離監視
+     + 400MM走行距離監視
       ↓
-    450MM到達
+    400MM到達
       ↓
     停止
     """
@@ -1098,13 +1098,13 @@ def build_behaviour_tree():
     #
     # ・ライントレース
     # ・ボトル色認識
-    # ・450mm走行距離監視
+    # ・400mm走行距離監視
     #
     # を同時に実行する
     # ==========================================
 
-    trace_detect_bottle_450mm = Parallel(
-        name="trace and detect bottle for 450mm",
+    trace_detect_bottle_400mm = Parallel(
+        name="trace and detect bottle for 400mm",
 
         # IsDistanceReached がSUCCESSになったら
         # このParallelを終了する
@@ -1112,7 +1112,7 @@ def build_behaviour_tree():
     )
 
 
-    trace_detect_bottle_450mm.add_children(
+    trace_detect_bottle_400mm.add_children(
         [
              # --------------------------------------
             # ライントレース
@@ -1178,7 +1178,7 @@ def build_behaviour_tree():
             trace_detect_bottle_400mm,
 
 
-            # ④ 450mm進んだら停止
+            # ④ 400mm進んだら停止
             StopNow(
                 name="final stop"
             ),

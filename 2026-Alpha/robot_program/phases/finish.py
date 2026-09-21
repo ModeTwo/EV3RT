@@ -11,7 +11,7 @@ def build_finish_phase(context, config):
     root = Sequence(name="finish", memory=True)
     root.add_children(
         [
-            build_drive_to_garage(context, config),
+            # build_drive_to_garage(context, config),
             build_stop_in_garage(context, config),
         ]
     )

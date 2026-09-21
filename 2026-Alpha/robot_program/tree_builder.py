@@ -12,6 +12,7 @@ from .phases.hint_collection import build_hint_collection_phase
 from .features.catch_bottle import build_catch_bottle
 from .features.to_hint_route import build_tantou_tree
 from .behaviours.handoff import CaptureAtToHandoff
+from .gyro_scale import EnableGyroScale
 
 
 def build_mission_children(context, config):
@@ -19,7 +20,8 @@ def build_mission_children(context, config):
     from .config import INTEGRATION_MISSIONS
     if config.mission_mode in INTEGRATION_MISSIONS:
         from .integration_runs import build_integration_children
-        return build_integration_children(context, config)
+        # ラップゲートを通らない試験ミッションは、先頭からジャイロの倍率補正を有効にする。
+        return [EnableGyroScale()] + list(build_integration_children(context, config))
     if config.mission_mode not in (
         'at',
         'to',
@@ -32,21 +34,25 @@ def build_mission_children(context, config):
     ):
         raise ValueError('Unknown mission mode: ' + config.mission_mode)
     if config.mission_mode == 'at':
-        return [build_catch_bottle(context, config)]
+        return [EnableGyroScale(), build_catch_bottle(context, config)]
     if config.mission_mode == 'to':
         # 単体試験ではタッチ開始後の配置位置・向きをAT終了状態として使う。
-        return [CaptureAtToHandoff('TO standalone origin', context),
+        return [EnableGyroScale(), CaptureAtToHandoff('TO standalone origin', context),
                 build_tantou_tree(context, config)]
     if config.mission_mode in ('hint2', 'hint2-return'):
-        return [build_lap_gate_phase(context, config), build_hint_collection_phase(context, config)]
+        # ラップゲートまでは従来の値のまま。通過後(Hint取得以降)から倍率補正を有効にする。
+        return [build_lap_gate_phase(context, config), EnableGyroScale(),
+                build_hint_collection_phase(context, config)]
     if config.mission_mode == 'bottle-final':
-        return [build_bottle_delivery_final_phase(context, config)]
+        return [EnableGyroScale(), build_bottle_delivery_final_phase(context, config)]
     if config.mission_mode == 'rally-drive':
         # Hint取得・Bottle Deliveryを通らず、受信待ちとSEQ実行だけを構成する。
-        return [build_et_rally_phase(context, config)]
+        return [EnableGyroScale(), build_et_rally_phase(context, config)]
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))
+    # ラップゲート通過後(ET相撲以降)から、ジャイロの倍率補正を有効にする。ラップゲートまでは従来の値。
+    children.append(EnableGyroScale())
     # 正式な工程順: LAPゲート通過後はET相撲を先に行い、そのあとでボトルキャッチ(AT)へ進む。
     if config.enable_et_sumo:
         children.append(build_et_sumo_phase(context, config))

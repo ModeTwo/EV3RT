@@ -3,7 +3,7 @@
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 
 from ..behaviours.conditions import IsDistanceEarned
-from .sumo_bearing_motion import RunAtBearing, SpinToBearing, current_bearing
+from .sumo_bearing_motion import RunAtBearing, EncoderSpinToBearing as SpinToBearing, current_bearing
 from ..behaviours.motor_control import RunAsInstructed, StopNow
 
 
@@ -106,6 +106,8 @@ class InitializeSumoState(Behaviour):
         state.bottle_distance_mm = None
         state.approach_distance_mm = 0.0
         state.camera_capture_bearing_deg = None
+        state.bottle_image_x_ratio = None
+        state.escape_route = None
         state.skipped = False
         state.bottle_captured = False
         state.bottle_pushed_out = False

@@ -17,7 +17,7 @@ class RaceConfig:
     # profile: PDF距離-方位表。legacy: 従来の固定方位+ライントレース。
     start_lap_mode: str = 'profile'
     #start_lap_mode: str = 'legacy'
-    start_lap_power: int = 80
+    start_lap_power: int = 85
     # 車軸中心から最初のカーブまで。アーム先端から500mm＋前方100mm。
     start_lap_first_straight_mm: float = 600.0
     # 最初のカーブ以降の距離倍率。別途実測するまでは旧表の長さを維持。

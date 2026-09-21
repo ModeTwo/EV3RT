@@ -13,7 +13,11 @@ class SumoBlackBottleConfig:
     frame_width: int = 320
     frame_height: int = 180
     black_max_saturation: int = 120
-    black_max_value: int = 60
+    black_max_value: int = 40
+
+    # 画像上部を黒ボトル探索対象から除外する割合
+    search_top_ratio: float = 0.30
+
     min_area_px: float = 150.0
     min_extent: float = 0.45
     max_aspect_ratio: float = 4.0
@@ -74,8 +78,22 @@ class SumoBlackBottleDetector:
             dtype=np.uint8,
         )
         mask = cv2.inRange(hsv, lower, upper)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
+        # ========================================
+        # 黒ボトル探索範囲を制限
+        # ========================================
+        # 画像上部は背景の黒領域を誤検出する可能性があるため、
+        # 指定した割合より上側を黒ボトル探索対象から除外する。
+        search_top = int(
+            self.config.frame_height
+            * self.config.search_top_ratio
+        )
+
+        mask[:search_top, :] = 0
+
+        # ノイズ除去
+        mask = cv2.morphologyEx(mask,cv2.MORPH_OPEN,self.kernel)
+        mask = cv2.morphologyEx(mask,cv2.MORPH_CLOSE,self.kernel)
+
 
         contours, _ = cv2.findContours(
             mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE

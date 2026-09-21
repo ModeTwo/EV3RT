@@ -1,6 +1,7 @@
 """Features 16 and 17: find and capture the sumo bottle with the camera."""
 
 from simple_pid import PID
+import math
 
 from .bt_imports import Behaviour, BottleColor, HeadingType, Parallel, ParallelPolicy, Selector, Sequence, Status, runtime, time
 
@@ -41,6 +42,10 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.pid = None
 
     def initialise(self):
+        self.context.sumo.push_end_position_mm = None
+        self.green_turn_needed = False
+        self.green_curve_started = False
+        self.green_origin_distance = None
         self.alignment_turn = None
         self.alignment_checked = False
         self.settle_until = 0.0
@@ -81,10 +86,6 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.context.sumo.skipped = False
         self.context.sumo.failure_reason = None
         self.context.sumo.camera_capture_bearing_deg = None
-        # 今回の黒ボトル位置から退避ルートを改めて決定するため、
-        # 前回実行時の判定結果をリセットする。
-        self.context.sumo.bottle_image_x_ratio = None
-        self.context.sumo.escape_route = None
         # 黒テープ確定中は必ず静止し、同じフレームを複数回数えない。
         self._stop_motors()
         self.logger.info(
@@ -153,54 +154,42 @@ class CaptureSumoBottleWithCamera(Behaviour):
             % (runtime.plotter.get_distance(), self.__class__.__name__, reason)
         )
         return Status.FAILURE
-    
-    def _decide_escape_route(self, cx, frame_width):
-        """
-        黒ボトルを確定した時点の画像上の位置から、
-        押し出し後に使用する退避ルートを決定する。
 
-        Leftコース:
-            左40%  -> 退避ルート①
-            右60%  -> 退避ルート②
-
-        Rightコース:
-            右40%  -> 退避ルート①
-            左60%  -> 退避ルート②
-        """
-
-        if cx is None or frame_width <= 0:
+    def _prepare_green_route(self):
+        # 既存の開始位置近似を採用。旋回前の撮影後退は-Xとする。
+        self.green_x = -self.settings.camera_retreat_distance_mm
+        self.green_y = self.settings.start_straight_distance_mm
+        self.green_origin_distance = runtime.plotter.get_distance()
+        self.green_last_distance = self.green_origin_distance
+        angle = math.radians(-runtime.course * (self.target_bearing - self.settings.entry_bearing_deg))
+        forward = max(0.0, math.cos(angle))
+        limit = self.settings.green_boundary_y_mm - self.settings.green_clearance_mm
+        self.green_turn_needed = self.green_y + self.settings.capture_and_push_distance_mm * forward >= limit
+        self.logger.info("Green route risk=%s start_y=%.1f safe_y=%.1f" % (self.green_turn_needed, self.green_y, limit))
+        # 捕捉前に境界へ迫る場合は、無理に曲がらず走行開始前に失敗停止する。
+        if self.green_turn_needed and (self.green_y + self.settings.green_capture_distance_mm * forward
+                                      + self.settings.green_curve_reserve_mm >= limit):
             return False
+        return True
 
-        # 画像上のボトル位置を0.0～1.0へ変換
-        x_ratio = float(cx) / float(frame_width)
-        x_ratio = max(0.0, min(1.0, x_ratio))
-
-        # Leftコース
-        if runtime.course > 0:
-            if x_ratio < 0.40:
-                route = 1       # 退避ルート①
-            else:
-                route = 2       # 退避ルート②
-
-        # Rightコース
-        else:
-            if x_ratio >= 0.60:
-                route = 1       # 退避ルート①
-            else:
-                route = 2       # 退避ルート②
-
-        # Feature 18で使用するため保存
-        self.context.sumo.bottle_image_x_ratio = x_ratio
-        self.context.sumo.escape_route = route
-
-        course_name = "LEFT" if runtime.course > 0 else "RIGHT"
-
-        self.logger.info(
-            "SUMO ESCAPE ROUTE "
-            "course=%s cx=%.1f width=%d ratio=%.3f route=%d"
-            % (course_name,cx,frame_width,x_ratio,route,)
-        )
-
+    def _update_green_route(self):
+        # 前進区間のみを積分。旋回・前進カーブ後の復帰位置計算へ引き渡す。
+        distance = runtime.plotter.get_distance()
+        delta = abs(distance - self.green_last_distance)
+        self.green_last_distance = distance
+        angle = math.radians(-runtime.course * (self._current_bearing() - self.settings.entry_bearing_deg))
+        self.green_x += delta * math.sin(angle)
+        self.green_y += delta * math.cos(angle)
+        self.context.sumo.push_end_position_mm = (self.green_x, self.green_y)
+        if self.green_y >= self.settings.green_boundary_y_mm - self.settings.green_clearance_mm:
+            return False
+        if (self.green_turn_needed and not self.green_curve_started
+                and abs(distance - self.green_origin_distance) >= self.settings.green_capture_distance_mm):
+            # 両輪前進の既存操舵を再利用し、土俵側90度へカーブする。
+            self.target_bearing = (self.settings.entry_bearing_deg - runtime.course * 90.0) % 360.0
+            self.pid.reset()
+            self.green_curve_started = True
+            self.logger.info("Capture assumed; curving toward ring bearing=%.1f" % self.target_bearing)
         return True
 
     def update(self):
@@ -225,12 +214,16 @@ class CaptureSumoBottleWithCamera(Behaviour):
                 self.approach_started_at = time.monotonic()
                 self.pid.reset()
                 self.context.sumo.camera_capture_bearing_deg = self.target_bearing
+                if self.settings.green_avoidance_enabled and not self._prepare_green_route():
+                    return self._fail("insufficient_green_clearance_for_capture_and_curve")
                 self.logger.info("Single alignment complete; starting distance drive target=%.1f" % self.target_bearing)
                 self._drive_toward_locked_bearing()
             return Status.RUNNING
         # 方位確定後は画像更新を待たず、毎制御周期で500mm到達を確認する。
         # キャッチ・押し出しを一つの距離へ含め、死角判定による追加走行は行わない。
         if self.phase == self.APPROACH:
+            if self.settings.green_avoidance_enabled and not self._update_green_route():
+                return self._fail("green_boundary_clearance_reached")
             if self.total_distance.update() == Status.SUCCESS:
                 self._stop_motors()
                 self.logger.info("Capture and push distance completed; proceeding to reverse")
@@ -249,25 +242,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
             return Status.RUNNING
         self.last_frame_id = frame_id
 
-        insight, color, cx, theta, bottom_row, area, in_blind = observation
-
-        if insight and color == BottleColor.BLACK:
-            self.logger.info(
-                "SUMO BLACK DETECT "
-                "frame=%d cx=%s theta=%.1f bottom=%s area=%.1f blind=%s bearing=%.1f"
-                % (
-                    frame_id,
-                    cx,
-                    theta,
-                    bottom_row,
-                    area,
-                    in_blind,
-                    self._current_bearing(),
-                )
-            )
-        
-        
-
+        insight, color, _cx, theta, bottom_row, area, in_blind = observation
         valid = (
             insight
             and color == BottleColor.BLACK
@@ -279,57 +254,19 @@ class CaptureSumoBottleWithCamera(Behaviour):
             self.confirmed_frames = self.confirmed_frames + 1 if valid else 0
             if self.confirmed_frames < self.settings.camera_confirm_frames:
                 return Status.RUNNING
-            # ======================================================
-            # 黒ボトルの位置から退避ルート①/②を決定
-            # ======================================================
-
-            # 現在のカメラ設定が640x480の場合
-            frame_width = 640
-
-            # 一度だけ退避ルートを決定する
-            if self.context.sumo.escape_route is None:
-                self._decide_escape_route(
-                    cx=cx,
-                    frame_width=frame_width,
-                )
-
-            # ======================================================
-            # ボトル方位を確定
-            # ======================================================
-
             self.target_bearing = self._estimated_bottle_bearing(theta)
-
-            if (
-                not self.alignment_checked
-                or abs(theta) > self.settings.camera_alignment_tolerance_deg
-            ):
+            if not self.alignment_checked or abs(theta) > self.settings.camera_alignment_tolerance_deg:
                 self._stop_motors()
-
                 self.alignment_turn = SpinToBearing(
-                    name="align to camera bottle bearing",
-                    context=self.context,
-                    bearing=self.target_bearing,
-                    max_power=self.settings.turn_max_power,
-                    min_power=self.settings.turn_min_power,
-                    pid_p=self.settings.turn_pid_p,
-                    pid_i=self.settings.turn_pid_i,
-                    pid_d=self.settings.turn_pid_d,
+                    name="align to camera bottle bearing", context=self.context,
+                    bearing=self.target_bearing, max_power=self.settings.turn_max_power,
+                    min_power=self.settings.turn_min_power, pid_p=self.settings.turn_pid_p,
+                    pid_i=self.settings.turn_pid_i, pid_d=self.settings.turn_pid_d,
                     tolerance=self.settings.heading_tolerance_deg,
                 )
-
                 self.phase = self.ALIGN
-
-                self.logger.info(
-                    "Bottle alignment requested "
-                    "theta=%.1f target=%.1f"
-                    % (
-                        theta,
-                        self.target_bearing,
-                    )
-                )
-
-                return Status.RUNNING    
-            
+                self.logger.info("Bottle alignment requested theta=%.1f target=%.1f" % (theta, self.target_bearing))
+                return Status.RUNNING
             self.phase = self.APPROACH
             # 旋回によるエンコーダー距離を含めず、前進開始点から500mmを測る。
             self.total_distance.update()
