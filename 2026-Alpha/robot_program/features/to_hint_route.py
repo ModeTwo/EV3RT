@@ -116,10 +116,34 @@ def build_tantou_tree(context, config, include_exit=True):
         #),
 
     turn_left_55.add_children([
-        # 【統合差分】ジャイロをリセットせず、起動時からの共通方位基準を維持する。
+        ## 【統合差分】ジャイロをリセットせず、起動時からの共通方位基準を維持する。
+        #SpinAround(
+            #context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            #name="left 55",
+            #target=90,
+            #max_power=SPIN_MAX_POWER,
+            #min_power=SPIN_MIN_POWER,
+            #pid_p=0.2,
+            #pid_i=0.005,
+            #pid_d=0.03,
+            #target_type=HeadingType.ABSOLUTE
+        #),
+
         SpinAround(
             context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="left 55",
+            target=45,
+            max_power=SPIN_MAX_POWER,
+            min_power=SPIN_MIN_POWER,
+            pid_p=0.2,
+            pid_i=0.005,
+            pid_d=0.03,
+            target_type=HeadingType.ABSOLUTE
+        ),
+
+        SpinAround(
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            name="left 55_2",
             target=90,
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
