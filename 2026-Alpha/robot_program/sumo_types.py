@@ -42,6 +42,28 @@ class SumoState:
 
 @dataclass(frozen=True)
 class SumoSettings:
+            # No.15の直前、LAPゲート終了直後の実際の停止位置が当初想定の初期位置から
+    # ズレているため、後退→+90度旋回→前進(黒即停止/青+extra/距離上限)→
+    # 180度旋回で相撲開始位置へ合わせ直す。元はstart_to_lap_gate.py側に
+    # あったが、相撲開始位置への移動という目的から、この開始位置補正として
+    # ここへ移した。絶対方位(0/90/180度)を直接使う旧来のgyro_drive方式で、
+    # このファイルの他の設定と違いRunAtBearing/SpinToBearingの方位抽象は使わない。
+    reposition_backward_distance_mm: float = 330.0
+    reposition_backward_power: int = 80
+    reposition_backward_pid_p: float = 0.8
+    reposition_backward_pid_i: float = 0.0
+    reposition_backward_pid_d: float = 0.02
+    reposition_turn_min_power: int = 60
+    reposition_turn_max_power: int = 60
+    reposition_turn_pid_p: float = 0.2
+    reposition_turn_pid_i: float = 0.005
+    reposition_turn_pid_d: float = 0.03
+    reposition_advance_power: int = 80
+    reposition_advance_pid_p: float = 1.1
+    reposition_advance_pid_i: float = 0.00075
+    reposition_advance_pid_d: float = 0.04
+    reposition_advance_limit_mm: float = 550.0
+    reposition_advance_blue_extra_mm: float = 20.0
     # Falseで直前の120度境界・±50度復帰へ戻せる。
     garage_point_return_enabled: bool = True
     # 復帰計算距離を超えて黒ラインを探す追加距離。実機で調整する暫定値。

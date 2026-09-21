@@ -21,6 +21,7 @@ from ..behaviours.motor_control import StopNow
 from ..behaviours.gyro_drive import RunByGyro
 from ..timing import CONTROL_INTERVAL_SEC
 
+from simple_pid import PID
 
 def _normalize_heading(angle):
     # 方位差を-180度以上180度未満へ正規化し、
