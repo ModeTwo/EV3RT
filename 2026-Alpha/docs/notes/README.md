@@ -563,3 +563,26 @@ LAP青検知で方位安定を待たずATへ引渡し、青検知起点の最初
 新設定`to_exit_white_straight_projected_limit_mm`(既定210.0)を`integration_settings.py`に追加。検証は`work/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.py`に追加したTest5bで、生の走行距離が600mm上限より遥かに小さくても投影距離210mmだけでWHITEからTURNへ進むことを確認(既存6件と合わせ全7件成功)。既存の`to_exit_trace_mm`(600mm、生の走行距離によるWHITE上限)は変更していないが、210mmの方が大幅に小さいため実質使われなくなる可能性が高い(要ユーザー判断)。
 
 全変更ファイル（修正）: `robot_program/behaviours/hint2_exit.py`、`robot_program/integration_settings.py`。ETロボコン側HANDOFF.mdおよび`work/hint2-exit-turn-fallback-v1/verify_hint2_exit_fix.py`にも記録。既存の未コミット変更は保持。
+
+
+## 2026-09-21 ボトルデリバリー戻り経路を「方位保持のRunByGyro系(DeliveryEtRun)」へ再実装
+
+ユーザー指示「devSSで角度の補正がかなり正確になっていると思います。それを利用するのと、RunByGyroとバック用のRunByGyroを使って正確に動作するようにしたい」により、前回指摘した「配置後の戻りが無補正のDriveDistanceで、後退2レグの距離・向きの対応が入れ替わっている」問題に対応した。
+
+調査の結果、devSSブランチ自体にdevTKより優れた補正機構は無く(ファイル一覧はdevTKの部分集合)、`drop_bottle.py`の旋回は既に`encoder_spin.delivery_encoder_turn`(ETラリーで実績のあるエンコーダ+ジャイロ仕上げ旋回、ジャイロ倍率補正`gyro_scale.ensure_scaled_gyro`適用済み)へ移行済みだった。「正確な補正」はdevSS固有ではなく`et_rally_drive.py`/`gyro_scale.py`一式を指すと判断し、直進側にも同じ仕組みを導入した。
+
+実装: (1) `et_rally_drive.EtRallyRunByGyro`のpower<0(後退)対応の不具合2件を修正(`output_limits`と減速用clampの両方がabs()なしでは範囲反転/turn固定になる致命的な不具合。検証で実際に再現・修正確認済み)。(2) `gyro_drive.RunByGyro`にも同種の予防的修正。(3) `corrected_run.py`に`DeliveryEtRun(EtRun)`を新設(`DeliveryEncoderTurn`と同じdelivery_heading座標変換をEtRunへ適用、power<0で後退)。(4) `drop_bottle.py`を全面再実装し、前進・後退4レグすべてを`DeliveryEtRun`+`distance_motion`(既存パターン)に変更、かつ後退の順序バグも同時に修正(直前レグの向きを保ったままそのレグの距離を打ち消す→旋回→もう一方のレグを同様に打ち消す、という正しい逆再生順に組み替え)。(5) `integration_settings.py`に`delivery_drive_pid_p/i/d`を追加したが、`corrected_run.USE_ET_STRAIGHT_PID=True`(既定)の間はETラリー較正値に上書きされ現状未使用。
+
+検証はETロボコン側`work/drop-bottle-etrun-v1/verify_drop_bottle_etrun.py`で、後退時の不具合再現→修正確認、DeliveryEtRunの前進/後退の符号確認、drop_bottle.pyの木構造で後退レグが正しい向き・距離で対応していることを確認。全8チェック成功。実機・実カメラでの再現テストは未実施。
+
+全変更ファイル（修正）: `robot_program/behaviours/et_rally_drive.py`、`robot_program/behaviours/gyro_drive.py`、`robot_program/behaviours/corrected_run.py`、`robot_program/features/drop_bottle.py`、`robot_program/integration_settings.py`。ETロボコン側HANDOFF.mdおよび新規work/drop-bottle-etrun-v1/verify_drop_bottle_etrun.pyにも記録。`behaviours/delivery_turn.py`(旧`delivery_turn`/`DeliveryPulseTurn`)は`move_to_rally_ready.py`が今も使うため無変更。既存の未コミット変更は保持。
+
+## 2026-09-21 LAPゲート後の相撲位置補正をstart_to_lap_gate.pyからmove_to_sumo_start.py(相撲側)へ移動
+
+ユーザー指示「LAPゲートの停止後のバックからの動作をレガシーでも使えるように外だししたい あるいは、相撲の責務にしたい」により調査した結果、レガシー側・アーカイブにこの後退・旋回シーケンスの既存呼び出し元は無く、一方でET相撲側(`move_to_sumo_start.py`のNo.15)には目的が重なる別実装(直進→土俵方位旋回→後退)が既に存在することを確認した(2026-09-19分の残課題として既に記録されていた重複懸念)。ユーザーからの補足「この処理は、相撲位置に移動するための処理で、もともとの初期位置と変わっているために追加している処理です」により、この後退→+90度旋回→前進→180度旋回のシーケンスは「LAPゲート終了直後の実際の停止位置を、No.15が前提とする初期位置へ合わせ直す補正」であることが確定し、相撲側の責務として`move_to_sumo_start.py`へ移動した。
+
+`start_to_lap_gate.py`にあった`RunByGyroMinusBack`クラスと関連シーケンス構築、6個のモジュール定数を`move_to_sumo_start.py`へ移し、6個の定数は`SumoSettings`(`sumo_types.py`)へ`reposition_backward_*`/`reposition_turn_*`/`reposition_advance_*`フィールドとして追加した(値は変更なし)。`build_move_to_sumo_start`のroot先頭にこの補正シーケンスを追加し、既存のNo.15本体はそのまま後に続く。`start_to_lap_gate.py`側は元の形(`run_to_line_trace`のみ)へ戻し、不要になったimport・ヘルパーも削除した。
+
+検証はETロボコン側`work/start-to-lap-turn90-v1/verify_start_to_lap_turn90.py`を全面更新し、両ファイルの新しい構造とパラメータの出所を確認。全8件成功。副次的に、`to_hint_route.py`が本セッション外で`RunByGyro`/`SpinAround`の実装元を`corrected_run.py`/`encoder_spin.py`へ切り替えていたのを確認し、無関係に失敗するようになっていた`work/sumo-style-hint1-recovery-v1/verify_hint1_black_recovery.py`のスタブを追随修正した(全5件成功に復帰)。
+
+全変更ファイル（修正）: `robot_program/features/start_to_lap_gate.py`、`robot_program/features/move_to_sumo_start.py`、`robot_program/sumo_types.py`。ETロボコン側HANDOFF.mdおよび`work/start-to-lap-turn90-v1/verify_start_to_lap_turn90.py`、`work/sumo-style-hint1-recovery-v1/verify_hint1_black_recovery.py`にも記録。既存の未コミット変更は保持。

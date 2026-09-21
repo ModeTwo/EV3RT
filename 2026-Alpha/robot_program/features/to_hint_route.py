@@ -7,7 +7,9 @@ SpinAround/RunByGyroは起動時からの共通方位基準、IsQRDecodedは共�
 添付の角度-90/25/-25は基準を確認できないため採用せず、既存0/115/90を維持。
 """
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
-from ..behaviours.section_motion import LocalSpin as SpinAround, LocalDrive as RunByGyro
+from ..behaviours.corrected_run import LocalEtRun as RunByGyro
+# 旋回はエンコーダ旋回+ジャイロ仕上げ(behaviours/encoder_spin.py)。直進はET用(behaviours/corrected_run.py)
+from ..behaviours.encoder_spin import LocalEncoderSpin as SpinAround
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.camera_line_trace import RecoverLineByCamera
 from ..behaviours.hint2_exit import Hint2Exit
@@ -31,6 +33,33 @@ def build_tantou_tree(context, config, include_exit=True):
     # ========================================================
     # 1. START → 左55°
     # ========================================================
+    
+    go_to_qr = Parallel(
+        name="go_to_qr",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
+    
+    go_to_qr_drive = RunByGyro(
+        context=context,
+        name="go_to_qr_drive",
+        target=0,
+        power=50,
+        pid_p=1.1,
+        pid_i=0.00075,
+        pid_d=0.04,
+        target_type=HeadingType.ABSOLUTE
+    )
+    
+    limit_qr = IsDistanceEarned(
+        name="limit_qr",
+        delta_dist=50
+    )
+    
+    go_to_qr.add_children([
+        go_to_qr_drive,
+        limit_qr,
+    ])
+
 
     turn_left_55 = Sequence(
         name="turn_left_55",
@@ -81,6 +110,11 @@ def build_tantou_tree(context, config, include_exit=True):
         #IsDistanceEarned(
             #name="dist_700mm",
             #delta_dist=700
+        #),
+
+        #IsColorDetected(
+         #   name="detect_black",
+         #   color=Color.BLACK
         #),
 
     turn_left_55.add_children([
@@ -442,7 +476,7 @@ def build_tantou_tree(context, config, include_exit=True):
     
     black_distance_limit = IsDistanceEarned(
         name="black_distance_limit",
-        delta_dist=200
+        delta_dist=250
     )
     
     black_or_550.add_children([
@@ -623,39 +657,182 @@ def build_tantou_tree(context, config, include_exit=True):
     # 右30°回転。
     # ========================================================
 
-    return_heading = Sequence(
-        name="return_heading",
+    #return_heading = Sequence(
+        #name="return_heading",
+        #memory=True
+    #)
+#
+    #return_heading.add_children([
+        #SpinAround(
+            #context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            #name="right 25 return",
+            #target=90,  # 【統合差分】添付-25。共通方位の既存値を維持
+            #max_power=SPIN_MAX_POWER,
+            #min_power=SPIN_MIN_POWER,
+            #pid_p=0.2,
+            #pid_i=0.005,
+            #pid_d=0.03,
+            #target_type=HeadingType.ABSOLUTE
+        #),
+#
+        #StopNow(
+            #name="stop_after_return_heading"
+        #),
+#
+        #IsTimePassed(
+            #name="wait_return_heading",
+            #delta_time=0.2
+        #),
+    #])
+#
+#
+    ## 【統合差分】添付の600mm単純追従に置換せず、現行Hint2Exitを維持。
+    ## 10. 90度保持→連続白→追加前進→TO基準190度へのその場旋回→黒線再取得。
+    ## 旋回途中でも黒検出で追従へ移り、距離/時間上限ではFAILURE停止する。
+    #go_to_goal = Hint2Exit('hint2 white exit', context, settings)
+
+    # ==========================================
+    # ① 黒線検知 OR 200mm走行
+    # ==========================================
+    
+    black_or_200 = Parallel(
+        name="black_or_200",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
+    
+    run_to_black_2 = RunByGyro(
+        context=context,
+        name="run_to_black_2",
+        target=115,
+        power=50,
+        pid_p=1.1,
+        pid_i=0.00075,
+        pid_d=0.04,
+        target_type=HeadingType.ABSOLUTE
+    )
+    
+    detect_black_2 = IsBlackDetected(
+        name="detect_black_2",
+        black_threshold=settings.to_exit_black_v,
+        required_frames=25
+    )
+    
+    black_distance_limit_2 = IsDistanceEarned(
+        name="black_distance_limit_2",
+        delta_dist=200
+    )
+    
+    black_or_200.add_children([
+        run_to_black_2,
+        detect_black_2,
+        black_distance_limit_2,
+    ])
+
+    # ==========================================
+    # ①終了後、黒検知の有無に関わらず絶対方位180度へ向き直してから
+    # ボトルデリバリーへ進む(ET相撲のガレージ復帰と同じ「検知→既知方位へ
+    # 旋回」構造。見つからなかった場合も失敗にはせず、90度で試行を続ける)。
+    # ==========================================
+
+    turn_to_180_before_trace = SpinAround(
+        context=context,
+        name="turn_to_180_before_trace",
+        target=180,
+        max_power=SPIN_MAX_POWER,
+        min_power=SPIN_MIN_POWER,
+        pid_p=0.2,
+        pid_i=0.005,
+        pid_d=0.03,
+        target_type=HeadingType.ABSOLUTE
+    )
+
+    stop_after_turn_to_180 = StopNow(
+        name="stop_after_turn_to_180"
+    )
+
+    wait_after_turn_to_180 = IsTimePassed(
+        name="wait_after_turn_to_180",
+        delta_time=0.2
+    )
+
+    # ==========================================
+    # ② ①終了後 → ライントレース
+    # 【統合差分】独自の650mm上限は削除。終了は外側のdist_1200_from_75deg_start
+    # (75度直進の開始位置を基準にした90度成分1200mm)だけに一本化する。
+    # ==========================================
+    
+    l_trace_last = Parallel(
+        name="l_trace_last",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
+    
+    trace_last = TraceLine(
+        name="trace_last",
+        target=TRACELINE_TARGET_V,
+        power=60,
+        pid_p=0.65,
+        pid_i=0.000001,
+        pid_d=0.045,
+        trace_side=TraceSide.NORMAL,
+    )
+
+    trace_last_limit = IsDistanceEarned(
+        name="trace_last_limit",
+        delta_dist=100
+    )  
+    
+    l_trace_last.add_children([
+        trace_last,
+        trace_last_limit,
+    ])
+
+    # ==========================================
+    # ③ 順番に実行
+    # ==========================================
+
+    line_trace_last = Sequence(
+        name="line_trace_last",
         memory=True
     )
 
-    return_heading.add_children([
-        SpinAround(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
-            name="right 25 return",
-            target=90,  # 【統合差分】添付-25。共通方位の既存値を維持
-            max_power=SPIN_MAX_POWER,
-            min_power=SPIN_MIN_POWER,
-            pid_p=0.2,
-            pid_i=0.005,
-            pid_d=0.03,
-            target_type=HeadingType.ABSOLUTE
-        ),
-
-        StopNow(
-            name="stop_after_return_heading"
-        ),
-
-        IsTimePassed(
-            name="wait_return_heading",
-            delta_time=0.2
-        ),
+    line_trace_last.add_children([
+        black_or_200,
+        turn_to_180_before_trace,
+        stop_after_turn_to_180,
+        wait_after_turn_to_180,
+        # 【統合差分】QR2用のカメラ切替(~3.4秒)をtrace_lastの走行時間に重ねて隠す。
+        # camera_recovery_then_trace_120(コメントアウト済み)にあった
+        # PrepareHintCamera("prepare hint2 camera")と同じ配置・目的。
+        # これが無いと、read_qr2開始時に初めて切替が始まり、切替コストが
+        # そのままQR2読み取りのelapsed時間に乗ってしまう。
+        #PrepareHintCamera(name="prepare hint2 camera"),
+        l_trace_last,
     ])
 
+    # 75度直進の開始位置(black_or_550が最初にtickされる瞬間)を基準に、
+    # 90度成分で1200mm進んだら全体を打ち切る(旧プログラムの1200mm相当)。
+    # trace_650自体には独自の終了条件がないため、これが唯一の終了条件になる。
+    #dist_1200_from_75deg_start = IsProjectedDistanceEarned(
+        #name="dist_1200_from_75deg_start",
+        #context=context,
+        #local_heading_deg=90.0,
+        #delta_dist=settings.to_hint2_trace_mm,
+    #)
+#
+    #line_trace_120_with_cap = Parallel(
+        #name="line_trace_120_with_cap",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)
+    #line_trace_120_with_cap.add_children([
+        #line_trace_120,
+        #dist_1200_from_75deg_start,
+    #])
+#
+    ## 650mm到達後に停止
+    #stop_at_650 = StopNow(
+        #name="stop_after_650"
+    #)
 
-    # 【統合差分】添付の600mm単純追従に置換せず、現行Hint2Exitを維持。
-    # 10. 90度保持→連続白→追加前進→TO基準190度へのその場旋回→黒線再取得。
-    # 旋回途中でも黒検出で追従へ移り、距離/時間上限ではFAILURE停止する。
-    go_to_goal = Hint2Exit('hint2 white exit', context, settings)
 
     # ゴールで停止
 
@@ -671,6 +848,7 @@ def build_tantou_tree(context, config, include_exit=True):
         # AT colour recognition is finished; TO uses gyro/colour-sensor driving.
         # Prepare QR capture during the approach, then start a fresh read at rest.
         PrepareHintCamera(name="prepare hint1 camera"),
+        go_to_qr,
         turn_left_55,
         go_to_black,
         turn_right_125,
@@ -683,6 +861,7 @@ def build_tantou_tree(context, config, include_exit=True):
         stop_at_650,
         turn_right_qr2,
         qr2_read,
+        line_trace_last,
 
         # 【統合差分】TheEndはalpha.pyの末尾が担当。
     ])
@@ -690,8 +869,6 @@ def build_tantou_tree(context, config, include_exit=True):
     # 【統合差分】hint2単体モードのみ読取後で終了。通常は元の出口走行まで続ける。
     if include_exit:
         root.add_children([
-            return_heading,
-            go_to_goal,
             goal_stop,
         ])
 

@@ -41,7 +41,7 @@ class SpinAround(Behaviour):
         pid_i: float,
         pid_d: float,
         target_type: HeadingType,
-        tolerance: float = 2.0,
+        tolerance: float = 0.5,
     ) -> None:
         super().__init__(name)
         self.target = target
@@ -213,7 +213,8 @@ class RunByGyro(Behaviour):
                 self.pid_d,
                 setpoint=self.target_heading,
                 sample_time=EXEC_INTERVAL,
-                output_limits=(-self.power, self.power),
+                # abs()により、power<0(後退)でもmin<=maxを保った有効な範囲になる。
+                output_limits=(-abs(self.power), abs(self.power)),
             )
             self.logger.info(
                 "%+06d %s.gyro run started at heading=%.1f requested=%.1f resolved=%.1f delta=%.1f"

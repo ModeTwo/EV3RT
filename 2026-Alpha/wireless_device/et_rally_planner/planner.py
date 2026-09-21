@@ -52,11 +52,18 @@ class Post(tuple):
     単位ベクトルをarm_dir属性として追加で持たせる。タプル自体はあくまで
     (x, y)の2要素のみで構成されるため、添字アクセス・geo関数・JSON化など
     既存コードからは普通の(x, y)タプルと区別なく扱える。
+
+    2026-09-18: colorに、この支柱が属するゲートの色("red"/"blue"/
+    "yellow")を持たせる(rule_route._straight_clearance_thresholdが、
+    「侵入/退出予定のゲート自身のT字パーツ」かどうかを判定するために使う。
+    無関係な別ゲートの支柱にまで実機マージンを広げると経路構築が不安定に
+    なることが分かったため、対象を絞り込む必要があった)。
     """
 
-    def __new__(cls, point, arm_dir=(0.0, 0.0)):
+    def __new__(cls, point, arm_dir=(0.0, 0.0), color=None):
         obj = super().__new__(cls, (point[0], point[1]))
         obj.arm_dir = arm_dir
+        obj.color = color
         return obj
 
 
@@ -101,7 +108,7 @@ class Gate:
         各支柱をPost(arm_dir=ゲート法線の単位ベクトル)として返し、
         T字パーツの向きをpivot_turn_safe側で参照できるようにしている。
         """
-        return [Post(self.foot_a, self.normal), Post(self.foot_b, self.normal)]
+        return [Post(self.foot_a, self.normal, self.color), Post(self.foot_b, self.normal, self.color)]
 
     def valid_half_length(self, angle_deg=0.0):
         """ロボットが安全に通過できる、中心からの片側最大距離。
@@ -217,10 +224,14 @@ def build_open_space_grid(all_posts):
     return points
 
 
-def build_stage_sequence(gates_by_color):
-    """[(lap, color, Gate), ...] を 赤,青,黄 x LAPS 周分の順序で作る。"""
+def build_stage_sequence(gates_by_color, laps=None):
+    """[(lap, color, Gate), ...] を 赤,青,黄 x laps 周分の順序で作る。
+    laps省略時はconfig.LAPSを使う(2026-09-18: 地区大会で1周/2周狙いに
+    切り替えられるよう、呼び出し側から周回数を指定できるようにした)。"""
+    if laps is None:
+        laps = config.LAPS
     sequence = []
-    for lap in range(1, config.LAPS + 1):
+    for lap in range(1, laps + 1):
         for color in config.GATE_ORDER:
             sequence.append((lap, color, gates_by_color[color]))
     return sequence

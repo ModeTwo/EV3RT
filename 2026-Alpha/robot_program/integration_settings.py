@@ -24,7 +24,7 @@ class IntegrationSettings:
     # 次工程(90度旋回→カメラトレース)へ進む(実機未校正)。
     to_after_hint1_green_pass_mm: float = 320.0
     to_after_hint1_safety_limit_mm: float = 320.0
-    to_hint2_trace_mm: float = 1200.0  # 受領値。終了判定は現行の投影距離を維持
+    to_hint2_trace_mm: float = 1250.0  # 受領値。終了判定は現行の投影距離を維持
     # 左90度旋回後、色センサーtrace_120へ渡す前にカメラでライン中央へ寄せる。
     # LAP前のRecoverLineByCamera(config.start_lap_camera_*)と同じ値を初期値として流用。実機未校正。
     to_after_hint1_camera_power: int = 50
@@ -93,6 +93,12 @@ class IntegrationSettings:
     delivery_drive_first_power: int = 50
     delivery_drop_distance_second_mm: float = 100.0
     delivery_drive_second_power: int = 50
+    # ドロップゾーン進入・退出をDeliveryEtRun(方位保持、power<0で後退)で行うためのPID。
+    # corrected_run.USE_ET_STRAIGHT_PID=True(既定)の間はET_MOVE_PIDに上書きされ、
+    # ここの値は使われない。Falseへ切り替えた場合の初期値として残す。
+    delivery_drive_pid_p: float = 1.1
+    delivery_drive_pid_i: float = 0.00075
+    delivery_drive_pid_d: float = 0.04
     # ライン進行方向からドロップゾーン側へ向く角度。ラリー内側とは反対側。
     delivery_drop_turn_deg_first: float = -30.0
     delivery_drop_turn_deg_second: float = -90.0
@@ -163,6 +169,11 @@ class IntegrationSettings:
         for name in ('delivery_drop_turn_deg_first', 'delivery_drop_turn_deg_second', 'delivery_inward_turn_deg'):
             if not math.isfinite(getattr(self, name)):
                 raise ValueError(f'{name} must be finite')
+        for name in ('delivery_drive_pid_p', 'delivery_drive_pid_d'):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f'{name} must be positive and finite')
+        if not math.isfinite(self.delivery_drive_pid_i) or self.delivery_drive_pid_i < 0:
+            raise ValueError('delivery_drive_pid_i must be nonnegative and finite')
 
 
 @dataclass
