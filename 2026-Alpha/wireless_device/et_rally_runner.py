@@ -14,9 +14,12 @@ def _parse_position(value):
     if len(value) != 2 or any(character not in "12345" for character in value):
         raise ValueError("Gate positions must be two digits from 1 to 5")
     x, y = int(value[0]), int(value[1])
-    # 公式表記(X,Yとも1〜5)を、計算ロジックのグリッド(左コースのplanner座標、X,Yとも0〜4)へ
-    # 1ずつずらして変換する。右コースのX反転はcalculate()側で行う。
-    return x - 1, y - 1
+    # 公式表記(X,Yとも1〜5)を、計算ロジックのグリッド(左コースのplanner座標、X,Yとも0〜4)へ変換する。
+    # Xは1ずらすだけ(X=5がスタート側)。右コースのX反転はcalculate()側で行う。
+    # Yは上下を逆にする: 公式のY=1がスタート位置と同じ高さの行で、plannerのY(0〜4)は、
+    # スタートの高さの行が3.5、ゴール側へ下がるほど小さくなる。したがって、planner側のY = 5 - 公式のY。
+    # (2026-09-21、実際のコースの確認に基づく変更: 「11のポイントはスタート位置と同じ高さにある」)
+    return x - 1, 5 - y
 
 
 def _parse_gate_text(value):
