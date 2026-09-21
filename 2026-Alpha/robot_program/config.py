@@ -89,7 +89,7 @@ class RaceConfig:
     # 直接TCP接続用。SSHポート転送だけならhostを127.0.0.1へ変更する。
     strategy_host: str = "0.0.0.0"
     strategy_port: int = 50000
-    strategy_timeout_s: float = 5.0
+    strategy_timeout_s: float = 20.0
     sumo: SumoSettings = SumoSettings()
     integration: IntegrationSettings = IntegrationSettings()
 
