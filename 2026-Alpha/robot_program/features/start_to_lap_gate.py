@@ -55,11 +55,12 @@ def _normalize_heading_error(error: float) -> float:
     return (error + 180.0) % 360.0 - 180.0
 #カーブで速度を落とすために、追加
 def speed_profile(distance_mm: float, config) -> int:
-    # カーブ区間のリスト（mm）
+     # カーブ区間のリスト（mm）
     curve_sections = [
-        (408, 821),
-        (1130, 1531),
-        (3156, 4021),
+        (418, 841),
+        (1184, 1591),
+        (1749, 2262),
+        (3740, 4201),
     ]
 
     # どれかのカーブ区間に入っていたら速度を落とす
