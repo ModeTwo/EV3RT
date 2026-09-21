@@ -7,6 +7,7 @@ from .bt_imports import Behaviour, BottleColor, HeadingType, Parallel, ParallelP
 from ..behaviours.conditions import IsDistanceEarned
 from .sumo_bearing_motion import current_bearing, EncoderSpinToBearing as SpinToBearing
 from ..behaviours.motor_control import StopNow
+from ..behaviours.gyro_drive import RunByGyro
 from ..timing import CONTROL_INTERVAL_SEC
 
 
@@ -16,12 +17,14 @@ def _normalize_heading(angle):
 
 
 class CaptureSumoBottleWithCamera(Behaviour):
-    # 停止状態で黒テープから絶対方位を確定し、その方位をジャイロ基準で維持して前進する。
-    # 走行中の遅延した画像角度を追い続けず、高出力のまま大きく回り込む挙動を防ぐ。
     ACQUIRE = 0
-    APPROACH = 1
-    ALIGN = 2
-    SETTLE = 3
+    # 初回検知した黒ボトル方向へ150mm接近
+    PRE_APPROACH = 1
+    # 再確認・必要な補正後に残り350mm走行
+    APPROACH = 2
+    ALIGN = 3
+    SETTLE = 4
+    REALIGN = 5
 
     def __init__(self, name, context, settings):
         super().__init__(name)
@@ -38,6 +41,11 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.started_at = 0.0
         self.approach_started_at = None
         self.last_drive_log_at = None
+        self.realign_count = 0
+        self.max_realign_count = 1
+        self.initial_alignment = False
+        self.gyro_drive = None
+        self.pre_approach_distance = None
         self.pid = None
 
     def initialise(self):
@@ -60,6 +68,10 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.started_at = time.monotonic()
         self.approach_started_at = None
         self.last_drive_log_at = None
+        self.realign_count = 0
+        self.initial_alignment = False
+        self.gyro_drive = None
+        self.pre_approach_distance = None
         self.pid = PID(
             self.settings.camera_steer_gain,
             0.0,
@@ -71,10 +83,10 @@ class CaptureSumoBottleWithCamera(Behaviour):
                 self.settings.camera_max_steer_power,
             ),
         )
-        # 検出確定時に起点を記録する距離判定。新しい実行では必ず作り直す。
-        self.total_distance = IsDistanceEarned(
-            name="sumo total capture and push distance",
-            delta_dist=self.settings.capture_and_push_distance_mm,
+
+        self.remaining_distance = IsDistanceEarned(
+            name="sumo remaining capture and push distance",
+            delta_dist=self.settings.capture_and_push_distance_mm - 150.0,
         )
         self.context.sumo.bottle_captured = False
         self.context.sumo.bottle_pushed_out = False
@@ -203,9 +215,136 @@ class CaptureSumoBottleWithCamera(Behaviour):
 
         return True
 
+    def _start_gyro_approach(self):
+        """
+        再確認後に確定した最終方位をRunByGyro用の絶対角度へ変換し、
+        残り350mmの走行を開始する。
+        """
+
+        # 現在のジャイロ生値
+        raw = runtime.gyro_sensor.get_angle()
+
+        # 相撲用bearing → RunByGyroが使用する絶対角度へ変換
+        gyro_target = self.context.sumo.bearing_reference.legacy_target(
+            self.target_bearing,
+            raw,
+            runtime.course,
+        )
+
+        self.gyro_drive = RunByGyro(
+            name="run remaining distance toward sumo bottle by gyro",
+            target=gyro_target,
+            power=self.settings.camera_approach_power,
+            pid_p=self.settings.drive_pid_p,
+            pid_i=self.settings.drive_pid_i,
+            pid_d=self.settings.drive_pid_d,
+            target_type=HeadingType.ABSOLUTE,
+        )
+
+        self.phase = self.APPROACH
+
+        # 再確認後、残り350mmの計測を開始
+        self.remaining_distance.update()
+
+        # Feature18の位置計算で使用
+        self.context.sumo.camera_capture_bearing_deg = self.target_bearing
+
+        self.logger.info(
+            "Starting remaining-distance RunByGyro "
+            "bearing=%.1f gyro_target=%.1f"
+            % (self.target_bearing,gyro_target,)
+        )
+
+        # 最初の1tick
+        self.gyro_drive.tick_once()
+
+    def _start_pre_approach(self):
+        """
+        初回黒ボトル検知で確定した方位へ
+        RunByGyroで150mm接近する。
+        """
+
+        raw = runtime.gyro_sensor.get_angle()
+
+        gyro_target = self.context.sumo.bearing_reference.legacy_target(
+            self.target_bearing,
+            raw,
+            runtime.course,
+        )
+
+        self.gyro_drive = RunByGyro(
+            name="run first 150mm toward sumo bottle by gyro",
+            target=gyro_target,
+            power=self.settings.camera_approach_power,
+            pid_p=self.settings.drive_pid_p,
+            pid_i=self.settings.drive_pid_i,
+            pid_d=self.settings.drive_pid_d,
+            target_type=HeadingType.ABSOLUTE,
+        )
+
+        self.pre_approach_distance = IsDistanceEarned(
+            name="sumo first 150mm approach distance",
+            delta_dist=150.0,
+        )
+
+        # ここを150mm走行の開始地点にする
+        self.pre_approach_distance.update()
+
+        self.phase = self.PRE_APPROACH
+
+        self.logger.info(
+            "Starting first 150mm RunByGyro "
+            "bearing=%.1f gyro_target=%.1f"
+            % (
+                self.target_bearing,
+                gyro_target,
+            )
+        )
+
+        self.gyro_drive.tick_once()
+
     def update(self):
-        # 前進せず既存のその場旋回Behaviorでボトル方位へ整列する。
+        # ------------------------------------------------------
+        # 初回黒ボトル検知後、その方向へ150mm接近
+        # ------------------------------------------------------
+        if self.phase == self.PRE_APPROACH:
+
+            # 150mm到達
+            if self.pre_approach_distance.update() == Status.SUCCESS:
+
+                if self.gyro_drive is not None:
+                    self.gyro_drive.stop(Status.INVALID)
+
+                self._stop_motors()
+
+                # 150mm接近後は、再確認用にカウントをリセット
+                self.confirmed_frames = 0
+
+                # 黒ボトルをもう一度確認
+                self.phase = self.REALIGN
+
+                self.logger.info(
+                    "First 150mm approach completed; "
+                    "checking black bottle again"
+                )
+
+                return Status.RUNNING
+
+            # 150mmに到達するまでRunByGyroを継続
+            if self.gyro_drive is not None:
+                self.gyro_drive.tick_once()
+
+                if self.gyro_drive.status == Status.FAILURE:
+                    self._stop_motors()
+                    return Status.FAILURE
+
+            return Status.RUNNING
+
+        # ------------------------------------------------------
+        # 再確認後、必要な場合だけその場旋回
+        # ------------------------------------------------------
         if self.phase == self.ALIGN:
+        # 前進せず既存のその場旋回Behaviorでボトル方位へ整列する。
             self.alignment_turn.tick_once()
             if self.alignment_turn.status == Status.FAILURE:
                 self._stop_motors()
@@ -215,27 +354,178 @@ class CaptureSumoBottleWithCamera(Behaviour):
                 self.settle_until = time.monotonic() + self.settings.camera_alignment_settle_sec
                 self.phase = self.SETTLE
             return Status.RUNNING
+
         if self.phase == self.SETTLE:
             self._stop_motors()
+
             if time.monotonic() >= self.settle_until:
-                # 補正は一度だけ。画像再認識へ戻らず、最初に確定した方位で前進する。
-                # 旋回中の車輪移動を含めず、この位置を500mm走行の起点にする。
-                self.phase = self.APPROACH
-                self.total_distance.update()
-                self.approach_started_at = time.monotonic()
-                self.pid.reset()
-                self.context.sumo.camera_capture_bearing_deg = self.target_bearing
-                self.logger.info("Single alignment complete; starting distance drive target=%.1f" % self.target_bearing)
-                self._drive_toward_locked_bearing()
+                
+                # --------------------------------------------------
+                # 初回黒ボトル検知後の旋回が完了
+                # → この方位のまま150mm接近
+                # --------------------------------------------------
+                if self.initial_alignment:
+                    self.initial_alignment = False
+
+                    self.logger.info(
+                        "Initial bottle alignment completed; "
+                        "starting first 150mm approach "
+                        "target=%.1f"
+                        % self.target_bearing
+                    )
+
+                    self._start_pre_approach()
+                    return Status.RUNNING
+                # --------------------------------------------------
+                # 再補正を1回実施済み
+                # → 2回目のカメラ確認をせずRunByGyroへ
+                # --------------------------------------------------
+                if self.realign_count >= self.max_realign_count:
+
+                    self.logger.info(
+                        "Realignment completed; "
+                        "skipping second camera check and starting RunByGyro "
+                        "target=%.1f"
+                        % self.target_bearing
+                    )
+                    self._start_gyro_approach()
+                    return Status.RUNNING
+
+                # ==================================================
+                # 初回旋回後
+                # → 1回だけカメラで再確認
+                # ==================================================
+                self.phase = self.REALIGN
+                self.confirmed_frames = 0
+
+                self.logger.info(
+                    "Alignment settled; checking bottle once before gyro drive"
+                )
+
             return Status.RUNNING
+
+        # ------------------------------------------------------
+        # 旋回後に黒ボトルを再確認する
+        # ------------------------------------------------------
+        if self.phase == self.REALIGN:
+
+            # 停止した状態で確認する
+            self._stop_motors()
+
+            session, frame_id, observation = runtime.video.get_bottle_observation()
+
+            # 古いセッションや同じフレームは使用しない
+            if session != self.session or frame_id <= self.last_frame_id:
+                return Status.RUNNING
+
+            self.last_frame_id = frame_id
+
+            insight, color, cx, theta, bottom_row, area, in_blind = observation
+
+            valid = (
+                insight
+                and color == BottleColor.BLACK
+                and area >= self.settings.camera_min_area_px
+            )
+
+            # 黒ボトルが見つからなければ、次のフレームを待つ
+            if not valid:
+                self.confirmed_frames = 0
+                return Status.RUNNING
+
+            self.confirmed_frames += 1
+
+            self.logger.info(
+                "SUMO REALIGN DETECT "
+                "frame=%d cx=%s theta=%.1f area=%.1f bearing=%.1f"
+                % (
+                    frame_id,
+                    cx,
+                    theta,
+                    area,
+                    self._current_bearing(),
+                )
+            )
+
+            # 1フレームだけではなく、通常の検出と同じ回数確認する
+            if self.confirmed_frames < self.settings.camera_confirm_frames:
+                return Status.RUNNING
+
+            # 確認完了
+            self.confirmed_frames = 0
+
+            # --------------------------------------------------
+            # まだボトルが正面からずれている場合
+            # --------------------------------------------------
+            if (
+                abs(theta) > self.settings.camera_alignment_tolerance_deg
+                and self.realign_count < self.max_realign_count
+            ):
+                self.realign_count += 1
+
+                # 「現在の方位 + 今回改めて測ったtheta」で
+                # 新しいボトル方位を計算する
+                self.target_bearing = self._estimated_bottle_bearing(theta)
+
+                self.logger.info(
+                    "Bottle realignment requested "
+                    "count=%d theta=%.1f target=%.1f"
+                    % (
+                        self.realign_count,
+                         theta,
+                        self.target_bearing,
+                    )
+                )
+
+                self.alignment_turn = SpinToBearing(
+                    name="realign to camera bottle bearing",
+                    context=self.context,
+                    bearing=self.target_bearing,
+                    max_power=self.settings.turn_max_power,
+                    min_power=self.settings.turn_min_power,
+                    pid_p=self.settings.turn_pid_p,
+                    pid_i=self.settings.turn_pid_i,
+                    pid_d=self.settings.turn_pid_d,
+                    tolerance=self.settings.heading_tolerance_deg,
+                )
+
+                self.phase = self.ALIGN
+                return Status.RUNNING
+
+            # --------------------------------------------------
+            # ボトルがほぼ正面、または最大補正回数に到達
+            # → ここから350mm走行開始
+            # --------------------------------------------------
+            self.target_bearing = self._estimated_bottle_bearing(theta)
+
+            self.logger.info(
+                "Bottle alignment confirmed "
+                "theta=%.1f target=%.1f; starting RunByGyro"
+                "starting distance drive"
+                % (theta,self.target_bearing,)
+            )
+
+            self._start_gyro_approach()
+            return Status.RUNNING
+        
+
         # 方位確定後は画像更新を待たず、毎制御周期で500mm到達を確認する。
         # キャッチ・押し出しを一つの距離へ含め、死角判定による追加走行は行わない。
         if self.phase == self.APPROACH:
-            if self.total_distance.update() == Status.SUCCESS:
+            if self.remaining_distance.update() == Status.SUCCESS:
+                if self.gyro_drive is not None:
+                    self.gyro_drive.stop(Status.INVALID)
                 self._stop_motors()
                 self.logger.info("Capture and push distance completed; proceeding to reverse")
                 return Status.SUCCESS
-            self._drive_toward_locked_bearing()
+            # RunByGyroを毎制御周期実行
+            if self.gyro_drive is not None:
+                self.gyro_drive.tick_once()
+
+                if self.gyro_drive.status == Status.FAILURE:
+                    self._stop_motors()
+                    return Status.FAILURE
+    
             return Status.RUNNING
 
         now = time.monotonic()
@@ -283,8 +573,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
             # 黒ボトルの位置から退避ルート①/②を決定
             # ======================================================
 
-            # 現在のカメラ設定が640x480の場合
-            frame_width = 640
+            frame_width = 320
 
             # 一度だけ退避ルートを決定する
             if self.context.sumo.escape_route is None:
@@ -293,51 +582,17 @@ class CaptureSumoBottleWithCamera(Behaviour):
                     frame_width=frame_width,
                 )
 
+
             # ======================================================
             # ボトル方位を確定
             # ======================================================
 
             self.target_bearing = self._estimated_bottle_bearing(theta)
 
-            if (
-                not self.alignment_checked
-                or abs(theta) > self.settings.camera_alignment_tolerance_deg
-            ):
-                self._stop_motors()
-
-                self.alignment_turn = SpinToBearing(
-                    name="align to camera bottle bearing",
-                    context=self.context,
-                    bearing=self.target_bearing,
-                    max_power=self.settings.turn_max_power,
-                    min_power=self.settings.turn_min_power,
-                    pid_p=self.settings.turn_pid_p,
-                    pid_i=self.settings.turn_pid_i,
-                    pid_d=self.settings.turn_pid_d,
-                    tolerance=self.settings.heading_tolerance_deg,
-                )
-
-                self.phase = self.ALIGN
-
-                self.logger.info(
-                    "Bottle alignment requested "
-                    "theta=%.1f target=%.1f"
-                    % (
-                        theta,
-                        self.target_bearing,
-                    )
-                )
-
-                return Status.RUNNING    
-            
-            self.phase = self.APPROACH
-            # 旋回によるエンコーダー距離を含めず、前進開始点から500mmを測る。
-            self.total_distance.update()
-            self.approach_started_at = now
-            self.pid.reset()
-            self.context.sumo.camera_capture_bearing_deg = self.target_bearing
             self.logger.info(
-                "%+06d %s.black bottle confirmed frame=%d theta=%.1f area=%d target_bearing=%.1f"
+                "%+06d %s.black bottle confirmed "
+                "frame=%d theta=%.1f area=%d target_bearing=%.1f; "
+                "aligning before first 150mm approach"
                 % (
                     runtime.plotter.get_distance(),
                     self.__class__.__name__,
@@ -348,9 +603,25 @@ class CaptureSumoBottleWithCamera(Behaviour):
                 )
             )
 
-        # 方位が確定したこの周期から前進する。以降は総距離だけで終了する。
-        self._drive_toward_locked_bearing()
-        return Status.RUNNING
+            # ------------------------------------------------------
+            # まずその場で黒ボトル方向を向く
+            # ------------------------------------------------------
+            self.initial_alignment = True
+            self.alignment_turn = SpinToBearing(
+                name="initial align to sumo bottle before 150mm approach",
+                context=self.context,
+                bearing=self.target_bearing,
+                max_power=self.settings.turn_max_power,
+                min_power=self.settings.turn_min_power,
+                pid_p=self.settings.turn_pid_p,
+                pid_i=self.settings.turn_pid_i,
+                pid_d=self.settings.turn_pid_d,
+                tolerance=self.settings.heading_tolerance_deg,
+            )
+
+            self.phase = self.ALIGN
+            return Status.RUNNING
+
 
     def terminate(self, new_status):
         if getattr(self, "alignment_turn", None) is not None:
