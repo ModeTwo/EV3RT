@@ -16,8 +16,6 @@ class SumoSonarSample:
 
 @dataclass
 class SumoState:
-    # 捕捉開始以後の走行距離と方位から積分した押出終了座標。
-    push_end_position_mm: Optional[tuple] = None
     # 全体または単体試験のResetDevice直後に登録する方位角とジャイロの対応。
     # 各実行の状態を共有しないよう、必ず個別インスタンスを生成する。
     bearing_reference: SumoBearingReference = field(default_factory=SumoBearingReference)
@@ -40,18 +38,12 @@ class SumoState:
     garage_line_found: bool = False
     line_trace_ready: bool = False
     failure_reason: Optional[str] = None
+    bottle_image_x_ratio: Optional[float] = None
+    escape_route: Optional[int] = None
 
 
 @dataclass(frozen=True)
 class SumoSettings:
-    # Falseで緑ゾーン対策追加前の500mm固定方位走行へ戻す。
-    green_avoidance_enabled: bool = True
-    green_boundary_y_mm: float = 520.0
-    # 車体/アーム/ボトル張出しと停止余走を含む余裕。実機寸法で要調整。
-    green_clearance_mm: float = 60.0
-    # 距離による捕捉の仮定。実機のボトル配置・保持深さで要調整。
-    green_capture_distance_mm: float = 150.0
-    green_curve_reserve_mm: float = 50.0
     # Falseで直前の120度境界・±50度復帰へ戻せる。
     garage_point_return_enabled: bool = True
     # 復帰計算距離を超えて黒ラインを探す追加距離。実機で調整する暫定値。
@@ -136,7 +128,13 @@ class SumoSettings:
     # ボトル離脱後、黒ライン探索へ入る前に横方向へ退避する。
     garage_avoid_distance_mm: float = 120.0
     garage_avoid_power: int = 50
-
+    # ボトルを押し出した方向から、退避ルート②へ向く角度。
+    # Left/Rightの反転はFeature18側でruntime.courseを使って行う。
+    escape_route_2_angle_deg: float = 45.0
+    # 退避ルート②で斜め方向へ走行する距離。
+    escape_route_2_distance_mm: float = 200.0
+    # 退避ルート②で走行するときのPWM。
+    escape_route_2_power: int = 50 
     # 離脱後はガレージ側へ旋回してから、その絶対方位を維持して黒ラインまで直進する。
     garage_return_drive_power: int = 60
     # 復帰用黒ラインは生の明度で判定し、未検出時は規定距離で安全停止する。

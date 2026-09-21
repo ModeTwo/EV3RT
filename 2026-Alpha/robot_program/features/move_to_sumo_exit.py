@@ -19,20 +19,27 @@ class PlanGarageReturn(Behaviour):
         self.settings = settings
         self.target_bearing = None
         self.search_limit_mm = None
-
-        # ボトルから離脱後に横へ退避するときの絶対方位。
+        self.push_bearing = None
         self.avoid_bearing = None
+        self.escape_route_2_bearing = None
 
     def update(self):
         # 押し出し完了直後、後退する前の実測方位で一度だけ計画する。
         pushed = current_bearing(self.context)
+        # 押し出し完了時の方位を保存
+        self.push_bearing = pushed
         relative = (-runtime.course * (pushed - self.settings.entry_bearing_deg)) % 360.0
         # 押し出した方向に対してコース外側へ90度向け、
         # 黒ライン探索前にボトルの進路から横へ退避する。
         self.avoid_bearing = (
             pushed - runtime.course * 90.0
         ) % 360.0
-
+        # 退避ルート②の走行方位を計算する。
+        # Left/Rightはruntime.courseによって鏡像にする。
+        self.escape_route_2_bearing = (
+            pushed
+            - runtime.course * self.settings.escape_route_2_angle_deg
+        ) % 360.0
         self.search_limit_mm = self.settings.garage_line_search_max_distance_mm
         if self.settings.garage_point_return_enabled:
             # 直線各区間の設定距離で後退後の位置を近似する試作。
@@ -51,30 +58,55 @@ class PlanGarageReturn(Behaviour):
                  + self.settings.capture_and_push_distance_mm * math.cos(capture_angle)
                  - self.settings.release_reverse_distance_mm * math.cos(reverse_angle))
             target_x = self.settings.garage_line_offset_mm
-            if (
-                self.settings.green_avoidance_enabled
-                and self.context.sumo.push_end_position_mm is not None
-            ):
-                end_x, end_y = self.context.sumo.push_end_position_mm
-                x = (
-                    end_x
-                    - self.settings.release_reverse_distance_mm
-                    * math.sin(reverse_angle)
-                )
-                y = (
-                    end_y
-                    - self.settings.release_reverse_distance_mm
-                    * math.cos(reverse_angle)
-                )
-            # 100mm後退後、横へ120mm退避した位置を反映する。
-            avoid_relative = (
-                -runtime.course
-                * (self.avoid_bearing - self.settings.entry_bearing_deg)
-            ) % 360.0
-            avoid_angle = math.radians(avoid_relative)
 
-            x += self.settings.garage_avoid_distance_mm * math.sin(avoid_angle)
-            y += self.settings.garage_avoid_distance_mm * math.cos(avoid_angle)
+            # Feature16で決定した退避ルートに応じて、
+            # 退避後の推定位置を計算する。
+            escape_route = self.context.sumo.escape_route
+
+            if escape_route == 1:
+                # ==================================================
+                # 退避ルート①
+                # 押し出し方向から90度横へ退避する。
+                # ==================================================
+                escape_bearing = self.avoid_bearing
+                escape_distance_mm = self.settings.garage_avoid_distance_mm
+
+            elif escape_route == 2:
+                # ==================================================
+                # 退避ルート②
+                # 設定した角度の斜め方向へ退避する。
+                # ==================================================
+                escape_bearing = self.escape_route_2_bearing
+                escape_distance_mm = self.settings.escape_route_2_distance_mm
+
+            else:
+                self.logger.error("Escape route is not selected: %s" % str(escape_route))
+                return Status.FAILURE
+
+            # 選択された退避方向を、
+            # 相撲開始方向を基準としたコース正規化角度へ変換する。
+            escape_relative = (
+                -runtime.course
+               * (escape_bearing - self.settings.entry_bearing_deg)
+            ) % 360.0
+
+            escape_angle = math.radians(escape_relative)
+
+            # 退避走行後の推定座標を反映する。
+            x += escape_distance_mm * math.sin(escape_angle)
+            y += escape_distance_mm * math.cos(escape_angle)
+
+            self.logger.info(
+                "Escape route=%d bearing=%.1f distance=%.1f "
+                "estimated_position=(%.1f,%.1f)"
+                % (
+                    escape_route,
+                    escape_bearing,
+                    escape_distance_mm,
+                    x,
+                    y,
+                )
+            )         
             
             target_y = self.settings.garage_blue_forward_mm - self.settings.garage_rejoin_before_blue_mm
             if x >= target_x or self.settings.garage_rejoin_before_blue_mm <= 0:
@@ -113,6 +145,13 @@ class PlanGarageReturn(Behaviour):
             raise RuntimeError("Garage avoidance bearing has not been planned")
         return self.avoid_bearing
 
+    def route_2_bearing(self):
+        if self.escape_route_2_bearing is None:
+            raise RuntimeError(
+                "Escape route 2 bearing has not been planned"
+            )
+
+        return self.escape_route_2_bearing
 
 class PlannedGarageDistance(IsDistanceEarned):
     # 探索開始時に計画済み上限を設定し、既存の距離判定を再利用する。
@@ -289,6 +328,23 @@ class MarkSumoExitState(Behaviour):
         )
         return Status.SUCCESS
 
+class IsSumoEscapeRoute(Behaviour):
+    """
+    Feature 16で決定した退避ルートを確認する。
+    route=1 : 退避ルート①
+    route=2 : 退避ルート②
+    """
+
+    def __init__(self, name, context, route):
+        super().__init__(name)
+        self.context = context
+        self.route = route
+
+    def update(self):
+        if self.context.sumo.escape_route == self.route:
+            return Status.SUCCESS
+
+        return Status.FAILURE
 
 def build_move_to_sumo_exit(context, config):
     # No.18：前工程で合計500mm走行済み。直線後退で離脱し、ガレージ側黒ラインへ復帰する。
@@ -344,6 +400,123 @@ def build_move_to_sumo_exit(context, config):
             ),
         ]
     )
+
+    # ======================================================
+    # 退避ルート②：斜め方向へ一定距離走行する
+    # ======================================================
+    escape_route_2_drive = Parallel(
+        name="drive sumo escape route 2",
+        policy=ParallelPolicy.SuccessOnOne(),
+    )
+
+    escape_route_2_drive.add_children([
+        # 計算した退避ルート②の方位を維持して走行する
+        RunAtBearing(
+            name="hold sumo escape route 2 bearing",
+            context=context,
+            bearing=return_plan.route_2_bearing,
+            power=settings.escape_route_2_power,
+            pid_p=settings.drive_pid_p,
+            pid_i=settings.drive_pid_i,
+            pid_d=settings.drive_pid_d,
+        ),
+
+        # 設定した距離まで進んだら終了する
+        IsDistanceEarned(
+            name="sumo escape route 2 distance",
+            delta_dist=settings.escape_route_2_distance_mm,
+        ),
+    ])
+
+    # ======================================================
+    # 退避ルート➀
+    # Feature16でescape_route=1と判定された場合に実行する
+    # ======================================================
+    escape_route_1 = Sequence(
+        name="sumo escape route 1",
+        memory=True,
+    )
+
+    escape_route_1.add_children([
+        # Feature16で退避ルート①と判定されているか確認
+        IsSumoEscapeRoute(
+            name="check sumo escape route 1",
+            context=context,
+            route=1,
+        ),
+
+        # ボトルを押し出した方向から90度横へ向く
+        SpinToBearing(
+            name="escape route 1 turn sideways",
+            context=context,
+            bearing=return_plan.avoidance_bearing,
+            max_power=settings.turn_max_power,
+            min_power=settings.turn_min_power,
+            pid_p=settings.turn_pid_p,
+            pid_i=settings.turn_pid_i,
+            pid_d=settings.turn_pid_d,
+            tolerance=settings.heading_tolerance_deg,
+        ),
+
+        # 旋回終了後に停止
+        StopNow(name="stop before escape route 1 drive"),
+        # 横方向へ退避
+        garage_avoid_drive,
+        # 退避終了後に停止
+        StopNow(name="stop after escape route 1 drive"),
+    ])
+
+    # ======================================================
+    # 退避ルート➁
+    # ======================================================
+    escape_route_2 = Sequence(
+        name="sumo escape route 2",
+        memory=True,
+    )
+
+    escape_route_2.add_children([
+        IsSumoEscapeRoute(
+            name="check sumo escape route 2",
+            context=context,
+            route=2,
+        ),
+
+        # 押し出し方向から退避ルート②の方向へ旋回
+        SpinToBearing(
+            name="turn toward sumo escape route 2",
+            context=context,
+            bearing=return_plan.route_2_bearing,
+            max_power=settings.turn_max_power,
+            min_power=settings.turn_min_power,
+            pid_p=settings.turn_pid_p,
+            pid_i=settings.turn_pid_i,
+            pid_d=settings.turn_pid_d,
+            tolerance=settings.heading_tolerance_deg,
+        ),
+
+        # 旋回終了後に一度停止
+        StopNow(name="stop before sumo escape route 2 drive"),
+
+        # 退避ルート②を走行
+        escape_route_2_drive,
+
+        # 退避終了
+        StopNow(name="stop after sumo escape route 2 drive"),
+    ])
+
+    # ======================================================
+    # 退避ルート➀/➁を選択
+    # ======================================================
+    escape_route_selector = Selector(
+        name="select sumo escape route",
+        memory=True,
+    )
+
+    escape_route_selector.add_children([
+        escape_route_1,
+        escape_route_2,
+    ])
+
 
     # 候補選択による旋回後の方位を保持し、直進で黒ラインを探す。
     garage_line_detector = DetectDarkGarageLine(
@@ -471,24 +644,8 @@ def build_move_to_sumo_exit(context, config):
                 "released",
             ),
 
-            # 押し出したボトルの進路から横へ逃げる。
-            SpinToBearing(
-                name="turn away from released sumo bottle",
-                context=context,
-                bearing=return_plan.avoidance_bearing,
-                max_power=settings.turn_max_power,
-                min_power=settings.turn_min_power,
-                pid_p=settings.turn_pid_p,
-                pid_i=settings.turn_pid_i,
-                pid_d=settings.turn_pid_d,
-                tolerance=settings.heading_tolerance_deg,
-            ),
-
-            StopNow(name="stop before sumo bottle avoidance drive"),
-
-            garage_avoid_drive,
-
-            StopNow(name="stop after sumo bottle avoidance drive"),
+            # Feature16で決定した退避ルート①/②を実行する
+            escape_route_selector,
 
             # 退避完了後、ガレージ側黒ラインへ向く。
             SpinToBearing(
