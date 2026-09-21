@@ -73,7 +73,7 @@ class RaceConfig:
     enable_et_rally: bool = True
     et_rally_laps: int = 3
     # received: PCから受信したSEQ、file: 従来の固定plan JSONを実行する。
-    et_rally_strategy_source: str = "file"
+    et_rally_strategy_source: str = "received"
     # Noneならtests/plan_seed9392783.json。相対パスは2026-Alpha直下を基準にする。
     et_rally_plan_path: Optional[str] = None
     enable_et_sumo: bool = True
