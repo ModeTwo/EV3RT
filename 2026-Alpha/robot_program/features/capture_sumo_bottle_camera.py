@@ -22,6 +22,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
     APPROACH = 1
     ALIGN = 2
     SETTLE = 3
+    REALIGN = 4
 
     def __init__(self, name, context, settings):
         super().__init__(name)
@@ -38,6 +39,8 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.started_at = 0.0
         self.approach_started_at = None
         self.last_drive_log_at = None
+        self.realign_count = 0
+        self.max_realign_count = 1
         self.pid = None
 
     def initialise(self):
@@ -60,6 +63,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.started_at = time.monotonic()
         self.approach_started_at = None
         self.last_drive_log_at = None
+        self.realign_count = 0
         self.pid = PID(
             self.settings.camera_steer_gain,
             0.0,
@@ -217,17 +221,143 @@ class CaptureSumoBottleWithCamera(Behaviour):
             return Status.RUNNING
         if self.phase == self.SETTLE:
             self._stop_motors()
+
             if time.monotonic() >= self.settle_until:
-                # 補正は一度だけ。画像再認識へ戻らず、最初に確定した方位で前進する。
-                # 旋回中の車輪移動を含めず、この位置を500mm走行の起点にする。
-                self.phase = self.APPROACH
-                self.total_distance.update()
-                self.approach_started_at = time.monotonic()
-                self.pid.reset()
-                self.context.sumo.camera_capture_bearing_deg = self.target_bearing
-                self.logger.info("Single alignment complete; starting distance drive target=%.1f" % self.target_bearing)
-                self._drive_toward_locked_bearing()
+                # 旋回直後はそのまま500mm走行を開始せず、
+                # カメラでもう一度黒ボトルの位置を確認する。
+                self.phase = self.REALIGN
+
+                # REALIGNでは新しいフレームを待つ
+                self.last_frame_id = -1
+
+                # 連続確認数もリセット
+                self.confirmed_frames = 0
+
+                self.logger.info("Alignment settled; checking bottle again before distance drive")
+
             return Status.RUNNING
+
+        # ------------------------------------------------------
+        # 旋回後に黒ボトルを再確認する
+        # ------------------------------------------------------
+        if self.phase == self.REALIGN:
+
+            # 停止した状態で確認する
+            self._stop_motors()
+
+            session, frame_id, observation = runtime.video.get_bottle_observation()
+
+            # 古いセッションや同じフレームは使用しない
+            if session != self.session or frame_id <= self.last_frame_id:
+                return Status.RUNNING
+
+            self.last_frame_id = frame_id
+
+            insight, color, cx, theta, bottom_row, area, in_blind = observation
+
+            valid = (
+                insight
+                and color == BottleColor.BLACK
+                and area >= self.settings.camera_min_area_px
+            )
+
+            # 黒ボトルが見つからなければ、次のフレームを待つ
+            if not valid:
+                self.confirmed_frames = 0
+                return Status.RUNNING
+
+            self.confirmed_frames += 1
+
+            self.logger.info(
+                "SUMO REALIGN DETECT "
+                "frame=%d cx=%s theta=%.1f area=%.1f bearing=%.1f"
+                % (
+                    frame_id,
+                    cx,
+                    theta,
+                    area,
+                    self._current_bearing(),
+                )
+            )
+
+            # 1フレームだけではなく、通常の検出と同じ回数確認する
+            if self.confirmed_frames < self.settings.camera_confirm_frames:
+                return Status.RUNNING
+
+            # 確認完了
+            self.confirmed_frames = 0
+
+            # --------------------------------------------------
+            # まだボトルが正面からずれている場合
+            # --------------------------------------------------
+            if (
+                abs(theta) > self.settings.camera_alignment_tolerance_deg
+                and self.realign_count < self.max_realign_count
+            ):
+                self.realign_count += 1
+
+                # 「現在の方位 + 今回改めて測ったtheta」で
+                # 新しいボトル方位を計算する
+                self.target_bearing = self._estimated_bottle_bearing(theta)
+
+                self.logger.info(
+                    "Bottle realignment requested "
+                    "count=%d theta=%.1f target=%.1f"
+                    % (
+                        self.realign_count,
+                         theta,
+                        self.target_bearing,
+                    )
+                )
+
+                self.alignment_turn = SpinToBearing(
+                    name="realign to camera bottle bearing",
+                    context=self.context,
+                    bearing=self.target_bearing,
+                    max_power=self.settings.turn_max_power,
+                    min_power=self.settings.turn_min_power,
+                    pid_p=self.settings.turn_pid_p,
+                    pid_i=self.settings.turn_pid_i,
+                    pid_d=self.settings.turn_pid_d,
+                    tolerance=self.settings.heading_tolerance_deg,
+                )
+
+                self.phase = self.ALIGN
+                return Status.RUNNING
+
+            # --------------------------------------------------
+            # ボトルがほぼ正面、または最大補正回数に到達
+            # → ここから500mm走行開始
+            # --------------------------------------------------
+            self.target_bearing = self._estimated_bottle_bearing(theta)
+
+            self.logger.info(
+                "Bottle alignment confirmed "
+                "theta=%.1f target=%.1f realign_count=%d; "
+                "starting distance drive"
+                % (
+                    theta,
+                    self.target_bearing,
+                    self.realign_count,
+                )
+            )
+
+            self.phase = self.APPROACH
+
+            # ここを500mm走行の距離計測開始地点とする
+            self.total_distance.update()
+
+            self.approach_started_at = time.monotonic()
+            self.pid.reset()
+
+            # Feature18の位置推定でも使用する最終的な押し出し方位
+            self.context.sumo.camera_capture_bearing_deg = self.target_bearing
+
+            self._drive_toward_locked_bearing()
+
+            return Status.RUNNING
+        
+
         # 方位確定後は画像更新を待たず、毎制御周期で500mm到達を確認する。
         # キャッチ・押し出しを一つの距離へ含め、死角判定による追加走行は行わない。
         if self.phase == self.APPROACH:
