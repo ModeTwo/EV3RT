@@ -61,6 +61,6 @@ def build_mission_children(context, config):
         children.append(build_bottle_and_rally_preparation_phase(context, config))
     if config.enable_et_rally and config.et_rally_laps > 0:
         children.append(build_et_rally_phase(context, config))
-    # if config.enable_finish:
-    #     children.append(build_finish_phase(context, config))
+    if config.enable_finish:
+        children.append(build_finish_phase(context, config))
     return children
