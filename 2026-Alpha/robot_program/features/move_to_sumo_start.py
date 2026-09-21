@@ -106,6 +106,8 @@ class InitializeSumoState(Behaviour):
         state.bottle_distance_mm = None
         state.approach_distance_mm = 0.0
         state.camera_capture_bearing_deg = None
+        state.bottle_image_x_ratio = None
+        state.escape_route = None
         state.skipped = False
         state.bottle_captured = False
         state.bottle_pushed_out = False
