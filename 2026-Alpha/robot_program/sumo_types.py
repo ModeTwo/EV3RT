@@ -38,8 +38,6 @@ class SumoState:
     garage_line_found: bool = False
     line_trace_ready: bool = False
     failure_reason: Optional[str] = None
-    bottle_image_x_ratio: Optional[float] = None
-    escape_route: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -84,7 +82,7 @@ class SumoSettings:
     # 値はすべて暫定値。レプリカコースでの実験結果に応じてここだけを変更する。
     # 実機で静止摩擦に負けないよう、ET相撲の駆動出力は絶対値50以上にする。
     # No.15開始位置からの総直進距離。白検知や追加クリアランスは使用しない。
-    start_straight_distance_mm: float = 350.0
+    start_straight_distance_mm: float = 300.0
     # 以下の黒→白判定設定は旧方式の比較用。現行No.15の終了条件には使用しない。
     line_exit_white_duration_sec: float = 0.5
     # ET相撲開始位置では、共通色分類ではなく生の明度で黒線退出を判定する。
@@ -147,16 +145,8 @@ class SumoSettings:
     # 直線後退でアームの保持深さ、ボトル直径、安全余裕をまとめて確保する。
     release_reverse_distance_mm: float = 100.0
     release_reverse_power: int = 60
-    # ボトル離脱後、黒ライン探索へ入る前に横方向へ退避する。
-    garage_avoid_distance_mm: float = 120.0
-    garage_avoid_power: int = 50
-    # ボトルを押し出した方向から、退避ルート②へ向く角度。
-    # Left/Rightの反転はFeature18側でruntime.courseを使って行う。
-    escape_route_2_angle_deg: float = 40.0
-    # 退避ルート②で斜め方向へ走行する距離。
-    escape_route_2_distance_mm: float = 200.0
     # 退避ルート②で走行するときのPWM。
-    escape_route_2_power: int = 60 
+    escape_power: int = 60 
     # 離脱後はガレージ側へ旋回してから、その絶対方位を維持して黒ラインまで直進する。
     garage_return_drive_power: int = 60
     # 復帰用黒ラインは生の明度で判定し、未検出時は規定距離で安全停止する。
@@ -180,3 +170,46 @@ class SumoSettings:
     drive_pid_i: float = 0.1
     drive_pid_d: float = 0.03
     heading_tolerance_deg: float = 3.0
+    # ==========================================================
+    # ETラリー終了位置 → ET相撲開始位置への位置合わせ
+    # ==========================================================
+    # 最初に絶対方位0°を維持しながら後退する。
+    reposition_backward_power: int = 60
+    reposition_backward_pid_p: float = 1.1
+    reposition_backward_pid_i: float = 0.1
+    reposition_backward_pid_d: float = 0.03
+    # 後退距離。
+    # move_to_sumo_start.py の "backward_50cm" に合わせて500mm。
+    reposition_backward_distance_mm: float = 500.0
+        # ==========================================================
+    # ETラリー終了位置 → ET相撲開始位置への位置合わせ
+    # ==========================================================
+    # LAPゲート終了位置から、
+    # 後退 → +90°旋回 → 前進 → 180°旋回
+    # でET相撲の開始位置へ合わせ直すための設定。
+
+    # ① 絶対方位0°を維持しながら後退
+    reposition_backward_distance_mm: float = 330.0
+    reposition_backward_power: int = 80
+    reposition_backward_pid_p: float = 0.8
+    reposition_backward_pid_i: float = 0.0
+    reposition_backward_pid_d: float = 0.02
+
+    # ② +90° / 180°への旋回
+    reposition_turn_min_power: int = 60
+    reposition_turn_max_power: int = 60
+    reposition_turn_pid_p: float = 0.2
+    reposition_turn_pid_i: float = 0.005
+    reposition_turn_pid_d: float = 0.03
+
+    # ③ +90°を維持しながら前進
+    reposition_advance_power: int = 80
+    reposition_advance_pid_p: float = 1.1
+    reposition_advance_pid_i: float = 0.00075
+    reposition_advance_pid_d: float = 0.04
+
+    # 黒ラインなら即停止。
+    # 青ラインなら検知後さらに20mm進む。
+    # どちらも検知しなければ550mmで停止。
+    reposition_advance_limit_mm: float = 550.0
+    reposition_advance_blue_extra_mm: float = 20.0
