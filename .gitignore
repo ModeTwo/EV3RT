@@ -67,5 +67,5 @@ a.out
 *#
 *.bk
 __pycache__
-*.zip
+# *.zip
 test_*

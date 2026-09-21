@@ -5,6 +5,7 @@ import time
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 from py_etrobo_util import TraceSide
+from py_etrobo_util.plotter import IMU_HEADING_SIGN
 from .line_trace import TraceLine
 
 from ..runtime import runtime
@@ -54,6 +55,13 @@ class Hint2Exit(Behaviour):
             self.turn_heading = self.context.at_to.absolute_heading(self.s.to_exit_target_heading_deg)
             if runtime.course not in (-1, 1):
                 raise ValueError('Invalid course')
+            # WHITEの直進距離は、生の走行距離ではなく方位角90度方向への投影距離で
+            # 制約する(to_hint_route.pyのdist_1200_from_75deg_startと同じ考え方)。
+            raw_heading_deg = -runtime.course * IMU_HEADING_SIGN * self.straight_heading
+            angle = math.radians(raw_heading_deg)
+            self.straight_axis_x, self.straight_axis_y = math.sin(angle), math.cos(angle)
+            self.white_origin_x = runtime.plotter.loc_x
+            self.white_origin_y = runtime.plotter.loc_y
         except (RuntimeError, ValueError) as exc:
             self.invalid = str(exc)
         self.enter('WHITE')
@@ -96,6 +104,14 @@ class Hint2Exit(Behaviour):
         raw_angle = runtime.gyro_sensor.get_angle()
         _, _, v = runtime.color_sensor.get_raw_color_hsv()
         distance = abs(runtime.plotter.get_distance() - self.start_distance)
+        white_projected_exceeded = False
+        if self.phase == 'WHITE':
+            dx = runtime.plotter.loc_x - self.white_origin_x
+            dy = runtime.plotter.loc_y - self.white_origin_y
+            white_projected_mm = dx * self.straight_axis_x + dy * self.straight_axis_y
+            if not math.isfinite(white_projected_mm):
+                return self.fail('non-finite odometry')
+            white_projected_exceeded = white_projected_mm >= s.to_exit_white_straight_projected_limit_mm
         if not all(math.isfinite(x) for x in (raw_angle, v, distance)):
             return self.fail('non-finite sensor value')
         limit = {'WHITE': s.to_exit_trace_mm,
@@ -104,7 +120,7 @@ class Hint2Exit(Behaviour):
                  'BLACK': s.to_exit_search_limit_mm,
                  'FOLLOW': s.to_exit_follow_mm + 50.0}[self.phase]
         timed_out = time.monotonic() - self.start_time >= s.to_exit_phase_timeout_s
-        if timed_out or distance >= limit:
+        if timed_out or distance >= limit or white_projected_exceeded:
             # どのフェーズで打ち切りになっても停止させず、常に前進させて最終的にFOLLOWを完了させる。
             if self.phase in ('WHITE', 'OFFSET'):
                 self.enter('TURN')

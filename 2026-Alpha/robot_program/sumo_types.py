@@ -77,7 +77,7 @@ class SumoSettings:
     carry_power: int = 60
 
     # 土俵方向へ90度旋回した直後、カメラ視野を広げるため素早く後退する。
-    camera_retreat_distance_mm: float = 60.0
+    camera_retreat_distance_mm: float = 100.0
     camera_retreat_power: int = 80
 
     # 力士ボトルは黒テープだけを対象とし、連続した新規フレームで確定する。

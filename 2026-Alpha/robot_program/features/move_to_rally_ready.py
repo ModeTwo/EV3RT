@@ -2,11 +2,12 @@
 
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..behaviours.bottle import IsDropZoneUnset, IsSelectedDropZone, MarkRallyReady
-from ..behaviours.conditions import IsColorDetected
+from ..behaviours.conditions import IsColorDetected, IsColorPassed
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.motor_control import StopNow
 from ..behaviours.section_motion import distance_motion
-from ..behaviours.delivery_turn import delivery_turn as to_turn
+# ボトルを離した後の旋回なので、エンコーダ旋回+ジャイロ仕上げ(behaviours/encoder_spin.py)
+from ..behaviours.encoder_spin import delivery_encoder_turn as to_turn
 
 
 def _trace_motor(name, settings):
@@ -27,6 +28,20 @@ def _trace_until_blue(name, settings):
         [
             _trace_motor(name + " motor", settings),
             IsColorDetected(name=name + " detector", color=Color.BLUE),
+        ]
+    )
+    root = Sequence(name=name + " segment", memory=True)
+    root.add_children([search, StopNow(name=name + " brake")])
+    return root
+
+
+def _move_until_blue_exits(name, settings):
+    # 青を検知している間だけ進み、青から抜けた時点で停止する。
+    search = Parallel(name=name, policy=ParallelPolicy.SuccessOnOne())
+    search.add_children(
+        [
+            _trace_motor(name + " motor", settings),
+            IsColorPassed(name=name + " detector", color=Color.BLUE),
         ]
     )
     root = Sequence(name=name + " segment", memory=True)
@@ -73,9 +88,15 @@ def build_move_to_rally_ready(context, config):
     start_zone_route = Selector(name="route from delivered zone to rally start", memory=True)
 
     # 赤へ配置した場合は、すでに最上段の青ライン中央へ戻っている。
+    # 青を検知している間だけ前進し、青から抜けた時点で停止する。
+    # これにより、青ライン中央に「固定距離」で寄せるのではなく、
+    # カメラが青を見なくなるまで進む挙動へ切り替える。
     red_route = Sequence(name="red zone is rally start", memory=True)
     red_route.add_children(
-        [IsSelectedDropZone("started from red zone", BottleColor.RED, context)]
+        [
+            IsSelectedDropZone("started from red zone", BottleColor.RED, context),
+            _move_until_blue_exits("move past blue marker from red", settings),
+        ]
     )
 
     # 青からは一段、黄からは二段上の赤ゾーン前まで進む。
@@ -84,11 +105,7 @@ def build_move_to_rally_ready(context, config):
         [
             IsSelectedDropZone("started from blue zone", BottleColor.BLUE, context),
             _leave_current_center_and_find_next("blue to red rally line", settings),
-            distance_motion(
-                "center red rally line from blue",
-                _trace_motor("center red rally line motor from blue", settings),
-                settings.delivery_marker_half_width_mm,
-            ),
+            _move_until_blue_exits("blue marker passed before rally start", settings),
         ]
     )
 
@@ -98,11 +115,7 @@ def build_move_to_rally_ready(context, config):
             IsSelectedDropZone("started from yellow zone", BottleColor.YELLOW, context),
             _leave_current_center_and_find_next("yellow to blue rally line", settings),
             _pass_intermediate_and_find_next("blue to red rally line from yellow", settings),
-            distance_motion(
-                "center red rally line from yellow",
-                _trace_motor("center red rally line motor from yellow", settings),
-                settings.delivery_marker_half_width_mm,
-            ),
+            _move_until_blue_exits("yellow route passed blue marker", settings),
         ]
     )
 
