@@ -247,8 +247,9 @@ def build_catch_bottle(context, config):
     )
 
 
-    # ボトル色が正常に取得できているか確認
+    # ボトル色を確認し、未検知の場合はBLUEとして扱う
     root.add_child(RequireBottleColor(context))
-    # ボトル色が正常に取得できているか確認
+
+    # 確定したボトル色をTO工程へ引き渡す
     root.add_child(CaptureAtToHandoff("AT_TO capture boundary", context))
     return root
