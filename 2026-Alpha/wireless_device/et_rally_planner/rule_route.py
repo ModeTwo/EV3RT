@@ -2481,6 +2481,36 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
         candidates_for_arm = list(pool)
         if extended is not None and _fully_safe(extended):
             candidates_for_arm.append(extended)
+
+        # 2026-09-21: 最短の候補が、向かうゲート自身のT字パーツまで車体3cm未満のとき、
+        # 「車体クリアランスが方針の最小値(config.ARM_BODY_CLEARANCE_MIN_CM)以上を満たす、最短の候補」を
+        # 採用する。従来は、旋回軸基準の強い条件(STRAIGHT_CLEARANCE_CM+POST_ARM_STRAIGHT_MARGIN_CM以上)
+        # を満たす候補を優先していたため、方針を満たす短い経路(例: 赤のexitの真下に青ゲートがある
+        # 配置で、20.4cm)を落として、48.3cmの迂回を選んでいた。既存の候補に、斜めの中継点を1つ置く
+        # 候補の探索(_search_shortest_arm_safe_detour)を足して、その中で最短のものを選ぶ。
+        # 3cmを満たす候補が1つも無いときは、従来の選び方(下)へ進む。
+        min_body = config.ARM_BODY_CLEARANCE_MIN_CM
+        upper_bound = min(
+            (_segment_result_length(r) for r in candidates_for_arm
+             if entry_arm_body_clearance(r) >= min_body),
+            default=float("inf"))
+        # 同じ配置の中で、同じ条件の探索が、sign組み合わせごとに何度も来るため、結果を覚えておく
+        # (plan_route_with_anchorsの先頭で消す)。判定に効く条件は、全部キーに入れる。
+        cache_key = (
+            a, b, id(target_gate), id(prev_gate), id(all_gates), strict_safe, round(upper_bound, 6),
+            tuple(sorted(gate_signs.items(), key=lambda kv: str(kv[0]))) if gate_signs else None,
+        )
+        if cache_key in _ARM_SEARCH_CACHE:
+            searched = _ARM_SEARCH_CACHE[cache_key]
+        else:
+            searched = _search_shortest_arm_safe_detour(
+                a, b, _fully_safe, entry_arm_body_clearance, min_body, upper_bound=upper_bound)
+            _ARM_SEARCH_CACHE[cache_key] = searched
+        if searched is not None:
+            candidates_for_arm.append(searched)
+        meeting_min = [r for r in candidates_for_arm if entry_arm_body_clearance(r) >= min_body]
+        if meeting_min:
+            return min(meeting_min, key=lambda r: (round(_segment_result_length(r), 6), len(r)))
         # 2026-09-18追記: 「desired_clearanceを満たす候補があれば無条件で
         # それを優先する」形にしたところ、そのために必要な迂回が異常に
         # 長くなるケースが見つかった(seed=5719257: 最短候補55.9cmに対し、
@@ -2597,6 +2627,71 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
                         return top
 
     return min(pool, key=_sort_key)
+
+
+_ARM_SEARCH_CACHE = {}
+
+
+def _search_shortest_arm_safe_detour(a, b, fully_safe, body_clearance, min_body, upper_bound=float("inf"),
+                                      margin=20.0, step=6.0, refine_steps=(2.0, 1.0)):
+    """aからbへ、中継点を1つ置く経路のうち、全ての安全判定(fully_safe)を通り、かつ向かうゲートの
+    T字パーツまでの車体クリアランスがmin_body以上になる、最短のものを探す。見つからなければNone。
+
+    中継点は、a・bを囲む範囲(margin広げる)のstep刻みの格子点。経路の長さの短い順に並べ、
+    最初に条件を満たしたものを採用する(全ての格子点を判定するわけではない)。見つかった中継点の
+    まわり(±step)は、refine_steps刻みで段階的に探し直し、より短いものがあれば、それに置き換える。
+    upper_boundより長い候補は、探さない(すでに、もっと短い候補があるため)。
+    """
+    def path(w):
+        return [(a, None), (w, None), (b, None)]
+
+    def length(w):
+        return geo.distance(a, w) + geo.distance(w, b)
+
+    def ok(w):
+        r = path(w)
+        return body_clearance(r) >= min_body and fully_safe(r)
+
+    x_lo, x_hi = min(a[0], b[0]) - margin, max(a[0], b[0]) + margin
+    y_lo, y_hi = min(a[1], b[1]) - margin, max(a[1], b[1]) + margin
+    points = []
+    x = x_lo
+    while x <= x_hi:
+        y = y_lo
+        while y <= y_hi:
+            w = (x, y)
+            if geo.distance(a, w) > 1.0 and geo.distance(b, w) > 1.0:
+                l = length(w)
+                if l < upper_bound - 1e-6:
+                    points.append((l, w))
+            y += step
+        x += step
+    points.sort()
+    found = None
+    for l, w in points:
+        if found is not None and l >= found[0] - 1e-6:
+            break
+        if ok(w):
+            found = (l, w)
+            break
+    if found is None:
+        return None
+    # 見つかった格子点のまわりを、段階的に細かく探して、より短いものがあれば置き換える。
+    best_l, best_w = found
+    radius = step
+    for fine in refine_steps:
+        n = int(round(radius / fine))
+        center = best_w
+        for i in range(-n, n + 1):
+            for j in range(-n, n + 1):
+                w = (center[0] + i * fine, center[1] + j * fine)
+                if geo.distance(a, w) <= 1.0 or geo.distance(b, w) <= 1.0:
+                    continue
+                l = length(w)
+                if l < best_l - 1e-6 and l < upper_bound - 1e-6 and ok(w):
+                    best_l, best_w = l, w
+        radius = fine
+    return path(best_w)
 
 
 def _try_extend_entry_arm_clearance(result, target_gate, all_posts, target_arm_posts, desired_clearance,
@@ -3006,6 +3101,7 @@ def plan_route_with_anchors(gates_by_color, laps=None):
     all_gates = list(gates_by_color.values())
 
     best = None  # (is_valid, violation_count, score, waypoints, anchors, labels, true_points)
+    _ARM_SEARCH_CACHE.clear()
     for combo in itertools.product((1.0, -1.0), repeat=len(colors)):
         color_signs = dict(zip(colors, combo))
         signs = [color_signs[color] for _, color, _ in stage_sequence]
