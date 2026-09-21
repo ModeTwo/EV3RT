@@ -121,7 +121,10 @@ GOAL_OFFSET_CM = 14.8
 
 # スタート: グリッド(4,3)-(4,4)を結ぶ線の中心点から、その線と垂直に
 # START_OFFSET_CMだけ離れた点。
-START_POS_CM = (4 * GRID_PITCH_CM + START_OFFSET_CM, 3.5 * GRID_PITCH_CM)
+# 2026-09-21: スタート地点を、従来のスタート(X=4*GRID_PITCH_CM+START_OFFSET_CM, Y=3.5*GRID_PITCH_CM)から
+# Y方向に-1cm移動した。従来の位置に戻すときは START_SHIFT_CM を (0.0, 0.0) にする。
+START_SHIFT_CM = (0.0, -1.0)
+START_POS_CM = (4 * GRID_PITCH_CM + START_OFFSET_CM + START_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + START_SHIFT_CM[1])
 START_HEADING_DEG = 180.0   # -x方向を向く
 
 # ゴール: スタートと同じ考え方で、グリッド(0,3)-(0,4)を結ぶ線の中心点から
