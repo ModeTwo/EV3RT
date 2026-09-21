@@ -41,6 +41,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
     SETTLE = 4
     REALIGN = 5
     SEARCH_CORRECT = 7
+    SEARCH_CORRECT_RETURN = 8
 
     # 黒ボトル検知のタイムアウト
     BOTTLE_DETECT_TIMEOUT_SEC = 2.0
@@ -81,6 +82,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
 
         # 2秒未検知時の150mm探索前進
         self.search_correction_turn = None
+        self.search_correction_original_bearing = None
         self.search_advance_drive = None
         self.search_advance_distance = None
 
@@ -135,6 +137,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.pre_approach_distance = None
 
         self.search_correction_turn = None
+        self.search_correction_original_bearing = None
         self.search_advance_drive = None
         self.search_advance_distance = None
         self.search_advance_done = False
@@ -159,6 +162,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.context.sumo.skipped = False
         self.context.sumo.failure_reason = None
         self.context.sumo.camera_capture_bearing_deg = None
+        self.context.sumo.bottle_found_after_initial_search_correction = False
 
         # 黒ボトル探索中は停止
         self._stop_motors()
@@ -486,6 +490,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
         """Leftコースの初回未検知時に、左へ20度だけ向きを補正する。"""
 
         current_heading = self._current_bearing()
+        self.search_correction_original_bearing = current_heading
         target_bearing = (
             current_heading
             - self.INITIAL_SEARCH_CORRECTION_DEG
@@ -515,6 +520,29 @@ class CaptureSumoBottleWithCamera(Behaviour):
             )
         )
 
+        self.search_correction_turn.tick_once()
+
+    def _start_search_correction_return(self):
+        """左20度の探索補正後、元の方位へ戻る。"""
+
+        self.search_correction_turn = SpinToBearing(
+            name="return from initial left search correction",
+            context=self.context,
+            bearing=self.search_correction_original_bearing,
+            max_power=self.settings.turn_max_power,
+            min_power=self.settings.turn_min_power,
+            pid_p=self.settings.turn_pid_p,
+            pid_i=self.settings.turn_pid_i,
+            pid_d=self.settings.turn_pid_d,
+            tolerance=self.settings.heading_tolerance_deg,
+        )
+
+        self.phase = self.SEARCH_CORRECT_RETURN
+        self.logger.info(
+            "Bottle not detected after left search correction; "
+            "returning to original bearing=%.1f"
+            % self.search_correction_original_bearing
+        )
         self.search_correction_turn.tick_once()
 
     # ======================================================
@@ -583,7 +611,7 @@ class CaptureSumoBottleWithCamera(Behaviour):
     def update(self):
 
         # ==================================================
-        # 初回未検知時の右20度探索補正
+        # 初回未検知時の左20度探索補正
         # ==================================================
 
         if self.phase == self.SEARCH_CORRECT:
@@ -611,6 +639,42 @@ class CaptureSumoBottleWithCamera(Behaviour):
             return Status.RUNNING
 
         # ==================================================
+        # 初回未検知時の探索補正から元の方位へ復帰
+        # ==================================================
+
+        if self.phase == self.SEARCH_CORRECT_RETURN:
+
+            if self.search_correction_turn is None:
+                self._stop_motors()
+                return Status.FAILURE
+
+            self.search_correction_turn.tick_once()
+
+            if (
+                self.search_correction_turn.status
+                == Status.FAILURE
+            ):
+                self._stop_motors()
+                return Status.FAILURE
+
+            if (
+                self.search_correction_turn.status
+                == Status.SUCCESS
+            ):
+                self._stop_motors()
+                self.search_correction_turn = None
+                self.search_correction_original_bearing = None
+                self.phase = self.ACQUIRE
+                self.confirmed_frames = 0
+                self.started_at = time.monotonic()
+                self.logger.info(
+                    "Returned to original bearing; "
+                    "restarting black bottle acquisition"
+                )
+
+            return Status.RUNNING
+
+        # ==================================================
         # 2秒未検知時の150mm探索前進
         # ==================================================
 
@@ -632,6 +696,10 @@ class CaptureSumoBottleWithCamera(Behaviour):
                 self._stop_motors()
 
                 # 150mm前進後、再探索
+                if self.search_correction_original_bearing is not None:
+                    self._start_search_correction_return()
+                    return Status.RUNNING
+
                 self.phase = self.ACQUIRE
 
                 self.confirmed_frames = 0
@@ -1153,6 +1221,10 @@ class CaptureSumoBottleWithCamera(Behaviour):
 
             self.logger.info(
                 "SUMO ESCAPE ROUTE fixed route=2"
+            )
+
+            self.context.sumo.bottle_found_after_initial_search_correction = (
+                self.search_correction_original_bearing is not None
             )
 
             # ==========================================

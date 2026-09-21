@@ -21,6 +21,7 @@ class SumoState:
     bearing_reference: SumoBearingReference = field(default_factory=SumoBearingReference)
     search_bearing_deg: float = 0.0
     camera_capture_bearing_deg: Optional[float] = None
+    bottle_found_after_initial_search_correction: bool = False
     # No.15からNo.18までの間だけ共有する、ET相撲固有の実行状態。
     started_at: Optional[float] = None
     search_heading_deg: float = 0.0
@@ -146,7 +147,7 @@ class SumoSettings:
     release_reverse_distance_mm: float = 100.0
     release_reverse_power: int = 60
     # 退避ルート②で走行するときのPWM。
-    escape_power: int = 60 
+    escape_power: int = 70
     # 離脱後はガレージ側へ旋回してから、その絶対方位を維持して黒ラインまで直進する。
     garage_return_drive_power: int = 60
     # 復帰用黒ラインは生の明度で判定し、未検出時は規定距離で安全停止する。

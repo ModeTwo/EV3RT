@@ -27,12 +27,14 @@ class PlanGarageReturn(Behaviour):
     """Plan the single fixed escape path used after the sumo bottle is released.
 
     The old route-1/route-2 selection has been removed.
-    Regardless of the black bottle's image position, the robot always turns
-    40 degrees from the bottle push heading (mirrored by course) and then
-    drives on that bearing until the garage-side black line is detected.
+    Normally the robot turns 40 degrees from the bottle push heading
+    (mirrored by course). If the bottle was found after the initial
+    left-course search correction, it turns 90 degrees outward from the
+    course line instead.
     """
 
     ESCAPE_TURN_DEG = 40.0
+    INITIAL_CORRECTION_ESCAPE_TURN_DEG = 90.0
 
     def __init__(self, context, settings):
         super().__init__(name="plan garage return from push heading")
@@ -46,15 +48,20 @@ class PlanGarageReturn(Behaviour):
         pushed = current_bearing(self.context)
         self.push_bearing = pushed
 
-        # Fixed escape path:
-        # Left / Right are mirrored by runtime.course.
+        # Fixed escape path. The initial-correction case uses a
+        # perpendicular outward heading; both cases mirror by course.
+        turn_deg = (
+            self.INITIAL_CORRECTION_ESCAPE_TURN_DEG
+            if self.context.sumo.bottle_found_after_initial_search_correction
+            else self.ESCAPE_TURN_DEG
+        )
         self.escape_bearing = (
-            pushed - runtime.course * self.ESCAPE_TURN_DEG
+            pushed - runtime.course * turn_deg
         ) % 360.0
 
         self.logger.info(
             "SUMO escape plan push_bearing=%.1f turn=%.1f escape_bearing=%.1f"
-            % (pushed, self.ESCAPE_TURN_DEG, self.escape_bearing)
+            % (pushed, turn_deg, self.escape_bearing)
         )
         return Status.SUCCESS
 
