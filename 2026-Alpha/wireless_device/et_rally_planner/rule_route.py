@@ -1863,27 +1863,56 @@ def _try_shifted_axis_corner(a, b, all_gates, all_posts, target_gate, axis,
 
     perp = (-axis[1], axis[0])
 
+    # 2026-09-20: entry(target_gate)へ向かう候補は、そのゲート自身のT字パーツから車体
+    # 前方でconfig.ARM_BODY_CLEARANCE_MIN_CM(3cm)以上離れる最初のずらし量を採用する
+    # (seed=7595581: 5cm刻みで最初に安全だったずらし量が、T字パーツまで2.25cmだった)。
+    # 見つかったら、1cm刻みで手前に戻って、ARM_BODY_CLEARANCE_TARGET_CM(4cm)を
+    # 満たす最小のずらし量を探す。
+    need_arm = target_gate is not None and config.ARM_BODY_CLEARANCE_TARGET_CM > 0
+    arm_posts = [
+        p for p in all_posts
+        if need_arm and getattr(p, "color", None) == target_gate.color and (p.arm_dir[0] or p.arm_dir[1])
+    ] if need_arm else []
+
+    def arm_clearance(res):
+        pts = [pt for pt, _ in res]
+        return min(_segment_body_clearance(x, y, p) for x, y in zip(pts, pts[1:]) for p in arm_posts)             if arm_posts else float("inf")
+
+    def make(sign, sv):
+        shifted_a = geo.add(a, geo.scale(perp, sign * sv))
+        if (_find_blocking_post(a, shifted_a, all_posts) is not None
+                or _segment_crosses_any_gate_leg(a, shifted_a, all_gates)):
+            return None
+        dx, dy = b[0] - shifted_a[0], b[1] - shifted_a[1]
+        t = (dx * entry_axis[1] - dy * entry_axis[0]) / denom
+        if t <= 1e-6:
+            return None
+        corner = geo.add(shifted_a, geo.scale(axis, t))
+        if (_find_blocking_post(shifted_a, corner, all_posts) is None
+                and _find_blocking_post(corner, b, all_posts) is None
+                and not _segment_crosses_any_gate_leg(shifted_a, corner, all_gates)
+                and not _segment_crosses_any_gate_leg(corner, b, all_gates)):
+            nearest_post = min(all_posts, key=lambda p: geo.distance(corner, p))
+            anchor = (nearest_post, _post_owner_gate(nearest_post, all_gates))
+            return [(a, None), (shifted_a, None), (corner, anchor), (b, None)]
+        return None
+
     found = []
     for sign in (1.0, -1.0):
         s = step
         while s <= max_shift:
-            shifted_a = geo.add(a, geo.scale(perp, sign * s))
-            if (_find_blocking_post(a, shifted_a, all_posts) is not None
-                    or _segment_crosses_any_gate_leg(a, shifted_a, all_gates)):
-                s += step
-                continue
-            dx, dy = b[0] - shifted_a[0], b[1] - shifted_a[1]
-            t = (dx * entry_axis[1] - dy * entry_axis[0]) / denom
-            if t > 1e-6:
-                corner = geo.add(shifted_a, geo.scale(axis, t))
-                if (_find_blocking_post(shifted_a, corner, all_posts) is None
-                        and _find_blocking_post(corner, b, all_posts) is None
-                        and not _segment_crosses_any_gate_leg(shifted_a, corner, all_gates)
-                        and not _segment_crosses_any_gate_leg(corner, b, all_gates)):
-                    nearest_post = min(all_posts, key=lambda p: geo.distance(corner, p))
-                    anchor = (nearest_post, _post_owner_gate(nearest_post, all_gates))
-                    found.append([(a, None), (shifted_a, None), (corner, anchor), (b, None)])
-                    break
+            res = make(sign, s)
+            if res is not None and (not arm_posts or arm_clearance(res) >= config.ARM_BODY_CLEARANCE_MIN_CM):
+                if arm_posts and step > 1.0:
+                    s2 = s - step + 1.0
+                    while s2 < s - 1e-9:
+                        r2 = make(sign, s2)
+                        if r2 is not None and arm_clearance(r2) >= config.ARM_BODY_CLEARANCE_TARGET_CM:
+                            res = r2
+                            break
+                        s2 += 1.0
+                found.append(res)
+                break
             s += step
 
     if not found:
@@ -2209,9 +2238,12 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
     except RuntimeError:
         pass
 
+    diagonal_results = _try_diagonal_to_entry_axis(a, b, all_gates, all_posts, target_gate)
+
     raw_candidates = [
         r for r in (rect_result, axis_result, midpoint_result, loop_result, axis_first_result,
-                    departure_corner_result, *corner_results, *shifted_corner_results, *bypass_results)
+                    departure_corner_result, *corner_results, *shifted_corner_results, *bypass_results,
+                    *diagonal_results)
         if r is not None
     ]
     # 2026-09-18: 当初は各候補をその場でshortcut後の形に置き換えていたが、
@@ -2397,29 +2429,6 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
         candidates_for_arm = list(pool)
         if extended is not None and _fully_safe(extended):
             candidates_for_arm.append(extended)
-        # 2026-09-20: entry直前の横移動がT字パーツに近すぎる候補は、その横移動を
-        # ゲートから遠ざけた候補も加える(_try_raise_approach_run_for_arm参照)。
-        for r in (list(candidates_for_arm) if config.ARM_BODY_CLEARANCE_TARGET_CM > 0 else []):
-            if entry_arm_body_clearance(r) >= config.ARM_BODY_CLEARANCE_TARGET_CM:
-                continue
-            raised = _try_raise_approach_run_for_arm(
-                r, target_arm_posts, entry_arm_body_clearance, _fully_safe,
-                config.ARM_BODY_CLEARANCE_TARGET_CM, MIN_BODY_CLEARANCE_FOR_STRONG_CM,
-            )
-            if raised is not None:
-                candidates_for_arm.append(raised)
-            shifted = r
-            for _ in range(3):  # 複数のrunが近いときのため、最大3回まで繰り返し適用
-                shifted = _try_shift_parallel_run_for_arm(
-                    shifted, target_arm_posts, entry_arm_body_clearance, _fully_safe,
-                    config.ARM_BODY_CLEARANCE_TARGET_CM, MIN_BODY_CLEARANCE_FOR_STRONG_CM,
-                )
-                if shifted is None:
-                    break
-                candidates_for_arm.append(shifted)
-                if entry_arm_body_clearance(shifted) >= config.ARM_BODY_CLEARANCE_TARGET_CM:
-                    break
-
         # 2026-09-18追記: 「desired_clearanceを満たす候補があれば無条件で
         # それを優先する」形にしたところ、そのために必要な迂回が異常に
         # 長くなるケースが見つかった(seed=5719257: 最短候補55.9cmに対し、
@@ -2484,26 +2493,6 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
             best_clearance = entry_arm_body_clearance(best_candidate)
             if best_clearance >= baseline_clearance + 1.5:
                 pool = [r for r in within_budget if entry_arm_body_clearance(r) >= best_clearance - 1e-9]
-
-    # 2026-09-20: 「ゲートと平行に走ってきて、T字パーツに垂直に近づく」形(垂直な区間)だけは、
-    # 全体の最小クリアランスが他の斜めの区間で決まっていても、
-    # 3cm以上を確保する候補(横移動をずらした候補など)を優先する。最短候補が既に
-    # 垂直な区間で3cm以上なら何もしない。範囲は最短+60cmまで。
-    if target_arm_posts and config.ARM_BODY_CLEARANCE_TARGET_CM > 0:
-        _lenkey = lambda r: (round(_segment_result_length(r), 6), len(r))
-        _best = min(pool, key=_lenkey)
-        _need = config.ARM_BODY_CLEARANCE_MIN_CM
-        if _perp_arm_clearance(_best, target_arm_posts) < _need:
-            _cands = list(pool)
-            try:
-                _cands += list(candidates_for_arm)
-            except NameError:
-                pass
-            _good = [r for r in _cands
-                     if _segment_result_length(r) <= _segment_result_length(_best) + 60.0
-                     and _perp_arm_clearance(r, target_arm_posts) >= _need]
-            if _good:
-                pool = _good
 
     # 2026-09-18: 距離が(ほぼ)同点の候補が複数あるとき、単純に
     # _segment_result_lengthだけで選ぶとどちらが選ばれるかは候補が
@@ -2634,167 +2623,60 @@ def _try_extend_entry_arm_clearance(result, target_gate, all_posts, target_arm_p
     return new_result
 
 
-def _try_raise_approach_run_for_arm(result, target_arm_posts, body_clearance_fn, safe_fn,
-                                     want_cm, min_cm, max_raise=30.0, step=0.25):
-    """entryの手前で「ゲートの正面に回り込む横移動」の直進が、target_gate自身の
-    T字パーツに近すぎる(車体footprint基準のクリアランスがmin_cm未満)候補について、
-    その横移動の位置をゲートから遠ざける向き(entryへ入る向きの逆)にずらした
-    候補を作る(2026-09-20、seed=7595581の黄色ゲートentry直前の横移動が、T字パーツ
-    まで車体基準2.25cmしかなかった件)。
+def _try_diagonal_to_entry_axis(a, b, all_gates, all_posts, target_gate):
+    """aから、entryの軸(ゲートを通る向き)上の点c(entryからD手前)へ斜めに進み、
+    そこからentryまで軸に沿ってまっすぐ進む、「斜め+まっすぐ」の候補を返す
+    (2026-09-20: 「直進→90度→90度」の折れ線より、斜めに進んで軸に乗る方が
+    短い配置がある。seed=4418202の青→黄で93.5cmが68.6cm、seed=1437404の赤→青で
+    167.3cmが135.0cmになる)。
 
-    対象は「a0->c1がentry軸に平行、c1->c2がそれに垂直(横移動)、c2->bがentry軸」
-    という4点以上の形(全区間が軸に平行)の候補のみ。c1とc2を同じ量だけ
-    entry軸に沿ってずらすので、どの区間も軸平行のまま。step刻みで、
-    want_cm以上を満たす最小のずらし量を採用する。届かなければmin_cm以上を満たす
-    最小のずらし量を採用し、それも無理ならNoneを返す。
-    safe_fnは_fully_safe相当(ずらした結果が他の支柱・ゲートに触れないことの確認)。
+    Dはentryの手前の距離。近すぎると軸に乗る旋回が急になるので、config.
+    DIAGONAL_ENTRY_D_MIN_CM以上、config.DIAGONAL_ENTRY_D_MAX_CMまでconfig.
+    DIAGONAL_ENTRY_D_STEP_CMごとに候補を作る(安全性・T字パーツの余裕は、
+    呼び出し側の_fully_safeと、T字パーツ用の候補選びが判断する)。
+    ゴール(target_gateがNone)は対象外。aとbが既に軸上にある場合(直線で済む)も対象外。
     """
-    points = [pt for pt, _ in result]
-    if len(points) < 4:
-        return None
-    n = len(points) - 1
-    a0, c1, c2, b = points[n - 3], points[n - 2], points[n - 1], points[n]
-    axis = geo.sub(b, c2)
-    axis_len = geo.norm(axis)
-    if axis_len < 1e-9:
-        return None
-    axis = geo.scale(axis, 1.0 / axis_len)
-    away = geo.scale(axis, -1.0)  # ゲートから遠ざかる向き
-    lateral = geo.sub(c2, c1)
-    lat_len = geo.norm(lateral)
-    if lat_len < 1e-9 or abs(geo.dot(lateral, axis)) > 1e-6 * lat_len:
-        return None  # c1->c2がentry軸に垂直でない
-    first = geo.sub(c1, a0)
-    first_len = geo.norm(first)
-    if first_len < 1e-9 or abs(first[0] * axis[1] - first[1] * axis[0]) > 1e-6 * first_len:
-        return None  # a0->c1がentry軸に平行でない
+    if target_gate is None or not config.DIAGONAL_ENTRY_ENABLED:
+        return []
+    heading = _required_entry_heading_deg(b, target_gate)
+    e = (math.cos(math.radians(heading)), math.sin(math.radians(heading)))
+    # aがentry軸上(bからeの逆向きの直線上)にあれば、直線で足りる
+    ab = geo.sub(b, a)
+    if abs(ab[0] * e[1] - ab[1] * e[0]) < 1e-6:
+        return []
+    results = []
+    direct = geo.distance(a, b)
+    max_len = 1.6 * direct + 30.0   # 遠回りすぎる候補は作らない(計算量を抑える)
 
-    def build(t):
-        new_c1 = geo.add(c1, geo.scale(away, t))
-        new_c2 = geo.add(c2, geo.scale(away, t))
-        # a0->c1の向きが反転してしまうずらし量は使わない
-        if geo.dot(geo.sub(new_c1, a0), first) <= 1e-6:
-            return None
-        new_result = list(result)
-        new_result[n - 2] = (new_c1, result[n - 2][1])
-        new_result[n - 1] = (new_c2, result[n - 1][1])
-        return new_result
+    def ok_segments(pts):
+        return (all(_find_blocking_post(x, y, all_posts) is None for x, y in zip(pts, pts[1:]))
+                and not any(_segment_crosses_any_gate_leg(x, y, all_gates) for x, y in zip(pts, pts[1:])))
 
-    best_min = None
-    t = step
-    while t <= max_raise:
-        cand = build(t)
-        if cand is not None and safe_fn(cand):
-            clr = body_clearance_fn(cand)
-            if clr >= want_cm:
-                return cand
-            if best_min is None and clr >= min_cm:
-                best_min = cand
-        t += step
-    return best_min
-
-
-def _perp_arm_clearance(result, arm_posts):
-    """resultの各直線のうち、T字パーツ(arm_posts)に垂直なものだけについて、
-    車体前方からT字パーツまでの最小クリアランスを返す(垂直な区間が無ければinf)。
-    「ゲートと平行に走ってきて、T字パーツに垂直に近づく」形を専用に見るための指標。
-    """
-    pts = [pt for pt, _ in result]
-    worst = float("inf")
-    for i in range(len(pts) - 1):
-        dl = geo.distance(pts[i], pts[i + 1])
-        if dl < 1e-9:
-            continue
-        d = geo.scale(geo.sub(pts[i + 1], pts[i]), 1.0 / dl)
-        for p in arm_posts:
-            if abs(d[0] * p.arm_dir[0] + d[1] * p.arm_dir[1]) < 0.02:
-                worst = min(worst, _segment_body_clearance(pts[i], pts[i + 1], p))
-    return worst
-
-
-def _try_shift_parallel_run_for_arm(result, target_arm_posts, body_clearance_fn, safe_fn,
-                                     want_cm, min_cm, max_shift=30.0, step=0.25):
-    """T字パーツに垂直に走っている軸平行の直線(run)が近すぎる(車体基準でmin_cm未満)
-    とき、その直線を、T字パーツから遠ざかる向きへ平行にずらした候補を作る
-    (2026-09-20、seed=3847588などの「ゲートの脇を、ゲート線と平行に走る」形。
-    出口の直後など、始点が固定の直線はずらせないので対象外)。
-
-    runは、軸平行に並んだ連続する点(共線)の列。両端を含む全ての点を、runに垂直な
-    向き(T字パーツの向き)へ同じ量だけ動かす。両端の外側の区間が、runに垂直
-    (=ずらす向きと平行)なら軸平行のまま、そうでなければ斜めの区間の角度が
-    変わるだけで、どちらも許容する(safe_fnで安全性を確認する)。
-    resultの最初の点(現在地)と最後の点(entry)は動かさないので、それらを
-    含むrunは対象外。
-    step刻みで、want_cm以上を満たす最小のずらし量を採用し、届かなければ
-    min_cm以上を満たす最小のもの、それも無理ならNoneを返す。
-    """
-    points = [pt for pt, _ in result]
-    n = len(points)
-    if n < 4 or not target_arm_posts:
-        return None
-
-    def collinear_axis(i, j):
-        # points[i..j]が同じ軸平行の直線上にあるか
-        xs = {round(points[k][0], 6) for k in range(i, j + 1)}
-        ys = {round(points[k][1], 6) for k in range(i, j + 1)}
-        return len(xs) == 1 or len(ys) == 1
-
-    # 共線な点の列(run)を、軸平行なものについて列挙する(最初と最後の点を含まない)
-    runs = []
-    i = 1
-    while i < n - 1:
-        j = i
-        while j + 1 < n - 1 and collinear_axis(i, j + 1):
-            j += 1
-        if j > i and collinear_axis(i, j):
-            runs.append((i, j))
-        i = j + 1 if j > i else i + 1
-    best_overall = None
-    for (i, j) in runs:
-        a, b = points[i], points[j]
-        dl = geo.distance(a, b)
-        if dl < 1e-6:
-            continue
-        d = geo.scale(geo.sub(b, a), 1.0 / dl)
-        # このrunがT字パーツに垂直で、近すぎる支柱を探す
-        worst_post = None
-        worst_clr = float("inf")
-        for post in target_arm_posts:
-            dp = abs(d[0] * post.arm_dir[0] + d[1] * post.arm_dir[1])
-            if dp >= 0.02:
-                continue
-            c = min(
-                _segment_body_clearance(points[k], points[k + 1], post)
-                for k in range(max(i - 1, 0), min(j + 1, n - 1))
-            )
-            if c < worst_clr:
-                worst_clr, worst_post = c, post
-        if worst_post is None or worst_clr >= want_cm:
-            continue
-        # ずらす向き: T字パーツの向き(arm_dir)のうち、runが支柱から遠ざかる側
-        mid = geo.scale(geo.add(a, b), 0.5)
-        sgn = 1.0 if geo.dot(geo.sub(mid, worst_post), worst_post.arm_dir) >= 0 else -1.0
-        away = geo.scale(worst_post.arm_dir, sgn)
-        best_min = None
-        t = step
-        found = None
-        while t <= max_shift:
-            new_result = list(result)
-            for k in range(i, j + 1):
-                new_result[k] = (geo.add(points[k], geo.scale(away, t)), result[k][1])
-            if safe_fn(new_result):
-                clr = _perp_arm_clearance(new_result, target_arm_posts)
-                if clr >= want_cm:
-                    found = new_result
-                    break
-                if best_min is None and clr >= min_cm:
-                    best_min = new_result
-            t += step
-        cand = found or best_min
-        if cand is not None:
-            # 複数のrunがあれば、まず最初に直せたものを返す(呼び出し側が繰り返し適用してよい)
-            return cand
-    return best_overall
+    D = config.DIAGONAL_ENTRY_D_MIN_CM
+    while D <= config.DIAGONAL_ENTRY_D_MAX_CM + 1e-9:
+        c = geo.sub(b, geo.scale(e, D))
+        pts = [a, c, b]
+        if (geo.distance(a, c) > 1e-6 and geo.distance(a, c) + D <= max_len and ok_segments(pts)):
+            results.append([(a, None), (c, None), (b, None)])
+        D += config.DIAGONAL_ENTRY_D_STEP_CM
+    if results and min(geo.distance(r[0][0], r[1][0]) + geo.distance(r[1][0], r[2][0]) for r in results) <= 1.25 * direct + 10.0:
+        return results  # 1つ目の形で、ほぼ直線に近い候補があれば、2つ目は試さない
+    # 2つ目の形(1つ目が成立しない、または遠回りしかないときだけ): 斜めに進んで、entry軸に垂直な線(ゲートの脇)に乗り、
+    # その線に沿って軸上の点cへ進み、軸に沿ってentryへ入る(a -> p1 -> c -> b)。
+    # ゲートの脚を回り込む必要があるとき(seed=1437404の赤->青)用。
+    tangent = (-e[1], e[0])
+    for D in config.DIAGONAL_BYPASS_D_LIST_CM:
+        c = geo.sub(b, geo.scale(e, D))
+        for sign in (1.0, -1.0):
+            t = config.DIAGONAL_BYPASS_T_STEP_CM
+            while t <= config.DIAGONAL_BYPASS_T_MAX_CM + 1e-9:
+                p1 = geo.add(c, geo.scale(tangent, sign * t))
+                if geo.distance(a, p1) > 1e-6 and geo.distance(a, p1) + t + D <= max_len:
+                    pts = [a, p1, c, b]
+                    if ok_segments(pts):
+                        results.append([(a, None), (p1, None), (c, None), (b, None)])
+                t += config.DIAGONAL_BYPASS_T_STEP_CM
+    return results
 
 
 def _build_route_with_signs(gates_by_color, signs, laps=None):

@@ -3,7 +3,7 @@
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 
 from ..behaviours.conditions import IsDistanceEarned
-from ..behaviours.gyro_drive import RunByGyro
+from ..behaviours.corrected_run import EtRun as RunByGyro
 from ..behaviours.motor_control import StopNow
 
 

@@ -121,7 +121,10 @@ GOAL_OFFSET_CM = 14.8
 
 # スタート: グリッド(4,3)-(4,4)を結ぶ線の中心点から、その線と垂直に
 # START_OFFSET_CMだけ離れた点。
-START_POS_CM = (4 * GRID_PITCH_CM + START_OFFSET_CM, 3.5 * GRID_PITCH_CM)
+# 2026-09-21: スタート地点を、従来のスタート(X=4*GRID_PITCH_CM+START_OFFSET_CM, Y=3.5*GRID_PITCH_CM)から
+# Y方向に-1cm移動した。従来の位置に戻すときは START_SHIFT_CM を (0.0, 0.0) にする。
+START_SHIFT_CM = (0.0, -1.0)
+START_POS_CM = (4 * GRID_PITCH_CM + START_OFFSET_CM + START_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + START_SHIFT_CM[1])
 START_HEADING_DEG = 180.0   # -x方向を向く
 
 # ゴール: スタートと同じ考え方で、グリッド(0,3)-(0,4)を結ぶ線の中心点から
@@ -193,3 +196,14 @@ ROBOT_REAR_OVERHANG_FOR_CLEARANCE_CM = 0.0
 ARM_CLEARANCE_OTHER_GATES = False  # 2026-09-20: 影響が大きい(68%の経路が変わり平均+2.2%)割に効果が小さいため一旦無効
 ARM_BODY_CLEARANCE_MIN_CM = 3.0
 ARM_OTHER_GATES_LENGTH_BUDGET_CM = 60.0
+
+# 2026-09-20: 「斜めに進んでから、entryの軸に乗って直進する」候補
+# (rule_route._try_diagonal_to_entry_axis)。entryの手前D(cm)の点へ斜めに進む。
+DIAGONAL_ENTRY_ENABLED = True
+DIAGONAL_ENTRY_D_MIN_CM = 8.0
+DIAGONAL_ENTRY_D_MAX_CM = 48.0
+DIAGONAL_ENTRY_D_STEP_CM = 8.0
+# 斜め+ゲートの脇の線+entry軸(a -> p1 -> c -> b)の候補のパラメータ。
+DIAGONAL_BYPASS_D_LIST_CM = (8.0,)
+DIAGONAL_BYPASS_T_STEP_CM = 8.0
+DIAGONAL_BYPASS_T_MAX_CM = 48.0
