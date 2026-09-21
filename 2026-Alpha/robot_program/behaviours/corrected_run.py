@@ -7,7 +7,9 @@ ETラリーで実績のあるEtRallyRunByGyro(behaviours/et_rally_drive.py)を�
 USE_ET_STRAIGHT_PID=Falseにすると、呼び出し側のPID値をそのまま使う(倍率補正は有効なまま)。
 """
 
+from ..gyro_scale import ensure_scaled_gyro
 from ..runtime import runtime
+from ..types import HeadingType
 from .et_rally_drive import EtRallyRunByGyro
 
 # ETラリーの直進で較正した向きのPID(案B)。移動出力70〜80で調整した値。
@@ -47,4 +49,25 @@ class BrakeReleasingEtRun(EtRun):
         runtime.require('left_motor', 'right_motor')
         runtime.left_motor.set_brake(False)
         runtime.right_motor.set_brake(False)
+        return super().update()
+
+
+class DeliveryEtRun(EtRun):
+    """ボトル配置・ラリー準備用。配置ライン基準(delivery_heading)の目標角を保持して直進する
+    (delivery_turn.DeliveryPulseTurn/encoder_spin.DeliveryEncoderTurnと同じ目標角の求め方)。
+    power<0を渡すと同じ向きを保持したまま後退する(et_rally_drive.EtRallyRunByGyroの
+    output_limitsはabs(power)基準のため後退でも成立する)。"""
+
+    def __init__(self, name, context, target, power, pid_p, pid_i, pid_d, **kwargs):
+        self.context, self.delivery_target = context, target
+        super().__init__(name=name, target=target, power=power,
+                         pid_p=pid_p, pid_i=pid_i, pid_d=pid_d,
+                         target_type=HeadingType.ABSOLUTE, **kwargs)
+
+    def update(self):
+        if not self.running:
+            ensure_scaled_gyro()
+            raw = runtime.gyro_sensor.get_angle()
+            current = self.context.delivery_heading.heading(raw)
+            self.target = -runtime.course * raw + self.delivery_target - current
         return super().update()

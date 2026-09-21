@@ -273,7 +273,8 @@ class EtRallyRunByGyro(Behaviour):
             else:
                 self.target_heading = self.target
             # 算出した旋回量が直進パワーを超えて暴走しないよう、output_limitsでしっかりキャップをかける
-            self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
+            # (abs()により、power<0=後退でもmin<=maxを保った有効な範囲になる)
+            self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-abs(self.power), abs(self.power)))
             self.logger.info("%+06d %s.gyro run started toward heading=%d" % (runtime.plotter.get_distance(), self.__class__.__name__, self.target_heading))
             self.orig_dist = runtime.plotter.get_distance()
             # 2026-09-20: PID比較用に、区間ごとの向きの誤差と、その誤差による横ズレの
@@ -318,8 +319,9 @@ class EtRallyRunByGyro(Behaviour):
 
         turn = int(self.pid(current_heading))  # まっすぐ走るために必要な微修正の旋回量
         # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める
-        # (PID自体の上限は巡航パワーで作ってあるため)。
-        turn = max(-power_now, min(power_now, turn))
+        # (PID自体の上限は巡航パワーで作ってあるため)。abs()により、power_now<0
+        # (後退)でも範囲が反転せずturnがそのまま出力される。
+        turn = max(-abs(power_now), min(abs(power_now), turn))
         runtime.right_motor.set_power(power_now + runtime.course * turn)
         runtime.left_motor.set_power(power_now - runtime.course * turn)
         return Status.RUNNING

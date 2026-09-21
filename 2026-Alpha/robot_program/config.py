@@ -15,8 +15,10 @@ class RaceConfig:
     mission_mode: str = 'configured'
     lapgate : bool = True
     # profile: PDF距離-方位表。legacy: 従来の固定方位+ライントレース。
+    # profile: 谷口さんベースコードでSTART-LAPまで全部ライントレース
     start_lap_mode: str = 'profile'
     #start_lap_mode: str = 'legacy'
+    #start_lap_mode: str = 'alltrace'
     start_lap_power: int = 85
     # 車軸中心から最初のカーブまで。アーム先端から500mm＋前方100mm。
     start_lap_first_straight_mm: float = 600.0
@@ -73,7 +75,10 @@ class RaceConfig:
     enable_et_rally: bool = True
     et_rally_laps: int = 3
     # received: PCから受信したSEQ、file: 従来の固定plan JSONを実行する。
-    et_rally_strategy_source: str = "file"
+    et_rally_strategy_source: str = "received"
+    # ETラリー開始時にエラー(経路の受信失敗、Hint不足、経路の変換失敗)が出たとき、ミッションを失敗にせず、
+    # 固定ルートでゴール(ガレージ)へ向かう(et_rally_fallback.py)。Falseなら、従来どおり失敗で止まる。
+    et_rally_fallback_enabled: bool = True
     # Noneならtests/plan_seed9392783.json。相対パスは2026-Alpha直下を基準にする。
     et_rally_plan_path: Optional[str] = None
     enable_et_sumo: bool = True
