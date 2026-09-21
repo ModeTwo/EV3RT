@@ -798,9 +798,6 @@ class Video(object):
         for lo, hi in BOTTLE_HSV[color]:
             m = cv2.inRange(img_hsv, np.array(lo, np.uint8), np.array(hi, np.uint8))
             mask = m if mask is None else cv2.bitwise_or(mask, m)
-        # ET相撲の黒ボトルのみ、画面上部40%を検知対象外にする
-        if color == BottleColor.BLACK:
-            mask[:int(FRAME_HEIGHT * 0.30), :] = 0
         return mask
 
     def get_bottle_stamped(self):

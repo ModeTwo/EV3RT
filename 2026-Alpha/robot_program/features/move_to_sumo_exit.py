@@ -6,7 +6,6 @@ from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Par
 
 from ..behaviours.conditions import IsDistanceEarned,IsColorDetected
 from .sumo_bearing_motion import RunAtBearing, EncoderSpinToBearing as SpinToBearing, current_bearing
-from ..behaviours.gyro_drive import RunByGyro
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.motor_control import RunAsInstructed, StopNow
 
@@ -23,18 +22,12 @@ class PlanGarageReturn(Behaviour):
         self.push_bearing = None
         self.avoid_bearing = None
         self.escape_route_2_bearing = None
-        self.escape_route_1_bearing = None
 
     def update(self):
         # 押し出し完了直後、後退する前の実測方位で一度だけ計画する。
         pushed = current_bearing(self.context)
         # 押し出し完了時の方位を保存
         self.push_bearing = pushed
-        # 退避ルート➀：
-        # 黒ボトルを押し出した方向から反時計回り45°の方位
-        self.escape_route_1_bearing = (
-            pushed - 40.0
-        ) % 360.0
         relative = (-runtime.course * (pushed - self.settings.entry_bearing_deg)) % 360.0
         # 押し出した方向に対してコース外側へ90度向け、
         # 黒ライン探索前にボトルの進路から横へ退避する。
@@ -48,17 +41,6 @@ class PlanGarageReturn(Behaviour):
             - runtime.course * self.settings.escape_route_2_angle_deg
         ) % 360.0
         self.search_limit_mm = self.settings.garage_line_search_max_distance_mm
-
-        # 退避ルート①は新仕様では座標ベースの復帰計算を使用しない。
-        # 押し出し方向から反時計回り45°へ向き、
-        # RunByGyroで黒ラインまで直進するため、ここで計画完了とする。
-        if self.context.sumo.escape_route == 1:
-            self.logger.info(
-                "Escape route=1 push_bearing=%.1f route1_bearing=%.1f"
-                % (self.push_bearing, self.escape_route_1_bearing)
-            )
-            return Status.SUCCESS
-
         if self.settings.garage_point_return_enabled:
             # 直線各区間の設定距離で後退後の位置を近似する試作。
             # 初期直進は+Y、土俵向き後退は-X。滑りや旋回中心の移動は未補正。
@@ -162,13 +144,6 @@ class PlanGarageReturn(Behaviour):
         if self.avoid_bearing is None:
             raise RuntimeError("Garage avoidance bearing has not been planned")
         return self.avoid_bearing
-
-    def route_1_bearing(self):
-        if self.escape_route_1_bearing is None:
-            raise RuntimeError(
-                "Escape route 1 bearing has not been planned"
-            )
-        return self.escape_route_1_bearing
 
     def route_2_bearing(self):
         if self.escape_route_2_bearing is None:
@@ -371,68 +346,6 @@ class IsSumoEscapeRoute(Behaviour):
 
         return Status.FAILURE
 
-class TurnAfterRoute1BlackLine(Behaviour):
-    """
-    退避ルート①で黒ライン検知後に90°旋回する。
-
-    Leftコース : 反時計回り90°
-    Rightコース: 時計回り90°
-    """
-
-    def __init__(self, name, context, settings):
-        super().__init__(name)
-        self.context = context
-        self.settings = settings
-        self.turn = None
-
-    def initialise(self):
-        current = current_bearing(self.context)
-
-        if runtime.course > 0:
-            # Left：反時計回り90°
-            target = (current - 90.0) % 360.0
-            direction = "CCW"
-        else:
-            # Right：時計回り90°
-            target = (current + 90.0) % 360.0
-            direction = "CW"
-
-        self.logger.info(
-            "Route1 black-line turn course=%s current=%.1f target=%.1f direction=%s"
-            % (
-                "LEFT" if runtime.course > 0 else "RIGHT",
-                current,
-                target,
-                direction,
-            )
-        )
-
-        self.turn = SpinToBearing(
-            name="route 1 turn 90deg after black line",
-            context=self.context,
-            bearing=target,
-            max_power=self.settings.turn_max_power,
-            min_power=self.settings.turn_min_power,
-            pid_p=self.settings.turn_pid_p,
-            pid_i=self.settings.turn_pid_i,
-            pid_d=self.settings.turn_pid_d,
-            tolerance=self.settings.heading_tolerance_deg,
-        )
-
-    def update(self):
-        self.turn.tick_once()
-
-        if self.turn.status == Status.SUCCESS:
-            return Status.SUCCESS
-        if self.turn.status == Status.FAILURE:
-            return Status.FAILURE
-        return Status.RUNNING
-
-    def terminate(self, new_status):
-        if self.turn is not None:
-            self.turn.stop(Status.INVALID)
-
-
 def build_move_to_sumo_exit(context, config):
     # No.18：前工程で合計500mm走行済み。直線後退で離脱し、ガレージ側黒ラインへ復帰する。
     settings = config.sumo
@@ -489,23 +402,15 @@ def build_move_to_sumo_exit(context, config):
     )
 
     # ======================================================
-    # 退避ルート②：
-    # 45度旋回後、その方位を維持して前進し、
-    # 黒ラインを検知したら走行を終了する
+    # 退避ルート②：斜め方向へ一定距離走行する
     # ======================================================
-    escape_route_2_line_detector = DetectDarkGarageLine(
-        name="detect black line on sumo escape route 2",
-        context=context,
-        settings=settings,
-    )
-
     escape_route_2_drive = Parallel(
-        name="drive sumo escape route 2 until black line",
+        name="drive sumo escape route 2",
         policy=ParallelPolicy.SuccessOnOne(),
     )
 
     escape_route_2_drive.add_children([
-        # 45度旋回後の方位を維持して直進
+        # 計算した退避ルート②の方位を維持して走行する
         RunAtBearing(
             name="hold sumo escape route 2 bearing",
             context=context,
@@ -516,76 +421,35 @@ def build_move_to_sumo_exit(context, config):
             pid_d=settings.drive_pid_d,
         ),
 
-        # 黒ラインを検知したら終了
-        escape_route_2_line_detector,
-
-        # # 安全用：黒ラインを検知できなかった場合の最大走行距離
-        # IsDistanceEarned(
-        #     name="sumo escape route 2 safety distance",
-        #     delta_dist=settings.garage_line_search_max_distance_mm,
-        # ),
-    ])
-
-    # ======================================================
-    # 退避ルート①
-    #
-    # 後退完了
-    #   ↓
-    # 反時計回り45°旋回
-    #   ↓
-    # RunByGyroで直進
-    #   ↓
-    # 黒ライン検知
-    # ======================================================
-    escape_route_1_line_detector = DetectDarkGarageLine(
-        name="detect black line on sumo escape route 1",
-        context=context,
-        settings=settings,
-    )
-
-    escape_route_1_drive = Parallel(
-        name="drive sumo escape route 1 until black line",
-        policy=ParallelPolicy.SuccessOnOne(),
-    )
-    escape_route_1_drive.add_children([
-        # 45°旋回完了時の向きを基準に、その方位を維持して直進する。
-        RunByGyro(
-            name="run sumo escape route 1 by gyro",
-            target=0.0,
-            power=settings.garage_avoid_power,
-            pid_p=settings.drive_pid_p,
-            pid_i=settings.drive_pid_i,
-            pid_d=settings.drive_pid_d,
-            target_type=HeadingType.RELATIVE,
+        # 設定した距離まで進んだら終了する
+        IsDistanceEarned(
+            name="sumo escape route 2 distance",
+            delta_dist=settings.escape_route_2_distance_mm,
         ),
-
-        # 黒ラインを検知したらParallelを終了する。
-        escape_route_1_line_detector,
-
-        # # 安全用：黒ラインを見つけられなかった場合の最大走行距離。
-        # IsDistanceEarned(
-        #     name="sumo escape route 1 safety distance",
-        #     delta_dist=settings.garage_line_search_max_distance_mm,
-        # ),
     ])
 
+    # ======================================================
+    # 退避ルート➀
+    # Feature16でescape_route=1と判定された場合に実行する
+    # ======================================================
     escape_route_1 = Sequence(
         name="sumo escape route 1",
         memory=True,
     )
 
     escape_route_1.add_children([
+        # Feature16で退避ルート①と判定されているか確認
         IsSumoEscapeRoute(
             name="check sumo escape route 1",
             context=context,
             route=1,
         ),
 
-        # 押し出し方向から反時計回り45°旋回する。
+        # ボトルを押し出した方向から90度横へ向く
         SpinToBearing(
-            name="turn counterclockwise 45deg for escape route 1",
+            name="escape route 1 turn sideways",
             context=context,
-            bearing=return_plan.route_1_bearing,
+            bearing=return_plan.avoidance_bearing,
             max_power=settings.turn_max_power,
             min_power=settings.turn_min_power,
             pid_p=settings.turn_pid_p,
@@ -594,12 +458,12 @@ def build_move_to_sumo_exit(context, config):
             tolerance=settings.heading_tolerance_deg,
         ),
 
-        StopNow(name="stop after escape route 1 45deg turn"),
-
-        # RunByGyroで黒ラインまで直進する。
-        escape_route_1_drive,
-
-        StopNow(name="stop after escape route 1 black line detection"),
+        # 旋回終了後に停止
+        StopNow(name="stop before escape route 1 drive"),
+        # 横方向へ退避
+        garage_avoid_drive,
+        # 退避終了後に停止
+        StopNow(name="stop after escape route 1 drive"),
     ])
 
     # ======================================================
@@ -701,32 +565,6 @@ def build_move_to_sumo_exit(context, config):
         ]
     )
 
-    # 退避ルート➀専用のライントレース
-    # py_treesでは同じBehaviourインスタンスを複数の親で共有できないため、
-    # route①用に別インスタンスを作成する。
-    route_1_stabilize_line_trace = Parallel(
-        name="stabilize on garage-side black line for route 1",
-        policy=ParallelPolicy.SuccessOnOne(),
-    )
-
-    route_1_stabilize_line_trace.add_children(
-        [
-            TraceLine(
-                name="trace garage-side black line for route 1",
-                target=settings.line_rejoin_trace_target_v,
-                power=settings.line_rejoin_trace_power,
-                pid_p=0.55,
-                pid_i=0.0000009,
-                pid_d=0.015,
-                trace_side=TraceSide.NORMAL,
-            ),
-            IsDistanceEarned(
-                name="garage-side line stabilization distance for route 1",
-                delta_dist=settings.line_rejoin_trace_distance_mm,
-            ),
-        ]
-    )
-
     # 黒検知後の進入量を調整し、旋回時に機体がラインへ十分乗り込むようにする。
     enter_garage_line = Parallel(
         name="advance onto garage line before alignment",
@@ -745,48 +583,6 @@ def build_move_to_sumo_exit(context, config):
         IsDistanceEarned(
             name="garage line entry distance",
             delta_dist=settings.garage_line_entry_distance_mm,
-        ),
-    ])
-
-    # ======================================================
-    # 退避ルート①：
-    # 黒ライン検知
-    # → Right:時計回り90° / Left:反時計回り90°
-    # → ライントレース
-    # ======================================================
-    route_1_complete_line_rejoin = Sequence(
-        name="complete escape route 1 line rejoin",
-        memory=True,
-    )
-
-    route_1_complete_line_rejoin.add_children([
-        IsSumoEscapeRoute(
-            name="check route 1 before line rejoin",
-            context=context,
-            route=1,
-        ),
-
-        WasGarageLineFound(
-            name="confirm route 1 black line was found before turn",
-            context=context,
-        ),
-
-        TurnAfterRoute1BlackLine(
-            name="turn 90deg after route 1 black line",
-            context=context,
-            settings=settings,
-        ),
-
-        StopNow(name="stop after route 1 90deg turn"),
-
-        route_1_stabilize_line_trace,
-
-        StopNow(name="stop after route 1 line trace stabilization"),
-
-        MarkSumoExitState(
-            "mark route 1 sumo line trace ready",
-            context,
-            "line_trace_ready",
         ),
     ])
 
@@ -820,10 +616,6 @@ def build_move_to_sumo_exit(context, config):
     handle_line_search_result = Selector(name="handle garage-side line search result", memory=True)
     handle_line_search_result.add_children(
         [
-            # route1は新仕様の相対90°旋回→TraceLine。
-            route_1_complete_line_rejoin,
-
-            # route2は既存処理をそのまま使用する。
             complete_line_rejoin,
             FailWhenGarageLineWasNotFound(
                 "fail when garage-side black line was not found",
@@ -833,63 +625,6 @@ def build_move_to_sumo_exit(context, config):
             ),
         ]
     )
-
-    # ======================================================
-    # 退避ルート①：
-    # escape_route_1_drive の時点ですでに黒ラインを
-    # 検知しているため、追加探索は行わない。
-    # ======================================================
-    route_1_line_already_found = Sequence(
-        name="escape route 1 line already found",
-        memory=True,
-    )
-
-    route_1_line_already_found.add_children([
-        IsSumoEscapeRoute(
-            name="check route 1 after black line detection",
-            context=context,
-            route=1,
-        ),
-
-        WasGarageLineFound(
-            name="confirm route 1 black line was found",
-            context=context,
-        ),
-    ])
-
-    # ======================================================
-    # 退避ルート②：
-    # escape_route_2_drive の時点ですでに黒ラインを
-    # 検知しているため、追加の探索走行は行わない
-    # ======================================================
-    route_2_line_already_found = Sequence(
-        name="escape route 2 line already found",
-        memory=True,
-    )
-
-    route_2_line_already_found.add_children([
-        IsSumoEscapeRoute(
-            name="check route 2 after black line detection",
-            context=context,
-            route=2,
-        ),
-
-        WasGarageLineFound(
-            name="confirm route 2 black line was found",
-            context=context,
-        ),
-    ])
-
-    # ルートに応じて黒ライン到達処理を選択
-    reach_garage_line = Selector(
-        name="reach garage-side black line",
-        memory=True,
-    )
-
-    reach_garage_line.add_children([
-        route_1_line_already_found,
-        route_2_line_already_found,
-    ])
 
     transport = Sequence(name="carry sumo bottle to exit", memory=True)
     transport.add_children(
@@ -912,11 +647,25 @@ def build_move_to_sumo_exit(context, config):
             # Feature16で決定した退避ルート①/②を実行する
             escape_route_selector,
 
-            # ルート①/②とも退避走行中に黒ラインを検知済み。
-            # ここでは検知結果を確認する。
-            reach_garage_line,
+            # 退避完了後、ガレージ側黒ラインへ向く。
+            SpinToBearing(
+                name="turn toward garage before line search",
+                context=context,
+                bearing=return_plan.bearing,
+                max_power=settings.turn_max_power,
+                min_power=settings.turn_min_power,
+                pid_p=settings.turn_pid_p,
+                pid_i=settings.turn_pid_i,
+                pid_d=settings.turn_pid_d,
+                tolerance=settings.heading_tolerance_deg,
+            ),
 
-            # 黒ライン検知後、ルートごとの復帰処理へ進む
+            # 実行順4：旋回完了位置で制動し、後続直進が保持する絶対方位を確定する。
+            StopNow(name="stop after garage heading turn"),
+            # 実行順5：旋回後の絶対方位を維持して直進し、復帰用黒ラインを検知する。
+            find_garage_side_line,
+            StopNow(name="stop after garage-side black line search"),
+            # 実行順6：検知成功時だけ短距離ライントレースし、FINISH工程へ引き渡す。
             handle_line_search_result,
             blue_trace,
         ]
