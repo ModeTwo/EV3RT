@@ -122,8 +122,9 @@ GOAL_OFFSET_CM = 14.8
 # スタート: グリッド(4,3)-(4,4)を結ぶ線の中心点から、その線と垂直に
 # START_OFFSET_CMだけ離れた点。
 # 2026-09-21: スタート地点を、従来のスタート(X=4*GRID_PITCH_CM+START_OFFSET_CM, Y=3.5*GRID_PITCH_CM)から
-# Y方向に-1cm移動した。従来の位置に戻すときは START_SHIFT_CM を (0.0, 0.0) にする。
-START_SHIFT_CM = (0.0, -1.0)
+# Y方向に-1cm移動した。さらに、Y方向に-1.7cm(グレーポイントの中点から-2.7cm)、X方向にETエリア側(-X)へ0.5cm移動した。
+# 従来の位置に戻すときは START_SHIFT_CM を (0.0, 0.0) にする。
+START_SHIFT_CM = (-0.5, -2.7)
 START_POS_CM = (4 * GRID_PITCH_CM + START_OFFSET_CM + START_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + START_SHIFT_CM[1])
 START_HEADING_DEG = 180.0   # -x方向を向く
 
@@ -147,8 +148,9 @@ KEEP_OUT_RECTS_CM = (
     # 11のグレーポイント(0, 0)から、下へ37cmより下(y < -37)。
     # ただし、ゴール側(-X)へ17cm以上(x <= -17)進んだ範囲は制限なし。
     (-17.0, _INF, -_INF, -37.0),
-    # スタート位置から、ETエリアとは逆方向(+X)へ14cm以降のすべての範囲。
-    (START_POS_CM[0] + 14.0, _INF, -_INF, _INF),
+    # 従来のスタート位置(X=4*GRID_PITCH_CM+START_OFFSET_CM)から、ETエリアとは逆方向(+X)へ14cm以降のすべての範囲。
+    # スタート位置をずらしても動かさないため、START_POS_CM ではなく、ずらす前の位置を基準にする。
+    (4 * GRID_PITCH_CM + START_OFFSET_CM + 14.0, _INF, -_INF, _INF),
     # 11のグレーポイントから、ゴール側(-X)へ28cm以降(x <= -28)で、11の点より上(y >= 0)の範囲。
     (-_INF, -28.0, 0.0, _INF),
 )
