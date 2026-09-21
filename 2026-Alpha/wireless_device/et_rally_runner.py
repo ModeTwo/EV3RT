@@ -84,6 +84,13 @@ def calculate(payload):
         config.GOAL_POS_CM = (mirror_x(config.GOAL_POS_CM[0]), config.GOAL_POS_CM[1])
         config.START_HEADING_DEG = mirror_heading(config.START_HEADING_DEG)
         config.GOAL_HEADING_DEG = mirror_heading(config.GOAL_HEADING_DEG)
+        # 進入禁止エリアと、ゴールへの中継点も、同じ軸で左右反転する(xの範囲は大小が入れ替わる)。
+        config.KEEP_OUT_RECTS_CM = tuple(
+            (mirror_x(xmax), mirror_x(xmin), ymin, ymax)
+            for xmin, xmax, ymin, ymax in config.KEEP_OUT_RECTS_CM
+        )
+        config.KEEP_OUT_GOAL_LANE_POINT_CM = (
+            mirror_x(config.KEEP_OUT_GOAL_LANE_POINT_CM[0]), config.KEEP_OUT_GOAL_LANE_POINT_CM[1])
 
     from commands import waypoints_to_plan
     from planner import Gate
