@@ -2827,6 +2827,25 @@ def _try_diagonal_to_entry_axis(a, b, all_gates, all_posts, target_gate):
 
 
 def _resolve_goal_segment(current, all_gates, all_posts, prev_gate, gate_signs):
+    """ゴールへの最終区間を作る。まず、直進の余裕を config.GOAL_STRAIGHT_EXTRA_MARGIN_CM だけ増やした条件で
+    試し(全ての安全条件を満たす候補だけ)、作れなければ、従来の条件で作る。
+    (STRAIGHT_CLEARANCE_CMは、この区間の探索の間だけ一時的に増やして、必ず元に戻す。)
+    """
+    global STRAIGHT_CLEARANCE_CM
+    extra = config.GOAL_STRAIGHT_EXTRA_MARGIN_CM
+    if extra > 0:
+        base = STRAIGHT_CLEARANCE_CM
+        STRAIGHT_CLEARANCE_CM = base + extra
+        try:
+            return _resolve_goal_segment_core(current, all_gates, all_posts, prev_gate, gate_signs, strict_only=True)
+        except RuntimeError:
+            pass
+        finally:
+            STRAIGHT_CLEARANCE_CM = base
+    return _resolve_goal_segment_core(current, all_gates, all_posts, prev_gate, gate_signs)
+
+
+def _resolve_goal_segment_core(current, all_gates, all_posts, prev_gate, gate_signs, strict_only=False):
     """最後のゲートの退出点からゴールへの区間を作る。
 
     ゴールへ直接向かう通常の候補(進入禁止エリアに入らないもの)と、中継点C
@@ -2863,8 +2882,10 @@ def _resolve_goal_segment(current, all_gates, all_posts, prev_gate, gate_signs):
         if _segment_result_length(via_lane) + 1e-6 < _segment_result_length(direct):
             return via_lane
         return direct
+    # strict_only: 安全な候補が作れないときは、作れないこと(RuntimeError)を、そのまま返す。
     to_lane = _resolve_top_level_segment(
-        current, lane, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs)
+        current, lane, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs,
+        strict_safe=strict_only)
     return list(to_lane) + [(goal, None)]
 
 
@@ -3068,6 +3089,28 @@ def _route_turn_sum_deg(waypoints, start_heading_deg=config.START_HEADING_DEG,
     )
 
 
+def _route_min_arm_body_clearance(waypoints, labels, all_posts):
+    """各ゲートのentryへ向かう区間(直前のexit、またはスタートから、そのentryまで)の全ての直進について、
+    そのゲート自身のT字パーツと車体との最短クリアランスを返す(_segment_body_clearance、最小値)。
+    経路が、entryへの最後の直線だけでなく、その手前の直線も、自分のゲートのT字パーツに近づいていないかを見る。
+    """
+    worst = float("inf")
+    stage_start = 0
+    for i, label in enumerate(labels):
+        if not label:
+            continue
+        if label.endswith("-entry"):
+            color = label.split("-")[1]
+            arm_posts = [p for p in all_posts
+                         if getattr(p, "color", None) == color and (p.arm_dir[0] or p.arm_dir[1])]
+            for k in range(stage_start, i):
+                for p in arm_posts:
+                    worst = min(worst, _segment_body_clearance(waypoints[k], waypoints[k + 1], p))
+        elif label.endswith("-exit"):
+            stage_start = i
+    return worst
+
+
 def plan_route_with_anchors(gates_by_color, laps=None):
     """plan_route()と同じ経路構築を行うが、各waypointのアンカー情報も返す
     (テスト・検証コードがverify_straight_clearanceにanchorsを渡して、
@@ -3120,6 +3163,7 @@ def plan_route_with_anchors(gates_by_color, laps=None):
     all_gates = list(gates_by_color.values())
 
     best = None  # (is_valid, violation_count, score, waypoints, anchors, labels, true_points)
+    all_candidates = []
     _ARM_SEARCH_CACHE.clear()
     for combo in itertools.product((1.0, -1.0), repeat=len(colors)):
         color_signs = dict(zip(colors, combo))
@@ -3160,9 +3204,23 @@ def plan_route_with_anchors(gates_by_color, laps=None):
         candidate = (is_valid, -violation_count, completed_laps, -score, waypoints, anchors, labels, true_points)
         if best is None or candidate[:4] > best[:4]:
             best = candidate
+        arm_ok = _route_min_arm_body_clearance(waypoints, labels, all_posts) >= config.ARM_BODY_CLEARANCE_MIN_CM - 1e-9
+        all_candidates.append(candidate + (arm_ok, dist))
 
     if best is None:
         raise RuntimeError("どの侵入側の組み合わせでも経路を構築できませんでした")
+
+    # 2026-09-22: 最良の組み合わせが、どこかのゲートで、自分のT字パーツへの余裕(3cm)を満たしていないとき、
+    # 同じ安全性・周回数の組み合わせのうち、全てのゲートで余裕を満たすものが、
+    # 増える長さ(スコアの差)ARM_SIGN_PREFERENCE_BUDGET_CM以内にあれば、そちらを使う。
+    if config.ARM_SIGN_PREFERENCE_BUDGET_CM > 0:
+        best_entry = next(c for c in all_candidates if c[:8] == best)
+        if not best_entry[8]:
+            # 増える長さは、スコア(旋回のコストを含む)ではなく、実際の距離で比べる。
+            same_safety = [c for c in all_candidates
+                           if c[8] and c[:3] == best[:3] and c[9] <= best_entry[9] + config.ARM_SIGN_PREFERENCE_BUDGET_CM]
+            if same_safety:
+                best = max(same_safety, key=lambda c: c[3])[:8]
 
     _, _, _, _, waypoints, anchors, labels, true_points = best
 
