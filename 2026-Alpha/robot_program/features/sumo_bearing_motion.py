@@ -3,7 +3,9 @@
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 
+from ..behaviours.encoder_spin import EncoderSpin
 from ..behaviours.gyro_drive import RunByGyro, SpinAround
+from ..gyro_scale import ensure_scaled_gyro
 from ..runtime import runtime
 from ..types import HeadingType
 from .sumo_bearing import choose_search_bearing, normalize_bearing
@@ -56,6 +58,23 @@ class SpinToBearing(_BearingTarget, SpinAround):
 
     def update(self):
         if not self.running:
+            self._configure_bearing()
+        result = super().update()
+        if result == Status.SUCCESS:
+            self.logger.info("sumo turn complete bearing=%.1f" % current_bearing(self.context))
+        return result
+
+
+class EncoderSpinToBearing(_BearingTarget, EncoderSpin):
+    # SpinToBearingと同じ引数・同じ方位の求め方で、旋回だけエンコーダ主導+ジャイロ仕上げにしたもの。
+    def __init__(self, name, context, bearing, **kwargs):
+        self.context = context
+        self.bearing = bearing
+        super().__init__(name=name, target=0, target_type=HeadingType.ABSOLUTE, **kwargs)
+
+    def update(self):
+        if not self.running:
+            ensure_scaled_gyro()  # 目標角を補正済みのジャイロで求めるため、先に有効にする
             self._configure_bearing()
         result = super().update()
         if result == Status.SUCCESS:

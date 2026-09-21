@@ -3,7 +3,7 @@
 sample_comment.py(ETラリー用にカスタムしたスタンドアロン版)のSpinAroundByEncoder/
 RunByGyroを、robot_programのruntime経由に移植したもの。共通のgyro_drive.pyの
 SpinAround/RunByGyroとは別クラスで、既存クラスの挙動は変えない。
-ジャイロ値にGYRO_SCALE_FACTORを掛けて「真の角度の推定値」として使う点、旋回を
+ジャイロ値は倍率補正済みの値(robot_program/gyro_scale.pyのScaledGyro。GYRO_SCALE_FACTOR適用済み)を読む点、旋回を
 エンコーダ主導(フェーズ1)+ジャイロ仕上げ(フェーズ2)で行う点が共通版との違い。
 """
 
@@ -15,8 +15,9 @@ from py_trees.common import Status
 from simple_pid import PID
 
 from py_etrobo_util import SymmetricClamper
-from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, GYRO_SCALE_FACTOR, WHEEL_TREAD
+from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, WHEEL_TREAD
 
+from ..gyro_scale import ensure_scaled_gyro
 from ..runtime import runtime
 from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
 from ..types import HeadingType
@@ -62,7 +63,8 @@ class EtRallySpinAroundByEncoder(Behaviour):
                  main_power: int, fine_max_power: int, fine_min_power: int,
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType,
                  fine_tolerance_deg: float = 2.0,
-                 decel_deg: float = 0.0, decel_power: int = 50) -> None:
+                 decel_deg: float = 0.0, decel_power: int = 50,
+                 fine_trim: bool = True) -> None:
         super(EtRallySpinAroundByEncoder, self).__init__(name)
         # 2026-09-20: フェーズ1(全力寄りのmain_power)のまま目標のエンコーダ角度に
         # 到達してブレーキをかけると、慣性で行き過ぎてフェーズ2の仕上げ補正が
@@ -86,6 +88,10 @@ class EtRallySpinAroundByEncoder(Behaviour):
         # 縮まなければ別の要因(キャスター等)を疑う。切り分けが終わったら
         # 2.0に戻すこと。
         self.fine_tolerance_deg = fine_tolerance_deg
+        # fine_trim=False: フェーズ1(エンコーダで回して停止)だけで終える。ジャイロでの仕上げ(行き過ぎた
+        # ときに低出力で細かく動かして戻す動き)をしない。ボトルを先端で運んでいる区間で、
+        # 小刻みな動きでボトルが離れないようにするためのスイッチ。
+        self.fine_trim = fine_trim
         self.fine_clamper = SymmetricClamper(fine_min_power, fine_max_power)  # フェーズ2(仕上げ)専用
         # フェーズ1終了直後はブレーキで完全停止しているため、fine_min_power程度の
         # 弱い力では静止摩擦に勝てず、まったく動かないまま(=角度誤差が2度未満に
@@ -98,10 +104,11 @@ class EtRallySpinAroundByEncoder(Behaviour):
 
     def update(self) -> Status:
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
-        # 2026-09-14: ジャイロの生値は実際の回転量を約0.6%過少に報告していると
-        # 判明した(py_etrobo_util/plotter.pyのGYRO_SCALE_FACTOR参照)ため、
-        # 全ての箇所でここを掛けた値を「真の角度の推定値」として使う。
-        current_heading = (-1) * runtime.course * runtime.gyro_sensor.get_angle() * GYRO_SCALE_FACTOR
+        # ジャイロの倍率補正(GYRO_SCALE_FACTOR)は、読み取りの窓口(gyro_scale.ScaledGyro)で適用済み。
+        # 単独で使われる場合(補正がまだ有効でない場合)も、ここで有効にして必ず補正済みの値を読む。
+        if not self.running:
+            ensure_scaled_gyro()
+        current_heading = (-1) * runtime.course * runtime.gyro_sensor.get_angle()
         if not self.running:
             if self.target_type == HeadingType.RELATIVE:
                 self.target_heading = current_heading + self.target
@@ -141,6 +148,12 @@ class EtRallySpinAroundByEncoder(Behaviour):
                 runtime.left_motor.set_brake(True)
 
             if self.right_done and self.left_done:
+                if not self.fine_trim:
+                    # 仕上げなし: 停止したまま終了する。残った誤差はログにだけ残す。
+                    residual = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
+                    self.logger.info("%+06d %s.encoder-spin ended without fine-trim at heading=%d, residual=%+.1f" % (
+                        runtime.plotter.get_distance(), self.__class__.__name__, current_heading, residual))
+                    return Status.SUCCESS
                 self.phase = 2
                 self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL)
                 self.stall_ticks = 0
@@ -201,6 +214,15 @@ class EtRallySpinAroundByEncoder(Behaviour):
         return Status.RUNNING
 
 
+    def terminate(self, new_status: Status) -> None:
+        # 中断・完了時にモーター出力を残さず、次の実行(再入)に備えて状態を戻す。
+        if runtime.right_motor is not None:
+            runtime.right_motor.set_power(0)
+        if runtime.left_motor is not None:
+            runtime.left_motor.set_power(0)
+        self.running = False
+
+
 class EtRallyRunByGyro(Behaviour):
     """床の線を見ず、ジャイロセンサーの角度だけを頼りに指定の方角へ向かって真っ直ぐ直進するノード"""
     def __init__(self, name: str, target: int, power: int,
@@ -238,7 +260,9 @@ class EtRallyRunByGyro(Behaviour):
         # 当時は他の較正(キャスター引きずり補正・タイヤ径較正)とも変更が重なって
         # いた可能性があるため、これ単体を切り分けて再検証する
         # (2026-09-19、et_rally_planner側の解析に基づき再度有効化)。
-        current_heading = (-1) * runtime.course * runtime.gyro_sensor.get_angle() * GYRO_SCALE_FACTOR
+        if not self.running:
+            ensure_scaled_gyro()
+        current_heading = (-1) * runtime.course * runtime.gyro_sensor.get_angle()
         # 1秒ごとに現在の方角をログに吐き出してデバッグしやすくする
         if self.last_log_time == None or time.time() - self.last_log_time >= 1.0:
             self.logger.info("%+06d %s.current heading=%d" % (runtime.plotter.get_distance(), self.__class__.__name__, current_heading))

@@ -5,6 +5,7 @@ import statistics
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 
 from ..behaviours.conditions import IsDistanceEarned
+from ..behaviours.encoder_spin import EncoderSpin
 from ..behaviours.gyro_drive import RunByGyro, SpinAround
 from ..behaviours.motor_control import StopNow
 from ..sumo_types import SumoSonarSample
@@ -420,7 +421,7 @@ def _spin(
     # 探索の短い段階旋回だけ出力を上書きできるようにし、大旋回と正対旋回への影響を防ぐ。
     effective_min_power = settings.turn_min_power if min_power is None else min_power
     effective_max_power = settings.turn_max_power if max_power is None else max_power
-    return SpinAround(
+    return EncoderSpin(
         name=name,
         target=target,
         max_power=effective_max_power,

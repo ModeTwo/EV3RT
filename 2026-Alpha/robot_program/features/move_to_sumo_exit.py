@@ -5,7 +5,7 @@ import math
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 
 from ..behaviours.conditions import IsDistanceEarned,IsColorDetected
-from .sumo_bearing_motion import RunAtBearing, SpinToBearing, current_bearing
+from .sumo_bearing_motion import RunAtBearing, EncoderSpinToBearing as SpinToBearing, current_bearing
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.motor_control import RunAsInstructed, StopNow
 
