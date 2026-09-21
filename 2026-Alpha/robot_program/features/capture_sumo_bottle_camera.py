@@ -18,9 +18,8 @@ def _normalize_heading(angle):
 
 class CaptureSumoBottleWithCamera(Behaviour):
     ACQUIRE = 0
-    # 初回検知した黒ボトル方向へ150mm接近
+    SEARCH_ADVANCE = 6
     PRE_APPROACH = 1
-    # 再確認・必要な補正後に残り350mm走行
     APPROACH = 2
     ALIGN = 3
     SETTLE = 4
@@ -46,6 +45,12 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.initial_alignment = False
         self.gyro_drive = None
         self.pre_approach_distance = None
+        self.search_advance_drive = None
+        self.search_advance_distance = None
+
+        # 150mm前進を実施済みか
+        # Trueになった後は、再び3秒経過しても追加前進しない
+        self.search_advance_done = False
         self.pid = None
 
     def initialise(self):
@@ -72,6 +77,9 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.initial_alignment = False
         self.gyro_drive = None
         self.pre_approach_distance = None
+        self.search_advance_drive = None
+        self.search_advance_distance = None
+        self.search_advance_done = False
         self.pid = PID(
             self.settings.camera_steer_gain,
             0.0,
@@ -258,6 +266,46 @@ class CaptureSumoBottleWithCamera(Behaviour):
         # 最初の1tick
         self.gyro_drive.tick_once()
 
+    def _start_search_advance(self):
+        """
+        初回の黒ボトル探索で3秒間検知できなかった場合、
+        現在向いている方向へRunByGyroで150mm前進する。
+        """
+
+        raw = runtime.gyro_sensor.get_angle()
+
+        # 現在向いている方向を維持して直進する
+        current_heading = -runtime.course * raw
+
+        self.search_advance_drive = RunByGyro(
+            name="run 150mm after black bottle search timeout",
+            target=current_heading,
+            power=self.settings.retry_advance_power,
+            pid_p=self.settings.drive_pid_p,
+            pid_i=self.settings.drive_pid_i,
+            pid_d=self.settings.drive_pid_d,
+            target_type=HeadingType.ABSOLUTE,
+        )
+
+        self.search_advance_distance = IsDistanceEarned(
+            name="150mm after black bottle search timeout",
+            delta_dist=150.0,
+        )
+
+        # この地点から150mmを計測
+        self.search_advance_distance.update()
+
+        self.phase = self.SEARCH_ADVANCE
+        self.search_advance_done = True
+
+        self.logger.info(
+            "Black bottle not detected for 3.0s; "
+            "starting 150mm search advance heading=%.1f"
+            % current_heading
+        )
+
+        self.search_advance_drive.tick_once()
+
     def _start_pre_approach(self):
         """
         初回黒ボトル検知で確定した方位へ
@@ -304,6 +352,45 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.gyro_drive.tick_once()
 
     def update(self):
+        # ------------------------------------------------------
+        # 初回探索で3秒未検出だった場合の150mm前進
+        # ------------------------------------------------------
+        if self.phase == self.SEARCH_ADVANCE:
+
+            # 150mm到達
+            if self.search_advance_distance.update() == Status.SUCCESS:
+
+                if self.search_advance_drive is not None:
+                    self.search_advance_drive.stop(Status.INVALID)
+
+                self._stop_motors()
+        
+                # 150mm前進後、再び黒ボトル探索へ戻る
+                self.phase = self.ACQUIRE
+        
+                # 連続検知カウントをリセット
+                self.confirmed_frames = 0
+
+                # ここから再探索開始
+                self.started_at = time.monotonic()
+
+                self.logger.info(
+                    "150mm search advance completed; "
+                    "restarting black bottle acquisition"
+                )
+
+                return Status.RUNNING
+
+            # 150mm到達までRunByGyroを継続
+            if self.search_advance_drive is not None:
+                self.search_advance_drive.tick_once()
+
+                if self.search_advance_drive.status == Status.FAILURE:
+                    self._stop_motors()
+                    return Status.FAILURE
+
+            return Status.RUNNING
+
         # ------------------------------------------------------
         # 初回黒ボトル検知後、その方向へ150mm接近
         # ------------------------------------------------------
@@ -566,12 +653,39 @@ class CaptureSumoBottleWithCamera(Behaviour):
 
         # 実行単位1：静止したまま黒テープを連続した新規フレームで確認する。
         if self.phase == self.ACQUIRE:
-            self.confirmed_frames = self.confirmed_frames + 1 if valid else 0
+            # --------------------------------------------------
+            # 黒ボトルを3秒間確定できなかった場合
+            # → 150mm前進してから再探索する
+            #
+            # search_advance_done=Trueなら、
+            # 150mm前進はすでに実施済みなので再実行しない。
+            # --------------------------------------------------
+            if (
+                not self.search_advance_done
+                and time.monotonic() - self.started_at >= 3.0
+            ):
+                self.confirmed_frames = 0
+                self._stop_motors()
+
+                self.logger.info(
+            "Black bottle acquisition timeout after 3.0s"
+                )
+
+                self._start_search_advance()
+                return Status.RUNNING
+
+            # 黒ボトルの連続検知
+            self.confirmed_frames = (
+                self.confirmed_frames + 1
+                if valid
+                else 0
+            )
+
             if self.confirmed_frames < self.settings.camera_confirm_frames:
                 return Status.RUNNING
             # ======================================================
             # 黒ボトルの位置から退避ルート①/②を決定
-            # ======================================================
+            # =====================================================
 
             frame_width = 320
 

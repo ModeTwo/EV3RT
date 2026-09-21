@@ -43,7 +43,7 @@ def build_tantou_tree(context, config, include_exit=True):
         context=context,
         name="go_to_qr_drive",
         target=0,
-        power=50,
+        power=60,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
@@ -294,7 +294,7 @@ def build_tantou_tree(context, config, include_exit=True):
         IsDistanceEarned(
             name="distance_after_green",
             #delta_dist=settings.to_after_hint1_green_pass_mm  # 緑通過後320mm
-            delta_dist=200
+            delta_dist=165
         ),
     ])
 
@@ -476,7 +476,7 @@ def build_tantou_tree(context, config, include_exit=True):
     
     black_distance_limit = IsDistanceEarned(
         name="black_distance_limit",
-        delta_dist=250
+        delta_dist=200
     )
     
     black_or_550.add_children([
@@ -521,7 +521,7 @@ def build_tantou_tree(context, config, include_exit=True):
     trace_650 = TraceLine(
         name="trace_650",
         target=TRACELINE_TARGET_V,
-        power=60,
+        power=50,
         pid_p=0.65,
         pid_i=0.000001,
         pid_d=0.045,
@@ -719,7 +719,7 @@ def build_tantou_tree(context, config, include_exit=True):
     
     black_distance_limit_2 = IsDistanceEarned(
         name="black_distance_limit_2",
-        delta_dist=200
+        delta_dist=140
     )
     
     black_or_200.add_children([

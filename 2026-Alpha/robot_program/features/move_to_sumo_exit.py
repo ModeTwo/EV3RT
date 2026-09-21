@@ -33,7 +33,7 @@ class PlanGarageReturn(Behaviour):
         # 退避ルート➀：
         # 黒ボトルを押し出した方向から反時計回り45°の方位
         self.escape_route_1_bearing = (
-            pushed - 45.0
+            pushed - 40.0
         ) % 360.0
         relative = (-runtime.course * (pushed - self.settings.entry_bearing_deg)) % 360.0
         # 押し出した方向に対してコース外側へ90度向け、
@@ -519,11 +519,11 @@ def build_move_to_sumo_exit(context, config):
         # 黒ラインを検知したら終了
         escape_route_2_line_detector,
 
-        # 安全用：黒ラインを検知できなかった場合の最大走行距離
-        IsDistanceEarned(
-            name="sumo escape route 2 safety distance",
-            delta_dist=settings.garage_line_search_max_distance_mm,
-        ),
+        # # 安全用：黒ラインを検知できなかった場合の最大走行距離
+        # IsDistanceEarned(
+        #     name="sumo escape route 2 safety distance",
+        #     delta_dist=settings.garage_line_search_max_distance_mm,
+        # ),
     ])
 
     # ======================================================
@@ -562,11 +562,11 @@ def build_move_to_sumo_exit(context, config):
         # 黒ラインを検知したらParallelを終了する。
         escape_route_1_line_detector,
 
-        # 安全用：黒ラインを見つけられなかった場合の最大走行距離。
-        IsDistanceEarned(
-            name="sumo escape route 1 safety distance",
-            delta_dist=settings.garage_line_search_max_distance_mm,
-        ),
+        # # 安全用：黒ラインを見つけられなかった場合の最大走行距離。
+        # IsDistanceEarned(
+        #     name="sumo escape route 1 safety distance",
+        #     delta_dist=settings.garage_line_search_max_distance_mm,
+        # ),
     ])
 
     escape_route_1 = Sequence(

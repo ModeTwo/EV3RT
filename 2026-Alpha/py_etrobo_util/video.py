@@ -800,7 +800,7 @@ class Video(object):
             mask = m if mask is None else cv2.bitwise_or(mask, m)
         # ET相撲の黒ボトルのみ、画面上部40%を検知対象外にする
         if color == BottleColor.BLACK:
-            mask[:int(FRAME_HEIGHT * 0.40), :] = 0
+            mask[:int(FRAME_HEIGHT * 0.30), :] = 0
         return mask
 
     def get_bottle_stamped(self):

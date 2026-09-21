@@ -15,7 +15,7 @@ class IntegrationSettings:
     at_gate_forward_mm: float = 100.0
     at_recognition_reverse_mm: float = 200.0
     # REの青検知後、色認識を並行して行うカラートレース距離。
-    at_to_transfer_trace_mm: float = 400.0
+    at_to_transfer_trace_mm: float = 300.0
     at_marker_straight_mm: float = 293.0  # 青検知からグレー丸出口まで絶対0度
     # TOが引渡し後に黒線へ接近する区間の距離上限。受領tantou4準拠。
     to_first_black_limit_mm: float = 550.0
