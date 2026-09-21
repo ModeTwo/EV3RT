@@ -8,6 +8,7 @@ from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, TIRE_DIAMETER
 
 from ..behaviours.device_control import ArmDirection, ArmUpDownFull
 from ..features.execute_strategy import build_execute_strategy
+from ..behaviours.motor_control import StopNow
 from ..features.receive_strategy import build_receive_strategy
 from ..gyro_scale import EnableGyroScale
 from ..runtime import runtime
@@ -43,6 +44,9 @@ def build_et_rally_phase(context, config):
             "Unknown ET rally strategy source: " + str(config.et_rally_strategy_source)
         )
     children.append(build_execute_strategy(context, config))
+    # ET用の直進は、区間が連続するゲート通過中に止まらないよう終了時のブレーキを持たない。
+    # 最後の区間の後は、ここで明示的に停止する(単体テストでは、この後は何も動かさないため必須)。
+    children.append(StopNow(name="et_rally final stop"))
     children.append(SetTireDiameter("et_rally tire diameter restore", TIRE_DIAMETER))
     root.add_children(children)
     return root
