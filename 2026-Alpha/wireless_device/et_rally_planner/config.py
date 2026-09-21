@@ -213,6 +213,26 @@ ROBOT_REAR_OVERHANG_FOR_CLEARANCE_CM = 0.0
 # 2026-09-20: target_gate以外のゲートのT字パーツにも、車体前方のクリアランスを
 # ARM_BODY_CLEARANCE_MIN_CM以上確保する候補を優先する(rule_route._resolve_top_level_segment)。
 # ARM_OTHER_GATES_LENGTH_BUDGET_CM: そのために許容する遠回り(最短候補からの増加分、cm)。
+# 2026-09-22: 侵入側(8通り)の選択で、各ゲートのentryへ向かう区間(前のゲートのexitから、そのentryまで)が、
+# そのゲート自身のT字パーツに、車体の側面から ARM_BODY_CLEARANCE_MIN_CM 以上の余裕を持つ組み合わせを、
+# 優先する。ただし、そのために増える経路の長さ(最短の組み合わせからの増加分)が、この値(cm)以内のときだけ。
+# 0以下なら、この優先を行わない(従来と同じ選び方)。
+ARM_SIGN_PREFERENCE_BUDGET_CM = 60.0
+
+# 2026-09-22: ゴールへの最終区間(最後のゲートのexitからゴールまで)の直進が、どの支柱(T字パーツ込み)にも、
+# 物理的な最小距離(rule_route.STRAIGHT_CLEARANCE_CM、半幅+支柱半径)に、この値(cm)を足した距離以上
+# 離れるように、まず試す。その条件で経路が作れなければ、従来の条件(余裕なし)で作る。
+# 0以下なら、この余裕を求めない。
+GOAL_STRAIGHT_EXTRA_MARGIN_CM = 1.0
+
+# 2026-09-22: 「斜め→軸に平行な通路→軸に垂直→軸に沿ってentry」の候補
+# (rule_route._try_diagonal_to_entry_axis の3つ目の形)の探索範囲。
+# CORRIDOR_T_LIST_CM: 通路の、entry軸からの距離(cm)。CORRIDOR_SHIFT_LIST_CM: 通路へ乗る点の、
+# aからの垂線の足に対するずらし量(cm)。CORRIDOR_MAX_CANDIDATES: 安全性の判定に回す最大の候補数。
+CORRIDOR_T_LIST_CM = (14.0, 18.0, 22.0, 26.0, 30.0, 36.0, 44.0)
+CORRIDOR_SHIFT_LIST_CM = (-40.0, -30.0, -20.0, -10.0, 0.0, 10.0, 20.0)
+CORRIDOR_MAX_CANDIDATES = 4
+
 ARM_CLEARANCE_OTHER_GATES = False  # 2026-09-20: 影響が大きい(68%の経路が変わり平均+2.2%)割に効果が小さいため一旦無効
 ARM_BODY_CLEARANCE_MIN_CM = 3.0
 ARM_OTHER_GATES_LENGTH_BUDGET_CM = 60.0
