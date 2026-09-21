@@ -4,6 +4,7 @@ from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 
 from ..behaviours.encoder_spin import EncoderSpin
+from ..behaviours.corrected_run import EtRun
 from ..behaviours.gyro_drive import RunByGyro, SpinAround
 from ..gyro_scale import ensure_scaled_gyro
 from ..runtime import runtime
@@ -82,8 +83,8 @@ class EncoderSpinToBearing(_BearingTarget, EncoderSpin):
         return result
 
 
-class RunAtBearing(_BearingTarget, RunByGyro):
-    # 実際のPID走行は既存RunByGyroへ委譲し、他工程のABSOLUTEの意味を変えない。
+class RunAtBearing(_BearingTarget, EtRun):
+    # 直進はET用(behaviours/corrected_run.py)。方位の求め方は従来のRunAtBearingと同じ。
     def __init__(self, name, context, bearing, **kwargs):
         self.context = context
         self.bearing = bearing
@@ -91,5 +92,6 @@ class RunAtBearing(_BearingTarget, RunByGyro):
 
     def update(self):
         if not self.running:
+            ensure_scaled_gyro()  # 目標角を補正済みのジャイロで求めるため、先に有効にする
             self._configure_bearing()
         return super().update()

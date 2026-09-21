@@ -5,8 +5,8 @@ ETラリーで実績のあるEtRallySpinAroundByEncoder(behaviours/et_rally_driv
 
 fine_trim(ジャイロでの仕上げ)を切り替えられる:
 - fine_trim=True : フェーズ1(エンコーダで回して停止)のあと、残った誤差を低出力で細かく仕上げる(ETラリーと同じ)。
-- fine_trim=False: フェーズ1だけで終える。ボトルを先端で運んでいる区間(ATのキャッチ〜配置)で、
-                   小刻みな動きでボトルが離れないようにする。
+                   ボトルの運搬区間を含め、現在は全工程でこちらを使う。
+- fine_trim=False: フェーズ1だけで終える(仕上げの、行き過ぎを戻す小刻みな動きをしない)。
 """
 
 from py_trees.composites import Sequence
@@ -39,9 +39,9 @@ class EncoderSpin(EtRallySpinAroundByEncoder):
 
 class LocalEncoderSpin(EncoderSpin):
     """TO区間用。TOの目標角(共通ジャイロ座標)をそのまま使う(section_motion.LocalSpinと同じ意味)。
-    TOはボトルを運びながら走るため、既定でfine_trim=False。"""
+    """
 
-    def __init__(self, name, context, target, fine_trim=False, **kwargs):
+    def __init__(self, name, context, target, fine_trim=True, **kwargs):
         self.context, self.local_target = context, target
         super().__init__(name=name, target=target, fine_trim=fine_trim, **kwargs)
 
@@ -73,7 +73,7 @@ class DeliveryEncoderTurn(EncoderSpin):
 
 
 def delivery_encoder_turn(name, context, settings, target, fine_trim=True):
-    """delivery_turn.delivery_turnのエンコーダ版。fine_trim=Falseはボトルを運んでいる区間用。"""
+    """delivery_turn.delivery_turnのエンコーダ版。"""
     root = Sequence(name=name, memory=True)
     root.add_children([
         DeliveryEncoderTurn(name + ' spin', context, target,

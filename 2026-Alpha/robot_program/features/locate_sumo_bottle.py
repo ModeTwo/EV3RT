@@ -6,7 +6,8 @@ from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Par
 
 from ..behaviours.conditions import IsDistanceEarned
 from ..behaviours.encoder_spin import EncoderSpin
-from ..behaviours.gyro_drive import RunByGyro, SpinAround
+from ..behaviours.corrected_run import EtRun as RunByGyro
+from ..behaviours.gyro_drive import SpinAround
 from ..behaviours.motor_control import StopNow
 from ..sumo_types import SumoSonarSample
 

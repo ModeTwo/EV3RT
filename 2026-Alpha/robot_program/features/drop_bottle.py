@@ -4,12 +4,7 @@ from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Par
 from ..behaviours.bottle import MarkBottleDelivered
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.section_motion import DriveDistance, distance_motion
-from ..behaviours.encoder_spin import delivery_encoder_turn
-
-
-def to_turn(name, context, settings, target):
-    # ボトルを運んでいる区間なので、ジャイロでの細かい仕上げはしない(fine_trim=False)。
-    return delivery_encoder_turn(name, context, settings, target, fine_trim=False)
+from ..behaviours.encoder_spin import delivery_encoder_turn as to_turn
 
 
 def build_drop_bottle(context, config):

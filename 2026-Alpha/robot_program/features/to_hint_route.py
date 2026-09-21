@@ -7,8 +7,8 @@ SpinAround/RunByGyroは起動時からの共通方位基準、IsQRDecodedは共�
 添付の角度-90/25/-25は基準を確認できないため採用せず、既存0/115/90を維持。
 """
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
-from ..behaviours.section_motion import LocalDrive as RunByGyro
-# ボトルを運びながらの旋回のため、エンコーダ旋回・仕上げなし(behaviours/encoder_spin.py)
+from ..behaviours.corrected_run import LocalEtRun as RunByGyro
+# 旋回はエンコーダ旋回+ジャイロ仕上げ(behaviours/encoder_spin.py)。直進はET用(behaviours/corrected_run.py)
 from ..behaviours.encoder_spin import LocalEncoderSpin as SpinAround
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.camera_line_trace import RecoverLineByCamera
