@@ -41,7 +41,7 @@ class SpinAround(Behaviour):
         pid_i: float,
         pid_d: float,
         target_type: HeadingType,
-        tolerance: float = 2.0,
+        tolerance: float = 0.5,
     ) -> None:
         super().__init__(name)
         self.target = target

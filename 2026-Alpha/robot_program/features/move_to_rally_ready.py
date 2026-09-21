@@ -6,7 +6,8 @@ from ..behaviours.conditions import IsColorDetected, IsColorPassed
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.motor_control import StopNow
 from ..behaviours.section_motion import distance_motion
-from ..behaviours.delivery_turn import delivery_turn as to_turn
+# ボトルを離した後の旋回なので、エンコーダ旋回+ジャイロ仕上げ(behaviours/encoder_spin.py)
+from ..behaviours.encoder_spin import delivery_encoder_turn as to_turn
 
 
 def _trace_motor(name, settings):

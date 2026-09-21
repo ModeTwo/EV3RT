@@ -40,7 +40,7 @@ def waypoints_to_commands(waypoints, start_heading_deg=config.START_HEADING_DEG,
 
     # 最終姿勢をゴール向きに合わせる
     final_turn = _heading_delta_to_turn_command(heading, goal_heading_deg)
-    if abs(final_turn) > 1e-6:
+    if config.GOAL_FINAL_TURN and abs(final_turn) > 1e-6:
         commands.append(("turn", round(final_turn, 2)))
 
     return commands
@@ -95,7 +95,7 @@ def waypoints_to_plan(waypoints, labels=None, start_heading_deg=config.START_HEA
         })
         heading = segment_heading
 
-    if abs(geo.normalize_deg(goal_heading_deg - heading)) > 1e-6:
+    if config.GOAL_FINAL_TURN and abs(geo.normalize_deg(goal_heading_deg - heading)) > 1e-6:
         steps.append({"type": "turn", "target_heading_deg": shifted(goal_heading_deg), "label": "goal"})
 
     return steps

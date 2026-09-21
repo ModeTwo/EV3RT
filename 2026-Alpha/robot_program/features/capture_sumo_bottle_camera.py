@@ -6,7 +6,7 @@ import math
 from .bt_imports import Behaviour, BottleColor, HeadingType, Parallel, ParallelPolicy, Selector, Sequence, Status, runtime, time
 
 from ..behaviours.conditions import IsDistanceEarned
-from .sumo_bearing_motion import current_bearing, SpinToBearing
+from .sumo_bearing_motion import current_bearing, EncoderSpinToBearing as SpinToBearing
 from ..behaviours.motor_control import StopNow
 from ..timing import CONTROL_INTERVAL_SEC
 

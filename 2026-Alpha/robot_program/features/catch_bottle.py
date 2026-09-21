@@ -1,14 +1,14 @@
 """AT担当の編集箇所。bottle_catch2.pyのコメントとツリー構造を保持。"""
 from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
 from ..behaviours.line_trace import TraceLine
-from ..behaviours.gyro_drive import RunByGyro
+from ..behaviours.corrected_run import BrakeReleasingEtRun
 from ..behaviours.conditions import IsDistanceEarned, IsColorDetected
 from ..behaviours.motor_control import StopNow
 from ..behaviours.detect_bottle_color import DetectBottleColor
 from ..behaviours.handoff import CaptureAtToHandoff
 
 
-class MarkerZeroDrive(RunByGyro):
+class MarkerZeroDrive(BrakeReleasingEtRun):
     # 単体開始時や直前工程の停止ブレーキを解除して走行する。
     def update(self):
         runtime.require('left_motor', 'right_motor')
