@@ -31,7 +31,7 @@ class PlanGarageReturn(Behaviour):
         # 押し出し完了時の方位を保存
         self.push_bearing = pushed
         # 退避ルート➀：
-        # 黒ボトルを押し出した方向から反時計回り45°の方位
+        # 黒ボトルを押し出した方向から反時計回り40°の方位
         self.escape_route_1_bearing = (
             pushed - 40.0
         ) % 360.0
@@ -50,7 +50,7 @@ class PlanGarageReturn(Behaviour):
         self.search_limit_mm = self.settings.garage_line_search_max_distance_mm
 
         # 退避ルート①は新仕様では座標ベースの復帰計算を使用しない。
-        # 押し出し方向から反時計回り45°へ向き、
+        # 押し出し方向から反時計回り40°へ向き、
         # RunByGyroで黒ラインまで直進するため、ここで計画完了とする。
         if self.context.sumo.escape_route == 1:
             self.logger.info(
@@ -489,8 +489,8 @@ def build_move_to_sumo_exit(context, config):
     )
 
     # ======================================================
-    # 退避ルート②：
-    # 45度旋回後、その方位を維持して前進し、
+    # 退避ルート➁：
+    # 40度旋回後、その方位を維持して前進し、
     # 黒ラインを検知したら走行を終了する
     # ======================================================
     escape_route_2_line_detector = DetectDarkGarageLine(
@@ -519,11 +519,6 @@ def build_move_to_sumo_exit(context, config):
         # 黒ラインを検知したら終了
         escape_route_2_line_detector,
 
-        # # 安全用：黒ラインを検知できなかった場合の最大走行距離
-        # IsDistanceEarned(
-        #     name="sumo escape route 2 safety distance",
-        #     delta_dist=settings.garage_line_search_max_distance_mm,
-        # ),
     ])
 
     # ======================================================

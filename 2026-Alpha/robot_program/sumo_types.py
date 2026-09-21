@@ -56,28 +56,6 @@ class SumoSettings:
     entry_bearing_deg: float = 0.0
     # RightではNo.15が鏡像の90度へ変換する。
     ring_bearing_left_deg: float = 270.0
-    # No.15の直前、LAPゲート終了直後の実際の停止位置が当初想定の初期位置から
-    # ズレているため、後退→+90度旋回→前進(黒即停止/青+extra/距離上限)→
-    # 180度旋回で相撲開始位置へ合わせ直す。元はstart_to_lap_gate.py側に
-    # あったが、相撲開始位置への移動という目的から、この開始位置補正として
-    # ここへ移した。絶対方位(0/90/180度)を直接使う旧来のgyro_drive方式で、
-    # このファイルの他の設定と違いRunAtBearing/SpinToBearingの方位抽象は使わない。
-    reposition_backward_distance_mm: float = 330.0
-    reposition_backward_power: int = 80
-    reposition_backward_pid_p: float = 0.8
-    reposition_backward_pid_i: float = 0.0
-    reposition_backward_pid_d: float = 0.02
-    reposition_turn_min_power: int = 60
-    reposition_turn_max_power: int = 60
-    reposition_turn_pid_p: float = 0.2
-    reposition_turn_pid_i: float = 0.005
-    reposition_turn_pid_d: float = 0.03
-    reposition_advance_power: int = 80
-    reposition_advance_pid_p: float = 1.1
-    reposition_advance_pid_i: float = 0.00075
-    reposition_advance_pid_d: float = 0.04
-    reposition_advance_limit_mm: float = 550.0
-    reposition_advance_blue_extra_mm: float = 20.0
     garage_bearing_deg: float = 180.0
     # 現在方位±50度から180度と角度差が大きい候補を選ぶ。
     garage_search_offset_deg: float = 50.0
@@ -133,8 +111,8 @@ class SumoSettings:
     sonar_min_distance_mm: float = 50.0
     sonar_max_distance_mm: float = 800.0
 
-    # 未検出のたびに探索中心へ戻り、100、70、50mmと段階的に近づいて再探索する。
-    retry_advance_distances_mm: tuple = (100.0, 70.0, 50.0)
+    # 未検出のたびに探索中心へ戻り、150、70、50mmと段階的に近づいて再探索する。
+    retry_advance_distances_mm: tuple = (150.0, 70.0, 50.0)
     retry_advance_power: int = 50
 
     # 距離センサーとボトルの間がこの距離になった時、下端アーム内へ捕捉できる想定。
@@ -152,11 +130,11 @@ class SumoSettings:
     garage_avoid_power: int = 50
     # ボトルを押し出した方向から、退避ルート②へ向く角度。
     # Left/Rightの反転はFeature18側でruntime.courseを使って行う。
-    escape_route_2_angle_deg: float = 45.0
+    escape_route_2_angle_deg: float = 40.0
     # 退避ルート②で斜め方向へ走行する距離。
     escape_route_2_distance_mm: float = 200.0
     # 退避ルート②で走行するときのPWM。
-    escape_route_2_power: int = 50 
+    escape_route_2_power: int = 60 
     # 離脱後はガレージ側へ旋回してから、その絶対方位を維持して黒ラインまで直進する。
     garage_return_drive_power: int = 60
     # 復帰用黒ラインは生の明度で判定し、未検出時は規定距離で安全停止する。

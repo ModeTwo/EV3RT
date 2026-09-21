@@ -18,16 +18,49 @@ class MarkerZeroDrive(BrakeReleasingEtRun):
 
 
 class RequireBottleColor(Behaviour):
+    """
+    AT工程終了時にボトル色を確認する。
+
+    ・RED / BLUE / YELLOW を正常に検知済み
+        → その色をそのまま使用
+
+    ・最後までボトル色を検知できなかった
+        → BLUEとして扱う
+    """
+
     def __init__(self, context):
         super().__init__('AT require recognised bottle color')
         self.context = context
 
     def update(self):
+
+        # ------------------------------------------
+        # 正常にボトル色を検知できている場合
+        # → 検知した色をそのまま使用
+        # ------------------------------------------
         if self.context.bottle_color in (
-                BottleColor.RED.value, BottleColor.BLUE.value, BottleColor.YELLOW.value):
+            BottleColor.RED.value,
+            BottleColor.BLUE.value,
+            BottleColor.YELLOW.value,
+        ):
+            self.logger.info(
+                "AT bottle color confirmed: %s"
+                % self.context.bottle_color
+            )
             return Status.SUCCESS
-        self.logger.error('AT stopped at distance limit without a recognised bottle color')
-        return Status.FAILURE
+
+        # ------------------------------------------
+        # ボトル色を検知できなかった場合
+        # → BLUEとして扱う
+        # ------------------------------------------
+        self.context.bottle_color = BottleColor.BLUE.value
+
+        self.logger.warning(
+            "AT bottle color was not detected; "
+            "defaulting to BLUE"
+        )
+
+        return Status.SUCCESS
 
 
 class IsDistanceReached(IsDistanceEarned):
