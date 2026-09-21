@@ -2829,9 +2829,12 @@ def _try_diagonal_to_entry_axis(a, b, all_gates, all_posts, target_gate):
 def _resolve_goal_segment(current, all_gates, all_posts, prev_gate, gate_signs):
     """最後のゲートの退出点からゴールへの区間を作る。
 
-    通常の候補が進入禁止エリアに入らなければ、それをそのまま使う。入る(または作れない)ときは、
-    中継点C(config.KEEP_OUT_GOAL_LANE_POINT_CM)まで通常の探索で進み、Cからゴールへ直進する
-    (Cから先はゴール側の制限のない範囲で、支柱もない)。
+    ゴールへ直接向かう通常の候補(進入禁止エリアに入らないもの)と、中継点C
+    (config.KEEP_OUT_GOAL_LANE_POINT_CM)まで通常の探索で進み、Cからゴールへ直進する候補
+    (Cから先はゴール側の制限のない範囲で、支柱もない)を、両方作り、短いほうを使う。
+    2026-09-22: 従来は、直接の候補が進入禁止エリアに入らなければ、Cを経由する候補と比べず、
+    そのまま使っていた。そのため、直接の候補が大回り(例: 他のゲートを通って、遠い場所から長い
+    斜めでゴールへ向かう)になる配置でも、それが選ばれていた。
     """
     goal = config.GOAL_POS_CM
     direct = None
@@ -2841,9 +2844,25 @@ def _resolve_goal_segment(current, all_gates, all_posts, prev_gate, gate_signs):
             strict_safe=True)
     except RuntimeError:
         direct = None
-    if direct is not None and _candidate_keepout_safe(direct):
-        return direct
+    if direct is not None and not _candidate_keepout_safe(direct):
+        direct = None
     lane = config.KEEP_OUT_GOAL_LANE_POINT_CM
+    if direct is not None:
+        # Cを経由する候補は、どうやっても「現在地→C→ゴール」の直線距離より短くならない。
+        # それが、直接の候補以上なら、比べる必要がない(計算時間を増やさないため)。
+        if (geo.distance(current, lane) + geo.distance(lane, goal) >= _segment_result_length(direct) - 1e-6):
+            return direct
+        # Cを経由する候補は、安全な候補が作れたときだけ比べる(作れなければ、直接の候補を使う)。
+        try:
+            to_lane = _resolve_top_level_segment(
+                current, lane, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs,
+                strict_safe=True)
+        except RuntimeError:
+            return direct
+        via_lane = list(to_lane) + [(goal, None)]
+        if _segment_result_length(via_lane) + 1e-6 < _segment_result_length(direct):
+            return via_lane
+        return direct
     to_lane = _resolve_top_level_segment(
         current, lane, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs)
     return list(to_lane) + [(goal, None)]
