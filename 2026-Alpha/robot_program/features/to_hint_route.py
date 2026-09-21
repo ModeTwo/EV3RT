@@ -52,7 +52,7 @@ def build_tantou_tree(context, config, include_exit=True):
     
     limit_qr = IsDistanceEarned(
         name="limit_qr",
-        delta_dist=50
+        delta_dist=100
     )
     
     go_to_qr.add_children([
@@ -63,6 +63,10 @@ def build_tantou_tree(context, config, include_exit=True):
 
     turn_left_55 = Sequence(
         name="turn_left_55",
+        memory=True
+    )
+    turn_left_90 = Sequence(
+        name="turn_left_90",
         memory=True
     )
 
@@ -122,6 +126,72 @@ def build_tantou_tree(context, config, include_exit=True):
         SpinAround(
             context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="left 55",
+            target=45,
+            max_power=SPIN_MAX_POWER,
+            min_power=SPIN_MIN_POWER,
+            pid_p=0.2,
+            pid_i=0.005,
+            pid_d=0.03,
+            target_type=HeadingType.ABSOLUTE
+        ),
+
+        #IsTimePassed(name="wait_after_spin", delta_time=0.05),
+
+        StopNow(
+            name="stop_after_left_e"
+        ),
+
+        IsTimePassed(
+            name="wait_left_e",
+            delta_time=0.2
+        ),
+    ])
+
+    # ========================================================
+    # 2. 黒線まで直進
+    #
+    # 走行と黒線検出を同時に実行する。
+    #
+    # ・黒線を検出
+    # または
+    # ・600mm到達
+    #
+    # のどちらかで終了。
+    # ========================================================
+
+    go_to_black_45 = Parallel(
+        name="go_to_black",
+        policy=ParallelPolicy.SuccessOnOne()
+    )    
+    go_to_black_45.add_children([
+        RunByGyro(
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            name="run_to_black",
+            target=45,
+            power=55,
+            pid_p=1.1,
+            pid_i=0.00075,
+            pid_d=0.04,
+            target_type=HeadingType.ABSOLUTE
+        ),
+
+        #IsColorDetected(
+         #   name="detect_black",
+         #   color=Color.BLACK
+        #),
+
+        IsDistanceEarned(
+            name="black_distance_limit",
+            delta_dist=50  # tantou4: 550
+        ),
+       # ResetDevice(name="device_reset"),
+    ])
+
+    turn_left_90.add_children([
+        # 【統合差分】ジャイロをリセットせず、起動時からの共通方位基準を維持する。
+        SpinAround(
+            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            name="left 55",
             target=90,
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
@@ -155,12 +225,11 @@ def build_tantou_tree(context, config, include_exit=True):
     # のどちらかで終了。
     # ========================================================
 
-    go_to_black = Parallel(
+    go_to_black_90 = Parallel(
         name="go_to_black",
         policy=ParallelPolicy.SuccessOnOne()
-    )
-
-    go_to_black.add_children([
+    )    
+    go_to_black_90.add_children([
         RunByGyro(
             context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="run_to_black",
@@ -179,7 +248,7 @@ def build_tantou_tree(context, config, include_exit=True):
 
         IsDistanceEarned(
             name="black_distance_limit",
-            delta_dist=settings.to_first_black_limit_mm  # tantou4: 550
+            delta_dist=535  # tantou4: 550
         ),
        # ResetDevice(name="device_reset"),
     ])
@@ -456,7 +525,20 @@ def build_tantou_tree(context, config, include_exit=True):
         name="black_or_550",
         policy=ParallelPolicy.SuccessOnOne()
     )
-    
+    non_black_run = Parallel(
+        name="non_black_run",
+        policy=ParallelPolicy.SuccessOnOne()
+    )   
+    non_run_to_black = RunByGyro(
+        context=context,
+        name="run_to_black",
+        target=45,
+        power=50,
+        pid_p=1.1,
+        pid_i=0.00075,
+        pid_d=0.04,
+        target_type=HeadingType.ABSOLUTE
+    ) 
     run_to_black = RunByGyro(
         context=context,
         name="run_to_black",
@@ -471,18 +553,25 @@ def build_tantou_tree(context, config, include_exit=True):
     detect_black = IsBlackDetected(
         name="detect_black",
         black_threshold=settings.to_exit_black_v,
-        required_frames=25
+        required_frames=2
     )
     
     black_distance_limit = IsDistanceEarned(
         name="black_distance_limit",
         delta_dist=200
     )
-    
+    non_black_distance_limit = IsDistanceEarned(
+            name="non_black_distance_limit",
+            delta_dist=50
+        )
+    non_black_run.add_children([
+        non_run_to_black,
+        non_black_distance_limit,
+    ])
     black_or_550.add_children([
         run_to_black,
         detect_black,
-        black_distance_limit,
+        # black_distance_limit,
     ])
 
     # ==========================================
@@ -539,6 +628,7 @@ def build_tantou_tree(context, config, include_exit=True):
     )
 
     line_trace_120.add_children([
+        non_black_run,
         black_or_550,
         turn_to_90_before_trace,
         stop_after_turn_to_90,
@@ -694,7 +784,32 @@ def build_tantou_tree(context, config, include_exit=True):
     # ==========================================
     # ① 黒線検知 OR 200mm走行
     # ==========================================
+    black_or_50 = Parallel(
+        name="black_or_50",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
     
+    run_to_black_2_first = RunByGyro(
+        context=context,
+        name="run_to_black_2_first",
+        target=115,
+        power=50,
+        pid_p=1.1,
+        pid_i=0.00075,
+        pid_d=0.04,
+        target_type=HeadingType.ABSOLUTE
+    )
+    
+    black_distance_limit_2 = IsDistanceEarned(
+        name="black_distance_limit_2",
+        delta_dist=50
+    )
+    
+    black_or_50.add_children([
+        run_to_black_2_first,
+        black_distance_limit_2,
+    ])
+
     black_or_200 = Parallel(
         name="black_or_200",
         policy=ParallelPolicy.SuccessOnOne()
@@ -714,18 +829,18 @@ def build_tantou_tree(context, config, include_exit=True):
     detect_black_2 = IsBlackDetected(
         name="detect_black_2",
         black_threshold=settings.to_exit_black_v,
-        required_frames=25
+        required_frames=2
     )
     
-    black_distance_limit_2 = IsDistanceEarned(
-        name="black_distance_limit_2",
-        delta_dist=140
-    )
+    # black_distance_limit_2 = IsDistanceEarned(
+    #     name="black_distance_limit_2",
+    #     delta_dist=140
+    # )
     
     black_or_200.add_children([
         run_to_black_2,
         detect_black_2,
-        black_distance_limit_2,
+        # black_distance_limit_2,
     ])
 
     # ==========================================
@@ -796,6 +911,7 @@ def build_tantou_tree(context, config, include_exit=True):
     )
 
     line_trace_last.add_children([
+        black_or_50,
         black_or_200,
         turn_to_180_before_trace,
         stop_after_turn_to_180,
@@ -850,7 +966,9 @@ def build_tantou_tree(context, config, include_exit=True):
         PrepareHintCamera(name="prepare hint1 camera"),
         go_to_qr,
         turn_left_55,
-        go_to_black,
+        go_to_black_45,
+        turn_left_90,
+        go_to_black_90,
         turn_right_125,
         trace_to_qr1,
         stop_at_qr1,
