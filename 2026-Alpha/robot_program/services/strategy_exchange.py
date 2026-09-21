@@ -16,7 +16,7 @@ LOG = logging.getLogger(__name__)
 
 
 class StrategyExchange:
-    def __init__(self, host="0.0.0.0", port=50000, timeout=5.0, retry_interval=2.0):
+    def __init__(self, host="0.0.0.0", port=50000, timeout=20.0, retry_interval=2.0):
         self.host, self.port = host, port
         self.timeout, self.retry_interval = timeout, retry_interval
         self.mission_id = secrets.randbits(32)

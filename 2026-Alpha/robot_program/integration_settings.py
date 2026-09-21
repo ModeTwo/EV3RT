@@ -24,7 +24,7 @@ class IntegrationSettings:
     # 次工程(90度旋回→カメラトレース)へ進む(実機未校正)。
     to_after_hint1_green_pass_mm: float = 320.0
     to_after_hint1_safety_limit_mm: float = 320.0
-    to_hint2_trace_mm: float = 1200.0  # 受領値。終了判定は現行の投影距離を維持
+    to_hint2_trace_mm: float = 1250.0  # 受領値。終了判定は現行の投影距離を維持
     # 左90度旋回後、色センサーtrace_120へ渡す前にカメラでライン中央へ寄せる。
     # LAP前のRecoverLineByCamera(config.start_lap_camera_*)と同じ値を初期値として流用。実機未校正。
     to_after_hint1_camera_power: int = 50
