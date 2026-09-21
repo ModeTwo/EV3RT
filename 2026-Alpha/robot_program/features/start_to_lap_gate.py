@@ -135,7 +135,7 @@ def build_start_to_lap_gate(context, config):
             pid_i=config.start_lap_pid_i,
             pid_d=config.start_lap_pid_d,
             target_type=HeadingType.RELATIVE,
-            distance_limit_mm= 5260.540, #line_trace_start_mm,
+            distance_limit_mm= 5290.540, #line_trace_start_mm,
             feedforward_gain=config.start_lap_feedforward_gain,
             wheel_tread_mm=config.start_lap_wheel_tread_mm,
             cross_track_lookahead_mm=config.start_lap_cross_track_lookahead_mm,
@@ -218,7 +218,7 @@ def build_start_to_lap_gate(context, config):
 
         return root
     else:
-        distance_limit_mm = 5160.540 #lap_gate_mm + LAP_PASS_MARGIN_MM
+        distance_limit_mm = 5290.540 #lap_gate_mm + LAP_PASS_MARGIN_MM
 
     # 3. devRE完成版と同じく、LAPまで一つのRunByGyroで走る。
     #    heading_atに括弧を付けず、距離から目標方位を得る関数として渡す。

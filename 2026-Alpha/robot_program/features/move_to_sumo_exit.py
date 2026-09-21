@@ -557,11 +557,11 @@ def build_move_to_sumo_exit(context, config):
         # 黒ラインを検知したらParallelを終了する。
         escape_route_1_line_detector,
 
-        # 安全用：黒ラインを見つけられなかった場合の最大走行距離。
-        IsDistanceEarned(
-            name="sumo escape route 1 safety distance",
-            delta_dist=settings.garage_line_search_max_distance_mm,
-        ),
+        # # 安全用：黒ラインを見つけられなかった場合の最大走行距離。
+        # IsDistanceEarned(
+        #     name="sumo escape route 1 safety distance",
+        #     delta_dist=settings.garage_line_search_max_distance_mm,
+        # ),
     ])
 
     escape_route_1 = Sequence(
