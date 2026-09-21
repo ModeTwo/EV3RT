@@ -2,7 +2,6 @@
 
 from simple_pid import PID
 import math
-import statistics
 
 from .bt_imports import Behaviour, BottleColor, HeadingType, Parallel, ParallelPolicy, Selector, Sequence, Status, runtime, time
 
@@ -24,7 +23,6 @@ class CaptureSumoBottleWithCamera(Behaviour):
     APPROACH = 1
     ALIGN = 2
     SETTLE = 3
-    RECHECK = 4
 
     def __init__(self, name, context, settings):
         super().__init__(name)
@@ -49,11 +47,8 @@ class CaptureSumoBottleWithCamera(Behaviour):
         self.green_curve_started = False
         self.green_origin_distance = None
         self.alignment_turn = None
+        self.alignment_checked = False
         self.settle_until = 0.0
-        # 連続フレームの角度(中央値で方位を決める)、旋回した回数、再確認の待ち時間の期限。
-        self.theta_samples = []
-        self.turn_count = 0
-        self.recheck_deadline = 0.0
         runtime.require(
             "plotter", "video", "gyro_sensor", "right_motor", "left_motor"
         )
@@ -151,42 +146,6 @@ class CaptureSumoBottleWithCamera(Behaviour):
         left_power, right_power = self._drive_toward_bottle(equivalent_theta)
         return left_power, right_power, heading_error
 
-    def _start_alignment_turn(self, theta):
-        self._stop_motors()
-        self.turn_count += 1
-        self.alignment_turn = SpinToBearing(
-            name="align to camera bottle bearing", context=self.context,
-            bearing=self.target_bearing, max_power=self.settings.turn_max_power,
-            min_power=self.settings.turn_min_power, pid_p=self.settings.turn_pid_p,
-            pid_i=self.settings.turn_pid_i, pid_d=self.settings.turn_pid_d,
-            tolerance=self.settings.camera_alignment_tolerance_deg,
-        )
-        self.phase = self.ALIGN
-        self.logger.info("Bottle alignment requested turn=%d theta=%.2f target=%.1f" % (self.turn_count, theta, self.target_bearing))
-
-    def _start_recheck(self):
-        # 旋回中や旋回直後のフレームは使わない。いま届いているフレームより後の、新しいフレームだけを数える。
-        _, latest_frame_id, _ = runtime.video.get_bottle_observation()
-        self.last_frame_id = max(self.last_frame_id, latest_frame_id)
-        self.confirmed_frames = 0
-        self.theta_samples = []
-        self.recheck_deadline = time.monotonic() + self.settings.camera_recheck_timeout_sec
-        self.phase = self.RECHECK
-
-    def _begin_approach(self):
-        # 旋回による車輪の移動を含めず、この位置を500mm走行の起点にする。
-        self._stop_motors()
-        self.phase = self.APPROACH
-        self.total_distance.update()
-        self.approach_started_at = time.monotonic()
-        self.pid.reset()
-        self.context.sumo.camera_capture_bearing_deg = self.target_bearing
-        if self.settings.green_avoidance_enabled and not self._prepare_green_route():
-            return self._fail("insufficient_green_clearance_for_capture_and_curve")
-        self.logger.info("Alignment complete (turns=%d); starting distance drive target=%.1f" % (self.turn_count, self.target_bearing))
-        self._drive_toward_locked_bearing()
-        return Status.RUNNING
-
     def _fail(self, reason):
         self.context.sumo.skipped = True
         self.context.sumo.failure_reason = reason
@@ -248,8 +207,17 @@ class CaptureSumoBottleWithCamera(Behaviour):
         if self.phase == self.SETTLE:
             self._stop_motors()
             if time.monotonic() >= self.settle_until:
-                # 旋回のあと、停止した状態の新しい画像で、ボトルの中心を再確認する。
-                self._start_recheck()
+                # 補正は一度だけ。画像再認識へ戻らず、最初に確定した方位で前進する。
+                # 旋回中の車輪移動を含めず、この位置を500mm走行の起点にする。
+                self.phase = self.APPROACH
+                self.total_distance.update()
+                self.approach_started_at = time.monotonic()
+                self.pid.reset()
+                self.context.sumo.camera_capture_bearing_deg = self.target_bearing
+                if self.settings.green_avoidance_enabled and not self._prepare_green_route():
+                    return self._fail("insufficient_green_clearance_for_capture_and_curve")
+                self.logger.info("Single alignment complete; starting distance drive target=%.1f" % self.target_bearing)
+                self._drive_toward_locked_bearing()
             return Status.RUNNING
         # 方位確定後は画像更新を待たず、毎制御周期で500mm到達を確認する。
         # キャッチ・押し出しを一つの距離へ含め、死角判定による追加走行は行わない。
@@ -299,39 +267,41 @@ class CaptureSumoBottleWithCamera(Behaviour):
             and area >= self.settings.camera_min_area_px
         )
 
-        # 実行単位1：静止したまま黒テープを連続した新規フレームで確認する(検出も、旋回後の再確認も同じ)。
-        if self.phase in (self.ACQUIRE, self.RECHECK):
-            if valid:
-                self.confirmed_frames += 1
-                # 直近のcamera_confirm_frames個の角度だけを残し、その中央値でボトルの方位を決める。
-                self.theta_samples.append(float(theta))
-                del self.theta_samples[:-self.settings.camera_confirm_frames]
-            else:
-                self.confirmed_frames = 0
-                self.theta_samples = []
+        # 実行単位1：静止したまま黒テープを連続した新規フレームで確認する。
+        if self.phase == self.ACQUIRE:
+            self.confirmed_frames = self.confirmed_frames + 1 if valid else 0
             if self.confirmed_frames < self.settings.camera_confirm_frames:
-                if self.phase == self.RECHECK and now >= self.recheck_deadline:
-                    # 再確認の画像が得られなければ、失敗にせず、いまの方位で進む。
-                    self.logger.warning("Recheck timed out (bottle not seen); using bearing=%.1f" % self.target_bearing)
-                    return self._begin_approach()
                 return Status.RUNNING
-            theta_median = statistics.median(self.theta_samples)
-            self.confirmed_frames = 0
-            self.theta_samples = []
-            self.target_bearing = self._estimated_bottle_bearing(theta_median)
-            tolerance = self.settings.camera_alignment_tolerance_deg
-            if self.phase == self.RECHECK:
-                self.logger.info("Recheck theta=%.2f target=%.1f turns=%d" % (theta_median, self.target_bearing, self.turn_count))
-            else:
-                self.logger.info(
-                    "%+06d %s.black bottle confirmed frame=%d theta=%.2f area=%d target_bearing=%.1f"
-                    % (runtime.plotter.get_distance(), self.__class__.__name__, frame_id, theta_median, area, self.target_bearing)
+            self.target_bearing = self._estimated_bottle_bearing(theta)
+            if not self.alignment_checked or abs(theta) > self.settings.camera_alignment_tolerance_deg:
+                self._stop_motors()
+                self.alignment_turn = SpinToBearing(
+                    name="align to camera bottle bearing", context=self.context,
+                    bearing=self.target_bearing, max_power=self.settings.turn_max_power,
+                    min_power=self.settings.turn_min_power, pid_p=self.settings.turn_pid_p,
+                    pid_i=self.settings.turn_pid_i, pid_d=self.settings.turn_pid_d,
+                    tolerance=self.settings.heading_tolerance_deg,
                 )
-            # 許容を超えるずれなら旋回する(最初の1回に加えて、再確認では最大camera_recheck_max_turns回)。
-            if abs(theta_median) > tolerance and self.turn_count < 1 + self.settings.camera_recheck_max_turns:
-                self._start_alignment_turn(theta_median)
+                self.phase = self.ALIGN
+                self.logger.info("Bottle alignment requested theta=%.1f target=%.1f" % (theta, self.target_bearing))
                 return Status.RUNNING
-            return self._begin_approach()
+            self.phase = self.APPROACH
+            # 旋回によるエンコーダー距離を含めず、前進開始点から500mmを測る。
+            self.total_distance.update()
+            self.approach_started_at = now
+            self.pid.reset()
+            self.context.sumo.camera_capture_bearing_deg = self.target_bearing
+            self.logger.info(
+                "%+06d %s.black bottle confirmed frame=%d theta=%.1f area=%d target_bearing=%.1f"
+                % (
+                    runtime.plotter.get_distance(),
+                    self.__class__.__name__,
+                    frame_id,
+                    theta,
+                    area,
+                    self.target_bearing,
+                )
+            )
 
         # 方位が確定したこの周期から前進する。以降は総距離だけで終了する。
         self._drive_toward_locked_bearing()

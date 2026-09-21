@@ -80,13 +80,7 @@ class SumoSettings:
     navigation_power: int = 80
     # 旋回後の惰性を待ち、新規画像で正面への整列を確認する。
     camera_alignment_settle_sec: float = 0.2
-    # ボトルの正対の許容。ETラリーの旋回と同じ0.5度。正対の要否の判定、正対の旋回の許容、
-    # 旋回後に画像で中心を再確認するときのずれの許容に、同じ値を使う。
-    camera_alignment_tolerance_deg: float = 0.5
-    # 再確認でずれが許容を超えたときに、旋回し直す最大回数(最初の旋回に加えて)。
-    camera_recheck_max_turns: int = 2
-    # 再確認で、停止後の新しい画像からボトルを得られなかったときに、待つ時間。過ぎたら、いまの方位で進む。
-    camera_recheck_timeout_sec: float = 1.0
+    camera_alignment_tolerance_deg: float = 5.0
     approach_power: int = 60
     carry_power: int = 60
 

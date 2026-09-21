@@ -79,15 +79,6 @@ BOTTLE_BLACK_MAX_W      = int(FRAME_WIDTH * 0.55)  # black blob wider than this 
 BOTTLE_BLACK_MAX_ASPECT = 4.0   # w/h; the line is far more elongated than a band
 BOTTLE_BLIND_ROW        = FRAME_HEIGHT - 4  # band bottom at/below this row => the band is
                                             # crossing into the camera blind spot (~220 mm)
-# ET sumo black bottle (21.3 cm tall, black tape from 3 cm to 12 cm above the bottom):
-# the horizontal centre is taken from the MIDDLE rows of the black band only, so the
-# shadow at the base and the ragged top edge do not move it.
-BOTTLE_CENTER_BAND_TOP    = 0.25   # band rows: from 25 % ...
-BOTTLE_CENTER_BAND_BOTTOM = 0.75   # ... to 75 % of the black blob's height
-BOTTLE_CENTER_COL_FILL    = 0.5    # a column counts as black if >= 50 % of the band rows are black
-# saved frames for checking the black threshold on the real bottle (run_logs/sumo_frames/)
-SUMO_DEBUG_FRAME_LIMIT        = 12
-SUMO_DEBUG_FRAME_INTERVAL_SEC = 0.4
 
 # constants for TargetInterested.QRCODE
 CROP_X1   = 360
@@ -186,8 +177,6 @@ class Video(object):
 
         # ----- internal state for TargetInterested.BOTTLE
         self._bottle_lock_color = None          # None = auto-scan all colours
-        self._sumo_debug_saved = 0              # frames saved for the black threshold check
-        self._sumo_debug_last_at = 0.0
         self.bottle_color  = BottleColor.NONE
         self.bottle_cx     = int(FRAME_WIDTH/2)
         self.bottle_theta  = 0.0
@@ -485,25 +474,17 @@ class Video(object):
                         if aspect > BOTTLE_BLACK_MAX_ASPECT: continue
                         if extent < BOTTLE_MIN_EXTENT:       continue
                     if best is None or area > best[0]:
-                        best = (area, color, x + w // 2, y + h, (x, y, w, h), cnt, mask)
+                        best = (area, color, x + w // 2, y + h, (x, y, w, h), cnt)
 
             if best is not None:
-                area, color, bcx, bbottom, (bx, by, bw, bh), cnt, best_mask = best
-                band = None
-                if color == BottleColor.BLACK:
-                    # centre of the black band measured on its middle rows (sub-pixel)
-                    band = self._black_band_center(cnt, best_mask.shape, bx, by, bw, bh)
-                    bcx_f = band[0]
-                else:
-                    bcx_f = float(bcx)
-                bcx = int(round(bcx_f))
+                area, color, bcx, bbottom, (bx, by, bw, bh), cnt = best
                 self.target_insight    = True
                 self.bottle_color      = color
                 self.bottle_cx         = bcx
                 self.bottle_area       = int(area)
                 self.bottle_bottom_row = bbottom
                 # bearing to the band, reusing the LINE pixel->angle conversion
-                vxp = bcx_f - int(FRAME_WIDTH / 2)
+                vxp = bcx - int(FRAME_WIDTH / 2)
                 vxm = vxp * HORIZON_DISTANCE / FRAME_WIDTH
                 self.bottle_theta = 180 * math.atan(vxm / AXLE_TO_HORIZON_DISTANCE) / math.pi
                 in_blind = bbottom >= BOTTLE_BLIND_ROW
@@ -513,13 +494,6 @@ class Video(object):
                        BottleColor.YELLOW:(0,255,255), BottleColor.BLACK:(60,60,60)}[color]
                 cv2.rectangle(img_orig, (bx,by), (bx+bw, by+bh), col, LINE_THICKNESS)
                 cv2.drawContours(img_orig, [cnt], 0, (0,255,0), 1)
-                if band is not None:
-                    _, left, right, y0, y1 = band
-                    cv2.line(img_orig, (bcx, by), (bcx, by + bh), (0, 0, 255), 1)          # centre line
-                    cv2.line(img_orig, (int(left), y0), (int(left), y1), (255, 200, 0), 1)  # band edges
-                    cv2.line(img_orig, (int(right), y0), (int(right), y1), (255, 200, 0), 1)
-                    self._save_sumo_debug(img_orig, "cx=%.1f theta=%.2f w=%d h=%d area=%d"
-                                          % (bcx_f, self.bottle_theta, bw, bh, int(area)))
                 if in_blind:
                     cv2.line(img_orig, (0, BOTTLE_BLIND_ROW),
                              (FRAME_WIDTH, BOTTLE_BLIND_ROW), (0,0,255), 1)
@@ -819,46 +793,6 @@ class Video(object):
     def get_range_of_edges(self) -> int:
         return self.range_of_edges
 
-    def _black_band_center(self, cnt, shape, x, y, w, h):
-        """Black blob -> (centre x [px, sub-pixel], left, right, band top row, band bottom row).
-        The centre is the middle of the columns that are black in at least
-        BOTTLE_CENTER_COL_FILL of the band rows (25-75 % of the blob's height)."""
-        y0 = y + int(h * BOTTLE_CENTER_BAND_TOP)
-        y1 = max(y + int(h * BOTTLE_CENTER_BAND_BOTTOM), y0 + 1)
-        fallback = (x + w / 2.0, x, x + w, y0, y1)
-        filled = np.zeros(shape, np.uint8)
-        cv2.drawContours(filled, [cnt], -1, 255, -1)
-        sub = filled[y0:y1, x:x + w] > 0
-        if sub.size == 0:
-            return fallback
-        cols = np.flatnonzero(sub.mean(axis=0) >= BOTTLE_CENTER_COL_FILL)
-        if cols.size < 2:
-            return fallback
-        left, right = x + int(cols[0]), x + int(cols[-1]) + 1
-        return ((left + right) / 2.0, left, right, y0, y1)
-
-    def _save_sumo_debug(self, img, text):
-        """Save an annotated frame (limited count and rate) so the black threshold can be
-        checked on the real bottle. Never raises: a disk problem must not stop the vision thread."""
-        try:
-            now = time.monotonic()
-            if (self._sumo_debug_saved >= SUMO_DEBUG_FRAME_LIMIT
-                    or now - self._sumo_debug_last_at < SUMO_DEBUG_FRAME_INTERVAL_SEC):
-                return
-            from pathlib import Path
-            folder = Path(__file__).resolve().parents[1] / 'run_logs' / 'sumo_frames'
-            folder.mkdir(parents=True, exist_ok=True)
-            out = img.copy()
-            cv2.putText(out, text, (2, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (255, 255, 255), 1)
-            path = folder / ('sumo_%s_%02d_f%d.png' % (time.strftime('%Y%m%dT%H%M%S'), self._sumo_debug_saved, self.frame_id))
-            cv2.imwrite(str(path), out)
-            self._sumo_debug_saved += 1
-            self._sumo_debug_last_at = now
-            print("VID sumo debug frame saved: %s" % path)
-        except Exception as error:   # noqa: BLE001
-            self._sumo_debug_saved = SUMO_DEBUG_FRAME_LIMIT
-            print("VID sumo debug frame save failed: %r" % (error,))
-
     def _bottle_mask(self, img_hsv, color):
         mask = None
         for lo, hi in BOTTLE_HSV[color]:
@@ -907,8 +841,6 @@ class Video(object):
         # ET相撲では力士ボトルの黒テープだけを追跡する。
         # Bottle Deliveryの赤・青・黄の自動判定とは開始口を分離する。
         self.set_bottle_color(BottleColor.BLACK)
-        self._sumo_debug_saved = 0
-        self._sumo_debug_last_at = 0.0
         self.set_target_interested(TargetInterested.BOTTLE)
         return self._vision_sessions.capture_token()[0]
 
