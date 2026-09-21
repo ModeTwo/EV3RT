@@ -2789,7 +2789,9 @@ def _try_diagonal_to_entry_axis(a, b, all_gates, all_posts, target_gate):
     e = (math.cos(math.radians(heading)), math.sin(math.radians(heading)))
     # aがentry軸上(bからeの逆向きの直線上)にあれば、直線で足りる
     ab = geo.sub(b, a)
-    if abs(ab[0] * e[1] - ab[1] * e[0]) < 1e-6:
+    if abs(ab[0] * e[1] - ab[1] * e[0]) < 1e-6 and ab[0] * e[0] + ab[1] * e[1] > 0:
+        # 2026-09-22: 軸上にあっても、aがentryの「先(ゲートを通り過ぎた側)」にあるときは、直線では入れない
+        # (ゲートの反対側から来ているため)。その場合は、下の候補の探索へ進む(seed=3689058)。
         return []
     results = []
     direct = geo.distance(a, b)
@@ -2823,6 +2825,34 @@ def _try_diagonal_to_entry_axis(a, b, all_gates, all_posts, target_gate):
                     if ok_segments(pts):
                         results.append([(a, None), (p1, None), (c, None), (b, None)])
                 t += config.DIAGONAL_BYPASS_T_STEP_CM
+    # 3つ目の形(上の2つの形が作れない、または遠回りしかないときだけ): 斜めに進んで、entry軸と平行な
+    # 通路(ゲートの脇、軸から t だけ離れた線)に乗り、その線に沿って進み、軸に垂直に軸上の点cへ戻り、
+    # 軸に沿ってentryへ入る(a -> w1 -> w2 -> c -> b)。2026-09-22: 赤ゲートを南から入る組み合わせで、
+    # 北側(黄のexit)から南側へ回り込む配置(seed=3689058)で、上の形では、長さの上限を超えて作れず、
+    # 別のゲートを通り抜ける大回りが選ばれていた。長さの短い順に、最大CORRIDOR_MAX_CANDIDATES個だけ返す。
+    if not results or min(_segment_result_length(r) for r in results) > 1.6 * direct:
+        corridor = []
+        tangent = (-e[1], e[0])
+        for D in config.DIAGONAL_BYPASS_D_LIST_CM:
+            c = geo.sub(b, geo.scale(e, D))
+            for sign in (1.0, -1.0):
+                for t in config.CORRIDOR_T_LIST_CM:
+                    w2 = geo.add(c, geo.scale(tangent, sign * t))
+                    foot = (a[0] - w2[0]) * e[0] + (a[1] - w2[1]) * e[1]
+                    for shift in config.CORRIDOR_SHIFT_LIST_CM:
+                        w1 = geo.add(w2, geo.scale(e, foot + shift))
+                        if geo.distance(a, w1) < 1e-6 or geo.distance(w1, w2) < 1e-6:
+                            continue
+                        length = geo.distance(a, w1) + geo.distance(w1, w2) + t + D
+                        corridor.append((length, [a, w1, w2, c, b]))
+        corridor.sort(key=lambda item: item[0])
+        taken = 0
+        for length, pts in corridor:
+            if taken >= config.CORRIDOR_MAX_CANDIDATES:
+                break
+            if ok_segments(pts):
+                results.append([(p, None) for p in pts])
+                taken += 1
     return results
 
 

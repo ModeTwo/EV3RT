@@ -225,6 +225,14 @@ ARM_SIGN_PREFERENCE_BUDGET_CM = 60.0
 # 0以下なら、この余裕を求めない。
 GOAL_STRAIGHT_EXTRA_MARGIN_CM = 1.0
 
+# 2026-09-22: 「斜め→軸に平行な通路→軸に垂直→軸に沿ってentry」の候補
+# (rule_route._try_diagonal_to_entry_axis の3つ目の形)の探索範囲。
+# CORRIDOR_T_LIST_CM: 通路の、entry軸からの距離(cm)。CORRIDOR_SHIFT_LIST_CM: 通路へ乗る点の、
+# aからの垂線の足に対するずらし量(cm)。CORRIDOR_MAX_CANDIDATES: 安全性の判定に回す最大の候補数。
+CORRIDOR_T_LIST_CM = (14.0, 18.0, 22.0, 26.0, 30.0, 36.0, 44.0)
+CORRIDOR_SHIFT_LIST_CM = (-40.0, -30.0, -20.0, -10.0, 0.0, 10.0, 20.0)
+CORRIDOR_MAX_CANDIDATES = 4
+
 ARM_CLEARANCE_OTHER_GATES = False  # 2026-09-20: 影響が大きい(68%の経路が変わり平均+2.2%)割に効果が小さいため一旦無効
 ARM_BODY_CLEARANCE_MIN_CM = 3.0
 ARM_OTHER_GATES_LENGTH_BUDGET_CM = 60.0
