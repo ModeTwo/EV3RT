@@ -123,8 +123,10 @@ GOAL_OFFSET_CM = 14.8
 # START_OFFSET_CMだけ離れた点。
 # 2026-09-21: スタート地点を、従来のスタート(X=4*GRID_PITCH_CM+START_OFFSET_CM, Y=3.5*GRID_PITCH_CM)から
 # Y方向に-1cm移動した。さらに、Y方向に-1.7cm(グレーポイントの中点から-2.7cm)、X方向にETエリア側(-X)へ0.5cm移動した。
+# 2026-09-22: 実走(黄ゲートのゴール側支柱への接触)を受け、さらにゴールと反対方向(+X)へ1.0cm、
+# ゴールと反対方向/北(+Y)へ0.7cm移動した(合計でX-0.5+1.0=+0.5cm、Y-2.7+0.7=-2.0cm)。
 # 従来の位置に戻すときは START_SHIFT_CM を (0.0, 0.0) にする。
-START_SHIFT_CM = (-0.5, -2.7)
+START_SHIFT_CM = (0.5, -2.0)
 START_POS_CM = (4 * GRID_PITCH_CM + START_OFFSET_CM + START_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + START_SHIFT_CM[1])
 START_HEADING_DEG = 180.0   # -x方向を向く
 
