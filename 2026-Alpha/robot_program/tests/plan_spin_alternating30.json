@@ -1,0 +1,125 @@
+{
+  "note": "alternating +-90deg x30 (caster drag baseline)",
+  "steps": [
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    }
+  ]
+}
