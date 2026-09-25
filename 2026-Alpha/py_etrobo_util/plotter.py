@@ -1,13 +1,46 @@
 import math
 from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSensor, GyroSensor
 
-TIRE_DIAMETER: float = 55.0
-WHEEL_TREAD: float = 110.0
+# 2026-09-12: 直進100cm/102.9cmの実測テスト(計4回、指令距離に対する誤差は
+# +3.5cm/+3.8cm/+4.0cm/+3.9cm。誤差率に直すと+3.500%/+3.693%/+3.887%/+3.790%、
+# 平均+3.7175%)から、想定していたタイヤ径が実効径より約3.7%小さいと判明した
+# ため55.0→57.05に較正(1段階目)。元の値は55.0(参考用に残す)。
+# TIRE_DIAMETER: float = 55.0  # 較正前
+# TIRE_DIAMETER: float = 57.05  # 1段階目の較正値(55.0 * 1.037175)
+#
+# 57.05較正後に102.9cmで再実測(3回、+8mm/+5mm/+5mm、誤差率+0.78%/+0.49%/+0.49%)
+# したところ、まだ僅かに過走行が残っていたため、多数派だった+0.49%を採用して
+# 追加補正(2段階目、57.05 * 1.0049)。
+TIRE_DIAMETER: float = 57.33
+# ETラリー工程専用のタイヤ径。2026-09-19: RunByGyroにGYRO_SCALE_FACTORを適用した後の
+# 実機テストで、100cm指令に対し実測99.2cm(誤差-0.8%、過少走行)と判明したため
+# 57.33 * 0.992 に較正した。1回のみの試行なので暫定値。繰り返しテストの結果で再計算すること。
+# 他工程(ライントレース等)の距離には影響させないため、Plotter.tire_diameterを
+# ETラリー工程の開始時だけこの値へ切り替え、終了時に元へ戻す(phases/et_rally.py)。
+ET_RALLY_TIRE_DIAMETER: float = 56.87
+# WHEEL_TREAD: 2026-09-12に実測(左右タイヤの接地面中心間の距離、11.7cm)。
+# et_rally_planner側でのその場旋回の位置ズレ調査(SpinAroundByEncoder、
+# sample_comment.py参照)に使う。
+WHEEL_TREAD: float = 117.0
 IMU_HEADING_SIGN: float = 1.0
+
+# 2026-09-14: 同方向に90度を28回連続で回すテストで、フェーズ1・フェーズ2とも
+# 毎回ジャイロの目標値(28回目は2520度=0度相当)にぴったり収束しているにも
+# 関わらず(ログの"encoder-spin ended"が全28回とも目標と完全一致、
+# sample_comment.pyのSpinAroundByEncoder参照)、実際の物理的な角度は約16度
+# ズレていた。つまり制御ロジックではなく、ジャイロセンサー自体が実際の回転量を
+# 過少に報告している(較正されていない)ことが原因と判明。
+# 2520度(ジャイロの申告値)に対し、実際は約2520+16=2536度回っていた計算になる
+# ので、GYRO_SCALE_FACTOR = 2536/2520 ≈ 1.00635。get_angle()の生値に
+# この係数を掛けたものを「真の回転角度の推定値」として使う。
+# タイヤ径較正と同じく、実測1回ぶんの暫定値なので、テストを重ねて精緻化すること。
+GYRO_SCALE_FACTOR: float = 1.00635
 
 class Plotter(object):
     def __init__(self) -> None:
         self.running = False
+        # 通常は共通の較正値。ETラリー工程だけ開始時にET_RALLY_TIRE_DIAMETERへ切り替える。
+        self.tire_diameter = TIRE_DIAMETER
         self.distance = 0.0
         self.loc_x = 0.0
         self.loc_y = 0.0
@@ -39,8 +72,8 @@ class Plotter(object):
         # second. Wheel encoders remain the right source for this.)
         cur_ang_r = right_motor.get_count()
         cur_ang_l = left_motor.get_count()
-        delta_dist_r = math.pi * TIRE_DIAMETER * (cur_ang_r - self.prev_ang_r) / 360.0
-        delta_dist_l = math.pi * TIRE_DIAMETER * (cur_ang_l - self.prev_ang_l) / 360.0
+        delta_dist_r = math.pi * self.tire_diameter * (cur_ang_r - self.prev_ang_r) / 360.0
+        delta_dist_l = math.pi * self.tire_diameter * (cur_ang_l - self.prev_ang_l) / 360.0
         delta_dist = (delta_dist_r + delta_dist_l) / 2.0
         if (delta_dist >= 0.0):
             self.distance += delta_dist
@@ -54,7 +87,7 @@ class Plotter(object):
         # The previous encoder-based azimuth, (delta_dist_l - delta_dist_r) /
         # WHEEL_TREAD, has no absolute reference and drifts whenever a wheel
         # slips. The IMU heading is an absolute measurement and avoids that.
-        cur_azimuth = IMU_HEADING_SIGN * math.radians(gyro_sensor.get_angle())
+        cur_azimuth = IMU_HEADING_SIGN * math.radians(gyro_sensor.get_angle() * GYRO_SCALE_FACTOR)
         cur_azimuth %= (2.0 * math.pi)
  
         # Shortest-path delta for the mid-point azimuth, so a wrap-around

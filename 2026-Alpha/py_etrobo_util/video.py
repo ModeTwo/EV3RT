@@ -10,7 +10,22 @@ import numpy as np
 from enum import Enum
 import time
 import threading
-import zxingcpp
+from .vision_sessions import VisionSessions
+try:
+    import zxingcpp
+
+    # zxingcppが使用できる場合だけQR用設定を作る
+    _QR_ONLY = zxingcpp.BarcodeFormat.QRCode
+    _GH = zxingcpp.Binarizer.GlobalHistogram
+
+except ImportError:
+    # 今回はQRコードを使わないため、
+    # zxingcppが読み込めなくてもVideo自体は使えるようにする
+    zxingcpp = None
+    _QR_ONLY = None
+    _GH = None
+
+    print(" -- zxingcpp unavailable: QR detection disabled")
 from .plotter import Plotter
 from etrobo_python import Hub, Motor, ColorSensor, SonarSensor, GyroSensor
 
@@ -71,9 +86,7 @@ CROP_X2   = 1560
 QR_ROI_MARGIN = 40
 QR_LINE_THICKNESS = int(IN_FRAME_WIDTH / 160)   # = 12
 TEXT_EXPIRY_SEC = 2.0     # clear decoded text after this many seconds
-# internal constants for QR detection and decode pipeline
-_QR_ONLY = zxingcpp.BarcodeFormat.QRCode
-_GH      = zxingcpp.Binarizer.GlobalHistogram
+
 _WECHAT  = cv2.wechat_qrcode_WeChatQRCode()
 
 _CL_DETECT = cv2.createCLAHE(clipLimit=3, tileGridSize=(8, 8))
@@ -120,13 +133,17 @@ class BottleColor(Enum):
 BOTTLE_HSV = {
     BottleColor.RED:    [((  0, 120,  70), ( 10, 255, 255)),
                          ((170, 120,  70), (179, 255, 255))],
-    BottleColor.BLUE:   [((100, 100,  60), (130, 255, 255))],   # tentative
+    BottleColor.BLUE:   [(( 80,  80,  80), (110, 255, 255))],   # BottleColor.BLUE:   [((100, 100,  60), (130, 255, 255))]
     BottleColor.YELLOW: [(( 20, 100,  80), ( 35, 255, 255))],   # tentative
     BottleColor.BLACK:  [((  0,   0,   0), (179, 120,  60))],   # tentative; shape-gated
 }
 
 class Video(object):
-    def __init__(self):
+    def __init__(self, *, preview_enabled=True):
+        self.preview_enabled = preview_enabled
+        self._vision_sessions = VisionSessions()
+        self._worker_stop = threading.Event()
+        self._closed = False
         cv2.setLogLevel(3) # LOG_LEVEL_WARNING
         # set number of threads
         #cv2.setNumThreads(0)
@@ -186,8 +203,8 @@ class Video(object):
         self.target_insight = False
 
     def __del__(self):
-        cv2.destroyAllWindows()
-        self.cap.release()
+        if hasattr(self, "_closed") and hasattr(self, "cap"):
+            self.close()
 
     def _open_cap(self, fourcc, width, height, fps):
         """(Re)open the V4L2 capture in the given pixel format.
@@ -262,6 +279,11 @@ class Video(object):
         text    -- decoded string, or "" if not decoded
         corners -- list of 4 (x, y) in full-image coords if QR located, else None
         """
+
+         # ★ zxingcpp が使えない場合はQR検出をスキップする
+        if zxingcpp is None:
+            return "", None
+
         crop = img_gray[:, CROP_X1:CROP_X2]
 
         # Stage 1: GH fast path (QRv1 mostly)
@@ -296,29 +318,32 @@ class Video(object):
         return "", None
 
     def _detection_worker(self) -> None:
-        """Background thread: continuously processes the latest frame."""
-        while True:
-            # Grab latest frame
+        while not self._worker_stop.is_set():
             with self._frame_lock:
-                gray = self._latest_gray
-                self._latest_gray = None  # mark as consumed
-
-            if gray is None:
-                time.sleep(0.005)
+                packet = self._latest_gray
+                self._latest_gray = None
+            if packet is None:
+                self._worker_stop.wait(0.005)
                 continue
-
+            gray, session, frame_id = packet
+            if self._vision_sessions.capture_token() != (session, 'qr'):
+                continue
             with self._result_lock:
                 self._is_detecting = True
-
-            text, corners = self._detect_qr(gray)
-
-            with self._result_lock:
-                self._is_detecting = False
-                self._detected_corners = corners
-                if text:
-                    self._detected_text = text
-                    self._last_decode_time = time.time()
-
+            try:
+                text, corners = self._detect_qr(gray)
+            except Exception as error:
+                self._vision_sessions.publish_qr(session, frame_id, '', error)
+                continue
+            finally:
+                with self._result_lock:
+                    self._is_detecting = False
+            if self._vision_sessions.publish_qr(session, frame_id, text):
+                with self._result_lock:
+                    self._detected_corners = corners
+                    if text:
+                        self._detected_text = text
+                        self._last_decode_time = time.time()
 
     def process(self,
                 plotter: Plotter,
@@ -337,10 +362,12 @@ class Video(object):
         if cfg is not None:
             self._open_cap(*cfg)
 
+        capture_session, capture_mode = self._vision_sessions.capture_token()
         ret, frame = self.cap.read()
 
         if frame is None:
-            cv2.waitKey(1)
+            if self.preview_enabled:
+                cv2.waitKey(1)
             return
         t_cap = time.time()          # capture time for this frame
         self.frame_id += 1
@@ -351,7 +378,8 @@ class Video(object):
             img_gray = cv2.cvtColor(img_orig, cv2.COLOR_BGR2GRAY)
 
             with self._frame_lock:
-                self._latest_gray = img_gray
+                if capture_mode == 'qr':
+                    self._latest_gray = (img_gray, capture_session, self.frame_id)
 
             # Read detection state; expire text after TEXT_EXPIRY_SEC
             with self._result_lock:
@@ -388,16 +416,46 @@ class Video(object):
             frame_169 = frame[y0:y0 + crop_h, :]
             img_orig = cv2.resize(frame_169, (FRAME_WIDTH, FRAME_HEIGHT))
             img_hsv  = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HSV)
+
             # Track the locked colour once identified, else scan all four.
             if self._bottle_lock_color is not None:
                 candidates = [self._bottle_lock_color]
             else:
-                candidates = [BottleColor.RED, BottleColor.BLUE,
-                              BottleColor.YELLOW, BottleColor.BLACK]
+            # ボトルの色は赤・青・黄の3色のみなので、
+            # BLACKは認識候補から除外する
+                candidates = [BottleColor.RED,
+                              BottleColor.BLUE,
+                              BottleColor.YELLOW]
 
             best = None   # (area, color, cx, bottom_row, (x,y,w,h), cnt)
             for color in candidates:
                 mask = self._bottle_mask(img_hsv, color)
+                # 青ボトルのHSV値をログ出力
+                if color == BottleColor.BLUE:
+                    pixels = img_hsv[mask > 0]
+
+                    if len(pixels) > 0:
+                        h_mean = int(np.mean(pixels[:, 0]))
+                        s_mean = int(np.mean(pixels[:, 1]))
+                        v_mean = int(np.mean(pixels[:, 2]))
+
+                        h_min = int(np.min(pixels[:, 0]))
+                        h_max = int(np.max(pixels[:, 0]))
+                        s_min = int(np.min(pixels[:, 1]))
+                        s_max = int(np.max(pixels[:, 1]))
+                        v_min = int(np.min(pixels[:, 2]))
+                        v_max = int(np.max(pixels[:, 2]))
+
+                        print(
+                            "BLUE HSV "
+                            f"mean=({h_mean},{s_mean},{v_mean}) "
+                            f"H[{h_min}-{h_max}] "
+                            f"S[{s_min}-{s_max}] "
+                            f"V[{v_min}-{v_max}] "
+                            f"pixels={len(pixels)}"
+                        )
+
+                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self.kernel)
                 mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self.kernel)
                 mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
                 cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -449,6 +507,8 @@ class Video(object):
                 self._bottle_stamped = (self.target_insight, self.bottle_color,
                                         self.bottle_cx, self.bottle_theta,
                                         self.bottle_bottom_row, self.bottle_area, in_blind)
+                if capture_mode == 'bottle':
+                    self._vision_sessions.publish_bottle(capture_session, self.frame_id, self._bottle_stamped)
 
         else: # TargetInterested.LINE
             # ---- LINE runs on the downsized frame ----
@@ -681,6 +741,10 @@ class Video(object):
             #        x, y, w, h, self.range_of_edges, self.theta,
             #        int(self.target_insight), (time.time() - t_cap) * 1000))
 
+        # Recognition and observations above remain active without a display.
+        if not self.preview_enabled:
+            return
+
         # BELOW IS COMMON FOR ALL TARGETS
         # shrink the processed image straight to the monitor (transmission) size.
         # img_orig may be IN_FRAME (QR branch) or FRAME_* (LINE/BOTTLE); resizing
@@ -734,6 +798,9 @@ class Video(object):
         for lo, hi in BOTTLE_HSV[color]:
             m = cv2.inRange(img_hsv, np.array(lo, np.uint8), np.array(hi, np.uint8))
             mask = m if mask is None else cv2.bitwise_or(mask, m)
+        # ET相撲の黒ボトルのみ、画面上部40%を検知対象外にする
+        if color == BottleColor.BLACK:
+            mask[:int(FRAME_HEIGHT * 0.30), :] = 0
         return mask
 
     def get_bottle_stamped(self):
@@ -748,13 +815,43 @@ class Video(object):
         self._bottle_lock_color = color
 
     def get_QR_text(self) -> str:
-        if self.target_interested == TargetInterested.QRCODE:
-            with self._result_lock:
-                return self._detected_text
-        else:
-            # latch the detected text until set_target_interest(TargetInterested.QRCODE) is invoked,
-            # or TEXT_EXPIRY_SEC is exhausted while self.target_interested == TargetInterested.QRCODE.
-            return self._detected_text
+        return self._vision_sessions.get_qr()[2]
+
+    def require_qr_decoder(self):
+        if zxingcpp is None:
+            raise RuntimeError('zxingcpp is required for the Hint1/Hint2 mission')
+
+    def prepare_qr_camera(self):
+        """Prepare capture without accepting or decoding any QR observation."""
+        self.require_qr_decoder()
+        self.set_target_interested(TargetInterested.QRCODE, observation_mode="qr_prepare")
+        print("QR_PREPARE requested; capture only, no decoded result")
+
+    def begin_qr_read(self):
+        self.require_qr_decoder()
+        self.set_target_interested(TargetInterested.QRCODE)
+        return self._vision_sessions.capture_token()[0]
+
+    def get_qr_observation(self):
+        return self._vision_sessions.get_qr()
+
+    def begin_bottle_read(self):
+        self.set_bottle_color(None)
+        self.set_target_interested(TargetInterested.BOTTLE)
+        return self._vision_sessions.capture_token()[0]
+
+    def begin_sumo_bottle_read(self):
+        # ET相撲では力士ボトルの黒テープだけを追跡する。
+        # Bottle Deliveryの赤・青・黄の自動判定とは開始口を分離する。
+        self.set_bottle_color(BottleColor.BLACK)
+        self.set_target_interested(TargetInterested.BOTTLE)
+        return self._vision_sessions.capture_token()[0]
+
+    def get_bottle_observation(self):
+        session, frame_id, observation = self._vision_sessions.get_bottle()
+        if observation is None:
+            observation = (False, BottleColor.NONE, 0, 0.0, 0, 0, False)
+        return session, frame_id, observation
 
     def set_thresholds(self, gs_min: int, gs_max: int) -> None:
         self.gsmin = gs_min
@@ -765,27 +862,37 @@ class Video(object):
         self.trace_side = trace_side
         return
 
-    def set_target_interested(self, target_interested: TargetInterested) -> None:
+    def set_target_interested(self, target_interested: TargetInterested, *, observation_mode=None) -> None:
+        mode = {TargetInterested.QRCODE: 'qr', TargetInterested.BOTTLE: 'bottle'}.get(target_interested, 'line')
+        self._vision_sessions.start(observation_mode or mode)
         self.target_interested = target_interested
-
-        # request the matching capture format; the reopen itself happens on the
-        # capture thread, at the top of process()
+        with self._frame_lock:
+            self._latest_gray = None
+        with self._result_lock:
+            self._detected_text = ''
+            self._detected_corners = None
         cfg = _CAP_CONFIG.get(target_interested)
         if cfg is not None and cfg != self._cap_cfg:
             with self._pending_lock:
                 self._pending_cap_cfg = cfg
-
-        if self.target_interested == TargetInterested.QRCODE and not hasattr(self, "_detection_thread"):
-            self._detected_text    = ""    # initialize the detected text for safety
-            # Start detection thread
+        # One worker for the Video lifetime. No join or 1s delay inside a BT tick.
+        if target_interested == TargetInterested.QRCODE and not hasattr(self, '_detection_thread'):
             self._detection_thread = threading.Thread(target=self._detection_worker, daemon=True)
             self._detection_thread.start()
-        else:
-            # Stop detection thread if not interested in QR code
-            if hasattr(self, "_detection_thread"):
-                self._detection_thread.join(timeout=1.0)
-                del self._detection_thread
-        return
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        self._vision_sessions.start('closed')
+        self._worker_stop.set()
+        worker = getattr(self, '_detection_thread', None)
+        if worker is not None:
+            worker.join(timeout=2.0)
+        if self.cap is not None:
+            self.cap.release()
+        if self.preview_enabled:
+            cv2.destroyAllWindows()
 
     def is_target_insight(self) -> bool:
         return self.target_insight

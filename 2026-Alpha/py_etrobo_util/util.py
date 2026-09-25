@@ -27,45 +27,102 @@ class Color(Enum):
 
 class ColorClassifier:
     _WINDOW_SIZE = 5
+    # 無彩色判定
+    _ACHROMATIC_MAX_S = 45
+    #白黒境界
+    _WHITE_MIN_V = 83
+    _BLACK_MAX_V = 82
+
+     # 青判定
+    _BLUE_MIN_H = 205
+    _BLUE_MAX_H = 215
+    _BLUE_MIN_S = 60
+    _BLUE_MIN_V = 70
+    _BLUE_MAX_V = 100
 
     def __init__(self):
-        self.window: deque[int] = deque(maxlen=self._WINDOW_SIZE)
-
-    # --- 収集データから導いた閾値 ---
-    # black : V < 30, S < 25  (V avg≈26)
-    # white : V > 55, S < 22  (V avg≈98, S avg≈5)
-    # blue  : H in [205,220], S > 80  (H avg≈213, S avg≈93)
-    # green : H in [140,155], S > 60  (H avg≈148, S avg≈73)
-    # yellow: H in [35,65], V > 88    (H avg≈52, V avg≈99)
-    # red   : H > 345 or H < 10, S > 75  (H avg≈354, S avg≈87)
+        self.window: deque[color] = deque(maxlen=self._WINDOW_SIZE)
 
     def classify_single(self,h: int, s: int, v: int) -> Color:
-        """1サンプルのHSVから色を判定する。"""
-        # 純白：収集データのS最大値は19。S<20 かつ高輝度のみ白と認める
-        if s < 20 and v > 75:
-            return Color.WHITE
-        # 有彩色判定（S が高い領域）
-        # 青は境界でSが59〜71まで低下するため閾値を緩める
-        if 205 <= h <= 220 and s > 50:
+         """
+        1サンプルのHSV値から色を判定する。
+
+        判定順序:
+            1. 青などの有彩色
+            2. 白
+            3. 黒
+            4. UNKNOWN
+
+        青ラインはS（彩度）が白・黒より大幅に高いため、
+        白黒より先に判定する。
+        """
+
+        # --------------------------------------------------------
+        # BLUE
+        #
+        # 実測値:
+        # H=207～212
+        # S=67～96
+        # V=77～95
+        #
+        # 白・黒はS≒26～32なので、
+        # S>=60を条件にすることで誤検知を抑える。
+        # --------------------------------------------------------
+         if (
+            self._BLUE_MIN_H <= h <= self._BLUE_MAX_H
+            and s >= self._BLUE_MIN_S
+            and self._BLUE_MIN_V <= v <= self._BLUE_MAX_V
+        ):
             return Color.BLUE
-        if 140 <= h <= 155 and s > 60:
+         # GREEN
+         if 140 <= h <= 155 and s > 60:
             return Color.GREEN
-        if 35 <= h <= 65 and v > 88:
+
+        # YELLOW
+         if 35 <= h <= 65 and v > 88:
             return Color.YELLOW
-        if (h > 345 or h < 10) and s > 75:
+
+        # RED
+         if (h > 345 or h < 10) and s > 75:
             return Color.RED
-        # 上記いずれにも該当しない低彩度(S<35)はすべて黒扱い
-        # 外乱光でVが上昇しても、彩度が低ければ有色ラインではない
-        if s < 35:
+
+        # --------------------------------------------------------
+        # WHITE
+        #
+        # 白・黒はHが安定しないため、
+        # Hは使用せずS・Vを使用する。
+        #
+        # V >= 83 を暫定的にWHITEとする。
+        # --------------------------------------------------------
+         if (
+            s <= self._ACHROMATIC_MAX_S
+            and v >= self._WHITE_MIN_V
+        ):
+            return Color.WHITE
+
+        # --------------------------------------------------------
+        # BLACK
+        #
+        # 今回の黒ラインは以前想定していたV<=45ではなく、
+        # V=60～80台が多数確認された。
+        #
+        # そのためBLACK_MAX_Vを82まで拡張する。
+        # --------------------------------------------------------
+         if (
+            s <= self._ACHROMATIC_MAX_S
+            and v <= self._BLACK_MAX_V
+        ):
             return Color.BLACK
-        return Color.UNKNOWN
+
+         return Color.UNKNOWN
 
 
     def classify_robust(self, window: deque) -> Color:
         """
-        直近 WINDOW_SIZE サンプルの多数決で色を決定する。
-        走行体の左右揺れや外乱光による一時的なノイズを抑制する。
-        黒判定は除外し、有色・白の多数決を優先する。
+        直近5サンプルの多数決で最終的な色を決定する。
+
+        一瞬だけ青ラインを横切った場合や、
+        外乱光による1サンプルだけの誤検知を抑制する。
         """
         if not window:
             return Color.UNKNOWN
@@ -74,18 +131,19 @@ class ColorClassifier:
         for color in window:
             votes[color] = votes.get(color, 0) + 1
 
-        # 黒以外の票を集計し、過半数なら採用
-        non_black = {k: v for k, v in votes.items() if k != Color.BLACK}
-        if non_black:
-            best = max(non_black, key=lambda k: non_black[k])
-            if non_black[best] >= self._WINDOW_SIZE // 2 + 1:
-                return best
+        # 最多票の色を取得
+        best = max(votes, key=lambda color: votes[color])
 
-        # 黒が最多なら黒
-        return max(votes, key=lambda k: votes[k])
+        # 5サンプル中3サンプル以上一致した場合のみ確定
+        if votes[best] >= 3:
+            return best
 
+        return Color.UNKNOWN
 
     def classify(self, h: int, s: int, v: int) -> Color:
+        """
+        HSV値を入力し、多数決を考慮した最終的な色を返す。
+        """
         single = self.classify_single(h, s, v)
         self.window.append(single)
         return self.classify_robust(self.window)

@@ -1,0 +1,278 @@
+{
+  "gates": {
+    "mode": "random",
+    "seed": 9392783,
+    "red": {
+      "a": [
+        2,
+        2
+      ],
+      "b": [
+        3,
+        2
+      ]
+    },
+    "blue": {
+      "a": [
+        1,
+        1
+      ],
+      "b": [
+        1,
+        2
+      ]
+    },
+    "yellow": {
+      "a": [
+        1,
+        4
+      ],
+      "b": [
+        2,
+        4
+      ]
+    }
+  },
+  "heading_convention": "target_heading_deg is absolute, shifted so that the plan's own start heading = 0deg. Treat 0deg as 'the direction the robot is physically facing at gyro reset'. Rotation sense (increasing angle = CW or CCW) must be verified against the real gyro/motor wiring; negate all target_heading_deg values if it turns out reversed.",
+  "total_distance_mm": 7955.8,
+  "move_count": 21,
+  "turn_count": 22,
+  "steps": [
+    {
+      "type": "turn",
+      "target_heading_deg": 31.06,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 31.06,
+      "distance_mm": 601.8,
+      "label": "lap1-red-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 250.0,
+      "label": "lap1-red-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -8.52,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -8.52,
+      "distance_mm": 314.0,
+      "label": "lap1-blue-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 250.0,
+      "label": "lap1-blue-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -118.14,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -118.14,
+      "distance_mm": 643.6,
+      "label": "lap1-yellow-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 250.0,
+      "label": "lap1-yellow-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -180.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -180.0,
+      "distance_mm": 200.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 95.3,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 95.3,
+      "distance_mm": 616.6,
+      "label": "lap2-red-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 250.0,
+      "label": "lap2-red-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -8.52,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -8.52,
+      "distance_mm": 314.0,
+      "label": "lap2-blue-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 250.0,
+      "label": "lap2-blue-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -118.14,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -118.14,
+      "distance_mm": 643.6,
+      "label": "lap2-yellow-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 250.0,
+      "label": "lap2-yellow-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -180.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -180.0,
+      "distance_mm": 200.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 95.3,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 95.3,
+      "distance_mm": 616.6,
+      "label": "lap3-red-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 250.0,
+      "label": "lap3-red-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -8.52,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -8.52,
+      "distance_mm": 314.0,
+      "label": "lap3-blue-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 250.0,
+      "label": "lap3-blue-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -118.14,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -118.14,
+      "distance_mm": 643.6,
+      "label": "lap3-yellow-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 250.0,
+      "label": "lap3-yellow-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 30.49,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 30.49,
+      "distance_mm": 598.2,
+      "label": "goal"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": "goal"
+    }
+  ]
+}
