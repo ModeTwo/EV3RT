@@ -114,6 +114,7 @@ MISSION_CHOICES = (
     'full',
     'hint2',
     'hint2-return',
+    'et-rally-lqi-calibration',
 )
 
 
@@ -148,6 +149,9 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'bottle-final':
         # Hint2後移動の終了位置から、Bottle Delivery後半だけを単体実行する。
+        return replace(config, mission_mode=mission, **disabled)
+    if mission == 'et-rally-lqi-calibration':
+        # ETラリー旋回のLQI設計に使う実測データ収集専用。準備工程・PC通信は一切実行しない。
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'rally-drive':
         # 復号済みHintを外部入力し、準備工程なしでPC受信と周回走行だけを試す。

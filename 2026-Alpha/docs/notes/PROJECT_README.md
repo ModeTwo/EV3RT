@@ -6,5 +6,6 @@
 - [通信の説明](shared_communication/README.md)
 - [工程選択・単体走行](MISSION_SELECTION_v6.md)
 - [補足資料・変更履歴一覧](README.md)
+- [ETラリー モデル図作成のための調査資料](ET_RALLY_MODEL_SURVEY_v1.md)
 
 すべてのMarkdownをdocs/notesへ集約しています。コマンドは2026-Alpha直下で実行してください。今後のMarkdownもdocs/notes配下へ保存します。

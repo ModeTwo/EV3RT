@@ -31,6 +31,7 @@ def build_mission_children(context, config):
         'bottle-final',
         'rally-drive',
         'full',
+        'et-rally-lqi-calibration',
     ):
         raise ValueError('Unknown mission mode: ' + config.mission_mode)
     if config.mission_mode == 'at':
@@ -48,6 +49,10 @@ def build_mission_children(context, config):
     if config.mission_mode == 'rally-drive':
         # Hint取得・Bottle Deliveryを通らず、受信待ちとSEQ実行だけを構成する。
         return [EnableGyroScale(), build_et_rally_phase(context, config)]
+    if config.mission_mode == 'et-rally-lqi-calibration':
+        # ETラリー旋回のLQI設計用データ収集だけを実行する(PC通信・Hintは使わない)。
+        from .behaviours.et_rally_lqi_calibration import build_et_rally_lqi_calibration_sequence
+        return [EnableGyroScale(), build_et_rally_lqi_calibration_sequence()]
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))
