@@ -32,7 +32,6 @@ from ..gyro_scale import ensure_scaled_gyro
 from ..power_log import log_power_state
 from ..runtime import runtime
 from ..types import HeadingType
-from .et_rally_drive import TIRE_DIAMETER
 
 # 2026-09時点、実測前の仮の較正値・仮のパルス表。
 # b=0.5, c=1.5, stiction_floor=22, power=25(floor_powerぎりぎり上)という仮定で、
@@ -97,7 +96,9 @@ class EtRallyTurnOneShot(Behaviour):
             self.target_heading = self.target
         error = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
         arc_length_mm = math.radians(abs(error)) * (WHEEL_TREAD / 2.0)
-        self.target_motor_deg = arc_length_mm / (math.pi * TIRE_DIAMETER) * 360.0
+        # 直進・EtRallySpinAroundByEncoderと同じタイヤ径を使う(固定値だと
+        # --rally-gyro-tire-calibration offの切替が反映されない)。
+        self.target_motor_deg = arc_length_mm / (math.pi * runtime.plotter.tire_diameter) * 360.0
         self.direction = 1 if error > 0 else -1
         self.start_r = runtime.right_motor.get_count()
         self.start_l = runtime.left_motor.get_count()
