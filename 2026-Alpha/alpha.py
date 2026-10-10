@@ -1221,10 +1221,12 @@ def _run_main(argv, startup_cleanup):
     )
     parser.add_argument(
         '--rally-turn-method',
-        choices=['spin_pid', 'spin_encoder', 'one_shot', 'lqi'],
+        choices=['spin_pid', 'spin_encoder', 'one_shot', 'lqi', 'spin_encoder_dir_test'],
         default=None,
         help=('DD-19 calibration: override which turn implementation rally-drive uses. '
               'spin_pid is the uncalibrated baseline (gyro_drive.SpinAround, pre-DD-13). '
+              'spin_encoder_dir_test is test-only: honors a per-step "direction" (+1/-1) in the '
+              'plan JSON to force turn rotation direction instead of auto shortest-path. '
               'Default (unset) keeps the mission config value (spin_encoder).'),
     )
     parser.add_argument(

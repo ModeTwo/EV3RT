@@ -1,0 +1,155 @@
+{
+  "note": "alternating 0/180deg x30, EXPLICIT forced SAME direction (+1) every turn via spin_encoder_dir_test (every other turn takes the long way around). Isolates rotation-direction-reversal from the alternating-heading result.",
+  "steps": [
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": 1
+    }
+  ]
+}

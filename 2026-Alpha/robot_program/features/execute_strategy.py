@@ -9,6 +9,7 @@ from .bt_imports import Failure, HeadingType, Parallel, ParallelPolicy, Sequence
 from ..behaviours.et_rally_drive import EtRallyRunByGyro, EtRallySpinAroundByEncoder
 from ..behaviours.et_rally_turn_one_shot import EtRallyTurnOneShot
 from ..behaviours.et_rally_turn_lqi import EtRallyTurnLqi
+from ..behaviours.et_rally_turn_direction_test import EtRallySpinAroundDirectionTest
 from ..behaviours.gyro_drive import SpinAround
 from ..behaviours.conditions import IsDistanceEarned
 from ..runtime import runtime
@@ -18,7 +19,9 @@ from ..et_rally_fallback import fallback_planner_steps, fallback_strategy
 
 # DD-19較正: --rally-turn-method で選べる旋回方式。spin_pidだけ構成要素(name,target,
 # max_power,min_power,pid_p,pid_i,pid_d,target_type)がほかと異なるため、呼び出し側で分岐する。
-RALLY_TURN_METHODS = ('spin_pid', 'spin_encoder', 'one_shot', 'lqi')
+# spin_encoder_dir_test: 検証専用(2026-10-10)。各turnステップの"direction"(+1/-1)で
+# 回転方向を明示できる、EtRallySpinAroundByEncoderの検証用コピーを使う。本番では使わない。
+RALLY_TURN_METHODS = ('spin_pid', 'spin_encoder', 'one_shot', 'lqi', 'spin_encoder_dir_test')
 
 
 SPIN_MAX_POWER = 70         # その場回旋（スピン）するときの最大モーター出力
@@ -198,6 +201,12 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             if int(round(distance)) <= 0:
                 raise ValueError("distance_mm must be greater than zero")
             checked["distance_mm"] = distance
+        elif step_type == "turn":
+            # 検証専用(spin_encoder_dir_test)のときだけ使う、回転方向の明示指定(+1/-1、省略時0=自動)。
+            direction = step.get("direction", 0)
+            if direction not in (0, 1, -1):
+                raise ValueError("direction must be 0, 1 or -1")
+            checked["direction"] = direction
         steps.append(checked)
     # 横ズレはロボット固有の向き(物理的に常に右)に出る。runtime.courseが-1(右コース)だと
     # 「headingが増える向き」が物理的に逆になる(heading=-course*ジャイロ角)ため、
@@ -296,6 +305,24 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         target_type=HeadingType.ABSOLUTE,
                         main_power=turn_main_power,
                         fine_tolerance_deg=turn_fine_tolerance_deg,
+                    )
+                )
+            elif turn_method == 'spin_encoder_dir_test':
+                # 検証専用: 各turnステップの"direction"(+1/-1、省略時0=自動)で回転方向を強制する。
+                nodes.append(
+                    EtRallySpinAroundDirectionTest(
+                        name=turn_name,
+                        target=heading,
+                        main_power=turn_main_power,
+                        fine_max_power=turn_fine_max_power,
+                        fine_min_power=turn_fine_min_power,
+                        pid_p=turn_pid[0],
+                        pid_i=turn_pid[1],
+                        pid_d=turn_pid[2],
+                        target_type=HeadingType.ABSOLUTE,
+                        fine_tolerance_deg=turn_fine_tolerance_deg,
+                        decel_deg=turn_decel_deg,
+                        forced_direction=step.get("direction", 0),
                     )
                 )
             else:  # 'spin_encoder'(既定、DD-13)
