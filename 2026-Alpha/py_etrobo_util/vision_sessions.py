@@ -9,6 +9,7 @@ class VisionSessions:
         self.mode = 'line'
         self.qr = (0, -1, '')
         self.bottle = (0, -1, None)
+        self.marker = (0, -1, None)
         self.error = None
 
     def start(self, mode):
@@ -17,6 +18,7 @@ class VisionSessions:
             self.mode = mode
             self.qr = (self.generation, -1, '')
             self.bottle = (self.generation, -1, None)
+            self.marker = (self.generation, -1, None)
             self.error = None
             return self.generation
 
@@ -42,6 +44,16 @@ class VisionSessions:
                 self.bottle = (session, frame_id, observation)
             return True
 
+    def publish_marker(self, session, frame_id, observation):
+        # observationは、et_rally_marker_detector.detect()が返すリスト(検出0件ならNone扱い)。
+        # QR/bottleと同じく、frame_idが後退しないことだけを保証する(古い結果で上書きしない)。
+        with self.lock:
+            if self.mode != 'et_rally_marker' or session != self.generation:
+                return False
+            if frame_id > self.marker[1]:
+                self.marker = (session, frame_id, observation)
+            return True
+
     def get_qr(self):
         with self.lock:
             if self.error is not None:
@@ -51,3 +63,7 @@ class VisionSessions:
     def get_bottle(self):
         with self.lock:
             return self.bottle
+
+    def get_marker(self):
+        with self.lock:
+            return self.marker

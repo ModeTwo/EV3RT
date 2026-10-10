@@ -1,0 +1,151 @@
+<title>テスト経路のイメージ</title>
+<style>
+  :root {
+    --bg: #f3f4f1; --surface: #ffffff; --surface-alt: #eceeea;
+    --ink: #1b232b; --ink-soft: #5b6570; --line: #d9ddd6;
+    --accent: #3a6472; --good: #1f9d7c; --good-soft: #d9f1e9;
+    --shadow: rgba(24, 32, 36, 0.07);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10141a; --surface: #171c23; --surface-alt: #1e252d;
+      --ink: #e7ebee; --ink-soft: #93a1ad; --line: #2b333d;
+      --accent: #74b3c1; --good: #4fc79b; --good-soft: #163229;
+      --shadow: rgba(0, 0, 0, 0.45);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10141a; --surface: #171c23; --surface-alt: #1e252d;
+    --ink: #e7ebee; --ink-soft: #93a1ad; --line: #2b333d;
+    --accent: #74b3c1; --good: #4fc79b; --good-soft: #163229;
+    --shadow: rgba(0, 0, 0, 0.45);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Yu Gothic UI","Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
+    line-height: 1.5; padding: 1.4rem 1.1rem 2.4rem; }
+  main { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 0.9rem; }
+  h1 { font-size: 1.15rem; font-weight: 800; margin: 0; }
+  .subtitle { color: var(--ink-soft); font-size: 0.82rem; max-width: 70ch; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 0.6rem; box-shadow: 0 1px 2px var(--shadow); }
+  .diagram-frame { background: var(--surface-alt); border: 1px solid var(--line); border-radius: 6px; padding: 0.4rem; }
+  svg { display: block; width: 100%; height: auto; }
+  .course { fill: var(--surface-alt); stroke: var(--line); stroke-width: 0.4; }
+  .griddot { fill: var(--ink-soft); opacity: 0.4; }
+  .gateline { stroke: var(--ink-soft); stroke-width: 0.35; stroke-dasharray: 2 1.4; opacity: 0.6; }
+  .validzone { stroke-width: 1.7; stroke-linecap: round; }
+  .post { stroke: var(--surface); stroke-width: 0.3; }
+  .gatelabel { font-size: 3.4px; font-weight: 700; }
+  .pathline { stroke-width: 1.1; fill: none; stroke-linecap: round; }
+  .waynode { fill: var(--ink-soft); opacity: 0.5; }
+  .entrymark { fill: var(--surface); stroke-width: 0.6; }
+  .exitmark { stroke: var(--surface); stroke-width: 0.35; }
+  .startnode { fill: var(--accent); }
+  .goalnode { fill: var(--ink); }
+  .terminallabel { fill: var(--surface); font-size: 3.0px; font-weight: 700; }
+  .headingarrow { stroke: var(--ink); stroke-width: 0.5; }
+  .headingarrow-fill { fill: var(--ink); }
+  .looplabel { font-size: 4.2px; font-weight: 700; font-style: italic; fill: var(--ink-soft); }
+  footer.notes { font-size: 0.78rem; color: var(--ink-soft); border-top: 1px solid var(--line); padding-top: 0.8rem; line-height: 1.7; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; margin-right: 14px; }
+  .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+</style>
+
+<main>
+  <header>
+    <h1>テスト経路のイメージ（plan_seed9392783.json）</h1>
+    <p class="subtitle">ゲート座標（grid index）、スタート・ゴールの実座標と向き（config.py、2026-10-10更新：START_OFFSET_CM=17.9cm、GOAL_SHIFT_CM=(0,0)に戻し「14,15のグレーポイントの中点からマイナスX方向へ14.6cm」をそのままゴールに設定）は実データ。entry/exit点はDD-02の規約（ゲート中心から前方7.5cm／後方18cm）で算出。ゲート間をつなぐ経路線は、実際のT字パーツ回避アーム（rule_route.pyの詳細ロジック）までは再現していない簡略版。</p>
+  </header>
+
+  <div class="card">
+    <div class="diagram-frame">
+      <svg viewBox="0 -25 170 150" role="img" aria-label="plan_seed9392783.jsonの経路イメージ">
+        <rect x="33.50" y="8.90" width="98.40" height="98.40" class="course" />
+        <!-- grid dots: 5x5, x=33.5+24.6c, y=107.3-24.6r -->
+        <g class="griddot">
+          <circle cx="33.5" cy="107.3" r="1.1"/><circle cx="58.1" cy="107.3" r="1.1"/><circle cx="82.7" cy="107.3" r="1.1"/><circle cx="107.3" cy="107.3" r="1.1"/><circle cx="131.9" cy="107.3" r="1.1"/>
+          <circle cx="33.5" cy="82.7" r="1.1"/><circle cx="58.1" cy="82.7" r="1.1"/><circle cx="82.7" cy="82.7" r="1.1"/><circle cx="107.3" cy="82.7" r="1.1"/><circle cx="131.9" cy="82.7" r="1.1"/>
+          <circle cx="33.5" cy="58.1" r="1.1"/><circle cx="58.1" cy="58.1" r="1.1"/><circle cx="82.7" cy="58.1" r="1.1"/><circle cx="107.3" cy="58.1" r="1.1"/><circle cx="131.9" cy="58.1" r="1.1"/>
+          <circle cx="33.5" cy="33.5" r="1.1"/><circle cx="58.1" cy="33.5" r="1.1"/><circle cx="82.7" cy="33.5" r="1.1"/><circle cx="107.3" cy="33.5" r="1.1"/><circle cx="131.9" cy="33.5" r="1.1"/>
+          <circle cx="33.5" cy="8.9" r="1.1"/><circle cx="58.1" cy="8.9" r="1.1"/><circle cx="82.7" cy="8.9" r="1.1"/><circle cx="107.3" cy="8.9" r="1.1"/><circle cx="131.9" cy="8.9" r="1.1"/>
+        </g>
+
+        <!-- red gate: a(2,2)-(82.7,58.1) b(3,2)-(107.3,58.1) -->
+        <line x1="82.70" y1="58.10" x2="107.30" y2="58.10" class="gateline"/>
+        <line x1="89.50" y1="58.10" x2="100.50" y2="58.10" class="validzone" style="stroke:#c0392b"/>
+        <circle cx="82.70" cy="58.10" r="1.6" style="fill:#c0392b" class="post"/>
+        <circle cx="107.30" cy="58.10" r="1.6" style="fill:#c0392b" class="post"/>
+        <text x="89.50" y="53.5" class="gatelabel" style="fill:#c0392b">赤ゲート</text>
+
+        <!-- blue gate: a(1,1)-(58.1,82.7) b(1,2)-(58.1,58.1) -->
+        <line x1="58.10" y1="82.70" x2="58.10" y2="58.10" class="gateline"/>
+        <line x1="58.10" y1="75.40" x2="58.10" y2="65.40" class="validzone" style="stroke:#2f5fa8"/>
+        <circle cx="58.10" cy="82.70" r="1.6" style="fill:#2f5fa8" class="post"/>
+        <circle cx="58.10" cy="58.10" r="1.6" style="fill:#2f5fa8" class="post"/>
+        <text x="47.0" y="68.0" class="gatelabel" style="fill:#2f5fa8">青ゲート</text>
+
+        <!-- yellow gate: a(1,4)-(58.1,8.9) b(2,4)-(82.7,8.9) -->
+        <line x1="58.10" y1="8.90" x2="82.70" y2="8.90" class="gateline"/>
+        <line x1="65.40" y1="8.90" x2="75.40" y2="8.90" class="validzone" style="stroke:#c98a1f"/>
+        <circle cx="58.10" cy="8.90" r="1.6" style="fill:#c98a1f" class="post"/>
+        <circle cx="82.70" cy="8.90" r="1.6" style="fill:#c98a1f" class="post"/>
+        <text x="60.0" y="4.5" class="gatelabel" style="fill:#c98a1f">黄ゲート</text>
+
+        <!-- loop path (gray, x3) -->
+        <g stroke="#7d8590" class="pathline">
+          <line x1="150.3" y1="23.2" x2="95.0" y2="50.6"/>
+          <polygon points="122.65,36.9 119.4,33.9 124.0,32.9" style="fill:#7d8590;stroke:none"/>
+          <line x1="95.0" y1="76.1" x2="65.6" y2="70.4"/>
+          <polygon points="80.3,73.25 83.8,74.2 83.0,70.6" style="fill:#7d8590;stroke:none"/>
+          <line x1="40.1" y1="70.4" x2="70.4" y2="16.4"/>
+          <polygon points="55.25,43.4 53.0,47.2 58.0,46.8" style="fill:#7d8590;stroke:none"/>
+          <line x1="70.4" y1="-9.1" x2="95.0" y2="50.6" stroke-dasharray="2 1.4"/>
+        </g>
+        <!-- in-gate segments (colored) -->
+        <line x1="95.0" y1="50.6" x2="95.0" y2="76.1" class="pathline" style="stroke:#c0392b"/>
+        <polygon points="95.0,67.0 93.3,63.4 96.7,63.4" style="fill:#c0392b"/>
+        <line x1="65.6" y1="70.4" x2="40.1" y2="70.4" class="pathline" style="stroke:#2f5fa8"/>
+        <polygon points="50.0,70.4 53.6,68.7 53.6,72.1" style="fill:#2f5fa8"/>
+        <line x1="70.4" y1="16.4" x2="70.4" y2="-9.1" class="pathline" style="stroke:#c98a1f"/>
+        <polygon points="70.4,0.2 68.7,3.8 72.1,3.8" style="fill:#c98a1f"/>
+
+        <!-- final: 3rd-lap yellow-exit -> goal (green) -->
+        <line x1="70.4" y1="-9.1" x2="18.9" y2="21.2" class="pathline" style="stroke:#1f9d7c"/>
+        <polygon points="44.65,6.05 42.2,2.0 47.1,3.2" style="fill:#1f9d7c"/>
+
+        <!-- way/entry/exit marks -->
+        <circle cx="95.0" cy="50.6" r="1.0" class="entrymark" style="stroke:#c0392b"/>
+        <circle cx="95.0" cy="76.1" r="1.0" class="exitmark" style="fill:#c0392b"/>
+        <circle cx="65.6" cy="70.4" r="1.0" class="entrymark" style="stroke:#2f5fa8"/>
+        <circle cx="40.1" cy="70.4" r="1.0" class="exitmark" style="fill:#2f5fa8"/>
+        <circle cx="70.4" cy="16.4" r="1.0" class="entrymark" style="stroke:#c98a1f"/>
+        <circle cx="70.4" cy="-9.1" r="1.0" class="exitmark" style="fill:#c98a1f"/>
+
+        <!-- start / goal: real positions & headings from wireless_device/et_rally_planner/config.py -->
+        <!-- START_POS_CM=(116.8,84.1) heading=180deg(-x), GOAL_POS_CM=(-75.6,-28.9) heading=90deg(+y) -->
+        <circle cx="150.3" cy="23.2" r="2.6" class="startnode"/>
+        <text x="150.3" y="24.3" text-anchor="middle" class="terminallabel">S</text>
+        <line x1="150.3" y1="23.2" x2="141.3" y2="23.2" class="headingarrow"/>
+        <polygon points="141.3,23.2 143.5,21.9 143.5,24.5" class="headingarrow-fill"/>
+
+        <circle cx="18.9" cy="21.2" r="2.6" class="goalnode"/>
+        <text x="18.9" y="22.3" text-anchor="middle" class="terminallabel">G</text>
+        <line x1="18.9" y1="21.2" x2="18.9" y2="12.2" class="headingarrow"/>
+        <polygon points="18.9,12.2 17.6,14.4 20.2,14.4" class="headingarrow-fill"/>
+
+        <text x="102" y="35" class="looplabel">× 3周（同じループ）</text>
+      </svg>
+    </div>
+  </div>
+
+  <footer class="notes">
+    <span class="chip"><span class="sw" style="background:#c0392b"></span>赤ゲート区間</span>
+    <span class="chip"><span class="sw" style="background:#2f5fa8"></span>青ゲート区間</span>
+    <span class="chip"><span class="sw" style="background:#c98a1f"></span>黄ゲート区間</span>
+    <span class="chip"><span class="sw" style="background:#1f9d7c"></span>ゴールへの最終区間</span><br>
+    <b>正確な部分：</b>ゲート座標（grid index→cm変換）、entry/exit点の算出規約（DD-02：前方7.5cm／後方18cm）、スタート・ゴールの実座標（config.pyのSTART_POS_CM/GOAL_POS_CM）と向き（START_HEADING_DEG=180度／GOAL_HEADING_DEG=90度、数学標準系：+x方向=0度、反時計回り正）。<br>
+    <b>簡略化した部分：</b>ゲート間・スタート/ゴールへの接続経路（灰色・緑の線）は直線で結んだ簡易版で、実際の経路計算（T字パーツ回避のアーム等）は反映していない。<br>
+    <b>副次的な発見：</b>GOAL_SHIFT_CMを(0,0)に戻した結果、縮退走行処理（et_rally_fallback.py）の総距離が285.9cm→311.4cmに増加した。新ゴールが経由点B・Cの近くにあるため、既存の迂回ルート（A→B→C→ゴール）がやや遠回りになっている。機能は保っているため今回はそのままにしたが、本番復帰時（GOAL_SHIFT_CMを戻す時）は気にしなくてよい一時的な非効率。
+  </footer>
+</main>

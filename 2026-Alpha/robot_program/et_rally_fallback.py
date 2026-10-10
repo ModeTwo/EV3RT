@@ -22,10 +22,10 @@ from shared_communication.heading_frame import planner_to_full_start
 
 # --- planner/config.py と同じ式で定義する ---
 GRID_PITCH_CM = 24.6
-START_OFFSET_CM = 18.0
+START_OFFSET_CM = 17.9
 START_SHIFT_CM = (0.5, -2.0)
-GOAL_OFFSET_CM = 14.8
-GOAL_SHIFT_CM = (-61.0, -115.0)
+GOAL_OFFSET_CM = 14.6
+GOAL_SHIFT_CM = (0.0, 0.0)
 GATE_EXIT_OFFSET_CM = 22.0
 START_HEADING_DEG = 180.0
 

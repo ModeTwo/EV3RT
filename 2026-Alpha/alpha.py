@@ -1219,6 +1219,28 @@ def _run_main(argv, startup_cleanup):
               'test calibration, e.g. straight/spin runs). --rally-hint1/--rally-hint2-gate-info '
               'are still required by the argument checks but their values are ignored.'),
     )
+    parser.add_argument(
+        '--rally-turn-method',
+        choices=['spin_pid', 'spin_encoder', 'one_shot', 'lqi'],
+        default=None,
+        help=('DD-19 calibration: override which turn implementation rally-drive uses. '
+              'spin_pid is the uncalibrated baseline (gyro_drive.SpinAround, pre-DD-13). '
+              'Default (unset) keeps the mission config value (spin_encoder).'),
+    )
+    parser.add_argument(
+        '--rally-compensation',
+        choices=['on', 'off'],
+        default=None,
+        help=('DD-19 calibration: off disables both caster-drag (DD-15) and lateral-drift '
+              '(DD-16) compensation for a clean baseline run. Default (unset) keeps on.'),
+    )
+    parser.add_argument(
+        '--rally-gyro-tire-calibration',
+        choices=['on', 'off'],
+        default=None,
+        help=('DD-19 calibration: off disables both gyro-scale (DD-17 GYRO_SCALE_FACTOR) and '
+              'tire-diameter calibration for a clean baseline run. Default (unset) keeps on.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1249,6 +1271,22 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-plan-path requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_strategy_source='file', et_rally_plan_path=args.rally_plan_path)
+    if args.rally_turn_method is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-method requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_method=args.rally_turn_method)
+    if args.rally_compensation is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-compensation requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_compensation_enabled=(args.rally_compensation == 'on'))
+    if args.rally_gyro_tire_calibration is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-gyro-tire-calibration requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config,
+            et_rally_gyro_tire_calibration_enabled=(args.rally_gyro_tire_calibration == 'on'))
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,

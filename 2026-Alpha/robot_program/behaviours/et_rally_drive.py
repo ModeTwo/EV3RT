@@ -18,6 +18,7 @@ from py_etrobo_util import SymmetricClamper
 from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, WHEEL_TREAD
 
 from ..gyro_scale import ensure_scaled_gyro
+from ..power_log import OscillationTracker, log_power_state
 from ..runtime import runtime
 from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
 from ..types import HeadingType
@@ -41,7 +42,8 @@ class EtRallySpinAroundByEncoder(Behaviour):
     保証するが、左右のタイヤの実効径やグリップにわずかでも差があると、実際の
     回転中心が車軸の中心からズレてしまい、「その場」旋回のはずが車体全体が
     平行移動する問題があった。et_rally_plannerでの検証(±90度の旋回のみを
-    30回繰り返すテスト)で、旋回だけで最大約40cm・再現性の高い(2回の試行で
+    30回繰り返すテスト)
+    (2回の試行で
     ほぼ同じ量・同じ向き)位置ズレが見つかっている。ランダムな滑りにしては
     再現性が高すぎるため、左右のタイヤの機械的な非対称性(回転中心のオフセット)
     が主因と推定した。
@@ -127,6 +129,7 @@ class EtRallySpinAroundByEncoder(Behaviour):
             self.right_done = (self.target_motor_deg < 1e-6)
             self.left_done = (self.target_motor_deg < 1e-6)
             self.phase = 1
+            self.oscillation = OscillationTracker()
 
             self.running = True
             self.logger.info("%+06d %s.encoder-spin started at heading=%d for %d (target_motor_deg=%.1f)" % (
@@ -164,12 +167,16 @@ class EtRallySpinAroundByEncoder(Behaviour):
                 return Status.RUNNING
 
             use_decel = self.decel_deg > 0 and self.target_motor_deg >= 2 * self.decel_deg
+            right_power = left_power = 0
             if not self.right_done:
                 p = self.decel_power if use_decel and self.target_motor_deg - delta_r < self.decel_deg else self.main_power
-                runtime.right_motor.set_power(runtime.course * self.direction * p)
+                right_power = runtime.course * self.direction * p
+                runtime.right_motor.set_power(right_power)
             if not self.left_done:
                 p = self.decel_power if use_decel and self.target_motor_deg - delta_l < self.decel_deg else self.main_power
-                runtime.left_motor.set_power((-1) * runtime.course * self.direction * p)
+                left_power = (-1) * runtime.course * self.direction * p
+                runtime.left_motor.set_power(left_power)
+            log_power_state(self.__class__.__name__ + ".phase1", right_power, left_power)
             return Status.RUNNING
 
         # --- フェーズ2: ジャイロによる低パワーの仕上げ補正 ---
@@ -188,8 +195,9 @@ class EtRallySpinAroundByEncoder(Behaviour):
             runtime.right_motor.set_brake(True)
             runtime.left_motor.set_power(0)
             runtime.left_motor.set_brake(True)
-            self.logger.info("%+06d %s.encoder-spin ended at heading=%d" % (
-                runtime.plotter.get_distance(), self.__class__.__name__, current_heading))
+            self.logger.info("%+06d %s.encoder-spin ended at heading=%d reversals=%d samples=%d" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, current_heading,
+                self.oscillation.reversal_count, self.oscillation.sample_count))
             return Status.SUCCESS
 
         # スタック検知: ジャイロの角度がしばらく進んでいなければ、静止摩擦に
@@ -209,8 +217,12 @@ class EtRallySpinAroundByEncoder(Behaviour):
         self.pid.setpoint = current_heading + error
         clamper = self.escalated_clamper if self.escalated else self.fine_clamper
         power = int(clamper.clamp(self.pid(current_heading)))
-        runtime.right_motor.set_power(runtime.course * power)
-        runtime.left_motor.set_power((-1) * runtime.course * power)
+        right_power = runtime.course * power
+        left_power = (-1) * runtime.course * power
+        runtime.right_motor.set_power(right_power)
+        runtime.left_motor.set_power(left_power)
+        log_power_state(self.__class__.__name__ + ".phase2", right_power, left_power)
+        self.oscillation.update(power)
         return Status.RUNNING
 
 
@@ -227,7 +239,8 @@ class EtRallyRunByGyro(Behaviour):
     """床の線を見ず、ジャイロセンサーの角度だけを頼りに指定の方角へ向かって真っ直ぐ直進するノード"""
     def __init__(self, name: str, target: int, power: int,
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType,
-                 distance_mm: float = 0.0, decel_mm: float = 0.0, decel_min_power: int = 40) -> None:
+                 distance_mm: float = 0.0, decel_mm: float = 0.0, decel_min_power: int = 40,
+                 accel_mm: float = 0.0, accel_min_power: int = 40) -> None:
         super(EtRallyRunByGyro, self).__init__(name)
         self.target = target
         self.target_type = target_type
@@ -244,6 +257,12 @@ class EtRallyRunByGyro(Behaviour):
         self.distance_mm = distance_mm
         self.decel_mm = min(decel_mm, distance_mm * 0.6) if distance_mm > 0 else 0.0
         self.decel_min_power = min(decel_min_power, power)
+        # 2026-09(会話にもとづく): 開始直後の急発進を避けるための、減速と対になる
+        # 加速区間。区間全体をゆっくり加減速させるのではなく、あくまで開始直後・
+        # 終了直前の「短い」区間だけで済ませる想定(accel_mm/decel_mmを小さく保つ)。
+        # accel_mm=0なら従来通り、開始直後から巡航パワーで走る(無効化)。
+        self.accel_mm = min(accel_mm, distance_mm * 0.6) if distance_mm > 0 else 0.0
+        self.accel_min_power = min(accel_min_power, power)
         self.last_log_time = None
         self.running = False
 
@@ -286,13 +305,20 @@ class EtRallyRunByGyro(Behaviour):
             self.summarized = False
             self.running = True
 
-        # 減速区間では、残り距離に比例して現在のパワーを下げる。
+        # 加速区間(開始直後)・減速区間(終了直前)、それぞれで現在のパワーの上限を計算し、
+        # 小さいほう(より制約が強いほう)を採用する。短い区間で両方の窓が重なっても、
+        # 単純により低いパワー側を使うだけで、破綻なく扱える。
         power_now = self.power
+        if self.accel_mm > 0.0:
+            traveled = runtime.plotter.get_distance() - self.orig_dist
+            if traveled < self.accel_mm:
+                ratio = max(traveled, 0.0) / self.accel_mm
+                power_now = min(power_now, int(self.accel_min_power + (self.power - self.accel_min_power) * ratio))
         if self.decel_mm > 0.0:
             remaining = self.distance_mm - (runtime.plotter.get_distance() - self.orig_dist)
             if remaining < self.decel_mm:
                 ratio = max(remaining, 0.0) / self.decel_mm
-                power_now = int(self.decel_min_power + (self.power - self.decel_min_power) * ratio)
+                power_now = min(power_now, int(self.decel_min_power + (self.power - self.decel_min_power) * ratio))
 
         # SpinAroundと同種の不具合(PID内部はsetpointとcurrent_headingの単純な引き算で、
         # 180度をまたぐ場合の短い方への正規化を行わない)を避けるため、ここでも
@@ -320,7 +346,10 @@ class EtRallyRunByGyro(Behaviour):
         # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める
         # (PID自体の上限は巡航パワーで作ってあるため)。
         turn = max(-power_now, min(power_now, turn))
-        runtime.right_motor.set_power(power_now + runtime.course * turn)
-        runtime.left_motor.set_power(power_now - runtime.course * turn)
+        right_power = power_now + runtime.course * turn
+        left_power = power_now - runtime.course * turn
+        runtime.right_motor.set_power(right_power)
+        runtime.left_motor.set_power(left_power)
+        log_power_state(self.__class__.__name__, right_power, left_power)
         return Status.RUNNING
 

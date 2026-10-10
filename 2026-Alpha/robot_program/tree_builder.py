@@ -32,6 +32,8 @@ def build_mission_children(context, config):
         'rally-drive',
         'full',
         'et-rally-lqi-calibration',
+        'et-rally-marker-observe',
+        'et-rally-turn-phase2-diagnostic',
     ):
         raise ValueError('Unknown mission mode: ' + config.mission_mode)
     if config.mission_mode == 'at':
@@ -53,6 +55,17 @@ def build_mission_children(context, config):
         # ETラリー旋回のLQI設計用データ収集だけを実行する(PC通信・Hintは使わない)。
         from .behaviours.et_rally_lqi_calibration import build_et_rally_lqi_calibration_sequence
         return [EnableGyroScale(), build_et_rally_lqi_calibration_sequence()]
+    if config.mission_mode == 'et-rally-marker-observe':
+        # マーカー検出の実機確認専用(走行体は動かさず、検出結果だけをログに出す)。
+        from .behaviours.et_rally_camera_correction import (
+            PrepareEtRallyMarkerCamera, EtRallyMarkerObserveLoop)
+        return [EnableGyroScale(), PrepareEtRallyMarkerCamera(name="prepare et_rally marker camera"),
+                EtRallyMarkerObserveLoop(name="et_rally marker observe")]
+    if config.mission_mode == 'et-rally-turn-phase2-diagnostic':
+        # フェーズ2が横ズレの原因かどうかの切り分け専用(plan_spin_alternating30.jsonと比較)。
+        from .behaviours.et_rally_turn_phase2_diagnostic import (
+            build_et_rally_turn_phase2_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_turn_phase2_diagnostic_sequence()]
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))

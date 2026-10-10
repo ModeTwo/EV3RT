@@ -116,8 +116,9 @@ POST_AVOID_RADIUS_CM = ROBOT_PIVOT_SWEEP_RADIUS_CM + POST_RADIUS_CM + SAFETY_MAR
 # ため、スタート側だけ実測値に更新し、ゴール側は据え置き(未実測)とした。
 # 2026-09-12に再実測し18.0cmに更新(グレー●の中心間距離ベースの
 # (4,3)-(4,4)中点から垂直に18.0cm)。ゴール側は2026-09-15に実測し14.8cmに更新。
-START_OFFSET_CM = 18.0
-GOAL_OFFSET_CM = 14.8
+# 2026-10-10に再実測し、スタート17.9cm・ゴール14.6cmに更新。
+START_OFFSET_CM = 17.9
+GOAL_OFFSET_CM = 14.6
 
 # スタート: グリッド(4,3)-(4,4)を結ぶ線の中心点から、その線と垂直に
 # START_OFFSET_CMだけ離れた点。
@@ -135,8 +136,10 @@ START_HEADING_DEG = 180.0   # -x方向を向く
 # 2026-09-20: ゴール地点を、従来のゴール(X=GOAL_LINE_X_CM, Y=3.5*GRID_PITCH_CM)から
 # X方向に-61cm、Y方向に-115cm移動した(X=-75.8cm, Y=-28.9cm)。
 # (2026-09-20: 当初X-58cmだったものを、さらに-3cm動かして-61cmにした。)
+# 2026-10-10: DD-19(補正なしベースラインからの再較正)のテスト走行では、ガレージ位置への
+# 補正を外し、従来のゴール(14,15のグレーポイントの中点からX-14.6cm)をそのまま使う。
 # 従来の位置に戻すときは GOAL_SHIFT_CM を (0.0, 0.0) にする。
-GOAL_SHIFT_CM = (-61.0, -115.0)
+GOAL_SHIFT_CM = (0.0, 0.0)
 # 従来のゴール位置のX座標(GOAL_SHIFT_CMを足す前の基準)。
 GOAL_LINE_X_CM = 0 * GRID_PITCH_CM - GOAL_OFFSET_CM
 GOAL_POS_CM = (GOAL_LINE_X_CM + GOAL_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + GOAL_SHIFT_CM[1])

@@ -7,10 +7,18 @@ from pathlib import Path
 
 from .bt_imports import Failure, HeadingType, Parallel, ParallelPolicy, Sequence
 from ..behaviours.et_rally_drive import EtRallyRunByGyro, EtRallySpinAroundByEncoder
+from ..behaviours.et_rally_turn_one_shot import EtRallyTurnOneShot
+from ..behaviours.et_rally_turn_lqi import EtRallyTurnLqi
+from ..behaviours.gyro_drive import SpinAround
 from ..behaviours.conditions import IsDistanceEarned
 from ..runtime import runtime
 from ..et_rally_compensation import apply_caster_drag_compensation, apply_lateral_drift_compensation
 from ..et_rally_fallback import fallback_planner_steps, fallback_strategy
+
+
+# DD-19較正: --rally-turn-method で選べる旋回方式。spin_pidだけ構成要素(name,target,
+# max_power,min_power,pid_p,pid_i,pid_d,target_type)がほかと異なるため、呼び出し側で分岐する。
+RALLY_TURN_METHODS = ('spin_pid', 'spin_encoder', 'one_shot', 'lqi')
 
 
 SPIN_MAX_POWER = 70         # その場回旋（スピン）するときの最大モーター出力
@@ -22,12 +30,15 @@ DEFAULT_PLAN_PATH = Path(__file__).resolve().parents[1] / "tests" / "plan_seed93
 class DeferredStrategySequence(Sequence):
     """Build motor behaviours only when this subtree starts running."""
 
-    def __init__(self, name, loader, initial_heading_deg=0.0, fallback_loader=None):
+    def __init__(self, name, loader, initial_heading_deg=0.0, fallback_loader=None,
+                 turn_method='spin_encoder', compensation_enabled=True):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
         self._fallback_loader = fallback_loader
         self._initial_heading_deg = initial_heading_deg
+        self._turn_method = turn_method
+        self._compensation_enabled = compensation_enabled
         self._loaded = False
 
     def _load_children(self):
@@ -38,14 +49,16 @@ class DeferredStrategySequence(Sequence):
             return
         try:
             nodes = steps_from_strategy(
-                self._loader(), initial_heading_deg=self._initial_heading_deg)
+                self._loader(), initial_heading_deg=self._initial_heading_deg,
+                turn_method=self._turn_method, compensation_enabled=self._compensation_enabled)
         except (KeyError, OSError, TypeError, ValueError) as error:
             self.logger.error("Strategy loading failed: %s" % error)
             nodes = [Failure(name="invalid strategy")]
             if self._fallback_loader is not None:
                 try:
                     nodes = steps_from_strategy(
-                        self._fallback_loader(), initial_heading_deg=self._initial_heading_deg)
+                        self._fallback_loader(), initial_heading_deg=self._initial_heading_deg,
+                        turn_method=self._turn_method, compensation_enabled=self._compensation_enabled)
                     self.logger.error("ETラリー開始時にエラー(%s)。固定ルートでゴールへ向かいます" % error)
                 except (KeyError, OSError, TypeError, ValueError) as fallback_error:
                     self.logger.error("Fallback route failed: %s" % fallback_error)
@@ -75,6 +88,8 @@ def build_execute_strategy(context, config, lap_number=None):
             fallback_loader=(
                 (lambda: full_start_to_gyro(fallback_strategy(), config.mission_mode))
                 if getattr(config, "et_rally_fallback_enabled", False) else None),
+            turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
+            compensation_enabled=getattr(config, "et_rally_compensation_enabled", True),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -83,6 +98,8 @@ def build_execute_strategy(context, config, lap_number=None):
             loader=lambda: _load_plan_steps(plan_path),
             fallback_loader=(fallback_planner_steps
                              if getattr(config, "et_rally_fallback_enabled", False) else None),
+            turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
+            compensation_enabled=getattr(config, "et_rally_compensation_enabled", True),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -113,6 +130,13 @@ def _finite_number(value, field_name):
 
 
 def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
+                        # 2026-09(会話にもとづく): 発進・停止それぞれの直前直後だけを
+                        # 短く加減速する。区間全体をゆっくり加減速するのではない
+                        # (長い区間でも、この距離分しか加減速しない)。
+                        # 【要実機調整】30mm/半分のパワー、はまだ最初の見立てで、
+                        # 実測して詰める前提の値。
+                        move_accel_mm=30.0, move_accel_min_power=40,
+                        move_decel_mm=30.0, move_decel_min_power=40,
                         turn_main_power=SPIN_MAX_POWER,
                         turn_fine_max_power=60, turn_fine_min_power=50,
                         turn_fine_tolerance_deg=0.5,
@@ -121,14 +145,23 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         lateral_drift_mm_per_deg_a=0.00496,
                         lateral_drift_mm_per_deg_b=0.01278,
                         lateral_drift_sign=1.0,
-                        initial_heading_deg=0.0):
+                        initial_heading_deg=0.0,
+                        turn_method='spin_encoder',
+                        compensation_enabled=True):
     """Convert a received or file-loaded strategy to behaviour tree nodes.
 
     走行にはETラリー専用のEtRallyRunByGyro/EtRallySpinAroundByEncoder
     (behaviours/et_rally_drive.py)を使い、共通のgyro_drive.pyのクラスは使わない。
     既定値はsample_comment.pyのsteps_from_planと同じ(実機で較正済みの値)。
     caster_drag_mm_per_deg/lateral_drift_mm_per_deg_a,bに0を渡すと、その補正を無効にできる。
+
+    turn_method(DD-19較正用): 'spin_pid'(無補正ベースライン、gyro_drive.SpinAround)/
+    'spin_encoder'(既定、DD-13採用のEtRallySpinAroundByEncoder)/'one_shot'(一発パルス仕上げ)/
+    'lqi'(LQI仕上げ)のいずれか。compensation_enabled=Falseで、両補正(DD-15/16)をまとめて無効化する
+    (caster_drag_mm_per_deg等の引数は無視される)。
     """
+    if turn_method not in RALLY_TURN_METHODS:
+        raise ValueError("Unknown rally turn method: " + str(turn_method))
     if not isinstance(strategy, list) or not strategy:
         raise ValueError("Strategy must be a non-empty list")
 
@@ -159,6 +192,10 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         lateral_drift_mm_per_deg_a, lateral_drift_mm_per_deg_b = (
             lateral_drift_mm_per_deg_b, lateral_drift_mm_per_deg_a)
         lateral_drift_sign = -lateral_drift_sign
+    if not compensation_enabled:
+        # DD-19較正用ベースライン: DD-15(キャスター引きずり)・DD-16(横ズレ)を両方無効化する。
+        caster_drag_mm_per_deg = 0.0
+        lateral_drift_mm_per_deg_a = lateral_drift_mm_per_deg_b = 0.0
     steps = apply_caster_drag_compensation(
         steps, mm_per_deg=caster_drag_mm_per_deg, initial_heading_deg=initial_heading_deg)
     steps = apply_lateral_drift_compensation(
@@ -174,6 +211,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
 
         if step["type"] == "move":
             distance_mm = int(round(step["distance_mm"]))
+            # DD-19ベースライン: spin_pid指定時は直進PIDも、DD-14の調整値(4.0,0.6,0.06)ではなく
+            # 旋回側と同じ汎用デフォルト(0.2,0.00075,0.03)に揃える。
+            active_move_pid = (0.2, 0.00075, 0.03) if turn_method == 'spin_pid' else move_pid
             leg = Parallel(
                 name="et_rally move%d%s" % (index, label_text),
                 policy=ParallelPolicy.SuccessOnOne(),
@@ -184,11 +224,15 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         name="et_rally run%d" % index,
                         target=heading,
                         power=move_power,
-                        pid_p=move_pid[0],
-                        pid_i=move_pid[1],
-                        pid_d=move_pid[2],
+                        pid_p=active_move_pid[0],
+                        pid_i=active_move_pid[1],
+                        pid_d=active_move_pid[2],
                         target_type=HeadingType.ABSOLUTE,
                         distance_mm=step["distance_mm"],
+                        accel_mm=move_accel_mm,
+                        accel_min_power=move_accel_min_power,
+                        decel_mm=move_decel_mm,
+                        decel_min_power=move_decel_min_power,
                     ),
                     IsDistanceEarned(
                         name="et_rally dist%d" % index,
@@ -198,20 +242,59 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             )
             nodes.append(leg)
         else:
-            nodes.append(
-                EtRallySpinAroundByEncoder(
-                    name="et_rally turn%d%s" % (index, label_text),
-                    target=heading,
-                    main_power=turn_main_power,
-                    fine_max_power=turn_fine_max_power,
-                    fine_min_power=turn_fine_min_power,
-                    pid_p=turn_pid[0],
-                    pid_i=turn_pid[1],
-                    pid_d=turn_pid[2],
-                    target_type=HeadingType.ABSOLUTE,
-                    fine_tolerance_deg=turn_fine_tolerance_deg,
+            turn_name = "et_rally turn%d%s" % (index, label_text)
+            if turn_method == 'spin_pid':
+                # DD-19ベースライン: DD-13以前の、フェーズ分けのない無補正PID旋回。
+                # 許容誤差も、DD-19以降の改善(2度→0.5度)より前の2.0度に固定する
+                # (turn_fine_tolerance_degの既定0.5は改善後の値のため、ここでは使わない)。
+                nodes.append(
+                    SpinAround(
+                        name=turn_name,
+                        target=heading,
+                        max_power=turn_main_power,
+                        min_power=turn_fine_min_power,
+                        pid_p=turn_pid[0],
+                        pid_i=turn_pid[1],
+                        pid_d=turn_pid[2],
+                        target_type=HeadingType.ABSOLUTE,
+                        tolerance=2.0,
+                    )
                 )
-            )
+            elif turn_method == 'one_shot':
+                nodes.append(
+                    EtRallyTurnOneShot(
+                        name=turn_name,
+                        target=heading,
+                        target_type=HeadingType.ABSOLUTE,
+                        main_power=turn_main_power,
+                        fine_tolerance_deg=turn_fine_tolerance_deg,
+                    )
+                )
+            elif turn_method == 'lqi':
+                nodes.append(
+                    EtRallyTurnLqi(
+                        name=turn_name,
+                        target=heading,
+                        target_type=HeadingType.ABSOLUTE,
+                        main_power=turn_main_power,
+                        fine_tolerance_deg=turn_fine_tolerance_deg,
+                    )
+                )
+            else:  # 'spin_encoder'(既定、DD-13)
+                nodes.append(
+                    EtRallySpinAroundByEncoder(
+                        name=turn_name,
+                        target=heading,
+                        main_power=turn_main_power,
+                        fine_max_power=turn_fine_max_power,
+                        fine_min_power=turn_fine_min_power,
+                        pid_p=turn_pid[0],
+                        pid_i=turn_pid[1],
+                        pid_d=turn_pid[2],
+                        target_type=HeadingType.ABSOLUTE,
+                        fine_tolerance_deg=turn_fine_tolerance_deg,
+                    )
+                )
     return nodes
 
 

@@ -79,6 +79,17 @@ class RaceConfig:
     et_rally_fallback_enabled: bool = True
     # Noneならtests/plan_seed9392783.json。相対パスは2026-Alpha直下を基準にする。
     et_rally_plan_path: Optional[str] = None
+    # DD-19以降の較正やり直し用。spin_pid: 無補正PID旋回(gyro_drive.SpinAround、較正前のベースライン)、
+    # spin_encoder: エンコーダ主導+ジャイロ仕上げ(現行既定、DD-13)、one_shot: 一発パルス仕上げ、
+    # lqi: LQI(積分付き状態フィードバック)仕上げ。直進側はspin_*でも常にEtRallyRunByGyroを使う
+    # (直進の実現方式はDD-13の対象外のため切替なし)。
+    et_rally_turn_method: str = "spin_encoder"
+    # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
+    # (ベースライン計測用。較正値そのものは変えない)。
+    et_rally_compensation_enabled: bool = True
+    # Falseでジャイロ倍率補正(DD-17、GYRO_SCALE_FACTOR)とタイヤ径較正(ET_RALLY_TIRE_DIAMETER)を
+    # 両方無効化する(ベースライン計測用。phases/et_rally.pyのEnableGyroScale/SetTireDiameterを省略する)。
+    et_rally_gyro_tire_calibration_enabled: bool = True
     enable_et_sumo: bool = True
     enable_finish: bool = True
     # 8/20 goal reference: blue marker -> 800mm. Verify on the real course.
@@ -115,6 +126,8 @@ MISSION_CHOICES = (
     'hint2',
     'hint2-return',
     'et-rally-lqi-calibration',
+    'et-rally-marker-observe',
+    'et-rally-turn-phase2-diagnostic',
 )
 
 
@@ -152,6 +165,15 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'et-rally-lqi-calibration':
         # ETラリー旋回のLQI設計に使う実測データ収集専用。準備工程・PC通信は一切実行しない。
+        return replace(config, mission_mode=mission, **disabled)
+    if mission == 'et-rally-marker-observe':
+        # マーカー検出の実機確認専用(観測のみ、走行体は動かさない)。
+        # EXPECTED_MARKER_ANGLE_DEG/ANGLE_TO_HEADING_GAINの較正前に、
+        # まず検出そのものが安定するかを確認するためのミッション。
+        return replace(config, mission_mode=mission, **disabled)
+    if mission == 'et-rally-turn-phase2-diagnostic':
+        # 旋回のB方向横ズレが、フェーズ2(仕上げ補正)由来かどうかを切り分ける専用。
+        # plan_spin_alternating30.json(--rally-plan-path、通常設定)と比較して使う。
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'rally-drive':
         # 復号済みHintを外部入力し、準備工程なしでPC受信と周回走行だけを試す。

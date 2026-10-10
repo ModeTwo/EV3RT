@@ -31,12 +31,16 @@ def build_et_rally_phase(context, config):
     # PCまたは固定planが全周回分を一つのSEQとして返すため、SEQは一度だけ実行する。
     # ボトル配送までアームを下げたまま運んでいるため、ETラリー走行の前に上げ直す。
     root = Sequence(name="et_rally", memory=True)
-    children = [
-        # 通しの実行ではラップゲート後に有効済み(何もしない)。ETラリーだけ単独で走らせる場合の保険。
-        EnableGyroScale("et_rally gyro scale"),
-        SetTireDiameter("et_rally tire diameter", ET_RALLY_TIRE_DIAMETER),
-        ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP),
-    ]
+    # DD-19ベースライン計測用: Falseならジャイロ倍率補正・タイヤ径較正(DD-17)を適用しない。
+    gyro_tire_calibration = getattr(config, "et_rally_gyro_tire_calibration_enabled", True)
+    children = []
+    if gyro_tire_calibration:
+        children.extend([
+            # 通しの実行ではラップゲート後に有効済み(何もしない)。ETラリーだけ単独で走らせる場合の保険。
+            EnableGyroScale("et_rally gyro scale"),
+            SetTireDiameter("et_rally tire diameter", ET_RALLY_TIRE_DIAMETER),
+        ])
+    children.append(ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP))
     if config.et_rally_strategy_source == "received":
         children.append(build_receive_strategy(context, config))
     elif config.et_rally_strategy_source != "file":
@@ -47,6 +51,7 @@ def build_et_rally_phase(context, config):
     # ET用の直進は、区間が連続するゲート通過中に止まらないよう終了時のブレーキを持たない。
     # 最後の区間の後は、ここで明示的に停止する(単体テストでは、この後は何も動かさないため必須)。
     children.append(StopNow(name="et_rally final stop"))
-    children.append(SetTireDiameter("et_rally tire diameter restore", TIRE_DIAMETER))
+    if gyro_tire_calibration:
+        children.append(SetTireDiameter("et_rally tire diameter restore", TIRE_DIAMETER))
     root.add_children(children)
     return root

@@ -11,6 +11,7 @@ from enum import Enum
 import time
 import threading
 from .vision_sessions import VisionSessions
+from . import et_rally_marker_detector
 try:
     import zxingcpp
 
@@ -110,6 +111,9 @@ class TargetInterested(Enum):
     LINE = "Line"
     QRCODE = "QR Code"
     BOTTLE = "Bottle"
+    # 2026-09追加: ETラリー区画の座標プリント(QR風の四角マーカー)を、
+    # デコードせず物体として検出するモード。et_rally_marker_detector.py参照。
+    ET_RALLY_MARKER = "ET Rally Marker"
 
 # capture format per interest: (fourcc, width, height, fps)
 # MJPG = compressed, high fps for line tracing; YUYV = uncompressed, fine
@@ -118,6 +122,9 @@ _CAP_CONFIG = {
     TargetInterested.LINE:   ("MJPG", IN_FRAME_WIDTH, IN_FRAME_HEIGHT, 30),
     TargetInterested.BOTTLE: ("MJPG", IN_FRAME_WIDTH, IN_FRAME_HEIGHT, 30),
     TargetInterested.QRCODE: ("YUYV", IN_FRAME_WIDTH_QR, IN_FRAME_HEIGHT_QR, 5),
+    # LINE/BOTTLEと同じ低解像度・高フレームレート設定。QRのような細かい文字を
+    # 読む必要がなく、瞬間的な検出を優先するため。
+    TargetInterested.ET_RALLY_MARKER: ("MJPG", IN_FRAME_WIDTH, IN_FRAME_HEIGHT, 30),
 }
 
 class BottleColor(Enum):
@@ -185,6 +192,14 @@ class Video(object):
         self._bottle_lock  = threading.Lock()
         # (insight, color, cx, theta, bottom_row, area, in_blindspot)
         self._bottle_stamped = (False, BottleColor.NONE, int(FRAME_WIDTH/2), 0.0, 0, 0, False)
+
+        # ----- internal state for TargetInterested.ET_RALLY_MARKER
+        # QRと同様、検出処理(CLAHE・適応二値化・角検出)がBOTTLE/LINEより重いため、
+        # 専用の裏スレッドで処理し、撮影ループ(VideoThread)を止めない。
+        self._marker_frame_lock = threading.Lock()
+        self._latest_marker_frame = None   # (frame, session, frame_id) 検出待ちの最新フレーム
+        self._marker_worker_lock = threading.Lock()
+        self._marker_is_detecting = False
 
         # ----- frame id as the common key across the producer and consumers in logging
         self.frame_id = 0
@@ -344,6 +359,30 @@ class Video(object):
                     if text:
                         self._detected_text = text
                         self._last_decode_time = time.time()
+
+    def _marker_detection_worker(self) -> None:
+        while not self._worker_stop.is_set():
+            with self._marker_frame_lock:
+                packet = self._latest_marker_frame
+                self._latest_marker_frame = None
+            if packet is None:
+                self._worker_stop.wait(0.005)
+                continue
+            frame, session, frame_id = packet
+            if self._vision_sessions.capture_token() != (session, 'et_rally_marker'):
+                continue
+            with self._marker_worker_lock:
+                self._marker_is_detecting = True
+            try:
+                markers = et_rally_marker_detector.detect(frame)
+            except Exception as error:
+                self._vision_sessions.publish_marker(session, frame_id, None)
+                print("WARN et_rally_marker detection failed: %r" % (error,))
+                continue
+            finally:
+                with self._marker_worker_lock:
+                    self._marker_is_detecting = False
+            self._vision_sessions.publish_marker(session, frame_id, markers)
 
     def process(self,
                 plotter: Plotter,
@@ -509,6 +548,24 @@ class Video(object):
                                         self.bottle_bottom_row, self.bottle_area, in_blind)
                 if capture_mode == 'bottle':
                     self._vision_sessions.publish_bottle(capture_session, self.frame_id, self._bottle_stamped)
+
+        elif self.target_interested == TargetInterested.ET_RALLY_MARKER:
+            # ---- ET_RALLY_MARKER: QRと同じく、重い検出処理は裏スレッドへ渡す ----
+            # 撮影フォーマットはLINE/BOTTLEと同じ640x480 MJPGなので、そのままのframeを渡す
+            # (LINE用のFRAME_WIDTH=320への縮小は、ラインの近距離検出向けの設定であり、
+            # 数十cm先のマーカーの模様を見るこの用途には解像度を落としすぎるため使わない)。
+            img_orig = frame.copy()
+            with self._marker_frame_lock:
+                if capture_mode == 'et_rally_marker':
+                    self._latest_marker_frame = (frame.copy(), capture_session, self.frame_id)
+
+            with self._marker_worker_lock:
+                detecting = self._marker_is_detecting
+            session, frame_id, markers = self._vision_sessions.get_marker()
+            self.target_insight = bool(markers)
+            if markers:
+                cx, cy = markers[0]["center"]
+                cv2.circle(img_orig, (int(cx), int(cy)), 6, (0, 0, 255), -1)
 
         else: # TargetInterested.LINE
             # ---- LINE runs on the downsized frame ----
@@ -844,6 +901,20 @@ class Video(object):
         self.set_target_interested(TargetInterested.BOTTLE)
         return self._vision_sessions.capture_token()[0]
 
+    def prepare_et_rally_marker_camera(self):
+        """PrepareHintCameraと同じ考え方: 移動中にカメラモード切替だけ先に済ませておき、
+        旋回直後の読み取り開始時に切替コストがかからないようにする。"""
+        self.set_target_interested(TargetInterested.ET_RALLY_MARKER, observation_mode="et_rally_marker_prepare")
+
+    def begin_et_rally_marker_read(self):
+        self.set_target_interested(TargetInterested.ET_RALLY_MARKER)
+        return self._vision_sessions.capture_token()[0]
+
+    def get_et_rally_marker_observation(self):
+        """(session, frame_id, markers)を返す。marketsはet_rally_marker_detector.detect()の
+        戻り値と同じ形式のlist(未検出/未着手ならNoneまたは空list)。"""
+        return self._vision_sessions.get_marker()
+
     def get_bottle_observation(self):
         session, frame_id, observation = self._vision_sessions.get_bottle()
         if observation is None:
@@ -860,7 +931,11 @@ class Video(object):
         return
 
     def set_target_interested(self, target_interested: TargetInterested, *, observation_mode=None) -> None:
-        mode = {TargetInterested.QRCODE: 'qr', TargetInterested.BOTTLE: 'bottle'}.get(target_interested, 'line')
+        mode = {
+            TargetInterested.QRCODE: 'qr',
+            TargetInterested.BOTTLE: 'bottle',
+            TargetInterested.ET_RALLY_MARKER: 'et_rally_marker',
+        }.get(target_interested, 'line')
         self._vision_sessions.start(observation_mode or mode)
         self.target_interested = target_interested
         with self._frame_lock:
@@ -868,6 +943,8 @@ class Video(object):
         with self._result_lock:
             self._detected_text = ''
             self._detected_corners = None
+        with self._marker_frame_lock:
+            self._latest_marker_frame = None
         cfg = _CAP_CONFIG.get(target_interested)
         if cfg is not None and cfg != self._cap_cfg:
             with self._pending_lock:
@@ -876,6 +953,9 @@ class Video(object):
         if target_interested == TargetInterested.QRCODE and not hasattr(self, '_detection_thread'):
             self._detection_thread = threading.Thread(target=self._detection_worker, daemon=True)
             self._detection_thread.start()
+        if target_interested == TargetInterested.ET_RALLY_MARKER and not hasattr(self, '_marker_detection_thread'):
+            self._marker_detection_thread = threading.Thread(target=self._marker_detection_worker, daemon=True)
+            self._marker_detection_thread.start()
 
     def close(self):
         if self._closed:
@@ -886,6 +966,9 @@ class Video(object):
         worker = getattr(self, '_detection_thread', None)
         if worker is not None:
             worker.join(timeout=2.0)
+        marker_worker = getattr(self, '_marker_detection_thread', None)
+        if marker_worker is not None:
+            marker_worker.join(timeout=2.0)
         if self.cap is not None:
             self.cap.release()
         if self.preview_enabled:

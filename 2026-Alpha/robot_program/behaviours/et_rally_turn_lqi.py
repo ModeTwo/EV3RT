@@ -27,6 +27,7 @@ from py_etrobo_util import SymmetricClamper
 from py_etrobo_util.plotter import WHEEL_TREAD
 
 from ..gyro_scale import ensure_scaled_gyro
+from ..power_log import OscillationTracker, log_power_state
 from ..runtime import runtime
 from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
 from ..types import HeadingType
@@ -105,12 +106,16 @@ class EtRallyTurnLqi(Behaviour):
             return True
 
         use_decel = self.decel_deg > 0 and self.target_motor_deg >= 2 * self.decel_deg
+        right_power = left_power = 0
         if not self.right_done:
             p = self.decel_power if use_decel and self.target_motor_deg - delta_r < self.decel_deg else self.main_power
-            runtime.right_motor.set_power(runtime.course * self.direction * p)
+            right_power = runtime.course * self.direction * p
+            runtime.right_motor.set_power(right_power)
         if not self.left_done:
             p = self.decel_power if use_decel and self.target_motor_deg - delta_l < self.decel_deg else self.main_power
-            runtime.left_motor.set_power((-1) * runtime.course * self.direction * p)
+            left_power = (-1) * runtime.course * self.direction * p
+            runtime.left_motor.set_power(left_power)
+        log_power_state(self.__class__.__name__ + ".phase1", right_power, left_power)
         return False
 
     # --- フェーズ2: 状態フィードバック(LQI) ---
@@ -123,6 +128,7 @@ class EtRallyTurnLqi(Behaviour):
         self.prev_heading = current_heading
         self.omega_filtered = 0.0
         self.phase2_started_at = time.monotonic()
+        self.oscillation = OscillationTracker()
         self.logger.info(
             "%+06d %s.phase2(LQI) started at heading=%d" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, current_heading))
@@ -139,9 +145,10 @@ class EtRallyTurnLqi(Behaviour):
 
         if abs(theta_e) < self.fine_tolerance_deg and abs(self.omega_filtered) < self.fine_omega_tolerance_deg:
             self.logger.info(
-                "%+06d %s.phase2 converged heading=%d error=%+.2f omega=%+.2f" % (
+                "%+06d %s.phase2 converged heading=%d error=%+.2f omega=%+.2f reversals=%d samples=%d" % (
                     runtime.plotter.get_distance(), self.__class__.__name__,
-                    current_heading, theta_e, self.omega_filtered))
+                    current_heading, theta_e, self.omega_filtered,
+                    self.oscillation.reversal_count, self.oscillation.sample_count))
             return "converged"
         if time.monotonic() - self.phase2_started_at >= self.max_fine_duration_sec:
             self.logger.warning(
@@ -154,8 +161,12 @@ class EtRallyTurnLqi(Behaviour):
         if 0.0 < abs(u) < self.stiction_floor:
             u = math.copysign(self.stiction_floor, u)
         power = int(round(u))
-        runtime.right_motor.set_power(runtime.course * power)
-        runtime.left_motor.set_power((-1) * runtime.course * power)
+        right_power = runtime.course * power
+        left_power = (-1) * runtime.course * power
+        runtime.right_motor.set_power(right_power)
+        runtime.left_motor.set_power(left_power)
+        log_power_state(self.__class__.__name__ + ".phase2", right_power, left_power)
+        self.oscillation.update(power)
         return "running"
 
     # --- Behaviour本体 ---

@@ -1,0 +1,17 @@
+{
+  "note": "DD-19: turn-count comparison (low) - square path, 4 turns x90deg, 4 moves x300mm (total turn=360deg, total distance=1200mm)",
+  "heading_convention": "target_heading_deg is absolute; 0deg = the direction the robot faces at gyro reset.",
+  "total_distance_mm": 1200.0,
+  "move_count": 4,
+  "turn_count": 4,
+  "steps": [
+    { "type": "turn", "target_heading_deg": 0.0, "label": null },
+    { "type": "move", "target_heading_deg": 0.0, "distance_mm": 300.0, "label": "leg1" },
+    { "type": "turn", "target_heading_deg": 90.0, "label": null },
+    { "type": "move", "target_heading_deg": 90.0, "distance_mm": 300.0, "label": "leg2" },
+    { "type": "turn", "target_heading_deg": 180.0, "label": null },
+    { "type": "move", "target_heading_deg": 180.0, "distance_mm": 300.0, "label": "leg3" },
+    { "type": "turn", "target_heading_deg": 270.0, "label": null },
+    { "type": "move", "target_heading_deg": 270.0, "distance_mm": 300.0, "label": "leg4" }
+  ]
+}

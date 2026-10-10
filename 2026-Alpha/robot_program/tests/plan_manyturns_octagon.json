@@ -1,0 +1,25 @@
+{
+  "note": "DD-19: turn-count comparison (high) - octagon path, 8 turns x45deg, 8 moves x150mm (total turn=360deg, total distance=1200mm, same totals as plan_fewturns_square.json)",
+  "heading_convention": "target_heading_deg is absolute; 0deg = the direction the robot faces at gyro reset.",
+  "total_distance_mm": 1200.0,
+  "move_count": 8,
+  "turn_count": 8,
+  "steps": [
+    { "type": "turn", "target_heading_deg": 0.0, "label": null },
+    { "type": "move", "target_heading_deg": 0.0, "distance_mm": 150.0, "label": "leg1" },
+    { "type": "turn", "target_heading_deg": 45.0, "label": null },
+    { "type": "move", "target_heading_deg": 45.0, "distance_mm": 150.0, "label": "leg2" },
+    { "type": "turn", "target_heading_deg": 90.0, "label": null },
+    { "type": "move", "target_heading_deg": 90.0, "distance_mm": 150.0, "label": "leg3" },
+    { "type": "turn", "target_heading_deg": 135.0, "label": null },
+    { "type": "move", "target_heading_deg": 135.0, "distance_mm": 150.0, "label": "leg4" },
+    { "type": "turn", "target_heading_deg": 180.0, "label": null },
+    { "type": "move", "target_heading_deg": 180.0, "distance_mm": 150.0, "label": "leg5" },
+    { "type": "turn", "target_heading_deg": 225.0, "label": null },
+    { "type": "move", "target_heading_deg": 225.0, "distance_mm": 150.0, "label": "leg6" },
+    { "type": "turn", "target_heading_deg": 270.0, "label": null },
+    { "type": "move", "target_heading_deg": 270.0, "distance_mm": 150.0, "label": "leg7" },
+    { "type": "turn", "target_heading_deg": 315.0, "label": null },
+    { "type": "move", "target_heading_deg": 315.0, "distance_mm": 150.0, "label": "leg8" }
+  ]
+}
