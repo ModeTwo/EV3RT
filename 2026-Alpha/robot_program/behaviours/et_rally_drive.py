@@ -68,13 +68,19 @@ class EtRallySpinAroundByEncoder(Behaviour):
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType,
                  fine_tolerance_deg: float = 2.0,
                  decel_deg: float = 0.0, decel_power: int = 50,
-                 fine_trim: bool = True, backlash_preload_deg: float = 0.0) -> None:
+                 fine_trim: bool = True, backlash_preload_deg: float = 0.0,
+                 lag_compensation_deg: float = 0.0) -> None:
         super(EtRallySpinAroundByEncoder, self).__init__(name)
         # DD-22較正用: 前の旋回と逆方向に切り替わる旋回だけ、フェーズ1の目標エンコーダ角度に
         # この分を上乗せする。機構内のバックラッシュ(前の旋回で片側に詰まった遊びを、
         # 逆方向ではまず詰め直す必要がある)による「エンコーダは回るが実際には車輪が
         # 転がっていない」区間を事前に見込むためのもの。0なら無効(既定、挙動は変えない)。
         self.backlash_preload_deg = backlash_preload_deg
+        # DD-22較正用: 先に目標へ到達して止まった側が、まだ回っているもう片方の反力で
+        # 「止まった後も同じ方向へ引き込まれて動いてしまう」分(実測5〜9度、2026-10-10)を
+        # 見越して、先に止まる側(その旋回でマイナス出力になる側、後述)の目標値を
+        # この分だけ低く設定しておく。0なら無効(既定、挙動は変えない)。
+        self.lag_compensation_deg = lag_compensation_deg
         # 2026-09-20: フェーズ1(全力寄りのmain_power)のまま目標のエンコーダ角度に
         # 到達してブレーキをかけると、慣性で行き過ぎてフェーズ2の仕上げ補正が
         # 毎回必要になる。残りのエンコーダ角度がdecel_deg未満になったら
@@ -139,10 +145,22 @@ class EtRallySpinAroundByEncoder(Behaviour):
                 self.target_motor_deg += self.backlash_preload_deg
             _last_turn_direction = self.direction
 
+            # DD-22較正用: right_power=course*direction*main_powerなので、この符号が
+            # マイナスの側が先に目標へ到達して止まる(実測、2026-10-10)。先に止まる側は、
+            # もう片方がまだ回っている間、反力で同じ方向へ引き込まれて動いてしまう分
+            # (lag_compensation_deg)を見越して、目標値を低くしておく。
+            right_power_sign = runtime.course * self.direction
+            if right_power_sign < 0:
+                self.right_target_motor_deg = max(self.target_motor_deg - self.lag_compensation_deg, 0.0)
+                self.left_target_motor_deg = self.target_motor_deg
+            else:
+                self.right_target_motor_deg = self.target_motor_deg
+                self.left_target_motor_deg = max(self.target_motor_deg - self.lag_compensation_deg, 0.0)
+
             self.start_r = runtime.right_motor.get_count()
             self.start_l = runtime.left_motor.get_count()
-            self.right_done = (self.target_motor_deg < 1e-6)
-            self.left_done = (self.target_motor_deg < 1e-6)
+            self.right_done = (self.right_target_motor_deg < 1e-6)
+            self.left_done = (self.left_target_motor_deg < 1e-6)
             # target_motor_deg≈0(回転不要)なら、上のright_done/left_doneがTrueのまま
             # 下の個別停止判定を一度も通らないため、ここでも基準値を用意しておく。
             self.right_done_at_count = self.start_r
@@ -159,8 +177,9 @@ class EtRallySpinAroundByEncoder(Behaviour):
             delta_l = abs(runtime.left_motor.get_count() - self.start_l)
 
             # 目標のエンコーダ角度に達した方から個別に止める
-            # (左右のタイヤの実効径がわずかに違っても、片方だけ行き過ぎさせない)
-            if not self.right_done and delta_r >= self.target_motor_deg:
+            # (左右のタイヤの実効径がわずかに違っても、片方だけ行き過ぎさせない)。
+            # 目標値は、lag_compensation_deg適用時は先に止まる側だけ低くなっている。
+            if not self.right_done and delta_r >= self.right_target_motor_deg:
                 self.right_done = True
                 # ユーザー仮説(2026-10-10)の検証用: 止めた瞬間のエンコーダ値を記録し、
                 # もう片方がまだ動いている「遅れ」区間に、この止めたはずの輪が反力で
@@ -168,7 +187,7 @@ class EtRallySpinAroundByEncoder(Behaviour):
                 self.right_done_at_count = runtime.right_motor.get_count()
                 runtime.right_motor.set_power(0)
                 runtime.right_motor.set_brake(True)
-            if not self.left_done and delta_l >= self.target_motor_deg:
+            if not self.left_done and delta_l >= self.left_target_motor_deg:
                 self.left_done = True
                 self.left_done_at_count = runtime.left_motor.get_count()
                 runtime.left_motor.set_power(0)
@@ -199,11 +218,11 @@ class EtRallySpinAroundByEncoder(Behaviour):
             use_decel = self.decel_deg > 0 and self.target_motor_deg >= 2 * self.decel_deg
             right_power = left_power = 0
             if not self.right_done:
-                p = self.decel_power if use_decel and self.target_motor_deg - delta_r < self.decel_deg else self.main_power
+                p = self.decel_power if use_decel and self.right_target_motor_deg - delta_r < self.decel_deg else self.main_power
                 right_power = runtime.course * self.direction * p
                 runtime.right_motor.set_power(right_power)
             if not self.left_done:
-                p = self.decel_power if use_decel and self.target_motor_deg - delta_l < self.decel_deg else self.main_power
+                p = self.decel_power if use_decel and self.left_target_motor_deg - delta_l < self.decel_deg else self.main_power
                 left_power = (-1) * runtime.course * self.direction * p
                 runtime.left_motor.set_power(left_power)
             log_power_state(self.__class__.__name__ + ".phase1", right_power, left_power)

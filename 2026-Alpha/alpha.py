@@ -1284,6 +1284,15 @@ def _run_main(argv, startup_cleanup):
         help=('DD-22 calibration: for spin_encoder, override phase1\'s drive power (default 70). '
               'Used to match the single-wheel encoder diagnostic\'s power for a fair comparison.'),
     )
+    parser.add_argument(
+        '--rally-turn-lag-compensation-deg',
+        type=float,
+        default=None,
+        help=('DD-22 calibration: for spin_encoder, lower the stopping target by this many degrees '
+              'for whichever wheel finishes phase1 first (the negative-power side), to pre-cancel '
+              'the drift it picks up while dragged by the still-turning other wheel (measured '
+              '5-9deg). Default (unset/0) keeps both wheels at the same target.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1361,6 +1370,11 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-power requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_main_power=args.rally_turn_power)
+    if args.rally_turn_lag_compensation_deg is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-lag-compensation-deg requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_lag_compensation_deg=args.rally_turn_lag_compensation_deg)
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,

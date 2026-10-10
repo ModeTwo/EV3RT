@@ -104,6 +104,11 @@ class RaceConfig:
     # DD-22較正用: spin_encoderのフェーズ1の駆動パワーを上書きする。片輪エンコーダ
     # テスト(power=50既定)と同じ出力で比較するために使う。Noneなら素の既定値(70)。
     et_rally_turn_main_power: Optional[int] = None
+    # DD-22較正用: spin_encoderのフェーズ1で、先に目標へ到達して止まる側(その旋回で
+    # マイナス出力になる側)の目標値を、この分だけ低くする。まだ回っているもう片方の
+    # 反力で「止まった後も同じ方向へ引き込まれて動いてしまう」分(実測5〜9度)を
+    # 見越す補正。既定0.0=無効。
+    et_rally_turn_lag_compensation_deg: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (ベースライン計測用。較正値そのものは変えない)。
     et_rally_compensation_enabled: bool = True
