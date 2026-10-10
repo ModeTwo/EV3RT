@@ -212,8 +212,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         if step["type"] == "move":
             distance_mm = int(round(step["distance_mm"]))
             # DD-19ベースライン: spin_pid指定時は直進PIDも、DD-14の調整値(4.0,0.6,0.06)ではなく
-            # 旋回側と同じ汎用デフォルト(0.2,0.00075,0.03)に揃える。
-            active_move_pid = (0.2, 0.00075, 0.03) if turn_method == 'spin_pid' else move_pid
+            # sample.pyのRunByGyroと同じ値(1.1,0.1,0.03)に揃える。
+            active_move_pid = (1.1, 0.1, 0.03) if turn_method == 'spin_pid' else move_pid
             leg = Parallel(
                 name="et_rally move%d%s" % (index, label_text),
                 policy=ParallelPolicy.SuccessOnOne(),
@@ -245,6 +245,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             turn_name = "et_rally turn%d%s" % (index, label_text)
             if turn_method == 'spin_pid':
                 # DD-19ベースライン: DD-13以前の、フェーズ分けのない無補正PID旋回。
+                # PID値はsample.pyのSpinAroundと同じ(0.4,0.001,0.03)に揃える。
                 # 許容誤差も、DD-19以降の改善(2度→0.5度)より前の2.0度に固定する
                 # (turn_fine_tolerance_degの既定0.5は改善後の値のため、ここでは使わない)。
                 nodes.append(
@@ -253,9 +254,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         target=heading,
                         max_power=turn_main_power,
                         min_power=turn_fine_min_power,
-                        pid_p=turn_pid[0],
-                        pid_i=turn_pid[1],
-                        pid_d=turn_pid[2],
+                        pid_p=0.4,
+                        pid_i=0.001,
+                        pid_d=0.03,
                         target_type=HeadingType.ABSOLUTE,
                         tolerance=2.0,
                     )
