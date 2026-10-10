@@ -180,12 +180,18 @@ class EtRallySpinAroundByEncoder(Behaviour):
             left_base_motor_deg = self.target_motor_deg * self.left_target_scale
             right_power_sign = runtime.course * self.direction
             self.early_side = 'right' if right_power_sign < 0 else 'left'
+            # 2026-10-10: 90度旋回で較正したcompensation_degは、それより小さい旋回
+            # (フル周回には色々な大きさが混ざる)では目標値そのものより大きくなり、
+            # 0にクランプされて旋回がほぼ起きなくなる不具合が実機で発生した。
+            # 先に止まる側の目標値の半分までしか引かないようにする。
             if right_power_sign < 0:
-                self.right_target_motor_deg = max(right_base_motor_deg - compensation_deg, 0.0)
+                capped = min(compensation_deg, right_base_motor_deg * 0.5)
+                self.right_target_motor_deg = max(right_base_motor_deg - capped, 0.0)
                 self.left_target_motor_deg = left_base_motor_deg
             else:
                 self.right_target_motor_deg = right_base_motor_deg
-                self.left_target_motor_deg = max(left_base_motor_deg - compensation_deg, 0.0)
+                capped = min(compensation_deg, left_base_motor_deg * 0.5)
+                self.left_target_motor_deg = max(left_base_motor_deg - capped, 0.0)
 
             self.start_r = runtime.right_motor.get_count()
             self.start_l = runtime.left_motor.get_count()
