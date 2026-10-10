@@ -12,6 +12,11 @@ from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSen
 # したところ、まだ僅かに過走行が残っていたため、多数派だった+0.49%を採用して
 # 追加補正(2段階目、57.05 * 1.0049)。
 TIRE_DIAMETER: float = 57.33
+# DD-19較正用: 上記2段階の較正を一切行う前の、最初の想定タイヤ径(較正の起点)。
+# TIRE_DIAMETER(57.33)自体が既に較正済みの値のため、「補正なし」のベースライン
+# 計測では、ETラリー工程のタイヤ径をこちらに明示的に切り替える(phases/et_rally.py、
+# --rally-gyro-tire-calibration off指定時)。
+UNCALIBRATED_TIRE_DIAMETER: float = 55.0
 # ETラリー工程専用のタイヤ径。2026-09-19: RunByGyroにGYRO_SCALE_FACTORを適用した後の
 # 実機テストで、100cm指令に対し実測99.2cm(誤差-0.8%、過少走行)と判明したため
 # 57.33 * 0.992 に較正した。1回のみの試行なので暫定値。繰り返しテストの結果で再計算すること。

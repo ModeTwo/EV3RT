@@ -4,7 +4,7 @@ from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 from py_trees.composites import Sequence
 
-from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, TIRE_DIAMETER
+from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, TIRE_DIAMETER, UNCALIBRATED_TIRE_DIAMETER
 
 from ..behaviours.device_control import ArmDirection, ArmUpDownFull
 from ..features.execute_strategy import build_execute_strategy
@@ -40,6 +40,10 @@ def build_et_rally_phase(context, config):
             EnableGyroScale("et_rally gyro scale"),
             SetTireDiameter("et_rally tire diameter", ET_RALLY_TIRE_DIAMETER),
         ])
+    else:
+        # TIRE_DIAMETER(57.33)自体が既に2段階較正済みの値のため、「補正なし」の
+        # ベースラインでは、較正前の最初の想定値(55.0)を明示的に使う。
+        children.append(SetTireDiameter("et_rally tire diameter uncalibrated", UNCALIBRATED_TIRE_DIAMETER))
     children.append(ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP))
     if config.et_rally_strategy_source == "received":
         children.append(build_receive_strategy(context, config))
@@ -51,7 +55,8 @@ def build_et_rally_phase(context, config):
     # ET用の直進は、区間が連続するゲート通過中に止まらないよう終了時のブレーキを持たない。
     # 最後の区間の後は、ここで明示的に停止する(単体テストでは、この後は何も動かさないため必須)。
     children.append(StopNow(name="et_rally final stop"))
-    if gyro_tire_calibration:
-        children.append(SetTireDiameter("et_rally tire diameter restore", TIRE_DIAMETER))
+    # calibration有効時はET_RALLY_TIRE_DIAMETERから、無効時はUNCALIBRATED_TIRE_DIAMETERから、
+    # いずれの場合も共通デフォルト(TIRE_DIAMETER)へ戻す。
+    children.append(SetTireDiameter("et_rally tire diameter restore", TIRE_DIAMETER))
     root.add_children(children)
     return root
