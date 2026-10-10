@@ -59,6 +59,24 @@ def build_et_rally_single_wheel_reversal_diagnostic_sequence(
     return root
 
 
+def build_et_rally_single_wheel_alternating_diagnostic_sequence(
+        power: int = _DEFAULT_POWER, segments: int = 20,
+        deg_per_lap: float = _DEFAULT_DEG_PER_LAP) -> Sequence:
+    # 各輪ごとに、1周(laps=1)ずつ、符号を毎回反転させてsegments回繰り返す。
+    # 最初の1回を除き、すべての区間が「反転直後の1周」になるため、反転コストの
+    # サンプル数を最大化できる(segments=20なら19サンプル/輪)。右輪→左輪の順。
+    root = Sequence(name="et_rally single wheel alternating diagnostic", memory=True)
+    children = []
+    for wheel in ("right", "left"):
+        for i in range(segments):
+            segment_power = power if i % 2 == 0 else -power
+            children.append(EtRallySingleWheelEncoderTest(
+                name="single_wheel_alt_test %s seg%d" % (wheel, i), wheel=wheel,
+                power=segment_power, deg_per_lap=deg_per_lap, laps=1))
+    root.add_children(children)
+    return root
+
+
 class EtRallySingleWheelEncoderTest(Behaviour):
     def __init__(self, name: str, wheel: str, power: int,
                  deg_per_lap: float = 360.0, laps: int = 10) -> None:
