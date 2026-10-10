@@ -15,16 +15,13 @@ from py_trees.common import Status
 from simple_pid import PID
 
 from py_etrobo_util import SymmetricClamper
-from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, WHEEL_TREAD
+from py_etrobo_util.plotter import WHEEL_TREAD
 
 from ..gyro_scale import ensure_scaled_gyro
 from ..power_log import OscillationTracker, log_power_state
 from ..runtime import runtime
 from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
 from ..types import HeadingType
-
-# ETラリー工程の間はPlotter.tire_diameterもこの値になる(phases/et_rally.py)。
-TIRE_DIAMETER = ET_RALLY_TIRE_DIAMETER
 
 # sample_comment.pyは制御周期0.03秒で較正した。robot_programの周期(0.02秒)でも
 # 同じ「時間」で判定するため、tick数・1tickあたりの角度で持つ閾値を周期比で換算する。
@@ -49,8 +46,8 @@ class EtRallySpinAroundByEncoder(Behaviour):
     が主因と推定した。
 
     このノードでは、目標の回転角度を「左右の車輪が地面の上で進むべき円弧の
-    長さ(符号は逆・大きさは同じ)」に変換し(WHEEL_TREAD/TIRE_DIAMETER、
-    py_etrobo_util/plotter.py参照)、実際に左右のエンコーダがその量だけ回転
+    長さ(符号は逆・大きさは同じ)」に変換し(WHEEL_TREAD/runtime.plotter.tire_diameter、
+    直進と同じタイヤ径。py_etrobo_util/plotter.py参照)、実際に左右のエンコーダがその量だけ回転
     するまで駆動する(フェーズ1)。左右対称に回転させている限り、タイヤの
     実効径の絶対値の較正誤差があっても「その場」であることには影響しない。
 
@@ -121,7 +118,9 @@ class EtRallySpinAroundByEncoder(Behaviour):
             # 目標角度(度)を、左右の車輪が地面の上で進むべき円弧の長さ(mm)に
             # 変換し、さらにエンコーダの回転角度(度)に変換する。
             arc_length_mm = math.radians(abs(error)) * (WHEEL_TREAD / 2.0)
-            self.target_motor_deg = arc_length_mm / (math.pi * TIRE_DIAMETER) * 360.0
+            # 直進(Plotter.plot())と同じタイヤ径を使う。固定値を別途持つと、
+            # --rally-gyro-tire-calibration offでの較正前/較正後の切替が旋回側に反映されない。
+            self.target_motor_deg = arc_length_mm / (math.pi * runtime.plotter.tire_diameter) * 360.0
             self.direction = 1 if error > 0 else -1
 
             self.start_r = runtime.right_motor.get_count()
