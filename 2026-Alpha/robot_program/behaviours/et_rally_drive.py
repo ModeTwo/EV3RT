@@ -35,11 +35,14 @@ _STALL_PROGRESS_DEG = 0.3 * EXEC_INTERVAL / _TUNED_INTERVAL_SEC  # 1tickあた�
 _last_turn_direction = 0
 
 # DD-22較正用: 適応モード(adaptive_lag_compensation)で使う、引き込まれ量の
-# 実測からの推定値(指数移動平均)。固定値だと旋回ごとのばらつき(実測17〜31度)に
-# 追従できないため、毎回の実測(lag_right_delta/lag_left_delta)で更新していく。
-# 初期値は、2026-10-10の実機power=70の2回分(各n=30、計60サンプル)の平均22.67度を
-# 種として設定(0からだと最初の数回の補正が弱くなるため)。
-_lag_estimate_deg = 22.67
+# 実測からの推定値(指数移動平均)。固定の度数だと、較正に使った90度旋回より
+# 小さい旋回(フル周回には色々な大きさが混ざる)では過大になり、0にクランプされる
+# 不具合が実機で発生した(2026-10-10)。そのため度数ではなく、その旋回の
+# target_motor_degに対する比率(引き込まれ量÷先に止まる側の目標値)として持つ。
+# 初期値は、2026-10-10の実機power=70の2回分(各n=30、計60サンプル、90度旋回・
+# target_motor_deg≈121)の平均22.67度を121で割った比率。
+_LAG_REFERENCE_MOTOR_DEG = 121.0
+_lag_estimate_ratio = 22.67 / _LAG_REFERENCE_MOTOR_DEG
 # 2026-10-10: 実測2回分からノイズ(標準偏差2.6〜4.0度)と傾向(1旋回あたり約0.17度の
 # 緩やかな減少)を見積もり、ノイズ低減と追従遅れのトレードオフを数値最小化した結果、
 # 0.3よりも0.2の方がわずかに良い(誤差推定1.48度→1.37度)と分かったため変更。
@@ -101,9 +104,10 @@ class EtRallySpinAroundByEncoder(Behaviour):
         # 出力になる側、後述)の目標値をこの分だけ低く設定しておく。0なら無効。
         self.lag_compensation_deg = lag_compensation_deg
         # True: 上のlag_compensation_degを固定値として使う代わりに、モジュール変数
-        # _lag_estimate_degを使う。これは毎回の旋回終了後に実測の引き込まれ量で
-        # 指数移動平均として更新していくため、固定値では追従できない旋回ごとの
-        # ばらつきやpower依存を、実行中に自動で合わせ込む狙い。
+        # _lag_estimate_ratio(target_motor_degに対する比率)を使う。これは毎回の
+        # 旋回終了後に実測の引き込まれ量で指数移動平均として更新していくため、
+        # 固定値では追従できない旋回ごとのばらつき・power依存・旋回の大きさの違いを、
+        # 実行中に自動で合わせ込む狙い。
         self.adaptive_lag_compensation = adaptive_lag_compensation
         # 2026-09-20: フェーズ1(全力寄りのmain_power)のまま目標のエンコーダ角度に
         # 到達してブレーキをかけると、慣性で行き過ぎてフェーズ2の仕上げ補正が
@@ -172,26 +176,28 @@ class EtRallySpinAroundByEncoder(Behaviour):
             # DD-22較正用: right_power=course*direction*main_powerなので、この符号が
             # マイナスの側が先に目標へ到達して止まる(実測、2026-10-10)。先に止まる側は、
             # もう片方がまだ回っている間、反力で同じ方向へ引き込まれて動いてしまう分
-            # (lag_compensation_deg、適応モードなら_lag_estimate_deg)を見越して、
-            # 目標値を低くしておく。
-            global _lag_estimate_deg
-            compensation_deg = _lag_estimate_deg if self.adaptive_lag_compensation else self.lag_compensation_deg
-            right_base_motor_deg = self.target_motor_deg
-            left_base_motor_deg = self.target_motor_deg * self.left_target_scale
+            # (lag_compensation_deg/_LAG_REFERENCE_MOTOR_DEG、適応モードなら
+            # _lag_estimate_ratio)を見越して、目標値を低くしておく。
+            # 2026-10-10: 固定の度数ではなく、その旋回のtarget_motor_degに対する
+            # 比率として持つことで、較正に使った90度旋回より小さい旋回でも
+            # 自動的に適切な大きさに縮む(以前は0にクランプされる不具合があった)。
+            global _lag_estimate_ratio
+            compensation_ratio = (_lag_estimate_ratio if self.adaptive_lag_compensation
+                                   else self.lag_compensation_deg / _LAG_REFERENCE_MOTOR_DEG)
+            self.right_base_motor_deg = self.target_motor_deg
+            self.left_base_motor_deg = self.target_motor_deg * self.left_target_scale
             right_power_sign = runtime.course * self.direction
             self.early_side = 'right' if right_power_sign < 0 else 'left'
-            # 2026-10-10: 90度旋回で較正したcompensation_degは、それより小さい旋回
-            # (フル周回には色々な大きさが混ざる)では目標値そのものより大きくなり、
-            # 0にクランプされて旋回がほぼ起きなくなる不具合が実機で発生した。
+            # 比率を使っても、万一1.0を超えるような値になった場合の保険として
             # 先に止まる側の目標値の半分までしか引かないようにする。
             if right_power_sign < 0:
-                capped = min(compensation_deg, right_base_motor_deg * 0.5)
-                self.right_target_motor_deg = max(right_base_motor_deg - capped, 0.0)
-                self.left_target_motor_deg = left_base_motor_deg
+                capped = min(self.right_base_motor_deg * compensation_ratio, self.right_base_motor_deg * 0.5)
+                self.right_target_motor_deg = max(self.right_base_motor_deg - capped, 0.0)
+                self.left_target_motor_deg = self.left_base_motor_deg
             else:
-                self.right_target_motor_deg = right_base_motor_deg
-                capped = min(compensation_deg, left_base_motor_deg * 0.5)
-                self.left_target_motor_deg = max(left_base_motor_deg - capped, 0.0)
+                self.right_target_motor_deg = self.right_base_motor_deg
+                capped = min(self.left_base_motor_deg * compensation_ratio, self.left_base_motor_deg * 0.5)
+                self.left_target_motor_deg = max(self.left_base_motor_deg - capped, 0.0)
 
             self.start_r = runtime.right_motor.get_count()
             self.start_l = runtime.left_motor.get_count()
@@ -234,13 +240,18 @@ class EtRallySpinAroundByEncoder(Behaviour):
                 lag_left_delta = runtime.left_motor.get_count() - self.left_done_at_count
                 if self.adaptive_lag_compensation:
                     observed = abs(lag_right_delta if self.early_side == 'right' else lag_left_delta)
-                    _lag_estimate_deg = (_LAG_ESTIMATE_ALPHA * observed
-                                         + (1.0 - _LAG_ESTIMATE_ALPHA) * _lag_estimate_deg)
+                    early_base = (self.right_base_motor_deg if self.early_side == 'right'
+                                   else self.left_base_motor_deg)
+                    # target_motor_degがほぼ0の旋回(ほぼ回転不要)は比率が発散するので無視する。
+                    if early_base > 1.0:
+                        observed_ratio = observed / early_base
+                        _lag_estimate_ratio = (_LAG_ESTIMATE_ALPHA * observed_ratio
+                                               + (1.0 - _LAG_ESTIMATE_ALPHA) * _lag_estimate_ratio)
                 self.logger.info(
                     "%+06d %s.encoder-spin phase1 lag check: lag_right_delta=%+d lag_left_delta=%+d "
-                    "lag_estimate=%.1f" % (
+                    "lag_estimate_ratio=%.3f" % (
                         runtime.plotter.get_distance(), self.__class__.__name__,
-                        lag_right_delta, lag_left_delta, _lag_estimate_deg))
+                        lag_right_delta, lag_left_delta, _lag_estimate_ratio))
                 if not self.fine_trim:
                     # 仕上げなし: 停止したまま終了する。残った誤差はログにだけ残す。
                     residual = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
