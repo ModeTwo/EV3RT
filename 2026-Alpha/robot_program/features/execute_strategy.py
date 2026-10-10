@@ -31,7 +31,8 @@ class DeferredStrategySequence(Sequence):
     """Build motor behaviours only when this subtree starts running."""
 
     def __init__(self, name, loader, initial_heading_deg=0.0, fallback_loader=None,
-                 turn_method='spin_encoder', compensation_enabled=True):
+                 turn_method='spin_encoder', compensation_enabled=True,
+                 turn_fine_tolerance_deg=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -39,6 +40,7 @@ class DeferredStrategySequence(Sequence):
         self._initial_heading_deg = initial_heading_deg
         self._turn_method = turn_method
         self._compensation_enabled = compensation_enabled
+        self._turn_fine_tolerance_deg = turn_fine_tolerance_deg
         self._loaded = False
 
     def _load_children(self):
@@ -47,10 +49,14 @@ class DeferredStrategySequence(Sequence):
         # 食い違い「unknown / invalid state」になる。
         if self._loaded:
             return
+        extra_kwargs = {}
+        if self._turn_fine_tolerance_deg is not None:
+            extra_kwargs["turn_fine_tolerance_deg"] = self._turn_fine_tolerance_deg
         try:
             nodes = steps_from_strategy(
                 self._loader(), initial_heading_deg=self._initial_heading_deg,
-                turn_method=self._turn_method, compensation_enabled=self._compensation_enabled)
+                turn_method=self._turn_method, compensation_enabled=self._compensation_enabled,
+                **extra_kwargs)
         except (KeyError, OSError, TypeError, ValueError) as error:
             self.logger.error("Strategy loading failed: %s" % error)
             nodes = [Failure(name="invalid strategy")]
@@ -58,7 +64,8 @@ class DeferredStrategySequence(Sequence):
                 try:
                     nodes = steps_from_strategy(
                         self._fallback_loader(), initial_heading_deg=self._initial_heading_deg,
-                        turn_method=self._turn_method, compensation_enabled=self._compensation_enabled)
+                        turn_method=self._turn_method, compensation_enabled=self._compensation_enabled,
+                        **extra_kwargs)
                     self.logger.error("ETラリー開始時にエラー(%s)。固定ルートでゴールへ向かいます" % error)
                 except (KeyError, OSError, TypeError, ValueError) as fallback_error:
                     self.logger.error("Fallback route failed: %s" % fallback_error)
@@ -90,6 +97,7 @@ def build_execute_strategy(context, config, lap_number=None):
                 if getattr(config, "et_rally_fallback_enabled", False) else None),
             turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
             compensation_enabled=getattr(config, "et_rally_compensation_enabled", True),
+            turn_fine_tolerance_deg=getattr(config, "et_rally_turn_fine_tolerance_deg", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -100,6 +108,7 @@ def build_execute_strategy(context, config, lap_number=None):
                              if getattr(config, "et_rally_fallback_enabled", False) else None),
             turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
             compensation_enabled=getattr(config, "et_rally_compensation_enabled", True),
+            turn_fine_tolerance_deg=getattr(config, "et_rally_turn_fine_tolerance_deg", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 

@@ -84,6 +84,10 @@ class RaceConfig:
     # lqi: LQI(積分付き状態フィードバック)仕上げ。直進側はspin_*でも常にEtRallyRunByGyroを使う
     # (直進の実現方式はDD-13の対象外のため切替なし)。
     et_rally_turn_method: str = "spin_encoder"
+    # DD-19較正用: spin_encoder/one_shot/lqiのフェーズ2(仕上げ)許容誤差を上書きする。
+    # Noneなら各方式の素の既定値(0.5度)を使う。spin_pidとの純粋な方式比較時、
+    # spin_pid側の許容誤差(2.0度固定)に揃えるために使う。
+    et_rally_turn_fine_tolerance_deg: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (ベースライン計測用。較正値そのものは変えない)。
     et_rally_compensation_enabled: bool = True

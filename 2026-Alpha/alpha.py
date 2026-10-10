@@ -1241,6 +1241,14 @@ def _run_main(argv, startup_cleanup):
         help=('DD-19 calibration: off disables both gyro-scale (DD-17 GYRO_SCALE_FACTOR) and '
               'tire-diameter calibration for a clean baseline run. Default (unset) keeps on.'),
     )
+    parser.add_argument(
+        '--rally-turn-tolerance-deg',
+        type=float,
+        default=None,
+        help=('DD-19 calibration: override the fine-phase tolerance for spin_encoder/one_shot/lqi '
+              '(default 0.5deg). Used to match spin_pid\'s fixed 2.0deg tolerance for an isolated '
+              'turn-method comparison. Default (unset) keeps each method\'s own default.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1287,6 +1295,13 @@ def _run_main(argv, startup_cleanup):
         mission_config = dataclasses.replace(
             mission_config,
             et_rally_gyro_tire_calibration_enabled=(args.rally_gyro_tire_calibration == 'on'))
+    if args.rally_turn_tolerance_deg is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-tolerance-deg requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not math.isfinite(args.rally_turn_tolerance_deg):
+            parser.error('--rally-turn-tolerance-deg must be finite')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_fine_tolerance_deg=args.rally_turn_tolerance_deg)
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,
