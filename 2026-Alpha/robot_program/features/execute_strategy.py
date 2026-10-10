@@ -212,8 +212,10 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         if step["type"] == "move":
             distance_mm = int(round(step["distance_mm"]))
             # DD-19ベースライン: spin_pid指定時は直進PIDも、DD-14の調整値(4.0,0.6,0.06)ではなく
-            # 旋回側と同じ汎用デフォルト(0.2,0.00075,0.03)に揃える。
-            active_move_pid = (0.2, 0.00075, 0.03) if turn_method == 'spin_pid' else move_pid
+            # RunByGyro系で昔から使われてきた汎用デフォルト(1.1,0.00075,0.04。ruiseki_point.py等)に
+            # 戻す。旋回側の値(0.2,0.00075,0.03)をそのまま流用すると、補正量が前進出力に上乗せ
+            # される形になるぶん効きが弱く、方位を保持できず大きくカーブしてしまうことを実機で確認した。
+            active_move_pid = (1.1, 0.00075, 0.04) if turn_method == 'spin_pid' else move_pid
             leg = Parallel(
                 name="et_rally move%d%s" % (index, label_text),
                 policy=ParallelPolicy.SuccessOnOne(),
