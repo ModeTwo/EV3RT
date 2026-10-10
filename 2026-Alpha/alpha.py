@@ -1301,6 +1301,15 @@ def _run_main(argv, startup_cleanup):
               'turn\'s measured drag) instead of the fixed --rally-turn-lag-compensation-deg value. '
               'Default (unset) keeps the fixed value.'),
     )
+    parser.add_argument(
+        '--rally-turn-left-target-scale',
+        type=float,
+        default=None,
+        help=('DD-22 calibration: for spin_encoder, multiply the left wheel\'s target encoder angle '
+              'by this factor, to correct the steady-state right/left effective-rotation difference '
+              '(measured ~0.9%%, right wheel turns the robot slightly more per encoder degree). '
+              'Default (unset/1.0) keeps both wheels equal.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1389,6 +1398,11 @@ def _run_main(argv, startup_cleanup):
         mission_config = dataclasses.replace(
             mission_config,
             et_rally_turn_adaptive_lag_compensation=(args.rally_turn_lag_compensation_adaptive == 'on'))
+    if args.rally_turn_left_target_scale is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-left-target-scale requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_left_target_scale=args.rally_turn_left_target_scale)
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,

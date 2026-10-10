@@ -81,8 +81,15 @@ class EtRallySpinAroundByEncoder(Behaviour):
                  decel_deg: float = 0.0, decel_power: int = 50,
                  fine_trim: bool = True, backlash_preload_deg: float = 0.0,
                  lag_compensation_deg: float = 0.0,
-                 adaptive_lag_compensation: bool = False) -> None:
+                 adaptive_lag_compensation: bool = False,
+                 left_target_scale: float = 1.0) -> None:
         super(EtRallySpinAroundByEncoder, self).__init__(name)
+        # DD-22較正用: 片輪エンコーダテストで実測した、右輪の方が同じエンコーダ回転量に
+        # 対して約0.9%多く実際の方位を変える(実効径・グリップの定常的な左右差)分を
+        # 補正する。旋回のたびの「引き込まれ」(lag_compensation_deg)とは別の、
+        # 物理的な車輪そのものの特性による差なので、どちらが先に止まるかとは無関係に
+        # 常に左輪の目標値だけにこの係数をかける。1.0なら無効(既定、挙動は変えない)。
+        self.left_target_scale = left_target_scale
         # DD-22較正用: 前の旋回と逆方向に切り替わる旋回だけ、フェーズ1の目標エンコーダ角度に
         # この分を上乗せする。機構内のバックラッシュ(前の旋回で片側に詰まった遊びを、
         # 逆方向ではまず詰め直す必要がある)による「エンコーダは回るが実際には車輪が
@@ -169,14 +176,16 @@ class EtRallySpinAroundByEncoder(Behaviour):
             # 目標値を低くしておく。
             global _lag_estimate_deg
             compensation_deg = _lag_estimate_deg if self.adaptive_lag_compensation else self.lag_compensation_deg
+            right_base_motor_deg = self.target_motor_deg
+            left_base_motor_deg = self.target_motor_deg * self.left_target_scale
             right_power_sign = runtime.course * self.direction
             self.early_side = 'right' if right_power_sign < 0 else 'left'
             if right_power_sign < 0:
-                self.right_target_motor_deg = max(self.target_motor_deg - compensation_deg, 0.0)
-                self.left_target_motor_deg = self.target_motor_deg
+                self.right_target_motor_deg = max(right_base_motor_deg - compensation_deg, 0.0)
+                self.left_target_motor_deg = left_base_motor_deg
             else:
-                self.right_target_motor_deg = self.target_motor_deg
-                self.left_target_motor_deg = max(self.target_motor_deg - compensation_deg, 0.0)
+                self.right_target_motor_deg = right_base_motor_deg
+                self.left_target_motor_deg = max(left_base_motor_deg - compensation_deg, 0.0)
 
             self.start_r = runtime.right_motor.get_count()
             self.start_l = runtime.left_motor.get_count()

@@ -38,7 +38,7 @@ class DeferredStrategySequence(Sequence):
                  turn_fine_tolerance_deg=None, turn_decel_deg=None,
                  turn_backlash_preload_deg=None, turn_fine_trim=None,
                  turn_main_power=None, turn_lag_compensation_deg=None,
-                 turn_adaptive_lag_compensation=None):
+                 turn_adaptive_lag_compensation=None, turn_left_target_scale=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -53,6 +53,7 @@ class DeferredStrategySequence(Sequence):
         self._turn_main_power = turn_main_power
         self._turn_lag_compensation_deg = turn_lag_compensation_deg
         self._turn_adaptive_lag_compensation = turn_adaptive_lag_compensation
+        self._turn_left_target_scale = turn_left_target_scale
         self._loaded = False
 
     def _load_children(self):
@@ -76,6 +77,8 @@ class DeferredStrategySequence(Sequence):
             extra_kwargs["turn_lag_compensation_deg"] = self._turn_lag_compensation_deg
         if self._turn_adaptive_lag_compensation is not None:
             extra_kwargs["turn_adaptive_lag_compensation"] = self._turn_adaptive_lag_compensation
+        if self._turn_left_target_scale is not None:
+            extra_kwargs["turn_left_target_scale"] = self._turn_left_target_scale
         try:
             nodes = steps_from_strategy(
                 self._loader(), initial_heading_deg=self._initial_heading_deg,
@@ -128,6 +131,7 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_main_power=getattr(config, "et_rally_turn_main_power", None),
             turn_lag_compensation_deg=getattr(config, "et_rally_turn_lag_compensation_deg", None),
             turn_adaptive_lag_compensation=getattr(config, "et_rally_turn_adaptive_lag_compensation", None),
+            turn_left_target_scale=getattr(config, "et_rally_turn_left_target_scale", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -145,6 +149,7 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_main_power=getattr(config, "et_rally_turn_main_power", None),
             turn_lag_compensation_deg=getattr(config, "et_rally_turn_lag_compensation_deg", None),
             turn_adaptive_lag_compensation=getattr(config, "et_rally_turn_adaptive_lag_compensation", None),
+            turn_left_target_scale=getattr(config, "et_rally_turn_left_target_scale", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -190,6 +195,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         turn_fine_trim=True,
                         turn_lag_compensation_deg=0.0,
                         turn_adaptive_lag_compensation=False,
+                        turn_left_target_scale=1.0,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -375,6 +381,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         fine_trim=turn_fine_trim,
                         lag_compensation_deg=turn_lag_compensation_deg,
                         adaptive_lag_compensation=turn_adaptive_lag_compensation,
+                        left_target_scale=turn_left_target_scale,
                     )
                 )
     return nodes

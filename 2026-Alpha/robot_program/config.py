@@ -113,6 +113,11 @@ class RaceConfig:
     # 更新していく推定値(指数移動平均)を使う。固定値では追従できない旋回ごとの
     # ばらつき・power依存を、実行中に自動で合わせ込む狙い。既定False。
     et_rally_turn_adaptive_lag_compensation: Optional[bool] = None
+    # DD-22較正用: 左輪の目標エンコーダ角度に掛ける係数。片輪エンコーダテストで実測した、
+    # 右輪の方が同じ回転量に対して約0.9%多く実際の方位を変える(実効径・グリップの
+    # 定常的な左右差)分を補正する。lag_compensationとは別の、物理的な車輪特性による
+    # 差で、どちらが先に止まるかとは無関係。既定1.0=無効。
+    et_rally_turn_left_target_scale: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (ベースライン計測用。較正値そのものは変えない)。
     et_rally_compensation_enabled: bool = True
