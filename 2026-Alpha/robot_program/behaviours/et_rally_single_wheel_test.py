@@ -1,0 +1,101 @@
+"""検証専用: 片方の車輪だけをエンコーダで回し、もう片方はブレーキで固定して、
+1周(既定360度)ごとのジャイロ方位の変化量をログに残す。
+
+目的: 「エンコーダの測定自体は正確」であることと、「左右で同じエンコーダ回転量が
+同じだけ実際の向きを変える」こととは別の話ではないか、という疑問の直接検証。
+右輪だけでlaps回・左輪だけでlaps回を同じ条件(出力・周回数)で実行し、1周あたりの
+実際の方位変化量(ジャイロ測定)を左右で比較する。差があれば、タイヤの実効径・
+グリップ・バックラッシュの左右差が実在することの直接証拠になる。
+
+本番では使わない。EtRallySpinAroundByEncoder等、既存クラスは変更しない。
+"""
+
+from py_trees.behaviour import Behaviour
+from py_trees.common import Status
+from py_trees.composites import Sequence
+
+from ..gyro_scale import ensure_scaled_gyro
+from ..runtime import runtime
+
+_DEFAULT_POWER = 50
+_DEFAULT_LAPS = 10
+_DEFAULT_DEG_PER_LAP = 360.0
+
+
+def build_et_rally_single_wheel_diagnostic_sequence(
+        power: int = _DEFAULT_POWER, laps: int = _DEFAULT_LAPS,
+        deg_per_lap: float = _DEFAULT_DEG_PER_LAP) -> Sequence:
+    # 右輪だけ→左輪だけ、の順でlaps回ずつ実行し、1周ごとの実際の方位変化量を
+    # ログに残す(本ファイルのdocstring参照)。
+    root = Sequence(name="et_rally single wheel diagnostic", memory=True)
+    root.add_children([
+        EtRallySingleWheelEncoderTest(
+            name="single_wheel_test right", wheel="right", power=power,
+            deg_per_lap=deg_per_lap, laps=laps),
+        EtRallySingleWheelEncoderTest(
+            name="single_wheel_test left", wheel="left", power=power,
+            deg_per_lap=deg_per_lap, laps=laps),
+    ])
+    return root
+
+
+class EtRallySingleWheelEncoderTest(Behaviour):
+    def __init__(self, name: str, wheel: str, power: int,
+                 deg_per_lap: float = 360.0, laps: int = 10) -> None:
+        super().__init__(name)
+        if wheel not in ("right", "left"):
+            raise ValueError("wheel must be 'right' or 'left'")
+        self.wheel = wheel
+        self.power = power
+        self.deg_per_lap = deg_per_lap
+        self.laps = laps
+        self.running = False
+
+    def update(self) -> Status:
+        runtime.require("gyro_sensor", "right_motor", "left_motor")
+        drive_motor = runtime.right_motor if self.wheel == "right" else runtime.left_motor
+        brake_motor = runtime.left_motor if self.wheel == "right" else runtime.right_motor
+
+        if not self.running:
+            ensure_scaled_gyro()
+            brake_motor.set_power(0)
+            brake_motor.set_brake(True)
+            self.start_count = drive_motor.get_count()
+            self.lap_index = 0
+            self.start_heading = (-1) * runtime.course * runtime.gyro_sensor.get_angle()
+            self.prev_lap_heading = self.start_heading
+            self.running = True
+            self.logger.info(
+                "%s started wheel=%s power=%d deg_per_lap=%.1f laps=%d heading0=%+.2f" % (
+                    self.__class__.__name__, self.wheel, self.power,
+                    self.deg_per_lap, self.laps, self.start_heading))
+
+        current_heading = (-1) * runtime.course * runtime.gyro_sensor.get_angle()
+        delta_count = abs(drive_motor.get_count() - self.start_count)
+        target_count = self.deg_per_lap * (self.lap_index + 1)
+
+        if delta_count >= target_count:
+            lap_delta_heading = (current_heading - self.prev_lap_heading + 180.0) % 360.0 - 180.0
+            total_delta_heading = (current_heading - self.start_heading + 180.0) % 360.0 - 180.0
+            self.logger.info(
+                "%s wheel=%s lap=%d/%d encoder_total=%.1f heading=%+.2f "
+                "lap_delta_heading=%+.2f total_delta_heading=%+.2f" % (
+                    self.__class__.__name__, self.wheel, self.lap_index + 1, self.laps,
+                    delta_count, current_heading, lap_delta_heading, total_delta_heading))
+            self.prev_lap_heading = current_heading
+            self.lap_index += 1
+            if self.lap_index >= self.laps:
+                drive_motor.set_power(0)
+                drive_motor.set_brake(True)
+                self.running = False
+                return Status.SUCCESS
+
+        drive_motor.set_power(self.power)
+        return Status.RUNNING
+
+    def terminate(self, new_status: Status) -> None:
+        if runtime.right_motor is not None:
+            runtime.right_motor.set_power(0)
+        if runtime.left_motor is not None:
+            runtime.left_motor.set_power(0)
+        self.running = False

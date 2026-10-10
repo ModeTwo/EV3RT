@@ -145,6 +145,7 @@ MISSION_CHOICES = (
     'et-rally-lqi-calibration',
     'et-rally-marker-observe',
     'et-rally-turn-phase2-diagnostic',
+    'et-rally-single-wheel-diagnostic',
 )
 
 
@@ -191,6 +192,10 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
     if mission == 'et-rally-turn-phase2-diagnostic':
         # 旋回のB方向横ズレが、フェーズ2(仕上げ補正)由来かどうかを切り分ける専用。
         # plan_spin_alternating30.json(--rally-plan-path、通常設定)と比較して使う。
+        return replace(config, mission_mode=mission, **disabled)
+    if mission == 'et-rally-single-wheel-diagnostic':
+        # 片輪だけをエンコーダで回し、同じ回転量に対する実際の方位変化量(=実効的な
+        # 移動量)が左右で違うかを直接確認する専用(DD-22関連)。
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'rally-drive':
         # 復号済みHintを外部入力し、準備工程なしでPC受信と周回走行だけを試す。

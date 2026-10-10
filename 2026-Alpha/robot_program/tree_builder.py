@@ -34,6 +34,7 @@ def build_mission_children(context, config):
         'et-rally-lqi-calibration',
         'et-rally-marker-observe',
         'et-rally-turn-phase2-diagnostic',
+        'et-rally-single-wheel-diagnostic',
     ):
         raise ValueError('Unknown mission mode: ' + config.mission_mode)
     if config.mission_mode == 'at':
@@ -66,6 +67,11 @@ def build_mission_children(context, config):
         from .behaviours.et_rally_turn_phase2_diagnostic import (
             build_et_rally_turn_phase2_diagnostic_sequence)
         return [EnableGyroScale(), build_et_rally_turn_phase2_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-diagnostic':
+        # 片輪だけのエンコーダ駆動で、左右の実効的な移動量の差を直接確認する専用。
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_diagnostic_sequence()]
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))
