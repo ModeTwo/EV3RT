@@ -148,6 +148,8 @@ MISSION_CHOICES = (
     'et-rally-single-wheel-diagnostic',
     'et-rally-single-wheel-reversal-diagnostic',
     'et-rally-single-wheel-alternating-diagnostic',
+    'et-rally-single-wheel-alternating-right-diagnostic',
+    'et-rally-single-wheel-alternating-left-diagnostic',
 )
 
 
@@ -206,6 +208,11 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
     if mission == 'et-rally-single-wheel-alternating-diagnostic':
         # 片輪だけを1周ごとに反転させ続け、反転コストのサンプル数を増やして
         # 左右差をより確実に見る専用(DD-22関連)。
+        return replace(config, mission_mode=mission, **disabled)
+    if mission in ('et-rally-single-wheel-alternating-right-diagnostic',
+                   'et-rally-single-wheel-alternating-left-diagnostic'):
+        # 上記の右輪だけ/左輪だけ単独版。2つの間に、実機の位置ズレを物理的に
+        # 測る間を空けられるよう、別ミッションとして分けている(DD-22関連)。
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'rally-drive':
         # 復号済みHintを外部入力し、準備工程なしでPC受信と周回走行だけを試す。

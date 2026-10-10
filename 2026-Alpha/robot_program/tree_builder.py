@@ -37,6 +37,8 @@ def build_mission_children(context, config):
         'et-rally-single-wheel-diagnostic',
         'et-rally-single-wheel-reversal-diagnostic',
         'et-rally-single-wheel-alternating-diagnostic',
+        'et-rally-single-wheel-alternating-right-diagnostic',
+        'et-rally-single-wheel-alternating-left-diagnostic',
     ):
         raise ValueError('Unknown mission mode: ' + config.mission_mode)
     if config.mission_mode == 'at':
@@ -84,6 +86,14 @@ def build_mission_children(context, config):
         from .behaviours.et_rally_single_wheel_test import (
             build_et_rally_single_wheel_alternating_diagnostic_sequence)
         return [EnableGyroScale(), build_et_rally_single_wheel_alternating_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-alternating-right-diagnostic':
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_alternating_right_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_alternating_right_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-alternating-left-diagnostic':
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_alternating_left_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_alternating_left_diagnostic_sequence()]
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))
