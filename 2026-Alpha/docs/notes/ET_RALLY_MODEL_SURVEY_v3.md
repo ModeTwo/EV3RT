@@ -16,7 +16,7 @@ DD-15(キャスター引きずり補正)・DD-16(横ズレ補正)・DD-17(ジャ
 - `--mission rally-drive --rally-plan-path <ファイル>` で、PC通信なしに経路ファイル単体のテストができる(DD-12で既存)。直進専用: `robot_program/tests/plan_straight_100cm.json`/`200cm.json`、旋回専用: `plan_spin_alternating30.json`、旋回回数比較用: `plan_fewturns_square.json`(4旋回)/`plan_manyturns_octagon.json`(8旋回、総距離・総旋回角度は前者と同じ)、フル周回: `plan_seed9392783.json`(3周・旋回22回・約8m)
 - `--rally-turn-method {spin_pid,spin_encoder,one_shot,lqi}`(新設)で旋回方式を切替。`spin_pid`がDD-13以前の無補正PIDベースライン(gyro_drive.SpinAround)
 - `--rally-compensation {on,off}`(新設)でDD-15/16の両補正(キャスター引きずり・横ズレ)をまとめて無効化
-- `--rally-gyro-tire-calibration {on,off}`(新設)でDD-17(ジャイロ倍率補正・タイヤ径較正)を無効化
+- `--rally-gyro-tire-calibration {on,off}`(新設)でDD-17(ジャイロ倍率補正・タイヤ径較正)を無効化。2026-10-10修正: 当初offにしてもTIRE_DIAMETER(57.33、既に2段階較正済み)が使われたままだったため、`UNCALIBRATED_TIRE_DIAMETER`(55.0、較正前の最初の想定値)を明示的に使うよう修正した(`py_etrobo_util/plotter.py`、`robot_program/phases/et_rally.py`)。また、`EtRallyRunByGyro`は`--rally-gyro-tire-calibration off`でも自分で`ensure_scaled_gyro()`を呼ぶため、ジャイロ倍率補正(0.635%、小さい)は直進区間で依然かかったまま(未修正、既知の残課題)
 - モーター出力・バッテリー電圧/電流を`RALLY_PWR`タグでログ出力するよう各旋回・直進クラスに追加(`robot_program/power_log.py`)。`wireless_device/et_rally_lqi/parse_power_log.py`でログを要約できる
 - ゴール位置はDD-19較正の間、本番用のGOAL_SHIFT_CM(ガレージ位置への補正)を外し、「14,15のグレーポイントの中点からマイナスX方向へ14.6cm」の基準点そのものを使う(2026-10-10、`wireless_device/et_rally_planner/config.py`)
 - 位置ズレの記録方向: ゴールに正対した状態を基準に、+X=スタート方向へ戻る側／-X=ゴールを行き過ぎる側、+Y=北／-Y=南、角度は真上(+Y方向)を0度として左右
@@ -30,7 +30,9 @@ pypy3 alpha.py right --mission rally-drive \
   --rally-turn-method spin_pid --rally-compensation off --rally-gyro-tire-calibration off
 ```
 
-## ベースライン計測結果(2026-10-10、補正なし5回、plan_seed9392783.json・右コース)
+## ベースライン計測結果(2026-10-10、補正なし5回、plan_seed9392783.json・右コース) ※要再測定
+
+**注意**: 下表は、`--rally-gyro-tire-calibration off`でもタイヤ径が共通デフォルト(57.33、既に2段階較正済み)のまま使われていた回の結果。`UNCALIBRATED_TIRE_DIAMETER`(55.0)修正後に再測定が必要(直進単体・フル周回とも)。参考値として残す。
 
 旋回PID=(0.2, 0.00075, 0.03)(execute_strategy.pyのturn_pid既定値、production/spin_encoderのフェーズ2仕上げと同じ値)、直進PID=(1.1, 0.1, 0.03)(sample.pyのRunByGyroと同じ値)、`--rally-compensation off --rally-gyro-tire-calibration off`で5回完走。ゴール地点との誤差（ゴールに正対した基準、+X=スタート方向/-X=ゴール行き過ぎ、+Y=北/-Y=南、角度は真上0度）:
 
