@@ -39,6 +39,26 @@ def build_et_rally_single_wheel_diagnostic_sequence(
     return root
 
 
+def build_et_rally_single_wheel_reversal_diagnostic_sequence(
+        power: int = _DEFAULT_POWER, laps_forward: int = 5, laps_reverse: int = 5,
+        deg_per_lap: float = _DEFAULT_DEG_PER_LAP) -> Sequence:
+    # 各輪ごとに、順方向にlaps_forward周→その場で逆方向にlaps_reverse周、を連続させる。
+    # 逆方向側の1周目(反転した直後)が、2周目以降(定常)と比べて小さければ、
+    # 反転の瞬間だけ余計にエンコーダが消費されている(バックラッシュ等)ことの
+    # 直接証拠になる。右輪・左輪で同じ比較をすることで、反転コストの左右差も見える。
+    root = Sequence(name="et_rally single wheel reversal diagnostic", memory=True)
+    children = []
+    for wheel in ("right", "left"):
+        children.append(EtRallySingleWheelEncoderTest(
+            name="single_wheel_reversal_test %s forward" % wheel, wheel=wheel, power=power,
+            deg_per_lap=deg_per_lap, laps=laps_forward))
+        children.append(EtRallySingleWheelEncoderTest(
+            name="single_wheel_reversal_test %s reverse" % wheel, wheel=wheel, power=-power,
+            deg_per_lap=deg_per_lap, laps=laps_reverse))
+    root.add_children(children)
+    return root
+
+
 class EtRallySingleWheelEncoderTest(Behaviour):
     def __init__(self, name: str, wheel: str, power: int,
                  deg_per_lap: float = 360.0, laps: int = 10) -> None:

@@ -35,6 +35,7 @@ def build_mission_children(context, config):
         'et-rally-marker-observe',
         'et-rally-turn-phase2-diagnostic',
         'et-rally-single-wheel-diagnostic',
+        'et-rally-single-wheel-reversal-diagnostic',
     ):
         raise ValueError('Unknown mission mode: ' + config.mission_mode)
     if config.mission_mode == 'at':
@@ -72,6 +73,11 @@ def build_mission_children(context, config):
         from .behaviours.et_rally_single_wheel_test import (
             build_et_rally_single_wheel_diagnostic_sequence)
         return [EnableGyroScale(), build_et_rally_single_wheel_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-reversal-diagnostic':
+        # 片輪だけの順方向→逆方向の反転コストを、左右で比較する専用。
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_reversal_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_reversal_diagnostic_sequence()]
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))
