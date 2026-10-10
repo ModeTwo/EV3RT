@@ -98,12 +98,6 @@ class SpinAround(Behaviour):
             )
             return Status.SUCCESS
 
-        # PIDのsetpointを毎tick現在値の近くへ再センタリングする(EtRallySpinAroundByEncoder.phase2と同じ
-        # 考え方)。target_headingは固定値のまま、current_headingはミッション全体で積算され続けるため、
-        # setpointを固定したままだとPID内部の誤差(setpoint-current_heading)が、何度も旋回するうちに
-        # 実際の角度差とかけ離れた巨大な値になり、出力が暴れて目標を何周も飛び越える不具合があった。
-        self.pid.setpoint = current_heading + error
-
         # PIDの出力方向は維持しつつ、角度境界をまたぐ場合は正規化した誤差方向を採用する。
         raw_power = float(self.pid(current_heading))
         if raw_power == 0.0:
