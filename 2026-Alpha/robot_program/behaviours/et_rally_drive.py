@@ -37,7 +37,9 @@ _last_turn_direction = 0
 # DD-22較正用: 適応モード(adaptive_lag_compensation)で使う、引き込まれ量の
 # 実測からの推定値(指数移動平均)。固定値だと旋回ごとのばらつき(実測17〜31度)に
 # 追従できないため、毎回の実測(lag_right_delta/lag_left_delta)で更新していく。
-_lag_estimate_deg = 0.0
+# 初期値は、2026-10-10の実機power=70の2回分(各n=30、計60サンプル)の平均22.67度を
+# 種として設定(0からだと最初の数回の補正が弱くなるため)。
+_lag_estimate_deg = 22.67
 _LAG_ESTIMATE_ALPHA = 0.3
 
 
