@@ -1293,6 +1293,14 @@ def _run_main(argv, startup_cleanup):
               'the drift it picks up while dragged by the still-turning other wheel (measured '
               '5-9deg). Default (unset/0) keeps both wheels at the same target.'),
     )
+    parser.add_argument(
+        '--rally-turn-lag-compensation-adaptive',
+        choices=['on', 'off'],
+        default=None,
+        help=('DD-22 calibration: for spin_encoder, use a running estimate (updated from each '
+              'turn\'s measured drag) instead of the fixed --rally-turn-lag-compensation-deg value. '
+              'Default (unset) keeps the fixed value.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1375,6 +1383,12 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-lag-compensation-deg requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_lag_compensation_deg=args.rally_turn_lag_compensation_deg)
+    if args.rally_turn_lag_compensation_adaptive is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-lag-compensation-adaptive requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config,
+            et_rally_turn_adaptive_lag_compensation=(args.rally_turn_lag_compensation_adaptive == 'on'))
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,

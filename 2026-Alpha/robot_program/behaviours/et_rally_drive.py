@@ -34,6 +34,12 @@ _STALL_PROGRESS_DEG = 0.3 * EXEC_INTERVAL / _TUNED_INTERVAL_SEC  # 1tickあた�
 # 「前の旋回と逆方向か」をまたいで知るには、この窓口(モジュール変数)で持つ必要がある。
 _last_turn_direction = 0
 
+# DD-22較正用: 適応モード(adaptive_lag_compensation)で使う、引き込まれ量の
+# 実測からの推定値(指数移動平均)。固定値だと旋回ごとのばらつき(実測17〜31度)に
+# 追従できないため、毎回の実測(lag_right_delta/lag_left_delta)で更新していく。
+_lag_estimate_deg = 0.0
+_LAG_ESTIMATE_ALPHA = 0.3
+
 
 class EtRallySpinAroundByEncoder(Behaviour):
     """左右のタイヤの回転量(エンコーダ)を揃えて回すことで、「その場旋回」であること
@@ -69,7 +75,8 @@ class EtRallySpinAroundByEncoder(Behaviour):
                  fine_tolerance_deg: float = 2.0,
                  decel_deg: float = 0.0, decel_power: int = 50,
                  fine_trim: bool = True, backlash_preload_deg: float = 0.0,
-                 lag_compensation_deg: float = 0.0) -> None:
+                 lag_compensation_deg: float = 0.0,
+                 adaptive_lag_compensation: bool = False) -> None:
         super(EtRallySpinAroundByEncoder, self).__init__(name)
         # DD-22較正用: 前の旋回と逆方向に切り替わる旋回だけ、フェーズ1の目標エンコーダ角度に
         # この分を上乗せする。機構内のバックラッシュ(前の旋回で片側に詰まった遊びを、
@@ -77,10 +84,15 @@ class EtRallySpinAroundByEncoder(Behaviour):
         # 転がっていない」区間を事前に見込むためのもの。0なら無効(既定、挙動は変えない)。
         self.backlash_preload_deg = backlash_preload_deg
         # DD-22較正用: 先に目標へ到達して止まった側が、まだ回っているもう片方の反力で
-        # 「止まった後も同じ方向へ引き込まれて動いてしまう」分(実測5〜9度、2026-10-10)を
-        # 見越して、先に止まる側(その旋回でマイナス出力になる側、後述)の目標値を
-        # この分だけ低く設定しておく。0なら無効(既定、挙動は変えない)。
+        # 「止まった後も同じ方向へ引き込まれて動いてしまう」分(実測、旋回ごとに17〜31度と
+        # 幅がある、power依存、2026-10-10)を見越して、先に止まる側(その旋回でマイナス
+        # 出力になる側、後述)の目標値をこの分だけ低く設定しておく。0なら無効。
         self.lag_compensation_deg = lag_compensation_deg
+        # True: 上のlag_compensation_degを固定値として使う代わりに、モジュール変数
+        # _lag_estimate_degを使う。これは毎回の旋回終了後に実測の引き込まれ量で
+        # 指数移動平均として更新していくため、固定値では追従できない旋回ごとの
+        # ばらつきやpower依存を、実行中に自動で合わせ込む狙い。
+        self.adaptive_lag_compensation = adaptive_lag_compensation
         # 2026-09-20: フェーズ1(全力寄りのmain_power)のまま目標のエンコーダ角度に
         # 到達してブレーキをかけると、慣性で行き過ぎてフェーズ2の仕上げ補正が
         # 毎回必要になる。残りのエンコーダ角度がdecel_deg未満になったら
@@ -148,14 +160,18 @@ class EtRallySpinAroundByEncoder(Behaviour):
             # DD-22較正用: right_power=course*direction*main_powerなので、この符号が
             # マイナスの側が先に目標へ到達して止まる(実測、2026-10-10)。先に止まる側は、
             # もう片方がまだ回っている間、反力で同じ方向へ引き込まれて動いてしまう分
-            # (lag_compensation_deg)を見越して、目標値を低くしておく。
+            # (lag_compensation_deg、適応モードなら_lag_estimate_deg)を見越して、
+            # 目標値を低くしておく。
+            global _lag_estimate_deg
+            compensation_deg = _lag_estimate_deg if self.adaptive_lag_compensation else self.lag_compensation_deg
             right_power_sign = runtime.course * self.direction
+            self.early_side = 'right' if right_power_sign < 0 else 'left'
             if right_power_sign < 0:
-                self.right_target_motor_deg = max(self.target_motor_deg - self.lag_compensation_deg, 0.0)
+                self.right_target_motor_deg = max(self.target_motor_deg - compensation_deg, 0.0)
                 self.left_target_motor_deg = self.target_motor_deg
             else:
                 self.right_target_motor_deg = self.target_motor_deg
-                self.left_target_motor_deg = max(self.target_motor_deg - self.lag_compensation_deg, 0.0)
+                self.left_target_motor_deg = max(self.target_motor_deg - compensation_deg, 0.0)
 
             self.start_r = runtime.right_motor.get_count()
             self.start_l = runtime.left_motor.get_count()
@@ -196,10 +212,15 @@ class EtRallySpinAroundByEncoder(Behaviour):
             if self.right_done and self.left_done:
                 lag_right_delta = runtime.right_motor.get_count() - self.right_done_at_count
                 lag_left_delta = runtime.left_motor.get_count() - self.left_done_at_count
+                if self.adaptive_lag_compensation:
+                    observed = abs(lag_right_delta if self.early_side == 'right' else lag_left_delta)
+                    _lag_estimate_deg = (_LAG_ESTIMATE_ALPHA * observed
+                                         + (1.0 - _LAG_ESTIMATE_ALPHA) * _lag_estimate_deg)
                 self.logger.info(
-                    "%+06d %s.encoder-spin phase1 lag check: lag_right_delta=%+d lag_left_delta=%+d" % (
+                    "%+06d %s.encoder-spin phase1 lag check: lag_right_delta=%+d lag_left_delta=%+d "
+                    "lag_estimate=%.1f" % (
                         runtime.plotter.get_distance(), self.__class__.__name__,
-                        lag_right_delta, lag_left_delta))
+                        lag_right_delta, lag_left_delta, _lag_estimate_deg))
                 if not self.fine_trim:
                     # 仕上げなし: 停止したまま終了する。残った誤差はログにだけ残す。
                     residual = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0

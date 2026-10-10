@@ -109,6 +109,10 @@ class RaceConfig:
     # 反力で「止まった後も同じ方向へ引き込まれて動いてしまう」分(実測5〜9度)を
     # 見越す補正。既定0.0=無効。
     et_rally_turn_lag_compensation_deg: Optional[float] = None
+    # DD-22較正用: Trueなら上の固定値の代わりに、実測の引き込まれ量から毎回
+    # 更新していく推定値(指数移動平均)を使う。固定値では追従できない旋回ごとの
+    # ばらつき・power依存を、実行中に自動で合わせ込む狙い。既定False。
+    et_rally_turn_adaptive_lag_compensation: Optional[bool] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (ベースライン計測用。較正値そのものは変えない)。
     et_rally_compensation_enabled: bool = True
