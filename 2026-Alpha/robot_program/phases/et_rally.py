@@ -10,8 +10,22 @@ from ..behaviours.device_control import ArmDirection, ArmUpDownFull
 from ..features.execute_strategy import build_execute_strategy
 from ..behaviours.motor_control import StopNow
 from ..features.receive_strategy import build_receive_strategy
+from .. import gyro_scale
 from ..gyro_scale import EnableGyroScale
 from ..runtime import runtime
+
+
+class SetGyroScaleDisabled(Behaviour):
+    # DD-19較正用: EtRallyRunByGyro等が内部で無条件に呼ぶensure_scaled_gyro()を、
+    # この工程の間だけ無効化する(--rally-gyro-tire-calibration off)。
+    def __init__(self, name, disabled):
+        super().__init__(name)
+        self.disabled = disabled
+
+    def update(self):
+        gyro_scale.set_disabled(self.disabled)
+        self.logger.info("gyro scale disabled=%s" % self.disabled)
+        return Status.SUCCESS
 
 
 class SetTireDiameter(Behaviour):
@@ -44,6 +58,9 @@ def build_et_rally_phase(context, config):
         # TIRE_DIAMETER(57.33)自体が既に2段階較正済みの値のため、「補正なし」の
         # ベースラインでは、較正前の最初の想定値(55.0)を明示的に使う。
         children.append(SetTireDiameter("et_rally tire diameter uncalibrated", UNCALIBRATED_TIRE_DIAMETER))
+        # EtRallyRunByGyro等はフラグに関わらず内部でensure_scaled_gyro()を呼ぶため、
+        # 窓口自体を無効化してジャイロ倍率補正を確実に無しにする。
+        children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
     children.append(ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP))
     if config.et_rally_strategy_source == "received":
         children.append(build_receive_strategy(context, config))
@@ -58,5 +75,8 @@ def build_et_rally_phase(context, config):
     # calibration有効時はET_RALLY_TIRE_DIAMETERから、無効時はUNCALIBRATED_TIRE_DIAMETERから、
     # いずれの場合も共通デフォルト(TIRE_DIAMETER)へ戻す。
     children.append(SetTireDiameter("et_rally tire diameter restore", TIRE_DIAMETER))
+    if not gyro_tire_calibration:
+        # 後続の工程(同一プロセス内の別ミッション等)に影響させないよう元に戻す。
+        children.append(SetGyroScaleDisabled("et_rally gyro scale re-enabled", False))
     root.add_children(children)
     return root
