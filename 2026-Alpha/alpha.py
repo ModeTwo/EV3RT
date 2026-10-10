@@ -1277,6 +1277,13 @@ def _run_main(argv, startup_cleanup):
               'overshoot correction reversing direction again) contributes to the drift. '
               'Default (unset) keeps phase2 on.'),
     )
+    parser.add_argument(
+        '--rally-turn-power',
+        type=int,
+        default=None,
+        help=('DD-22 calibration: for spin_encoder, override phase1\'s drive power (default 70). '
+              'Used to match the single-wheel encoder diagnostic\'s power for a fair comparison.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1349,6 +1356,11 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-fine-trim requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_fine_trim_enabled=(args.rally_turn_fine_trim == 'on'))
+    if args.rally_turn_power is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-power requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_main_power=args.rally_turn_power)
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,

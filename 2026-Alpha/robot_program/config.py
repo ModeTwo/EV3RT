@@ -101,6 +101,9 @@ class RaceConfig:
     # 戻し)を起こし、ズレの一因になっていないかを切り分けるための診断用。
     # Noneなら素の既定値(True、フェーズ2を使う)のまま。
     et_rally_turn_fine_trim_enabled: Optional[bool] = None
+    # DD-22較正用: spin_encoderのフェーズ1の駆動パワーを上書きする。片輪エンコーダ
+    # テスト(power=50既定)と同じ出力で比較するために使う。Noneなら素の既定値(70)。
+    et_rally_turn_main_power: Optional[int] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (ベースライン計測用。較正値そのものは変えない)。
     et_rally_compensation_enabled: bool = True
