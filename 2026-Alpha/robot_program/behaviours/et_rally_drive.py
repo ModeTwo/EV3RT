@@ -143,6 +143,10 @@ class EtRallySpinAroundByEncoder(Behaviour):
             self.start_l = runtime.left_motor.get_count()
             self.right_done = (self.target_motor_deg < 1e-6)
             self.left_done = (self.target_motor_deg < 1e-6)
+            # target_motor_deg≈0(回転不要)なら、上のright_done/left_doneがTrueのまま
+            # 下の個別停止判定を一度も通らないため、ここでも基準値を用意しておく。
+            self.right_done_at_count = self.start_r
+            self.left_done_at_count = self.start_l
             self.phase = 1
             self.oscillation = OscillationTracker()
 
@@ -158,14 +162,25 @@ class EtRallySpinAroundByEncoder(Behaviour):
             # (左右のタイヤの実効径がわずかに違っても、片方だけ行き過ぎさせない)
             if not self.right_done and delta_r >= self.target_motor_deg:
                 self.right_done = True
+                # ユーザー仮説(2026-10-10)の検証用: 止めた瞬間のエンコーダ値を記録し、
+                # もう片方がまだ動いている「遅れ」区間に、この止めたはずの輪が反力で
+                # 動いていないか(片輪テストのbrake_side_deltaと同じ考え方)を後で見る。
+                self.right_done_at_count = runtime.right_motor.get_count()
                 runtime.right_motor.set_power(0)
                 runtime.right_motor.set_brake(True)
             if not self.left_done and delta_l >= self.target_motor_deg:
                 self.left_done = True
+                self.left_done_at_count = runtime.left_motor.get_count()
                 runtime.left_motor.set_power(0)
                 runtime.left_motor.set_brake(True)
 
             if self.right_done and self.left_done:
+                lag_right_delta = runtime.right_motor.get_count() - self.right_done_at_count
+                lag_left_delta = runtime.left_motor.get_count() - self.left_done_at_count
+                self.logger.info(
+                    "%+06d %s.encoder-spin phase1 lag check: lag_right_delta=%+d lag_left_delta=%+d" % (
+                        runtime.plotter.get_distance(), self.__class__.__name__,
+                        lag_right_delta, lag_left_delta))
                 if not self.fine_trim:
                     # 仕上げなし: 停止したまま終了する。残った誤差はログにだけ残す。
                     residual = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
