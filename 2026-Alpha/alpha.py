@@ -1268,6 +1268,15 @@ def _run_main(argv, startup_cleanup):
               'previous one, add this many degrees to phase1\'s target encoder angle, to pre-take-up '
               'mechanical backlash before the real rotation (default 0=off).'),
     )
+    parser.add_argument(
+        '--rally-turn-fine-trim',
+        choices=['on', 'off'],
+        default=None,
+        help=('DD-22 calibration: for spin_encoder, off skips phase2 (gyro fine-trim) and ends the '
+              'turn after phase1 (encoder-only) alone. Used to check whether phase2 itself (e.g. an '
+              'overshoot correction reversing direction again) contributes to the drift. '
+              'Default (unset) keeps phase2 on.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1335,6 +1344,11 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-backlash-preload-deg must be finite')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_backlash_preload_deg=args.rally_turn_backlash_preload_deg)
+    if args.rally_turn_fine_trim is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-fine-trim requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_fine_trim_enabled=(args.rally_turn_fine_trim == 'on'))
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,

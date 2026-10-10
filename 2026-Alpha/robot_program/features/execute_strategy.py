@@ -36,7 +36,7 @@ class DeferredStrategySequence(Sequence):
     def __init__(self, name, loader, initial_heading_deg=0.0, fallback_loader=None,
                  turn_method='spin_encoder', compensation_enabled=True,
                  turn_fine_tolerance_deg=None, turn_decel_deg=None,
-                 turn_backlash_preload_deg=None):
+                 turn_backlash_preload_deg=None, turn_fine_trim=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -47,6 +47,7 @@ class DeferredStrategySequence(Sequence):
         self._turn_fine_tolerance_deg = turn_fine_tolerance_deg
         self._turn_decel_deg = turn_decel_deg
         self._turn_backlash_preload_deg = turn_backlash_preload_deg
+        self._turn_fine_trim = turn_fine_trim
         self._loaded = False
 
     def _load_children(self):
@@ -62,6 +63,8 @@ class DeferredStrategySequence(Sequence):
             extra_kwargs["turn_decel_deg"] = self._turn_decel_deg
         if self._turn_backlash_preload_deg is not None:
             extra_kwargs["turn_backlash_preload_deg"] = self._turn_backlash_preload_deg
+        if self._turn_fine_trim is not None:
+            extra_kwargs["turn_fine_trim"] = self._turn_fine_trim
         try:
             nodes = steps_from_strategy(
                 self._loader(), initial_heading_deg=self._initial_heading_deg,
@@ -110,6 +113,7 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_fine_tolerance_deg=getattr(config, "et_rally_turn_fine_tolerance_deg", None),
             turn_decel_deg=getattr(config, "et_rally_turn_decel_deg", None),
             turn_backlash_preload_deg=getattr(config, "et_rally_turn_backlash_preload_deg", None),
+            turn_fine_trim=getattr(config, "et_rally_turn_fine_trim_enabled", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -123,6 +127,7 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_fine_tolerance_deg=getattr(config, "et_rally_turn_fine_tolerance_deg", None),
             turn_decel_deg=getattr(config, "et_rally_turn_decel_deg", None),
             turn_backlash_preload_deg=getattr(config, "et_rally_turn_backlash_preload_deg", None),
+            turn_fine_trim=getattr(config, "et_rally_turn_fine_trim_enabled", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -165,6 +170,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         turn_fine_tolerance_deg=0.5,
                         turn_decel_deg=0.0,
                         turn_backlash_preload_deg=0.0,
+                        turn_fine_trim=True,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -347,6 +353,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         fine_tolerance_deg=turn_fine_tolerance_deg,
                         decel_deg=turn_decel_deg,
                         backlash_preload_deg=turn_backlash_preload_deg,
+                        fine_trim=turn_fine_trim,
                     )
                 )
     return nodes

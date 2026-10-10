@@ -96,6 +96,11 @@ class RaceConfig:
     # DD-22較正用: spin_encoderで、前の旋回と逆方向に切り替わる旋回だけ、フェーズ1の
     # 目標エンコーダ角度にこの分を上乗せする(機構内バックラッシュの先詰め)。既定0.0=無効。
     et_rally_turn_backlash_preload_deg: Optional[float] = None
+    # DD-22較正用: spin_encoderで、フェーズ2(ジャイロ仕上げ)を無効化し、フェーズ1
+    # (エンコーダのみ)だけで旋回を終える。フェーズ2自体が追加の方向反転(行き過ぎの
+    # 戻し)を起こし、ズレの一因になっていないかを切り分けるための診断用。
+    # Noneなら素の既定値(True、フェーズ2を使う)のまま。
+    et_rally_turn_fine_trim_enabled: Optional[bool] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (ベースライン計測用。較正値そのものは変えない)。
     et_rally_compensation_enabled: bool = True
