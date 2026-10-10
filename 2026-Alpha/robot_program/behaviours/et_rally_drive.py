@@ -29,6 +29,11 @@ _TUNED_INTERVAL_SEC = 0.03
 _STALL_TICK_LIMIT = math.ceil(7 * _TUNED_INTERVAL_SEC / EXEC_INTERVAL - 1e-9)  # 0.03s x 7 = 約0.2秒
 _STALL_PROGRESS_DEG = 0.3 * EXEC_INTERVAL / _TUNED_INTERVAL_SEC  # 1tickあたり0.3度=10度/秒未満
 
+# DD-22較正用: 直前の旋回の方向(+1/-1)。0=まだ旋回していない(反転判定をしない)。
+# EtRallySpinAroundByEncoderの各インスタンスは旋回ごとに別オブジェクトのため、
+# 「前の旋回と逆方向か」をまたいで知るには、この窓口(モジュール変数)で持つ必要がある。
+_last_turn_direction = 0
+
 
 class EtRallySpinAroundByEncoder(Behaviour):
     """左右のタイヤの回転量(エンコーダ)を揃えて回すことで、「その場旋回」であること
@@ -63,8 +68,13 @@ class EtRallySpinAroundByEncoder(Behaviour):
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType,
                  fine_tolerance_deg: float = 2.0,
                  decel_deg: float = 0.0, decel_power: int = 50,
-                 fine_trim: bool = True) -> None:
+                 fine_trim: bool = True, backlash_preload_deg: float = 0.0) -> None:
         super(EtRallySpinAroundByEncoder, self).__init__(name)
+        # DD-22較正用: 前の旋回と逆方向に切り替わる旋回だけ、フェーズ1の目標エンコーダ角度に
+        # この分を上乗せする。機構内のバックラッシュ(前の旋回で片側に詰まった遊びを、
+        # 逆方向ではまず詰め直す必要がある)による「エンコーダは回るが実際には車輪が
+        # 転がっていない」区間を事前に見込むためのもの。0なら無効(既定、挙動は変えない)。
+        self.backlash_preload_deg = backlash_preload_deg
         # 2026-09-20: フェーズ1(全力寄りのmain_power)のまま目標のエンコーダ角度に
         # 到達してブレーキをかけると、慣性で行き過ぎてフェーズ2の仕上げ補正が
         # 毎回必要になる。残りのエンコーダ角度がdecel_deg未満になったら
@@ -122,6 +132,12 @@ class EtRallySpinAroundByEncoder(Behaviour):
             # --rally-gyro-tire-calibration offでの較正前/較正後の切替が旋回側に反映されない。
             self.target_motor_deg = arc_length_mm / (math.pi * runtime.plotter.tire_diameter) * 360.0
             self.direction = 1 if error > 0 else -1
+
+            global _last_turn_direction
+            if (self.backlash_preload_deg > 0.0 and _last_turn_direction != 0
+                    and self.direction != _last_turn_direction):
+                self.target_motor_deg += self.backlash_preload_deg
+            _last_turn_direction = self.direction
 
             self.start_r = runtime.right_motor.get_count()
             self.start_l = runtime.left_motor.get_count()

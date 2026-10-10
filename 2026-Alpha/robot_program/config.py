@@ -93,6 +93,9 @@ class RaceConfig:
     # フェーズ1の慣性による行き過ぎ→フェーズ2(揺れ・バックラッシュの発生源)での
     # 補正量そのものを減らす狙い。
     et_rally_turn_decel_deg: Optional[float] = None
+    # DD-22較正用: spin_encoderで、前の旋回と逆方向に切り替わる旋回だけ、フェーズ1の
+    # 目標エンコーダ角度にこの分を上乗せする(機構内バックラッシュの先詰め)。既定0.0=無効。
+    et_rally_turn_backlash_preload_deg: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (ベースライン計測用。較正値そのものは変えない)。
     et_rally_compensation_enabled: bool = True
