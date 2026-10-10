@@ -88,6 +88,11 @@ class RaceConfig:
     # Noneなら各方式の素の既定値(0.5度)を使う。spin_pidとの純粋な方式比較時、
     # spin_pid側の許容誤差(2.0度固定)に揃えるために使う。
     et_rally_turn_fine_tolerance_deg: Optional[float] = None
+    # DD-22〜23較正用: spin_encoderのフェーズ1で、残りの旋回角度がこの値未満になったら
+    # decel_power(既定50)まで落として勢いを削ってから止める(既定0.0=無効)。
+    # フェーズ1の慣性による行き過ぎ→フェーズ2(揺れ・バックラッシュの発生源)での
+    # 補正量そのものを減らす狙い。
+    et_rally_turn_decel_deg: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (ベースライン計測用。較正値そのものは変えない)。
     et_rally_compensation_enabled: bool = True

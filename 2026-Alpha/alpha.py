@@ -1249,6 +1249,15 @@ def _run_main(argv, startup_cleanup):
               '(default 0.5deg). Used to match spin_pid\'s fixed 2.0deg tolerance for an isolated '
               'turn-method comparison. Default (unset) keeps each method\'s own default.'),
     )
+    parser.add_argument(
+        '--rally-turn-decel-deg',
+        type=float,
+        default=None,
+        help=('DD-22/23 calibration: for spin_encoder, slow phase1 down to decel_power once the '
+              'remaining turn angle is below this many degrees, before braking (default 0=off, no '
+              'slowdown). Aims to reduce phase1 overshoot/inertia feeding into phase2 (suspected '
+              'backlash source).'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1302,6 +1311,13 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-tolerance-deg must be finite')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_fine_tolerance_deg=args.rally_turn_tolerance_deg)
+    if args.rally_turn_decel_deg is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-decel-deg requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not math.isfinite(args.rally_turn_decel_deg):
+            parser.error('--rally-turn-decel-deg must be finite')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_decel_deg=args.rally_turn_decel_deg)
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,
