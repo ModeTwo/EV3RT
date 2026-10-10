@@ -245,7 +245,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             turn_name = "et_rally turn%d%s" % (index, label_text)
             if turn_method == 'spin_pid':
                 # DD-19ベースライン: DD-13以前の、フェーズ分けのない無補正PID旋回。
-                # PID値はsample.pyのSpinAroundと同じ(0.4,0.001,0.03)に揃える。
+                # PID値はturn_pid(既定0.2,0.00075,0.03)を使う。これはproduction(spin_encoder)の
+                # フェーズ2仕上げでも実際に使われ動作確認済みの値で、sample.py由来の値(0.4,0.001,0.03)
+                # は使わない。
                 # 許容誤差も、DD-19以降の改善(2度→0.5度)より前の2.0度に固定する
                 # (turn_fine_tolerance_degの既定0.5は改善後の値のため、ここでは使わない)。
                 nodes.append(
@@ -254,9 +256,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         target=heading,
                         max_power=turn_main_power,
                         min_power=turn_fine_min_power,
-                        pid_p=0.4,
-                        pid_i=0.001,
-                        pid_d=0.03,
+                        pid_p=turn_pid[0],
+                        pid_i=turn_pid[1],
+                        pid_d=turn_pid[2],
                         target_type=HeadingType.ABSOLUTE,
                         tolerance=2.0,
                     )
