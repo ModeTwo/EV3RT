@@ -43,8 +43,8 @@ def main():
         "--et-rally-laps",
         type=int,
         choices=(1, 2, 3),
-        default=os.environ.get("ET_RALLY_LAPS", "3"),
-        help="Laps selected by the PC (default: 3; env: ET_RALLY_LAPS)",
+        default=os.environ.get("ET_RALLY_LAPS", "2"),
+        help="Laps selected by the PC (default: 2; env: ET_RALLY_LAPS)",
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

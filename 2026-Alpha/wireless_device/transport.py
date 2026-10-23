@@ -50,7 +50,7 @@ class StrategyJsonLogger:
 
 
 class RequestProcessor:
-    def __init__(self, calculate, strategy_log_dir=None, selected_laps=3):
+    def __init__(self, calculate, strategy_log_dir=None, selected_laps=2):
         # 経路計算は担当者が渡す関数へ委譲し、このモジュールでは実装しない。
         if type(selected_laps) is not int or not 1 <= selected_laps <= 3:
             raise ValueError("selected_laps must be an integer from 1 to 3")
@@ -107,7 +107,7 @@ class RequestProcessor:
         return result
 
 
-def run_client(host, port, calculate, stop_event, strategy_log_dir=None, selected_laps=3):
+def run_client(host, port, calculate, stop_event, strategy_log_dir=None, selected_laps=2):
     processor = RequestProcessor(
         calculate,
         strategy_log_dir=strategy_log_dir,

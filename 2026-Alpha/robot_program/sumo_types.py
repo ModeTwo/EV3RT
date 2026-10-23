@@ -21,6 +21,7 @@ class SumoState:
     bearing_reference: SumoBearingReference = field(default_factory=SumoBearingReference)
     search_bearing_deg: float = 0.0
     camera_capture_bearing_deg: Optional[float] = None
+    bottle_found_after_initial_search_correction: bool = False
     # No.15からNo.18までの間だけ共有する、ET相撲固有の実行状態。
     started_at: Optional[float] = None
     search_heading_deg: float = 0.0
@@ -38,25 +39,11 @@ class SumoState:
     garage_line_found: bool = False
     line_trace_ready: bool = False
     failure_reason: Optional[str] = None
-    bottle_image_x_ratio: Optional[float] = None
-    escape_route: Optional[int] = None
 
 
 @dataclass(frozen=True)
 class SumoSettings:
-    # Falseで直前の120度境界・±50度復帰へ戻せる。
-    garage_point_return_enabled: bool = True
-    # 復帰計算距離を超えて黒ラインを探す追加距離。実機で調整する暫定値。
-    garage_search_margin_mm: float = 50.0
-    # 開始位置を原点、復帰ライン側X、初期前方Yとしたコース正規化座標。
-    garage_line_offset_mm: float = 680.0
-    garage_blue_forward_mm: float = 280.0
-    garage_rejoin_before_blue_mm: float = 100.0
-    # コース図の上0、右90、下180、左270。時計回りを正とする。
-    entry_bearing_deg: float = 0.0
-    # RightではNo.15が鏡像の90度へ変換する。
-    ring_bearing_left_deg: float = 270.0
-    # No.15の直前、LAPゲート終了直後の実際の停止位置が当初想定の初期位置から
+            # No.15の直前、LAPゲート終了直後の実際の停止位置が当初想定の初期位置から
     # ズレているため、後退→+90度旋回→前進(黒即停止/青+extra/距離上限)→
     # 180度旋回で相撲開始位置へ合わせ直す。元はstart_to_lap_gate.py側に
     # あったが、相撲開始位置への移動という目的から、この開始位置補正として
@@ -78,13 +65,25 @@ class SumoSettings:
     reposition_advance_pid_d: float = 0.04
     reposition_advance_limit_mm: float = 550.0
     reposition_advance_blue_extra_mm: float = 20.0
+    # Falseで直前の120度境界・±50度復帰へ戻せる。
+    garage_point_return_enabled: bool = True
+    # 復帰計算距離を超えて黒ラインを探す追加距離。実機で調整する暫定値。
+    garage_search_margin_mm: float = 50.0
+    # 開始位置を原点、復帰ライン側X、初期前方Yとしたコース正規化座標。
+    garage_line_offset_mm: float = 680.0
+    garage_blue_forward_mm: float = 280.0
+    garage_rejoin_before_blue_mm: float = 100.0
+    # コース図の上0、右90、下180、左270。時計回りを正とする。
+    entry_bearing_deg: float = 0.0
+    # RightではNo.15が鏡像の90度へ変換する。
+    ring_bearing_left_deg: float = 270.0
     garage_bearing_deg: float = 180.0
     # 現在方位±50度から180度と角度差が大きい候補を選ぶ。
     garage_search_offset_deg: float = 50.0
     # 値はすべて暫定値。レプリカコースでの実験結果に応じてここだけを変更する。
     # 実機で静止摩擦に負けないよう、ET相撲の駆動出力は絶対値50以上にする。
     # No.15開始位置からの総直進距離。白検知や追加クリアランスは使用しない。
-    start_straight_distance_mm: float = 350.0
+    start_straight_distance_mm: float = 300.0
     # 以下の黒→白判定設定は旧方式の比較用。現行No.15の終了条件には使用しない。
     line_exit_white_duration_sec: float = 0.5
     # ET相撲開始位置では、共通色分類ではなく生の明度で黒線退出を判定する。
@@ -133,8 +132,8 @@ class SumoSettings:
     sonar_min_distance_mm: float = 50.0
     sonar_max_distance_mm: float = 800.0
 
-    # 未検出のたびに探索中心へ戻り、100、70、50mmと段階的に近づいて再探索する。
-    retry_advance_distances_mm: tuple = (100.0, 70.0, 50.0)
+    # 未検出のたびに探索中心へ戻り、150、70、50mmと段階的に近づいて再探索する。
+    retry_advance_distances_mm: tuple = (150.0, 70.0, 50.0)
     retry_advance_power: int = 50
 
     # 距離センサーとボトルの間がこの距離になった時、下端アーム内へ捕捉できる想定。
@@ -147,16 +146,8 @@ class SumoSettings:
     # 直線後退でアームの保持深さ、ボトル直径、安全余裕をまとめて確保する。
     release_reverse_distance_mm: float = 100.0
     release_reverse_power: int = 60
-    # ボトル離脱後、黒ライン探索へ入る前に横方向へ退避する。
-    garage_avoid_distance_mm: float = 120.0
-    garage_avoid_power: int = 50
-    # ボトルを押し出した方向から、退避ルート②へ向く角度。
-    # Left/Rightの反転はFeature18側でruntime.courseを使って行う。
-    escape_route_2_angle_deg: float = 45.0
-    # 退避ルート②で斜め方向へ走行する距離。
-    escape_route_2_distance_mm: float = 200.0
     # 退避ルート②で走行するときのPWM。
-    escape_route_2_power: int = 50 
+    escape_power: int = 70
     # 離脱後はガレージ側へ旋回してから、その絶対方位を維持して黒ラインまで直進する。
     garage_return_drive_power: int = 60
     # 復帰用黒ラインは生の明度で判定し、未検出時は規定距離で安全停止する。
@@ -180,3 +171,46 @@ class SumoSettings:
     drive_pid_i: float = 0.1
     drive_pid_d: float = 0.03
     heading_tolerance_deg: float = 3.0
+    # ==========================================================
+    # ETラリー終了位置 → ET相撲開始位置への位置合わせ
+    # ==========================================================
+    # 最初に絶対方位0°を維持しながら後退する。
+    reposition_backward_power: int = 60
+    reposition_backward_pid_p: float = 1.1
+    reposition_backward_pid_i: float = 0.1
+    reposition_backward_pid_d: float = 0.03
+    # 後退距離。
+    # move_to_sumo_start.py の "backward_50cm" に合わせて500mm。
+    reposition_backward_distance_mm: float = 500.0
+        # ==========================================================
+    # ETラリー終了位置 → ET相撲開始位置への位置合わせ
+    # ==========================================================
+    # LAPゲート終了位置から、
+    # 後退 → +90°旋回 → 前進 → 180°旋回
+    # でET相撲の開始位置へ合わせ直すための設定。
+
+    # ① 絶対方位0°を維持しながら後退
+    reposition_backward_distance_mm: float = 330.0
+    reposition_backward_power: int = 80
+    reposition_backward_pid_p: float = 0.8
+    reposition_backward_pid_i: float = 0.0
+    reposition_backward_pid_d: float = 0.02
+
+    # ② +90° / 180°への旋回
+    reposition_turn_min_power: int = 60
+    reposition_turn_max_power: int = 60
+    reposition_turn_pid_p: float = 0.2
+    reposition_turn_pid_i: float = 0.005
+    reposition_turn_pid_d: float = 0.03
+
+    # ③ +90°を維持しながら前進
+    reposition_advance_power: int = 80
+    reposition_advance_pid_p: float = 1.1
+    reposition_advance_pid_i: float = 0.00075
+    reposition_advance_pid_d: float = 0.04
+
+    # 黒ラインなら即停止。
+    # 青ラインなら検知後さらに20mm進む。
+    # どちらも検知しなければ550mmで停止。
+    reposition_advance_limit_mm: float = 550.0
+    reposition_advance_blue_extra_mm: float = 20.0
