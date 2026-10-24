@@ -10,6 +10,7 @@ from ..behaviours.et_rally_drive import EtRallyRunByGyro, EtRallySpinAroundByEnc
 from ..behaviours.conditions import IsDistanceEarned
 from ..runtime import runtime
 from ..et_rally_compensation import apply_caster_drag_compensation, apply_lateral_drift_compensation
+from ..et_rally_fallback import fallback_planner_steps, fallback_strategy
 
 
 SPIN_MAX_POWER = 70         # その場回旋（スピン）するときの最大モーター出力
@@ -21,9 +22,11 @@ DEFAULT_PLAN_PATH = Path(__file__).resolve().parents[1] / "tests" / "plan_seed93
 class DeferredStrategySequence(Sequence):
     """Build motor behaviours only when this subtree starts running."""
 
-    def __init__(self, name, loader, initial_heading_deg=0.0):
+    def __init__(self, name, loader, initial_heading_deg=0.0, fallback_loader=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
+        # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
+        self._fallback_loader = fallback_loader
         self._initial_heading_deg = initial_heading_deg
         self._loaded = False
 
@@ -39,6 +42,13 @@ class DeferredStrategySequence(Sequence):
         except (KeyError, OSError, TypeError, ValueError) as error:
             self.logger.error("Strategy loading failed: %s" % error)
             nodes = [Failure(name="invalid strategy")]
+            if self._fallback_loader is not None:
+                try:
+                    nodes = steps_from_strategy(
+                        self._fallback_loader(), initial_heading_deg=self._initial_heading_deg)
+                    self.logger.error("ETラリー開始時にエラー(%s)。固定ルートでゴールへ向かいます" % error)
+                except (KeyError, OSError, TypeError, ValueError) as fallback_error:
+                    self.logger.error("Fallback route failed: %s" % fallback_error)
         self.add_children(nodes)
         self._loaded = True
 
@@ -62,12 +72,17 @@ def build_execute_strategy(context, config, lap_number=None):
             name="execute_received_strategy",
             loader=lambda: full_start_to_gyro(context.strategy, config.mission_mode),
             initial_heading_deg=start_heading,
+            fallback_loader=(
+                (lambda: full_start_to_gyro(fallback_strategy(), config.mission_mode))
+                if getattr(config, "et_rally_fallback_enabled", False) else None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
         return DeferredStrategySequence(
             name="execute_file_strategy",
             loader=lambda: _load_plan_steps(plan_path),
+            fallback_loader=(fallback_planner_steps
+                             if getattr(config, "et_rally_fallback_enabled", False) else None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 

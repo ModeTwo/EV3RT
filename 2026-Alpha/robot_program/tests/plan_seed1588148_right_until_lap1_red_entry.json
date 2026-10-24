@@ -1,0 +1,27 @@
+{
+ "note": "seed=1588148 right course, until lap1_red_entry (calibration: check stop position against the gate)",
+ "steps": [
+  {
+   "type": "turn",
+   "target_heading_deg": -37.78,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -37.78,
+   "distance_mm": 843.9,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 39.11,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 39.11,
+   "distance_mm": 158.5,
+   "label": "lap1-red-entry"
+  }
+ ]
+}

@@ -353,6 +353,35 @@ class SelectNearestBottleAndConfigureAlignment(Behaviour):
         )
         return Status.SUCCESS
 
+class SumoSearchTimeout(Behaviour):
+    """ET相撲の探索開始から指定秒数が経過したらSUCCESSを返す。"""
+
+    def __init__(self, name, timeout_sec):
+        super().__init__(name)
+        self.timeout_sec = float(timeout_sec)
+        self.started_at = None
+
+    def initialise(self):
+        # このBehaviourが開始された瞬間から計測する
+        self.started_at = time.monotonic()
+
+    def update(self):
+        if self.started_at is None:
+            self.started_at = time.monotonic()
+
+        elapsed = time.monotonic() - self.started_at
+
+        if elapsed >= self.timeout_sec:
+            self.logger.info(
+                "%s timeout after %.1fs"
+                % (
+                    self.__class__.__name__,
+                    elapsed,
+                )
+            )
+            return Status.SUCCESS
+
+        return Status.RUNNING
 
 class HasBottleCandidate(Behaviour):
     # 1回目の探索で候補を得た場合は、前進再探索を行わずFeatureを完了する。
@@ -590,10 +619,42 @@ def build_locate_sumo_bottle(context, config):
         retry.add_children(retry_children)
         finish_or_retry.add_child(retry)
 
+    # ==========================================
+    # 最初の黒ボトル探索
+    #
+    # ・通常のソナー探索
+    # ・3秒タイマー
+    #
+    # どちらかが先に完了した時点で探索を終了する。
+    # 3秒以内に候補が得られなかった場合は、
+    # 後続の再探索処理で150mm前進する。
+    # ==========================================
+
+    first_scan_with_timeout = Parallel(
+        name="first sumo sonar scan with 3sec timeout",
+        policy=ParallelPolicy.SuccessOnOne(),
+    )
+
+    first_scan_with_timeout.add_children(
+        [
+            _build_scan_pass(
+                "first sumo sonar scan",
+                context,
+                settings,
+                offsets,
+            ),
+
+            SumoSearchTimeout(
+                name="first sumo search 3sec timeout",
+                timeout_sec=3.0,
+            ),
+        ]
+    )
+
     root = Sequence(name="locate_sumo_bottle", memory=True)
     root.add_children(
         [
-            _build_scan_pass("first sumo sonar scan", context, settings, offsets),
+            first_scan_with_timeout,
             SelectNearestBottleAndConfigureAlignment(
                 "select first sumo sonar result",
                 context,

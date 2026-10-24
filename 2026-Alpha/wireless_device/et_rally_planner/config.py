@@ -122,8 +122,11 @@ GOAL_OFFSET_CM = 14.8
 # スタート: グリッド(4,3)-(4,4)を結ぶ線の中心点から、その線と垂直に
 # START_OFFSET_CMだけ離れた点。
 # 2026-09-21: スタート地点を、従来のスタート(X=4*GRID_PITCH_CM+START_OFFSET_CM, Y=3.5*GRID_PITCH_CM)から
-# Y方向に-1cm移動した。従来の位置に戻すときは START_SHIFT_CM を (0.0, 0.0) にする。
-START_SHIFT_CM = (0.0, -1.0)
+# Y方向に-1cm移動した。さらに、Y方向に-1.7cm(グレーポイントの中点から-2.7cm)、X方向にETエリア側(-X)へ0.5cm移動した。
+# 2026-09-22: 実走(黄ゲートのゴール側支柱への接触)を受け、さらにゴールと反対方向(+X)へ1.0cm、
+# ゴールと反対方向/北(+Y)へ0.7cm移動した(合計でX-0.5+1.0=+0.5cm、Y-2.7+0.7=-2.0cm)。
+# 従来の位置に戻すときは START_SHIFT_CM を (0.0, 0.0) にする。
+START_SHIFT_CM = (0.5, -2.0)
 START_POS_CM = (4 * GRID_PITCH_CM + START_OFFSET_CM + START_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + START_SHIFT_CM[1])
 START_HEADING_DEG = 180.0   # -x方向を向く
 
@@ -138,6 +141,25 @@ GOAL_SHIFT_CM = (-61.0, -115.0)
 GOAL_LINE_X_CM = 0 * GRID_PITCH_CM - GOAL_OFFSET_CM
 GOAL_POS_CM = (GOAL_LINE_X_CM + GOAL_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + GOAL_SHIFT_CM[1])
 GOAL_HEADING_DEG = 90.0     # +y方向を向く
+
+# --- 進入禁止エリア(2026-09-21) ---
+# タイヤ中心(車軸)の軌跡だけを対象にする(車体の外形は見ない)。縁に触れるだけなら許容する。
+# (xmin, xmax, ymin, ymax)のcm座標で、左コース基準。右コースはet_rally_runner.pyが左右反転する。
+_INF = 1.0e6
+KEEP_OUT_RECTS_CM = (
+    # 11のグレーポイント(0, 0)から、下へ37cmより下(y < -37)。
+    # ただし、ゴール側(-X)へ17cm以上(x <= -17)進んだ範囲は制限なし。
+    (-17.0, _INF, -_INF, -37.0),
+    # 従来のスタート位置(X=4*GRID_PITCH_CM+START_OFFSET_CM)から、ETエリアとは逆方向(+X)へ14cm以降のすべての範囲。
+    # スタート位置をずらしても動かさないため、START_POS_CM ではなく、ずらす前の位置を基準にする。
+    (4 * GRID_PITCH_CM + START_OFFSET_CM + 14.0, _INF, -_INF, _INF),
+    # 11のグレーポイントから、ゴール側(-X)へ28cm以降(x <= -28)で、11の点より上(y >= 0)の範囲。
+    (-_INF, -28.0, 0.0, _INF),
+)
+# ゴールへの最終区間の直進が禁止エリアに入るときに経由する中継点C。
+# 14,15のグレーポイントの中点(x=0)から、ゴール側へGATE_EXIT_OFFSET_CMだけ離れたX、11の点のY(y=0)。
+# ここまで来ればゴール側の制限のない範囲(x < -17)にいて、ゴールへは直進できる。
+KEEP_OUT_GOAL_LANE_POINT_CM = (0.0 - GATE_EXIT_OFFSET_CM, 0.0)
 
 # 「支柱のすぐ周りだけ」の迂回ノードだと、複数の障害物を大きく回り込んで
 # 避けた方が良いケース(距離は伸びても旋回が大きく減る)を探索できないため、
@@ -193,6 +215,26 @@ ROBOT_REAR_OVERHANG_FOR_CLEARANCE_CM = 0.0
 # 2026-09-20: target_gate以外のゲートのT字パーツにも、車体前方のクリアランスを
 # ARM_BODY_CLEARANCE_MIN_CM以上確保する候補を優先する(rule_route._resolve_top_level_segment)。
 # ARM_OTHER_GATES_LENGTH_BUDGET_CM: そのために許容する遠回り(最短候補からの増加分、cm)。
+# 2026-09-22: 侵入側(8通り)の選択で、各ゲートのentryへ向かう区間(前のゲートのexitから、そのentryまで)が、
+# そのゲート自身のT字パーツに、車体の側面から ARM_BODY_CLEARANCE_MIN_CM 以上の余裕を持つ組み合わせを、
+# 優先する。ただし、そのために増える経路の長さ(最短の組み合わせからの増加分)が、この値(cm)以内のときだけ。
+# 0以下なら、この優先を行わない(従来と同じ選び方)。
+ARM_SIGN_PREFERENCE_BUDGET_CM = 60.0
+
+# 2026-09-22: ゴールへの最終区間(最後のゲートのexitからゴールまで)の直進が、どの支柱(T字パーツ込み)にも、
+# 物理的な最小距離(rule_route.STRAIGHT_CLEARANCE_CM、半幅+支柱半径)に、この値(cm)を足した距離以上
+# 離れるように、まず試す。その条件で経路が作れなければ、従来の条件(余裕なし)で作る。
+# 0以下なら、この余裕を求めない。
+GOAL_STRAIGHT_EXTRA_MARGIN_CM = 1.0
+
+# 2026-09-22: 「斜め→軸に平行な通路→軸に垂直→軸に沿ってentry」の候補
+# (rule_route._try_diagonal_to_entry_axis の3つ目の形)の探索範囲。
+# CORRIDOR_T_LIST_CM: 通路の、entry軸からの距離(cm)。CORRIDOR_SHIFT_LIST_CM: 通路へ乗る点の、
+# aからの垂線の足に対するずらし量(cm)。CORRIDOR_MAX_CANDIDATES: 安全性の判定に回す最大の候補数。
+CORRIDOR_T_LIST_CM = (14.0, 18.0, 22.0, 26.0, 30.0, 36.0, 44.0)
+CORRIDOR_SHIFT_LIST_CM = (-40.0, -30.0, -20.0, -10.0, 0.0, 10.0, 20.0)
+CORRIDOR_MAX_CANDIDATES = 4
+
 ARM_CLEARANCE_OTHER_GATES = False  # 2026-09-20: 影響が大きい(68%の経路が変わり平均+2.2%)割に効果が小さいため一旦無効
 ARM_BODY_CLEARANCE_MIN_CM = 3.0
 ARM_OTHER_GATES_LENGTH_BUDGET_CM = 60.0

@@ -124,6 +124,48 @@ def _segment_post_distance(a, b, post):
     return geo.point_segment_distance(post, a, b)
 
 
+def _seg_hits_rect(a, b, rect):
+    """線分abが長方形rect=(xmin, xmax, ymin, ymax)の内部に入るか。縁に触れるだけ(縁に沿う場合を含む)は入らない。"""
+    eps = 1e-6
+    x0, x1, y0, y1 = rect[0] + eps, rect[1] - eps, rect[2] + eps, rect[3] - eps
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    t0, t1 = 0.0, 1.0
+    for p_, q_ in ((-dx, a[0] - x0), (dx, x1 - a[0]), (-dy, a[1] - y0), (dy, y1 - a[1])):
+        if p_ == 0.0:
+            if q_ < 0.0:
+                return False
+        else:
+            t = q_ / p_
+            if p_ < 0.0:
+                if t > t1:
+                    return False
+                if t > t0:
+                    t0 = t
+            else:
+                if t < t0:
+                    return False
+                if t < t1:
+                    t1 = t
+    return True
+
+
+def _keepout_hit(a, b):
+    """線分abが、進入禁止エリア(config.KEEP_OUT_RECTS_CM)のどれかの内部に入るか。"""
+    return any(_seg_hits_rect(a, b, rect) for rect in config.KEEP_OUT_RECTS_CM)
+
+
+def _candidate_keepout_safe(r):
+    """候補r=[(点, アンカー), ...]のどの区間も、進入禁止エリアに入らないか。"""
+    pts = [pt for pt, _ in r]
+    return not any(_keepout_hit(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
+
+
+def verify_keepout(waypoints):
+    """経路が進入禁止エリアに入る区間を返す。戻り値: [(index, 始点, 終点), ...] (空なら全て安全)。"""
+    return [(i, waypoints[i], waypoints[i + 1]) for i in range(len(waypoints) - 1)
+            if _keepout_hit(waypoints[i], waypoints[i + 1])]
+
+
 def _segment_body_clearance(a, b, post):
     """線分a->b(直進区間、旋回軸=タイヤ中心線の軌跡)を実際に車体が
     通過するときの、車体footprint(前端ROBOT_FRONT_OVERHANG_CM・後端
@@ -2145,7 +2187,7 @@ def _shortcut_consecutive_corners(result, all_posts):
 
 
 def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gate, gate_signs=None,
-                                allow_via_other=True):
+                                allow_via_other=True, strict_safe=False):
     """ステージ間をつなぐ最上位区間(_build_route_with_signsが直接呼ぶ区間)
     についてだけ、resolve_segment(長方形オフセット)と
     _resolve_segment_via_parallel_extension(軸方向延長)の両方を試し、
@@ -2274,6 +2316,7 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
             and _candidate_internal_pivot_safe(r, all_posts)
             and _candidate_crossing_safe(r, all_gates, gate_signs, target_gate=target_gate, prev_gate=prev_gate)
             and _candidate_straight_clear_safe(r, all_posts)
+            and _candidate_keepout_safe(r)
         )
 
     safe_candidates = [r for r in candidates if _fully_safe(r)]
@@ -2345,7 +2388,16 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
     if not candidates and not safe_candidates:
         raise RuntimeError("迂回経路を見つけられませんでした")
 
-    pool = safe_candidates if safe_candidates else candidates
+    if safe_candidates:
+        pool = safe_candidates
+    elif strict_safe:
+        # 呼び出し側(ゴールへの最終区間)が、別の経路(中継点経由)を持っているため、
+        # 安全でない候補へは落とさず、見つからなかったことを伝える。
+        raise RuntimeError("進入禁止エリアを避けた安全な候補がありません")
+    else:
+        # 完全に安全な候補が無いときのフォールバックでも、進入禁止エリアに入らないものを優先する。
+        keepout_ok = [c for c in candidates if _candidate_keepout_safe(c)]
+        pool = keepout_ok if keepout_ok else candidates
 
     # 2026-09-18: 候補選択がSTRAIGHT_CLEARANCE_CM(物理的な最小距離)を
     # 満たしてさえいれば最短のものを選ぶため、target_gate自身のT字パーツに
@@ -2429,6 +2481,36 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
         candidates_for_arm = list(pool)
         if extended is not None and _fully_safe(extended):
             candidates_for_arm.append(extended)
+
+        # 2026-09-21: 最短の候補が、向かうゲート自身のT字パーツまで車体3cm未満のとき、
+        # 「車体クリアランスが方針の最小値(config.ARM_BODY_CLEARANCE_MIN_CM)以上を満たす、最短の候補」を
+        # 採用する。従来は、旋回軸基準の強い条件(STRAIGHT_CLEARANCE_CM+POST_ARM_STRAIGHT_MARGIN_CM以上)
+        # を満たす候補を優先していたため、方針を満たす短い経路(例: 赤のexitの真下に青ゲートがある
+        # 配置で、20.4cm)を落として、48.3cmの迂回を選んでいた。既存の候補に、斜めの中継点を1つ置く
+        # 候補の探索(_search_shortest_arm_safe_detour)を足して、その中で最短のものを選ぶ。
+        # 3cmを満たす候補が1つも無いときは、従来の選び方(下)へ進む。
+        min_body = config.ARM_BODY_CLEARANCE_MIN_CM
+        upper_bound = min(
+            (_segment_result_length(r) for r in candidates_for_arm
+             if entry_arm_body_clearance(r) >= min_body),
+            default=float("inf"))
+        # 同じ配置の中で、同じ条件の探索が、sign組み合わせごとに何度も来るため、結果を覚えておく
+        # (plan_route_with_anchorsの先頭で消す)。判定に効く条件は、全部キーに入れる。
+        cache_key = (
+            a, b, id(target_gate), id(prev_gate), id(all_gates), strict_safe, round(upper_bound, 6),
+            tuple(sorted(gate_signs.items(), key=lambda kv: str(kv[0]))) if gate_signs else None,
+        )
+        if cache_key in _ARM_SEARCH_CACHE:
+            searched = _ARM_SEARCH_CACHE[cache_key]
+        else:
+            searched = _search_shortest_arm_safe_detour(
+                a, b, _fully_safe, entry_arm_body_clearance, min_body, upper_bound=upper_bound)
+            _ARM_SEARCH_CACHE[cache_key] = searched
+        if searched is not None:
+            candidates_for_arm.append(searched)
+        meeting_min = [r for r in candidates_for_arm if entry_arm_body_clearance(r) >= min_body]
+        if meeting_min:
+            return min(meeting_min, key=lambda r: (round(_segment_result_length(r), 6), len(r)))
         # 2026-09-18追記: 「desired_clearanceを満たす候補があれば無条件で
         # それを優先する」形にしたところ、そのために必要な迂回が異常に
         # 長くなるケースが見つかった(seed=5719257: 最短候補55.9cmに対し、
@@ -2547,6 +2629,71 @@ def _resolve_top_level_segment(a, b, all_gates, all_posts, target_gate, prev_gat
     return min(pool, key=_sort_key)
 
 
+_ARM_SEARCH_CACHE = {}
+
+
+def _search_shortest_arm_safe_detour(a, b, fully_safe, body_clearance, min_body, upper_bound=float("inf"),
+                                      margin=20.0, step=6.0, refine_steps=(2.0, 1.0)):
+    """aからbへ、中継点を1つ置く経路のうち、全ての安全判定(fully_safe)を通り、かつ向かうゲートの
+    T字パーツまでの車体クリアランスがmin_body以上になる、最短のものを探す。見つからなければNone。
+
+    中継点は、a・bを囲む範囲(margin広げる)のstep刻みの格子点。経路の長さの短い順に並べ、
+    最初に条件を満たしたものを採用する(全ての格子点を判定するわけではない)。見つかった中継点の
+    まわり(±step)は、refine_steps刻みで段階的に探し直し、より短いものがあれば、それに置き換える。
+    upper_boundより長い候補は、探さない(すでに、もっと短い候補があるため)。
+    """
+    def path(w):
+        return [(a, None), (w, None), (b, None)]
+
+    def length(w):
+        return geo.distance(a, w) + geo.distance(w, b)
+
+    def ok(w):
+        r = path(w)
+        return body_clearance(r) >= min_body and fully_safe(r)
+
+    x_lo, x_hi = min(a[0], b[0]) - margin, max(a[0], b[0]) + margin
+    y_lo, y_hi = min(a[1], b[1]) - margin, max(a[1], b[1]) + margin
+    points = []
+    x = x_lo
+    while x <= x_hi:
+        y = y_lo
+        while y <= y_hi:
+            w = (x, y)
+            if geo.distance(a, w) > 1.0 and geo.distance(b, w) > 1.0:
+                l = length(w)
+                if l < upper_bound - 1e-6:
+                    points.append((l, w))
+            y += step
+        x += step
+    points.sort()
+    found = None
+    for l, w in points:
+        if found is not None and l >= found[0] - 1e-6:
+            break
+        if ok(w):
+            found = (l, w)
+            break
+    if found is None:
+        return None
+    # 見つかった格子点のまわりを、段階的に細かく探して、より短いものがあれば置き換える。
+    best_l, best_w = found
+    radius = step
+    for fine in refine_steps:
+        n = int(round(radius / fine))
+        center = best_w
+        for i in range(-n, n + 1):
+            for j in range(-n, n + 1):
+                w = (center[0] + i * fine, center[1] + j * fine)
+                if geo.distance(a, w) <= 1.0 or geo.distance(b, w) <= 1.0:
+                    continue
+                l = length(w)
+                if l < best_l - 1e-6 and l < upper_bound - 1e-6 and ok(w):
+                    best_l, best_w = l, w
+        radius = fine
+    return path(best_w)
+
+
 def _try_extend_entry_arm_clearance(result, target_gate, all_posts, target_arm_posts, desired_clearance,
                                      max_extension=200.0, step=2.0):
     """resultのentry直前の点(最後から2番目)を、target_gate.direction方向へ
@@ -2642,7 +2789,9 @@ def _try_diagonal_to_entry_axis(a, b, all_gates, all_posts, target_gate):
     e = (math.cos(math.radians(heading)), math.sin(math.radians(heading)))
     # aがentry軸上(bからeの逆向きの直線上)にあれば、直線で足りる
     ab = geo.sub(b, a)
-    if abs(ab[0] * e[1] - ab[1] * e[0]) < 1e-6:
+    if abs(ab[0] * e[1] - ab[1] * e[0]) < 1e-6 and ab[0] * e[0] + ab[1] * e[1] > 0:
+        # 2026-09-22: 軸上にあっても、aがentryの「先(ゲートを通り過ぎた側)」にあるときは、直線では入れない
+        # (ゲートの反対側から来ているため)。その場合は、下の候補の探索へ進む(seed=3689058)。
         return []
     results = []
     direct = geo.distance(a, b)
@@ -2676,7 +2825,98 @@ def _try_diagonal_to_entry_axis(a, b, all_gates, all_posts, target_gate):
                     if ok_segments(pts):
                         results.append([(a, None), (p1, None), (c, None), (b, None)])
                 t += config.DIAGONAL_BYPASS_T_STEP_CM
+    # 3つ目の形(上の2つの形が作れない、または遠回りしかないときだけ): 斜めに進んで、entry軸と平行な
+    # 通路(ゲートの脇、軸から t だけ離れた線)に乗り、その線に沿って進み、軸に垂直に軸上の点cへ戻り、
+    # 軸に沿ってentryへ入る(a -> w1 -> w2 -> c -> b)。2026-09-22: 赤ゲートを南から入る組み合わせで、
+    # 北側(黄のexit)から南側へ回り込む配置(seed=3689058)で、上の形では、長さの上限を超えて作れず、
+    # 別のゲートを通り抜ける大回りが選ばれていた。長さの短い順に、最大CORRIDOR_MAX_CANDIDATES個だけ返す。
+    if not results or min(_segment_result_length(r) for r in results) > 1.6 * direct:
+        corridor = []
+        tangent = (-e[1], e[0])
+        for D in config.DIAGONAL_BYPASS_D_LIST_CM:
+            c = geo.sub(b, geo.scale(e, D))
+            for sign in (1.0, -1.0):
+                for t in config.CORRIDOR_T_LIST_CM:
+                    w2 = geo.add(c, geo.scale(tangent, sign * t))
+                    foot = (a[0] - w2[0]) * e[0] + (a[1] - w2[1]) * e[1]
+                    for shift in config.CORRIDOR_SHIFT_LIST_CM:
+                        w1 = geo.add(w2, geo.scale(e, foot + shift))
+                        if geo.distance(a, w1) < 1e-6 or geo.distance(w1, w2) < 1e-6:
+                            continue
+                        length = geo.distance(a, w1) + geo.distance(w1, w2) + t + D
+                        corridor.append((length, [a, w1, w2, c, b]))
+        corridor.sort(key=lambda item: item[0])
+        taken = 0
+        for length, pts in corridor:
+            if taken >= config.CORRIDOR_MAX_CANDIDATES:
+                break
+            if ok_segments(pts):
+                results.append([(p, None) for p in pts])
+                taken += 1
     return results
+
+
+def _resolve_goal_segment(current, all_gates, all_posts, prev_gate, gate_signs):
+    """ゴールへの最終区間を作る。まず、直進の余裕を config.GOAL_STRAIGHT_EXTRA_MARGIN_CM だけ増やした条件で
+    試し(全ての安全条件を満たす候補だけ)、作れなければ、従来の条件で作る。
+    (STRAIGHT_CLEARANCE_CMは、この区間の探索の間だけ一時的に増やして、必ず元に戻す。)
+    """
+    global STRAIGHT_CLEARANCE_CM
+    extra = config.GOAL_STRAIGHT_EXTRA_MARGIN_CM
+    if extra > 0:
+        base = STRAIGHT_CLEARANCE_CM
+        STRAIGHT_CLEARANCE_CM = base + extra
+        try:
+            return _resolve_goal_segment_core(current, all_gates, all_posts, prev_gate, gate_signs, strict_only=True)
+        except RuntimeError:
+            pass
+        finally:
+            STRAIGHT_CLEARANCE_CM = base
+    return _resolve_goal_segment_core(current, all_gates, all_posts, prev_gate, gate_signs)
+
+
+def _resolve_goal_segment_core(current, all_gates, all_posts, prev_gate, gate_signs, strict_only=False):
+    """最後のゲートの退出点からゴールへの区間を作る。
+
+    ゴールへ直接向かう通常の候補(進入禁止エリアに入らないもの)と、中継点C
+    (config.KEEP_OUT_GOAL_LANE_POINT_CM)まで通常の探索で進み、Cからゴールへ直進する候補
+    (Cから先はゴール側の制限のない範囲で、支柱もない)を、両方作り、短いほうを使う。
+    2026-09-22: 従来は、直接の候補が進入禁止エリアに入らなければ、Cを経由する候補と比べず、
+    そのまま使っていた。そのため、直接の候補が大回り(例: 他のゲートを通って、遠い場所から長い
+    斜めでゴールへ向かう)になる配置でも、それが選ばれていた。
+    """
+    goal = config.GOAL_POS_CM
+    direct = None
+    try:
+        direct = _resolve_top_level_segment(
+            current, goal, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs,
+            strict_safe=True)
+    except RuntimeError:
+        direct = None
+    if direct is not None and not _candidate_keepout_safe(direct):
+        direct = None
+    lane = config.KEEP_OUT_GOAL_LANE_POINT_CM
+    if direct is not None:
+        # Cを経由する候補は、どうやっても「現在地→C→ゴール」の直線距離より短くならない。
+        # それが、直接の候補以上なら、比べる必要がない(計算時間を増やさないため)。
+        if (geo.distance(current, lane) + geo.distance(lane, goal) >= _segment_result_length(direct) - 1e-6):
+            return direct
+        # Cを経由する候補は、安全な候補が作れたときだけ比べる(作れなければ、直接の候補を使う)。
+        try:
+            to_lane = _resolve_top_level_segment(
+                current, lane, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs,
+                strict_safe=True)
+        except RuntimeError:
+            return direct
+        via_lane = list(to_lane) + [(goal, None)]
+        if _segment_result_length(via_lane) + 1e-6 < _segment_result_length(direct):
+            return via_lane
+        return direct
+    # strict_only: 安全な候補が作れないときは、作れないこと(RuntimeError)を、そのまま返す。
+    to_lane = _resolve_top_level_segment(
+        current, lane, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs,
+        strict_safe=strict_only)
+    return list(to_lane) + [(goal, None)]
 
 
 def _build_route_with_signs(gates_by_color, signs, laps=None):
@@ -2788,9 +3028,7 @@ def _build_route_with_signs(gates_by_color, signs, laps=None):
             prev_gate = gate
             stage_idx += 1
 
-    segment = _resolve_top_level_segment(
-        current, config.GOAL_POS_CM, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs
-    )
+    segment = _resolve_goal_segment(current, all_gates, all_posts, prev_gate, gate_signs)
     for pt, anchor in segment[1:-1]:
         waypoints.append(pt)
         labels.append(None)
@@ -2881,6 +3119,28 @@ def _route_turn_sum_deg(waypoints, start_heading_deg=config.START_HEADING_DEG,
     )
 
 
+def _route_min_arm_body_clearance(waypoints, labels, all_posts):
+    """各ゲートのentryへ向かう区間(直前のexit、またはスタートから、そのentryまで)の全ての直進について、
+    そのゲート自身のT字パーツと車体との最短クリアランスを返す(_segment_body_clearance、最小値)。
+    経路が、entryへの最後の直線だけでなく、その手前の直線も、自分のゲートのT字パーツに近づいていないかを見る。
+    """
+    worst = float("inf")
+    stage_start = 0
+    for i, label in enumerate(labels):
+        if not label:
+            continue
+        if label.endswith("-entry"):
+            color = label.split("-")[1]
+            arm_posts = [p for p in all_posts
+                         if getattr(p, "color", None) == color and (p.arm_dir[0] or p.arm_dir[1])]
+            for k in range(stage_start, i):
+                for p in arm_posts:
+                    worst = min(worst, _segment_body_clearance(waypoints[k], waypoints[k + 1], p))
+        elif label.endswith("-exit"):
+            stage_start = i
+    return worst
+
+
 def plan_route_with_anchors(gates_by_color, laps=None):
     """plan_route()と同じ経路構築を行うが、各waypointのアンカー情報も返す
     (テスト・検証コードがverify_straight_clearanceにanchorsを渡して、
@@ -2933,6 +3193,8 @@ def plan_route_with_anchors(gates_by_color, laps=None):
     all_gates = list(gates_by_color.values())
 
     best = None  # (is_valid, violation_count, score, waypoints, anchors, labels, true_points)
+    all_candidates = []
+    _ARM_SEARCH_CACHE.clear()
     for combo in itertools.product((1.0, -1.0), repeat=len(colors)):
         color_signs = dict(zip(colors, combo))
         signs = [color_signs[color] for _, color, _ in stage_sequence]
@@ -2951,8 +3213,11 @@ def plan_route_with_anchors(gates_by_color, laps=None):
         # 時点で既に考慮しているため、通常はここで違反として残らない。
         # それでも万一残った場合に備えた安全弁として、妥当性判定からは除外する。
         non_goal_pivot = [v for v in pivot_violations if labels[v[0]] != "goal"]
-        is_valid = not straight_violations and not non_goal_pivot and not crossing_violations
-        violation_count = len(straight_violations) + len(non_goal_pivot) + len(crossing_violations)
+        keepout_violations = verify_keepout(waypoints)
+        is_valid = (not straight_violations and not non_goal_pivot and not crossing_violations
+                    and not keepout_violations)
+        violation_count = (len(straight_violations) + len(non_goal_pivot) + len(crossing_violations)
+                           + len(keepout_violations))
 
         dist = sum(geo.distance(waypoints[i], waypoints[i + 1]) for i in range(len(waypoints) - 1))
         turn_sum = _route_turn_sum_deg(waypoints)
@@ -2969,9 +3234,23 @@ def plan_route_with_anchors(gates_by_color, laps=None):
         candidate = (is_valid, -violation_count, completed_laps, -score, waypoints, anchors, labels, true_points)
         if best is None or candidate[:4] > best[:4]:
             best = candidate
+        arm_ok = _route_min_arm_body_clearance(waypoints, labels, all_posts) >= config.ARM_BODY_CLEARANCE_MIN_CM - 1e-9
+        all_candidates.append(candidate + (arm_ok, dist))
 
     if best is None:
         raise RuntimeError("どの侵入側の組み合わせでも経路を構築できませんでした")
+
+    # 2026-09-22: 最良の組み合わせが、どこかのゲートで、自分のT字パーツへの余裕(3cm)を満たしていないとき、
+    # 同じ安全性・周回数の組み合わせのうち、全てのゲートで余裕を満たすものが、
+    # 増える長さ(スコアの差)ARM_SIGN_PREFERENCE_BUDGET_CM以内にあれば、そちらを使う。
+    if config.ARM_SIGN_PREFERENCE_BUDGET_CM > 0:
+        best_entry = next(c for c in all_candidates if c[:8] == best)
+        if not best_entry[8]:
+            # 増える長さは、スコア(旋回のコストを含む)ではなく、実際の距離で比べる。
+            same_safety = [c for c in all_candidates
+                           if c[8] and c[:3] == best[:3] and c[9] <= best_entry[9] + config.ARM_SIGN_PREFERENCE_BUDGET_CM]
+            if same_safety:
+                best = max(same_safety, key=lambda c: c[3])[:8]
 
     _, _, _, _, waypoints, anchors, labels, true_points = best
 

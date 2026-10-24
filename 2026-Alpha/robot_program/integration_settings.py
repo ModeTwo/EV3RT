@@ -15,7 +15,7 @@ class IntegrationSettings:
     at_gate_forward_mm: float = 100.0
     at_recognition_reverse_mm: float = 200.0
     # REの青検知後、色認識を並行して行うカラートレース距離。
-    at_to_transfer_trace_mm: float = 400.0
+    at_to_transfer_trace_mm: float = 300.0
     at_marker_straight_mm: float = 293.0  # 青検知からグレー丸出口まで絶対0度
     # TOが引渡し後に黒線へ接近する区間の距離上限。受領tantou4準拠。
     to_first_black_limit_mm: float = 550.0
@@ -93,6 +93,12 @@ class IntegrationSettings:
     delivery_drive_first_power: int = 50
     delivery_drop_distance_second_mm: float = 100.0
     delivery_drive_second_power: int = 50
+    # ドロップゾーン進入・退出をDeliveryEtRun(方位保持、power<0で後退)で行うためのPID。
+    # corrected_run.USE_ET_STRAIGHT_PID=True(既定)の間はET_MOVE_PIDに上書きされ、
+    # ここの値は使われない。Falseへ切り替えた場合の初期値として残す。
+    delivery_drive_pid_p: float = 1.1
+    delivery_drive_pid_i: float = 0.00075
+    delivery_drive_pid_d: float = 0.04
     # ライン進行方向からドロップゾーン側へ向く角度。ラリー内側とは反対側。
     delivery_drop_turn_deg_first: float = -30.0
     delivery_drop_turn_deg_second: float = -90.0
@@ -163,6 +169,11 @@ class IntegrationSettings:
         for name in ('delivery_drop_turn_deg_first', 'delivery_drop_turn_deg_second', 'delivery_inward_turn_deg'):
             if not math.isfinite(getattr(self, name)):
                 raise ValueError(f'{name} must be finite')
+        for name in ('delivery_drive_pid_p', 'delivery_drive_pid_d'):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f'{name} must be positive and finite')
+        if not math.isfinite(self.delivery_drive_pid_i) or self.delivery_drive_pid_i < 0:
+            raise ValueError('delivery_drive_pid_i must be nonnegative and finite')
 
 
 @dataclass
