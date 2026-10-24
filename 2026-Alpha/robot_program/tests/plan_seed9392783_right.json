@@ -34,52 +34,52 @@
       ]
     }
   },
-  "heading_convention": "target_heading_deg is absolute, shifted so that the plan's own start heading = 0deg. Right-course gate mirror already applied (gates above are right-course grid coordinates, derived from plan_seed9392783.json's left-course gates via (4-x, y)). Treat 0deg as 'the direction the robot is physically facing at gyro reset'. Rotation sense must be verified against the real gyro/motor wiring; negate all target_heading_deg values if reversed.",
+  "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution: negated from the planner's raw CCW-positive, already-geometrically-mirrored angle, to compensate for file-mode skipping shared_communication/heading_frame.py's course normalization (which received-SEQ execution gets automatically). Derived from heading_frame.planner_to_full_start/full_start_to_gyro: for course=right the net transform is gyro_target = -planner_angle; for course=left it is the identity.",
   "total_distance_mm": 8418.6,
   "move_count": 31,
   "turn_count": 29,
   "steps": [
     {
       "type": "turn",
-      "target_heading_deg": -24.48,
+      "target_heading_deg": 24.48,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -24.48,
+      "target_heading_deg": 24.48,
       "distance_mm": 516.4,
       "label": null
     },
     {
       "type": "turn",
-      "target_heading_deg": -35.86,
+      "target_heading_deg": 35.86,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -35.86,
+      "target_heading_deg": 35.86,
       "distance_mm": 102.4,
       "label": "lap1-red-entry"
     },
     {
       "type": "turn",
-      "target_heading_deg": -90.0,
+      "target_heading_deg": 90.0,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -90.0,
+      "target_heading_deg": 90.0,
       "distance_mm": 295.0,
       "label": "lap1-red-exit"
     },
     {
       "type": "turn",
-      "target_heading_deg": 18.26,
+      "target_heading_deg": -18.26,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 18.26,
+      "target_heading_deg": -18.26,
       "distance_mm": 309.6,
       "label": "lap1-blue-entry"
     },
@@ -96,45 +96,45 @@
     },
     {
       "type": "turn",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "distance_mm": 123.0,
       "label": null
     },
     {
       "type": "turn",
-      "target_heading_deg": 129.89,
+      "target_heading_deg": -129.89,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 129.89,
+      "target_heading_deg": -129.89,
       "distance_mm": 269.8,
       "label": null
     },
     {
       "type": "turn",
-      "target_heading_deg": 128.99,
+      "target_heading_deg": -128.99,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 128.99,
+      "target_heading_deg": -128.99,
       "distance_mm": 270.2,
       "label": "lap1-yellow-entry"
     },
     {
       "type": "turn",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "distance_mm": 295.0,
       "label": "lap1-yellow-exit"
     },
@@ -151,40 +151,40 @@
     },
     {
       "type": "turn",
-      "target_heading_deg": -128.08,
+      "target_heading_deg": 128.08,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -128.08,
+      "target_heading_deg": 128.08,
       "distance_mm": 199.4,
       "label": null
     },
     {
       "type": "turn",
-      "target_heading_deg": -90.0,
+      "target_heading_deg": 90.0,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -90.0,
+      "target_heading_deg": 90.0,
       "distance_mm": 480.0,
       "label": "lap2-red-entry"
     },
     {
       "type": "move",
-      "target_heading_deg": -90.0,
+      "target_heading_deg": 90.0,
       "distance_mm": 295.0,
       "label": "lap2-red-exit"
     },
     {
       "type": "turn",
-      "target_heading_deg": 18.26,
+      "target_heading_deg": -18.26,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 18.26,
+      "target_heading_deg": -18.26,
       "distance_mm": 309.6,
       "label": "lap2-blue-entry"
     },
@@ -201,45 +201,45 @@
     },
     {
       "type": "turn",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "distance_mm": 123.0,
       "label": null
     },
     {
       "type": "turn",
-      "target_heading_deg": 129.89,
+      "target_heading_deg": -129.89,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 129.89,
+      "target_heading_deg": -129.89,
       "distance_mm": 269.8,
       "label": null
     },
     {
       "type": "turn",
-      "target_heading_deg": 128.99,
+      "target_heading_deg": -128.99,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 128.99,
+      "target_heading_deg": -128.99,
       "distance_mm": 270.2,
       "label": "lap2-yellow-entry"
     },
     {
       "type": "turn",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "distance_mm": 295.0,
       "label": "lap2-yellow-exit"
     },
@@ -256,40 +256,40 @@
     },
     {
       "type": "turn",
-      "target_heading_deg": -128.08,
+      "target_heading_deg": 128.08,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -128.08,
+      "target_heading_deg": 128.08,
       "distance_mm": 199.4,
       "label": null
     },
     {
       "type": "turn",
-      "target_heading_deg": -90.0,
+      "target_heading_deg": 90.0,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -90.0,
+      "target_heading_deg": 90.0,
       "distance_mm": 480.0,
       "label": "lap3-red-entry"
     },
     {
       "type": "move",
-      "target_heading_deg": -90.0,
+      "target_heading_deg": 90.0,
       "distance_mm": 295.0,
       "label": "lap3-red-exit"
     },
     {
       "type": "turn",
-      "target_heading_deg": 18.26,
+      "target_heading_deg": -18.26,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 18.26,
+      "target_heading_deg": -18.26,
       "distance_mm": 309.6,
       "label": "lap3-blue-entry"
     },
@@ -306,45 +306,45 @@
     },
     {
       "type": "turn",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "distance_mm": 123.0,
       "label": null
     },
     {
       "type": "turn",
-      "target_heading_deg": 129.89,
+      "target_heading_deg": -129.89,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 129.89,
+      "target_heading_deg": -129.89,
       "distance_mm": 269.8,
       "label": null
     },
     {
       "type": "turn",
-      "target_heading_deg": 128.99,
+      "target_heading_deg": -128.99,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 128.99,
+      "target_heading_deg": -128.99,
       "distance_mm": 270.2,
       "label": "lap3-yellow-entry"
     },
     {
       "type": "turn",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": 90.0,
+      "target_heading_deg": -90.0,
       "distance_mm": 295.0,
       "label": "lap3-yellow-exit"
     },
@@ -361,12 +361,12 @@
     },
     {
       "type": "turn",
-      "target_heading_deg": -34.72,
+      "target_heading_deg": 34.72,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -34.72,
+      "target_heading_deg": 34.72,
       "distance_mm": 602.2,
       "label": "goal"
     }
