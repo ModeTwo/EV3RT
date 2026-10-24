@@ -1,0 +1,374 @@
+{
+  "gates": {
+    "mode": "random",
+    "seed": 9392783,
+    "course": "right",
+    "red": {
+      "a": [
+        2,
+        2
+      ],
+      "b": [
+        1,
+        2
+      ]
+    },
+    "blue": {
+      "a": [
+        3,
+        1
+      ],
+      "b": [
+        3,
+        2
+      ]
+    },
+    "yellow": {
+      "a": [
+        3,
+        4
+      ],
+      "b": [
+        2,
+        4
+      ]
+    }
+  },
+  "heading_convention": "target_heading_deg is absolute, shifted so that the plan's own start heading = 0deg. Right-course gate mirror already applied (gates above are right-course grid coordinates, derived from plan_seed9392783.json's left-course gates via (4-x, y)). Treat 0deg as 'the direction the robot is physically facing at gyro reset'. Rotation sense must be verified against the real gyro/motor wiring; negate all target_heading_deg values if reversed.",
+  "total_distance_mm": 8418.6,
+  "move_count": 31,
+  "turn_count": 29,
+  "steps": [
+    {
+      "type": "turn",
+      "target_heading_deg": -24.48,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -24.48,
+      "distance_mm": 516.4,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -35.86,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -35.86,
+      "distance_mm": 102.4,
+      "label": "lap1-red-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 295.0,
+      "label": "lap1-red-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 18.26,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 18.26,
+      "distance_mm": 309.6,
+      "label": "lap1-blue-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 295.0,
+      "label": "lap1-blue-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 123.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 129.89,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 129.89,
+      "distance_mm": 269.8,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 128.99,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 128.99,
+      "distance_mm": 270.2,
+      "label": "lap1-yellow-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 295.0,
+      "label": "lap1-yellow-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -180.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -180.0,
+      "distance_mm": 123.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -128.08,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -128.08,
+      "distance_mm": 199.4,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 480.0,
+      "label": "lap2-red-entry"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 295.0,
+      "label": "lap2-red-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 18.26,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 18.26,
+      "distance_mm": 309.6,
+      "label": "lap2-blue-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 295.0,
+      "label": "lap2-blue-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 123.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 129.89,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 129.89,
+      "distance_mm": 269.8,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 128.99,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 128.99,
+      "distance_mm": 270.2,
+      "label": "lap2-yellow-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 295.0,
+      "label": "lap2-yellow-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -180.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -180.0,
+      "distance_mm": 123.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -128.08,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -128.08,
+      "distance_mm": 199.4,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 480.0,
+      "label": "lap3-red-entry"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 295.0,
+      "label": "lap3-red-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 18.26,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 18.26,
+      "distance_mm": 309.6,
+      "label": "lap3-blue-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 295.0,
+      "label": "lap3-blue-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 123.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 129.89,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 129.89,
+      "distance_mm": 269.8,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 128.99,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 128.99,
+      "distance_mm": 270.2,
+      "label": "lap3-yellow-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 295.0,
+      "label": "lap3-yellow-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 20.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -34.72,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -34.72,
+      "distance_mm": 602.2,
+      "label": "goal"
+    }
+  ]
+}
