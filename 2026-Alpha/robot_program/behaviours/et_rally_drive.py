@@ -255,8 +255,9 @@ class EtRallySpinAroundByEncoder(Behaviour):
                 if not self.fine_trim:
                     # 仕上げなし: 停止したまま終了する。残った誤差はログにだけ残す。
                     residual = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
-                    self.logger.info("%+06d %s.encoder-spin ended without fine-trim at heading=%d, residual=%+.1f" % (
-                        runtime.plotter.get_distance(), self.__class__.__name__, current_heading, residual))
+                    self.logger.info("%+06d %s.encoder-spin ended without fine-trim at heading=%d, residual=%+.1f loc=(%d,%d)" % (
+                        runtime.plotter.get_distance(), self.__class__.__name__, current_heading, residual,
+                        runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
                     return Status.SUCCESS
                 self.phase = 2
                 self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL)
@@ -296,9 +297,10 @@ class EtRallySpinAroundByEncoder(Behaviour):
             runtime.right_motor.set_brake(True)
             runtime.left_motor.set_power(0)
             runtime.left_motor.set_brake(True)
-            self.logger.info("%+06d %s.encoder-spin ended at heading=%d reversals=%d samples=%d" % (
-                runtime.plotter.get_distance(), self.__class__.__name__, current_heading,
-                self.oscillation.reversal_count, self.oscillation.sample_count))
+            self.logger.info("%+06d %s.encoder-spin ended at heading=%d residual=%+.1f reversals=%d samples=%d loc=(%d,%d)" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, current_heading, error,
+                self.oscillation.reversal_count, self.oscillation.sample_count,
+                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
             return Status.SUCCESS
 
         # スタック検知: ジャイロの角度がしばらく進んでいなければ、静止摩擦に
@@ -394,7 +396,9 @@ class EtRallyRunByGyro(Behaviour):
                 self.target_heading = self.target
             # 算出した旋回量が直進パワーを超えて暴走しないよう、output_limitsでしっかりキャップをかける
             self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
-            self.logger.info("%+06d %s.gyro run started toward heading=%d" % (runtime.plotter.get_distance(), self.__class__.__name__, self.target_heading))
+            self.logger.info("%+06d %s.gyro run started toward heading=%d target_dist=%d loc=(%d,%d)" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, self.target_heading, self.distance_mm,
+                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
             self.orig_dist = runtime.plotter.get_distance()
             # 2026-09-20: PID比較用に、区間ごとの向きの誤差と、その誤差による横ズレの
             # 推定値(進んだ距離 x sin(向き - 目標))を集計し、区間の最後に1行で出す。
@@ -439,9 +443,11 @@ class EtRallyRunByGyro(Behaviour):
         if (not self.summarized and self.distance_mm > 0.0
                 and now_dist - self.orig_dist >= self.distance_mm):
             self.summarized = True
-            self.logger.info("%+06d %s.run summary: dist=%d err_mean=%+.2f err_max=%.2f lat=%+.0fmm (+=目標より反時計回り側へ)" % (
-                now_dist, self.__class__.__name__, now_dist - self.orig_dist,
-                self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm))
+            actual_dist = now_dist - self.orig_dist
+            self.logger.info("%+06d %s.run summary: dist=%d target_dist=%d dist_err=%+d err_mean=%+.2f err_max=%.2f lat=%+.0fmm (+=目標より反時計回り側へ) loc=(%d,%d)" % (
+                now_dist, self.__class__.__name__, actual_dist, self.distance_mm, actual_dist - self.distance_mm,
+                self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm,
+                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
 
         turn = int(self.pid(current_heading))  # まっすぐ走るために必要な微修正の旋回量
         # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める

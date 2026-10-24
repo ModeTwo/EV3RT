@@ -169,9 +169,10 @@ class EtRallyTurnOneShot(Behaviour):
         error = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
         if abs(error) < self.fine_tolerance_deg or self.pulse_attempt >= self.max_pulse_attempts:
             self.logger.info(
-                "%+06d %s.phase2 done attempts=%d error=%+.2f" % (
+                "%+06d %s.phase2 done attempts=%d error=%+.2f loc=(%d,%d)" % (
                     runtime.plotter.get_distance(), self.__class__.__name__,
-                    self.pulse_attempt, error))
+                    self.pulse_attempt, error,
+                    runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
             return "done"
         # 1回で収まらなかった場合、残差を測り直してもう1回だけ試す。
         self._start_pulse(current_heading)

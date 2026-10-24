@@ -2,8 +2,12 @@
 
 import json
 import math
+import re
 from shared_communication.heading_frame import RALLY_START_HEADING, full_start_to_gyro
 from pathlib import Path
+
+from py_trees.behaviour import Behaviour
+from py_trees.common import Status
 
 from .bt_imports import Failure, HeadingType, Parallel, ParallelPolicy, Sequence
 from ..behaviours.et_rally_drive import EtRallyRunByGyro, EtRallySpinAroundByEncoder
@@ -28,6 +32,25 @@ SPIN_MAX_POWER = 70         # その場回旋（スピン）するときの最�
 SPIN_MIN_POWER = 60         # その場回旋（スピン）するときの最低モーター出力
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PLAN_PATH = Path(__file__).resolve().parents[1] / "tests" / "plan_seed9392783.json"
+
+_LAP_LABEL_RE = re.compile(r"^lap(\d+)")
+
+
+class LogLapBoundary(Behaviour):
+    """周回の切り替わりでplotterの位置・方位をログに残す(2026-10-24、周回ごとの
+    位置ズレを診断するための目印。即SUCCESSを返すだけで、走行には影響しない)。"""
+
+    def __init__(self, name, lap_tag):
+        super().__init__(name)
+        self.lap_tag = lap_tag
+
+    def update(self) -> Status:
+        runtime.require("plotter")
+        self.logger.info("%+06d LAP_BOUNDARY %s loc=(%d,%d) degree=%d" % (
+            runtime.plotter.get_distance(), self.lap_tag,
+            runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(),
+            runtime.plotter.get_degree()))
+        return Status.SUCCESS
 
 
 class DeferredStrategySequence(Sequence):
@@ -266,10 +289,21 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         initial_heading_deg=initial_heading_deg)
 
     nodes = []
+    prev_lap = None
     for index, step in enumerate(steps):
         heading = step["target_heading_deg"]
         label = step["label"]
         label_text = "" if label is None else " " + str(label)
+
+        # 周回ごとの位置ズレを診断するため、ラベル(lapN-color-entry/exit)の
+        # 周回番号が切り替わるタイミングで、位置ログだけ残す目印ノードを挟む。
+        lap_match = _LAP_LABEL_RE.match(label) if label else None
+        cur_lap = lap_match.group(1) if lap_match else None
+        if cur_lap is not None and cur_lap != prev_lap:
+            nodes.append(LogLapBoundary(
+                name="et_rally lap_boundary%d lap%s-start" % (index, cur_lap),
+                lap_tag="lap%s-start" % cur_lap))
+            prev_lap = cur_lap
 
         if step["type"] == "move":
             distance_mm = int(round(step["distance_mm"]))
