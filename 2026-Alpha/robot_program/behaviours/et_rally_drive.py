@@ -264,6 +264,10 @@ class EtRallySpinAroundByEncoder(Behaviour):
                 self.stall_ticks = 0
                 self.escalated = False
                 self.prev_heading_for_stall = current_heading
+                # 2026-10-25較正用: フェーズ2が最初に行き過ぎて向きを反転させる直前の
+                # 誤差を、「フェーズ2の1回目の精度」(一発パルス仕上げとの公平な比較用)
+                # として一度だけログに残す。
+                self.first_reversal_logged = False
                 self.logger.info("%+06d %s.encoder-spin phase1 complete at heading=%d, entering gyro fine-trim" % (
                     runtime.plotter.get_distance(), self.__class__.__name__, current_heading))
                 return Status.RUNNING
@@ -326,6 +330,12 @@ class EtRallySpinAroundByEncoder(Behaviour):
         runtime.left_motor.set_power(left_power)
         log_power_state(self.__class__.__name__ + ".phase2", right_power, left_power)
         self.oscillation.update(power)
+        if not self.first_reversal_logged and self.oscillation.reversal_count >= 1:
+            self.first_reversal_logged = True
+            self.logger.info(
+                "%+06d %s.phase2 first-pass error=%+.2f loc=(%d,%d)" % (
+                    runtime.plotter.get_distance(), self.__class__.__name__, error,
+                    runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
         return Status.RUNNING
 
 
