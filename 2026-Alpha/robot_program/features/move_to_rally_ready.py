@@ -1,148 +1,60 @@
-"""Feature 09 subtree factory."""
+"""配置後、方位0度の色別距離を進み、ラリー準備完了を記録する機能。
 
-from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
-from ..behaviours.bottle import IsDropZoneUnset, IsSelectedDropZone, MarkRallyReady
-from ..behaviours.conditions import IsColorDetected
-from ..behaviours.line_trace import TraceLine
-from ..behaviours.motor_control import StopNow
-from ..behaviours.section_motion import distance_motion
-# ボトルを離した後の旋回なので、エンコーダ旋回+ジャイロ仕上げ(behaviours/encoder_spin.py)
+処理順は、コース絶対方位+0度へ旋回、選択色に応じた前進、
+ラリー準備完了の記録。
+"""
+
+from ..behaviours.bottle import IsSelectedDropZone, MarkRallyReady
+from ..behaviours.corrected_run import DeliveryEtRun
 from ..behaviours.encoder_spin import delivery_encoder_turn as to_turn
+from ..behaviours.section_motion import distance_motion
+from .bt_imports import BottleColor, Selector, Sequence
+
+# 方位+0度を向いた後に進む距離[mm]。センチ指定をmmへ換算している。
+_RALLY_CLEARANCE = {
+    BottleColor.YELLOW: 800.0,  # 黄: 80 cm
+    BottleColor.BLUE: 550.0,   # 青: 55 cm
+    BottleColor.RED: 350.0,     # 赤: 5 cm
+}
 
 
-def _trace_motor(name, settings):
-    return TraceLine(
-        name=name,
-        target=settings.delivery_trace_target_v,
-        power=settings.delivery_trace_power,
-        pid_p=0.65,
-        pid_i=0.000001,
-        pid_d=0.045,
-        trace_side=TraceSide.NORMAL,
+def _drive_to_rally(name, context, settings, distance_mm):
+    """コース絶対方位+0度を保って、指定距離だけ前進する動作を作る。"""
+    return distance_motion(
+        name,
+        DeliveryEtRun(
+            name + " motor", context,
+            target=0.0,
+            power=settings.delivery_drive_first_power,
+            pid_p=settings.delivery_drive_pid_p,
+            pid_i=settings.delivery_drive_pid_i,
+            pid_d=settings.delivery_drive_pid_d,
+        ),
+        distance_mm,
     )
-
-
-def _trace_until_blue(name, settings):
-    search = Parallel(name=name, policy=ParallelPolicy.SuccessOnOne())
-    search.add_children(
-        [
-            _trace_motor(name + " motor", settings),
-            IsColorDetected(name=name + " detector", color=Color.BLUE),
-        ]
-    )
-    root = Sequence(name=name + " segment", memory=True)
-    root.add_children([search, StopNow(name=name + " brake")])
-    return root
-
-
-def _leave_current_center_and_find_next(name, settings):
-    # 配置後は青ライン中央にいるため、残り半分だけ進んでから次の線を探す。
-    root = Sequence(name=name, memory=True)
-    root.add_children(
-        [
-            distance_motion(
-                name + " leave current marker",
-                _trace_motor(name + " leave motor", settings),
-                settings.delivery_marker_half_width_mm,
-            ),
-            _trace_until_blue(name + " find next blue", settings),
-        ]
-    )
-    return root
-
-
-def _pass_intermediate_and_find_next(name, settings):
-    # 次の青ライン手前端から全幅を抜け、さらに上段の青ラインを探す。
-    root = Sequence(name=name, memory=True)
-    root.add_children(
-        [
-            distance_motion(
-                name + " pass intermediate marker",
-                _trace_motor(name + " pass motor", settings),
-                settings.delivery_marker_full_width_mm,
-            ),
-            _trace_until_blue(name + " find next blue", settings),
-        ]
-    )
-    return root
 
 
 def build_move_to_rally_ready(context, config):
-    # No.9 最上段の青ライン中央へ移動し、ETラリーエリア内側へ向ける。
+    """色別の短い前進と最終方位合わせを行うBTシーケンスを作る。"""
     settings = config.integration
     root = Sequence(name="move_to_rally_ready", memory=True)
-    start_zone_route = Selector(name="route from delivered zone to rally start", memory=True)
 
-    # 赤へ配置した場合は、すでに最上段の青ライン中央へ戻っている。
-    red_route = Sequence(name="red zone is rally start", memory=True)
-    red_route.add_children(
-        [IsSelectedDropZone("started from red zone", BottleColor.RED, context)]
-    )
+    # まず現在方位に関係なく、コース絶対方位+0度へ向きを合わせる。
+    root.add_child(to_turn("face course absolute 0", context, settings, 0.0))
 
-    # 青からは一段、黄からは二段上の赤ゾーン前まで進む。
-    blue_route = Sequence(name="blue zone to rally start", memory=True)
-    blue_route.add_children(
-        [
-            IsSelectedDropZone("started from blue zone", BottleColor.BLUE, context),
-            _leave_current_center_and_find_next("blue to red rally line", settings),
-            distance_motion(
-                "center red rally line from blue",
-                _trace_motor("center red rally line motor from blue", settings),
-                settings.delivery_marker_half_width_mm,
-            ),
-        ]
-    )
+    # 確定済みドロップゾーンを判定し、黄45 cm・青25 cm・赤5 cmを選択する。
+    # Selector内では、色判定とその色に対応する距離の前進を一つのSequenceにする。
+    color_route = Selector(name="move from drop zone by bottle color", memory=True)
+    for color, distance_mm in _RALLY_CLEARANCE.items():
+        route = Sequence(name=f"{color.name.lower()} zone rally approach", memory=True)
+        route.add_children([
+            IsSelectedDropZone(f"is {color.name.lower()} zone", color, context),
+            _drive_to_rally(f"advance from {color.name.lower()} zone", context,
+                            settings, distance_mm),
+        ])
+        color_route.add_child(route)
+    root.add_child(color_route)
 
-    yellow_route = Sequence(name="yellow zone to rally start", memory=True)
-    yellow_route.add_children(
-        [
-            IsSelectedDropZone("started from yellow zone", BottleColor.YELLOW, context),
-            _leave_current_center_and_find_next("yellow to blue rally line", settings),
-            _pass_intermediate_and_find_next("blue to red rally line from yellow", settings),
-            distance_motion(
-                "center red rally line from yellow",
-                _trace_motor("center red rally line motor from yellow", settings),
-                settings.delivery_marker_half_width_mm,
-            ),
-        ]
-    )
-
-    # ラリー単体モードではボトル配置を経ないため、黄ゾーン前の手前端から赤まで進む。
-    no_bottle_route = Sequence(name="first marker to rally start without bottle", memory=True)
-    no_bottle_route.add_children(
-        [
-            IsDropZoneUnset("drop zone was not selected", context),
-            _trace_until_blue("find yellow zone without bottle", settings),
-            _pass_intermediate_and_find_next("yellow to blue without bottle", settings),
-            _pass_intermediate_and_find_next("blue to red without bottle", settings),
-            distance_motion(
-                "center red rally line without bottle",
-                _trace_motor("center red rally line motor without bottle", settings),
-                settings.delivery_marker_half_width_mm,
-            ),
-        ]
-    )
-    # 配置した色ごとに、最上段の赤ゾーン前までの移動量を切り替える。
-    start_zone_route.add_children(
-        [red_route, blue_route, yellow_route, no_bottle_route]
-    )
-
-    # コース絶対方位+90度を目標にする。直前の向きの誤差は加算しない。
-    turn_toward_rally = to_turn(
-        "turn inward at rally start",
-        context,
-        settings,
-        settings.delivery_inward_turn_deg,
-    )
-    stop_at_rally_start = StopNow(name="stop at rally start")
-    mark_rally_ready = MarkRallyReady("mark rally ready", context)
-
-    root.add_children(
-        [
-            start_zone_route,
-            turn_toward_rally,
-            stop_at_rally_start,
-            mark_rally_ready,
-        ]
-    )
+    # 色別前進のあと、rally_readyを設定して後続のラリー工程へ準備完了を伝える。
+    root.add_child(MarkRallyReady("mark rally ready", context))
     return root

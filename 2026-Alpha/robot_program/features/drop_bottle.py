@@ -1,142 +1,81 @@
-"""Feature 08 subtree factory."""
+"""ボトル色に対応するゾーンへ進入し、ボトルを置く機能。
 
-from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
-from ..behaviours.bottle import MarkBottleDelivered
-from ..behaviours.line_trace import TraceLine
+色ごとの進入方位・距離・後退距離でゾーンへ進み、配置完了を
+共有contextへ記録する。
+"""
+
+from .bt_imports import BottleColor, Selector, Sequence
+from ..behaviours.bottle import IsSelectedDropZone, MarkBottleDelivered
 from ..behaviours.corrected_run import DeliveryEtRun
-from ..behaviours.section_motion import distance_motion
 from ..behaviours.encoder_spin import delivery_encoder_turn as to_turn
+from ..behaviours.section_motion import distance_motion
+
+# 色ごとの (ドロップゾーン側への進入方位, ゾーンまでの距離[mm])。
+# 方位はドロップコース基準。既存の方位座標系ではゾーン側が負方向なので、
+# 30/20/10度をそれぞれ -30/-20/-10度として指定する。
+_DROP_ROUTE = {
+    BottleColor.YELLOW: (-30.0, 400.0),  # 黄: -30度で40 cm
+    BottleColor.BLUE: (-20.0, 700.0),    # 青: -20度で70 cm
+    BottleColor.RED: (-15.0, 900.0),     # 赤: -15度で90 cm
+}
+
+# 色ごとの後退距離[mm]。黄は従来どおり10 cm。
+_DROP_BACK_DISTANCE_MM = {
+    BottleColor.YELLOW: 100.0,
+    BottleColor.BLUE: 200.0,
+    BottleColor.RED: 200.0,
+}
+
+
+def _drive(name, context, settings, heading, distance_mm, power):
+    """指定方位をジャイロ補正で保ちながら、指定距離だけ直進する動作を作る。
+
+    distance_motionが走行距離を監視し、DeliveryEtRunが走行中の方位ずれを
+    補正する。powerを負にすると、headingを保ったまま後退する。
+    """
+    return distance_motion(
+        name,
+        DeliveryEtRun(
+            name + " motor", context,
+            target=heading,
+            power=power,
+            pid_p=settings.delivery_drive_pid_p,
+            pid_i=settings.delivery_drive_pid_i,
+            pid_d=settings.delivery_drive_pid_d,
+        ),
+        distance_mm,
+    )
 
 
 def build_drop_bottle(context, config):
-    # No.8 旋回、前進、後退、復帰旋回によるボトル配置を担当する。
-    # 前進・後退は、ETラリーで実績のある補正込みのDeliveryEtRun(RunByGyro相当、
-    # power<0で後退)で方位を保持しながら走る。DriveDistance(無補正)は使わない。
+    """選択されたボトル色に応じた配置シーケンスを作る。
+
+    Selectorは黄・青・赤の分岐を順に確認し、IsSelectedDropZoneが成功した
+    色のシーケンスだけを実行する。分岐内の順序は、色の確認、ゾーン側へ旋回、
+    色別距離の前進、色別距離の後退、配置完了の記録。
+    """
     settings = config.integration
     root = Sequence(name="drop_bottle", memory=True)
+    color_route = Selector(name="approach color drop zone", memory=True)
 
-    # 1. 検知した青ラインの手前端から中央まで進む。
-    move_to_blue_line_center = distance_motion(
-        "center selected blue line",
-        TraceLine(
-            name="center selected blue line motor",
-            target=settings.delivery_trace_target_v,
-            power=settings.delivery_trace_power,
-            pid_p=0.65,
-            pid_i=0.000001,
-            pid_d=0.045,
-            trace_side=TraceSide.NORMAL,
-        ),
-        settings.delivery_marker_half_width_mm,
-    )
+    for color, (heading, distance_mm) in _DROP_ROUTE.items():
+        back_distance_mm = _DROP_BACK_DISTANCE_MM[color]
+        # この色が確定配置先の場合だけ、その色に対応する動作を実行する。
+        route = Sequence(name=f"{color.name.lower()} bottle drop", memory=True)
+        route.add_children([
+            IsSelectedDropZone(f"is {color.name.lower()} zone", color, context),
+            # コース基準の色別方位でドロップゾーン側を向く。
+            to_turn(f"turn toward {color.name.lower()} drop zone", context, settings, heading),
+            # 色ごとの所定距離を前進し、ボトル色のゾーンまで進む。
+            _drive(f"drive to {color.name.lower()} drop zone", context, settings,
+                   heading, distance_mm, settings.delivery_drive_first_power),
+                 # 同じ方位を維持して色別距離だけ後退し、ボトルを放す位置を作る。
+            _drive(f"back away from {color.name.lower()} bottle", context, settings,
+                     heading, back_distance_mm, -settings.delivery_drive_first_power),
+            # この分岐の移動がすべて成功したあと、配置済み状態を後続へ通知する。
+            MarkBottleDelivered(f"mark {color.name.lower()} bottle delivered", context),
+        ])
+        color_route.add_child(route)
 
-    # 2. ライン進行方向からドロップゾーン側へ旋回する(1本目)。
-    turn_toward_drop_zone_first = to_turn(
-        "turn toward bottle drop zone",
-        context,
-        settings,
-        settings.delivery_drop_turn_deg_first,
-    )
-
-    # 3. ボトルを置くため、ドロップゾーンへ規定距離だけ前進する(1本目、方位保持)。
-    drive_into_drop_zone_first = distance_motion(
-        "enter bottle drop zone (leg 1)",
-        DeliveryEtRun(
-            "enter bottle drop zone motor (leg 1)", context,
-            target=settings.delivery_drop_turn_deg_first,
-            power=settings.delivery_drive_first_power,
-            pid_p=settings.delivery_drive_pid_p,
-            pid_i=settings.delivery_drive_pid_i,
-            pid_d=settings.delivery_drive_pid_d,
-        ),
-        settings.delivery_drop_distance_first_mm,
-    )
-
-    # 4. さらにドロップゾーン側へ旋回する(2本目)。
-    turn_toward_drop_zone_second = to_turn(
-        "turn toward bottle drop zone",
-        context,
-        settings,
-        settings.delivery_drop_turn_deg_second,
-    )
-
-    # 5. ボトルを置くため、ドロップゾーンへ規定距離だけ前進する(2本目、方位保持)。
-    drive_into_drop_zone_second = distance_motion(
-        "enter bottle drop zone (leg 2)",
-        DeliveryEtRun(
-            "enter bottle drop zone motor (leg 2)", context,
-            target=settings.delivery_drop_turn_deg_second,
-            power=settings.delivery_drive_second_power,
-            pid_p=settings.delivery_drive_pid_p,
-            pid_i=settings.delivery_drive_pid_i,
-            pid_d=settings.delivery_drive_pid_d,
-        ),
-        settings.delivery_drop_distance_second_mm,
-    )
-
-    # 6. 直前(2本目)の向きを保ったまま、2本目を打ち消す距離だけ後退する。
-    #    (旋回前に後退する: 進んだ経路をそのまま逆再生する)
-    reverse_leg_second = distance_motion(
-        "leave bottle drop zone (undo leg 2)",
-        DeliveryEtRun(
-            "leave bottle drop zone motor (undo leg 2)", context,
-            target=settings.delivery_drop_turn_deg_second,
-            power=-settings.delivery_drive_second_power,
-            pid_p=settings.delivery_drive_pid_p,
-            pid_i=settings.delivery_drive_pid_i,
-            pid_d=settings.delivery_drive_pid_d,
-        ),
-        settings.delivery_drop_distance_second_mm,
-    )
-
-    # 7. 1本目の向きへ旋回して戻す。
-    turn_back_to_line_first = to_turn(
-        "turn back to drop zone line",
-        context,
-        settings,
-        settings.delivery_drop_turn_deg_first,  # 絶対方位: 1本目の進行方向へ戻る
-    )
-
-    # 8. 1本目の向きを保ったまま、1本目を打ち消す距離だけ後退し、青ライン中央へ戻る。
-    reverse_leg_first = distance_motion(
-        "leave bottle drop zone (undo leg 1)",
-        DeliveryEtRun(
-            "leave bottle drop zone motor (undo leg 1)", context,
-            target=settings.delivery_drop_turn_deg_first,
-            power=-settings.delivery_drive_first_power,
-            pid_p=settings.delivery_drive_pid_p,
-            pid_i=settings.delivery_drive_pid_i,
-            pid_d=settings.delivery_drive_pid_d,
-        ),
-        settings.delivery_drop_distance_first_mm,
-    )
-
-    # 9. 次の青ラインへ進めるよう、元のライン進行方向(0度)へ向きを戻す。
-    turn_back_to_line_second = to_turn(
-        "turn back to drop zone line",
-        context,
-        settings,
-        0.0,  # 絶対方位: ライン進行方向へ戻る
-    )
-
-    # 10. ここまでの制御が完了したことを後続工程へ記録する。
-    mark_delivery_complete = MarkBottleDelivered(
-        "mark bottle delivered",
-        context,
-    )
-
-    root.add_children(
-        [
-            move_to_blue_line_center,
-            turn_toward_drop_zone_first,
-            drive_into_drop_zone_first,
-            turn_toward_drop_zone_second,
-            drive_into_drop_zone_second,
-            reverse_leg_second,
-            turn_back_to_line_first,
-            reverse_leg_first,
-            turn_back_to_line_second,
-            mark_delivery_complete,
-        ]
-    )
+    root.add_child(color_route)
     return root
