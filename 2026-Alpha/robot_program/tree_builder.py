@@ -31,7 +31,7 @@ def build_mission_children(context, config):
         'bottle-final',
         'rally-drive',
         'full',
-        'et-rally-lqi-calibration',
+        'et-rally-turn-calibration',
         'et-rally-marker-observe',
         'et-rally-turn-phase2-diagnostic',
         'et-rally-single-wheel-diagnostic',
@@ -56,10 +56,10 @@ def build_mission_children(context, config):
     if config.mission_mode == 'rally-drive':
         # Hint取得・Bottle Deliveryを通らず、受信待ちとSEQ実行だけを構成する。
         return [EnableGyroScale(), build_et_rally_phase(context, config)]
-    if config.mission_mode == 'et-rally-lqi-calibration':
-        # ETラリー旋回のLQI設計用データ収集だけを実行する(PC通信・Hintは使わない)。
-        from .behaviours.et_rally_lqi_calibration import build_et_rally_lqi_calibration_sequence
-        return [EnableGyroScale(), build_et_rally_lqi_calibration_sequence()]
+    if config.mission_mode == 'et-rally-turn-calibration':
+        # ETラリー旋回の応答特性データ収集だけを実行する(PC通信・Hintは使わない)。
+        from .behaviours.et_rally_turn_calibration import build_et_rally_turn_calibration_sequence
+        return [EnableGyroScale(), build_et_rally_turn_calibration_sequence()]
     if config.mission_mode == 'et-rally-marker-observe':
         # マーカー検出の実機確認専用(走行体は動かさず、検出結果だけをログに出す)。
         from .behaviours.et_rally_camera_correction import (

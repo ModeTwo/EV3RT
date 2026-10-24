@@ -1,4 +1,11 @@
-"""ETラリー旋回の、LQI(積分付きLQR)による仕上げ制御を設計するための、実測データ収集専用ツール。
+"""ETラリー旋回のモーター+ジャイロ応答特性を実測するための、較正専用データ収集ツール。
+
+2026-10-24改名: 元は「LQI(積分付きLQR)設計専用」の名前だったが、ここで集めているのは
+b・c(応答特性)とstiction_floor(不感帯)という汎用的な較正データで、LQI
+(behaviours/et_rally_turn_lqi.py)だけでなく、一発パルス仕上げ
+(behaviours/et_rally_turn_one_shot.py、wireless_device/et_rally_lqi/one_shot_pulse.py)
+でも同じデータをそのまま使う。LQI専用という名前は実態と合わないため、較正内容に
+即した名前(turn_calibration)に変更した。
 
 ここにあるクラスは、いずれも「本番の走行」には使わない、較正専用の使い捨てビヘイビアである。
 既存の EtRallySpinAroundByEncoder / EtRallyRunByGyro(behaviours/et_rally_drive.py)は、
@@ -14,8 +21,8 @@
      フェーズ2と同じPID構成を、ログ目的だけのために、ここで独立して再実装する。
      既存クラスへは一切手を入れない)。
 
-ログの読み方: すべての行に "LQI_CAL" という目印を付けている。
-    grep "LQI_CAL" run_logs/xxxx.log
+ログの読み方: すべての行に "TURN_CAL" という目印を付けている。
+    grep "TURN_CAL" run_logs/xxxx.log
 で抽出し、wireless_device/et_rally_lqi/parse_log.py で表に変換する。
 """
 
@@ -35,12 +42,13 @@ from ..gyro_scale import ensure_scaled_gyro
 from ..runtime import runtime
 from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
 
-TAG = "LQI_CAL"
+TAG = "TURN_CAL"
 
 
 def _current_heading():
     # EtRallySpinAroundByEncoder/EtRallyRunByGyroと同じ符号規約(時計回り正)に揃える。
-    # LQIの設計は、この関数で読んだ値をそのまま使う前提で行うため、規約を変えない。
+    # LQI・一発パルス仕上げどちらの較正も、この関数で読んだ値をそのまま使う前提で行うため、
+    # 規約を変えない。
     return (-1) * runtime.course * runtime.gyro_sensor.get_angle()
 
 
@@ -301,8 +309,8 @@ STEP_SETTLE_SEC = 0.5
 FINE_TRIM_TARGETS_DEG = (3.0, -3.0, 5.0, -5.0, 2.0, -2.0)
 
 
-def build_et_rally_lqi_calibration_sequence() -> Sequence:
-    root = Sequence(name="et_rally_lqi_calibration", memory=True)
+def build_et_rally_turn_calibration_sequence() -> Sequence:
+    root = Sequence(name="et_rally_turn_calibration", memory=True)
     children = [
         FindStictionThreshold(name="stiction cw", direction=1),
         StopNow(name="settle after stiction cw"),
@@ -328,6 +336,6 @@ def build_et_rally_lqi_calibration_sequence() -> Sequence:
                                        target_relative_deg=target))
         children.append(StopNow(name="settle fine_trim %d" % index))
         children.append(IsTimePassed(name="wait fine_trim %d" % index, delta_time=STEP_SETTLE_SEC))
-    children.append(StopNow(name="et_rally_lqi_calibration final stop"))
+    children.append(StopNow(name="et_rally_turn_calibration final stop"))
     root.add_children(children)
     return root

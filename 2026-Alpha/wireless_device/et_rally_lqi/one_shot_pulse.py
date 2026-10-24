@@ -12,7 +12,7 @@
 1回だけそのパルスを与えて様子を見る」という設計にする。
 
 b, c、下限パワーは、parse_log.py/fit_model.pyで、
---mission et-rally-lqi-calibration のログから、これまでと同じ手順で求める
+--mission et-rally-turn-calibration のログから、これまでと同じ手順で求める
 (この一発補正の設計のためだけに、新しい較正手順を追加する必要はない)。
 
 モデル(design_gains.pyと同じ、開ループ版):

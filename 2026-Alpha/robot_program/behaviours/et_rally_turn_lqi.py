@@ -135,7 +135,7 @@ class EtRallyTurnLqi(Behaviour):
                 runtime.plotter.get_distance(), self.__class__.__name__, current_heading))
 
     def _tick_phase2(self, current_heading):
-        # 状態の定義は、較正時(et_rally_lqi_calibration.py)・モデル(design_gains.py)と、
+        # 状態の定義は、較正時(et_rally_turn_calibration.py)・モデル(design_gains.py)と、
         # 必ず同じ符号規約に揃える: theta_e=目標-現在、omega=現在方位の変化率(current_headingの
         # 微分、符号反転しない)、Integral[k+1]=Integral[k]+dt*theta_e[k]。
         theta_e = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0

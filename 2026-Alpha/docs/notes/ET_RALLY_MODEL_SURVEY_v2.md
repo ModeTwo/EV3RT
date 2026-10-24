@@ -117,7 +117,7 @@ v1の5-4節(`EtRallySpinAroundByEncoder`のステートマシン図)をベース
 
 ```mermaid
 sequenceDiagram
-    participant Cal as et_rally_lqi_calibration(実機較正ミッション)
+    participant Cal as et_rally_turn_calibration(実機較正ミッション)
     participant PC as one_shot_pulse.py(PC側計算)
     participant Turn as EtRallyTurnOneShot
     Cal->>Cal: 不感帯・応答特性を実測

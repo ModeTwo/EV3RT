@@ -159,7 +159,7 @@ MISSION_CHOICES = (
     'full',
     'hint2',
     'hint2-return',
-    'et-rally-lqi-calibration',
+    'et-rally-turn-calibration',
     'et-rally-marker-observe',
     'et-rally-turn-phase2-diagnostic',
     'et-rally-single-wheel-diagnostic',
@@ -202,8 +202,9 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
     if mission == 'bottle-final':
         # Hint2後移動の終了位置から、Bottle Delivery後半だけを単体実行する。
         return replace(config, mission_mode=mission, **disabled)
-    if mission == 'et-rally-lqi-calibration':
-        # ETラリー旋回のLQI設計に使う実測データ収集専用。準備工程・PC通信は一切実行しない。
+    if mission == 'et-rally-turn-calibration':
+        # ETラリー旋回の応答特性(LQI・一発パルス仕上げ共通)実測データ収集専用。
+        # 準備工程・PC通信は一切実行しない。
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'et-rally-marker-observe':
         # マーカー検出の実機確認専用(観測のみ、走行体は動かさない)。
