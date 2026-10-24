@@ -208,7 +208,9 @@ ARM_BODY_CLEARANCE_TARGET_CM = 4.0
 # 2026-09-20: ゴール地点に到達した後の旋回(GOAL_HEADING_DEGへ向く)を行うか。
 # False: ゴール地点に着いた時点で終了し、向きは問わない(旋回ステップを出さない、
 # 経路計画でもゴールでの旋回安全性は見ない)。
-GOAL_FINAL_TURN = False
+# 2026-10-24: ゴール到着時の向きを北(+y方向、GOAL_HEADING_DEG=90度)に固定したい
+# という要望によりTrueへ変更。
+GOAL_FINAL_TURN = True
 
 # 2026-09-20: T字パーツとの車体クリアランスの評価(rule_route._segment_body_clearance)で
 # 使う、車体の後端の張り出し(cm)。0なら「旋回軸より後ろは見ない」(車体の前方だけ

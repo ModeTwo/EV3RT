@@ -34,10 +34,10 @@
       ]
     }
   },
-  "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution: negated from the planner's raw CCW-positive, already-geometrically-mirrored angle, to compensate for file-mode skipping shared_communication/heading_frame.py's course normalization (which received-SEQ execution gets automatically). Derived from heading_frame.planner_to_full_start/full_start_to_gyro: for course=right the net transform is gyro_target = -planner_angle; for course=left it is the identity.",
+  "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution: negated from the planner's raw CCW-positive, already-geometrically-mirrored angle, to compensate for file-mode skipping shared_communication/heading_frame.py's course normalization (received-SEQ execution gets this automatically). For course=right the net transform is gyro_target = -planner_angle; for course=left it is the identity. GOAL_FINAL_TURN=True (2026-10-24): includes a final turn-in-place at the goal to face GOAL_HEADING_DEG=90deg (world-frame +y, project convention = north).",
   "total_distance_mm": 8418.6,
   "move_count": 31,
-  "turn_count": 29,
+  "turn_count": 30,
   "steps": [
     {
       "type": "turn",
@@ -368,6 +368,11 @@
       "type": "move",
       "target_heading_deg": 34.72,
       "distance_mm": 602.2,
+      "label": "goal"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
       "label": "goal"
     }
   ]
