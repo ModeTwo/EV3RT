@@ -62,6 +62,7 @@ class Plotter(object):
         sonar_sensor: SonarSensor,
         gyro_sensor: GyroSensor,
     ) -> None:
+        self.gyro_sensor = gyro_sensor
         if not self.running:
             self.running = True
             right_motor.reset_count()
@@ -115,10 +116,10 @@ class Plotter(object):
         return int(self.distance)
 
     def get_azimuth(self) -> int:
-        return int(IMU_HEADING_SIGN * math.radians(gyro_sensor.get_angle()) % (2.0 * math.pi))
+        return int(IMU_HEADING_SIGN * math.radians(self.gyro_sensor.get_angle()) % (2.0 * math.pi))
 
     def get_degree(self) -> int:
-        degree = int(IMU_HEADING_SIGN * gyro_sensor.get_angle()) % 360
+        degree = int(IMU_HEADING_SIGN * self.gyro_sensor.get_angle()) % 360
         return degree
 
     def get_loc_x(self) -> int:
