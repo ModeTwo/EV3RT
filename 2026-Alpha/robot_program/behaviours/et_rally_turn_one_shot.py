@@ -90,6 +90,13 @@ PULSE_TABLE = [
 ]
 MAX_PULSE_ATTEMPTS = 2  # これ以上は追いかけない(不感帯より細かい残差を無理に追わない)
 
+# 2026-10-25: phase1終了直後・各パルス直後は、ブレーキをかけてもロボットがまだ回っている
+# (旋回30回テストで、pulse#2時点の残差が旋回方向に15回中15回とも同じ符号で行き過ぎ、
+# パルスを撃たなかった回でも約40ms後に1〜2度流れていた)。heading がこのtick数だけ
+# 続けて変わらなくなってから残差を測る。SETTLE_MAX_TICKSで打ち切る(1tick=0.02s)。
+SETTLE_STABLE_TICKS = 3
+SETTLE_MAX_TICKS = 15
+
 # DD-22較正用(et_rally_drive.pyと同じ考え方を、このクラス独立で持つ。
 # クラス間の変更・継承はしない設計方針のため、モジュール変数も別に持つ)。
 # phase1で先に止まった側が、もう片方の反力で引き込まれて動いてしまう分の
@@ -131,7 +138,9 @@ class EtRallyTurnOneShot(Behaviour):
                  lag_compensation_deg: float = 0.0,
                  adaptive_lag_compensation: bool = False,
                  backlash_preload_deg: float = 0.0,
-                 left_target_scale: float = 1.0) -> None:
+                 left_target_scale: float = 1.0,
+                 settle_stable_ticks: int = SETTLE_STABLE_TICKS,
+                 settle_max_ticks: int = SETTLE_MAX_TICKS) -> None:
         super().__init__(name)
         self.target = target
         self.target_type = target_type
@@ -153,6 +162,9 @@ class EtRallyTurnOneShot(Behaviour):
         # (実効径・グリップの定常的な左右差)分の補正。常に左輪の目標値にだけかける。
         # 1.0なら無効(既定、挙動は変えない)。
         self.left_target_scale = left_target_scale
+        self.settle_stable_ticks = settle_stable_ticks
+        self.settle_max_ticks = settle_max_ticks
+        self.settling = False
         self.running = False
 
     # --- フェーズ1: エンコーダ主導(EtRallySpinAroundByEncoder/EtRallyTurnLqiと同じ考え方) ---
@@ -262,7 +274,35 @@ class EtRallyTurnOneShot(Behaviour):
     def _enter_phase2(self, current_heading):
         self.phase = 2
         self.pulse_attempt = 0
-        self._start_pulse(current_heading)
+        self._begin_settle(current_heading, "phase1")
+
+    def _begin_settle(self, current_heading, reason):
+        self._stop_motors()
+        self.settling = True
+        self.settle_reason = reason
+        self.settle_start_heading = current_heading
+        self.settle_prev_heading = current_heading
+        self.settle_stable_count = 0
+        self.settle_ticks = 0
+
+    def _tick_settle(self, current_heading):
+        """静止を確認できたらTrue。headingは約1度刻みなので、値が同じかどうかで判定する。"""
+        self.settle_ticks += 1
+        if abs(current_heading - self.settle_prev_heading) < 1e-6:
+            self.settle_stable_count += 1
+        else:
+            self.settle_stable_count = 0
+        self.settle_prev_heading = current_heading
+        if (self.settle_stable_count < self.settle_stable_ticks
+                and self.settle_ticks < self.settle_max_ticks):
+            return False
+        self.settling = False
+        self.logger.info(
+            "%+06d %s.phase2 settled after %s ticks=%d drift=%+.2f%s" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, self.settle_reason,
+                self.settle_ticks, current_heading - self.settle_start_heading,
+                "" if self.settle_stable_count >= self.settle_stable_ticks else " (timeout)"))
+        return True
 
     def _start_pulse(self, current_heading):
         error = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
@@ -284,6 +324,24 @@ class EtRallyTurnOneShot(Behaviour):
         runtime.left_motor.set_brake(True)
 
     def _tick_phase2(self, current_heading):
+        if self.settling:
+            if not self._tick_settle(current_heading):
+                return "running"
+            if self.pulse_attempt == 0:
+                self._start_pulse(current_heading)
+                return "running"
+            error = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
+            if abs(error) < self.fine_tolerance_deg or self.pulse_attempt >= self.max_pulse_attempts:
+                self.logger.info(
+                    "%+06d %s.phase2 done attempts=%d error=%+.2f loc=(%d,%d)" % (
+                        runtime.plotter.get_distance(), self.__class__.__name__,
+                        self.pulse_attempt, error,
+                        runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
+                return "done"
+            # 1回で収まらなかった場合、残差を測り直してもう1回だけ試す。
+            self._start_pulse(current_heading)
+            return "running"
+
         if self.pulse_ticks_remaining > 0:
             right_power = runtime.course * self.pulse_power
             left_power = (-1) * runtime.course * self.pulse_power
@@ -293,17 +351,7 @@ class EtRallyTurnOneShot(Behaviour):
             self.pulse_ticks_remaining -= 1
             return "running"
 
-        self._stop_motors()
-        error = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
-        if abs(error) < self.fine_tolerance_deg or self.pulse_attempt >= self.max_pulse_attempts:
-            self.logger.info(
-                "%+06d %s.phase2 done attempts=%d error=%+.2f loc=(%d,%d)" % (
-                    runtime.plotter.get_distance(), self.__class__.__name__,
-                    self.pulse_attempt, error,
-                    runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
-            return "done"
-        # 1回で収まらなかった場合、残差を測り直してもう1回だけ試す。
-        self._start_pulse(current_heading)
+        self._begin_settle(current_heading, "pulse#%d" % self.pulse_attempt)
         return "running"
 
     # --- Behaviour本体 ---
@@ -332,4 +380,5 @@ class EtRallyTurnOneShot(Behaviour):
             runtime.right_motor.set_power(0)
         if runtime.left_motor is not None:
             runtime.left_motor.set_power(0)
+        self.settling = False
         self.running = False
