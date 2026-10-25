@@ -47,6 +47,14 @@ _lag_estimate_ratio = 22.67 / _LAG_REFERENCE_MOTOR_DEG
 # 緩やかな減少)を見積もり、ノイズ低減と追従遅れのトレードオフを数値最小化した結果、
 # 0.3よりも0.2の方がわずかに良い(誤差推定1.48度→1.37度)と分かったため変更。
 _LAG_ESTIMATE_ALPHA = 0.2
+# 2026-10-25較正用: 引き込まれ量(observed)は旋回の大きさに関係なくほぼ一定
+# (実測17〜31度)なので、early_baseが小さい旋回では比率が実態と無関係に発散する
+# (実機ログで1.7度・4.3度の旋回直後にratioが1.0超へ急騰する不具合を確認、2026-10-25)。
+# 旧ガード(early_base>1.0)では防げなかったため、閾値を上げるのに加えて、
+# 1サンプルが動かせる比率そのものにも上限をかける(どちらの値も実機データが
+# 増えたら見直す前提の暫定値)。
+_LAG_ESTIMATE_MIN_EARLY_BASE_DEG = 20.0
+_LAG_ESTIMATE_MAX_RATIO = 0.5
 
 
 class EtRallySpinAroundByEncoder(Behaviour):
@@ -242,9 +250,11 @@ class EtRallySpinAroundByEncoder(Behaviour):
                     observed = abs(lag_right_delta if self.early_side == 'right' else lag_left_delta)
                     early_base = (self.right_base_motor_deg if self.early_side == 'right'
                                    else self.left_base_motor_deg)
-                    # target_motor_degがほぼ0の旋回(ほぼ回転不要)は比率が発散するので無視する。
-                    if early_base > 1.0:
-                        observed_ratio = observed / early_base
+                    # early_baseが小さい旋回は、ほぼ一定の引き込まれ量をごく小さい値で割る
+                    # ことになり比率が発散するので無視する。発散しなかった場合も念のため
+                    # 比率そのものに上限をかけ、1サンプルで推定値を暴走させない。
+                    if early_base > _LAG_ESTIMATE_MIN_EARLY_BASE_DEG:
+                        observed_ratio = min(observed / early_base, _LAG_ESTIMATE_MAX_RATIO)
                         _lag_estimate_ratio = (_LAG_ESTIMATE_ALPHA * observed_ratio
                                                + (1.0 - _LAG_ESTIMATE_ALPHA) * _lag_estimate_ratio)
                 self.logger.info(

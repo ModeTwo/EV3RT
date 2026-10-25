@@ -96,6 +96,11 @@ MAX_PULSE_ATTEMPTS = 2  # これ以上は追いかけない(不感帯より細�
 _LAG_REFERENCE_MOTOR_DEG = 121.0
 _lag_estimate_ratio = 22.67 / _LAG_REFERENCE_MOTOR_DEG
 _LAG_ESTIMATE_ALPHA = 0.2
+# 2026-10-25較正用: et_rally_drive.pyと同じ不具合(引き込まれ量はほぼ一定なのに
+# 小さい旋回のearly_baseで割るため比率が発散する、実機ログでratioが1.0超へ
+# 急騰する不具合を確認)への対策。閾値・上限とも暫定値、実機データが増えたら見直す。
+_LAG_ESTIMATE_MIN_EARLY_BASE_DEG = 20.0
+_LAG_ESTIMATE_MAX_RATIO = 0.5
 
 # DD-22較正用: 直前の旋回の方向(+1/-1)。0=まだ旋回していない(反転判定をしない)。
 # et_rally_drive.pyの_last_turn_directionとは別物(クラス間でモジュール変数も
@@ -224,8 +229,8 @@ class EtRallyTurnOneShot(Behaviour):
                 observed = abs(lag_right_delta if self.early_side == 'right' else lag_left_delta)
                 early_base = (self.right_base_motor_deg if self.early_side == 'right'
                                else self.left_base_motor_deg)
-                if early_base > 1.0:
-                    observed_ratio = observed / early_base
+                if early_base > _LAG_ESTIMATE_MIN_EARLY_BASE_DEG:
+                    observed_ratio = min(observed / early_base, _LAG_ESTIMATE_MAX_RATIO)
                     _lag_estimate_ratio = (_LAG_ESTIMATE_ALPHA * observed_ratio
                                            + (1.0 - _LAG_ESTIMATE_ALPHA) * _lag_estimate_ratio)
             self.logger.info(
