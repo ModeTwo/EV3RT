@@ -109,6 +109,75 @@ def fit_b_c_with_voltage(runs, v_ref_mv=None):
     return float(b_coef), float(c_coef), r_squared, len(rows), v_ref_mv
 
 
+def fit_b_c_trajectory(runs, c_min=0.05, c_max=300.0):
+    """b, cを、隣り合うサンプルの差分(omega)ではなく、各試行のheading(t)の軌跡全体に当てはめて求める。
+
+    headingの生の分解能が粗い(約1度刻み、2026-10-25の実機ログで確認)ため、fit_b_c()のように
+    隣り合うサンプルの差分でomegaを作ると、本当の滑らかな角速度ではなく分解能の粗さがそのまま
+    ノイズとして乗ってしまう。この関数は、1試行(同じ出力を保持し続ける1回のHoldSymmetricPower)
+    ぶんのheading(t)の並び全体を、
+        omega(t) = (b*u/c) * (1 - exp(-c*t))          (omega(0)=0から出発)
+        theta(t) = theta0 + (b*u/c)*t - (b*u/c^2) * (1 - exp(-c*t))
+    という解析解にまとめて当てはめる。cを1つ決めればthetaはbについて線形になるので、
+    cだけを数値探索し、各cごとにbを最小二乗で解析的に求める(scipy不要)。
+
+    戻り値: (b, c, r_squared, n_samples)
+        r_squared はtheta(heading)の当てはめに対する値。fit_b_c()のr_squared(omegaの当てはめに
+        対する値)とは対象が違うので、数値を直接比較しないこと。
+    """
+    t_list = []
+    u_list = []
+    theta_list = []
+    for run in runs:
+        samples = run["samples"]
+        if len(samples) < 2:
+            continue
+        u = run["power"]
+        theta0 = samples[0]["heading"]
+        for sample in samples:
+            t_list.append(sample["t"])
+            u_list.append(u)
+            theta_list.append(sample["heading"] - theta0)
+    if len(t_list) < 2:
+        raise ValueError("フィットに使えるサンプルが不足している(較正ログを確認すること)")
+
+    t_arr = np.array(t_list, dtype=float)
+    u_arr = np.array(u_list, dtype=float)
+    theta_arr = np.array(theta_list, dtype=float)
+
+    def basis_for_c(c):
+        # theta(t)/b = (u/c)*t - (u/c^2)*(1-exp(-c*t))
+        return (u_arr / c) * t_arr - (u_arr / (c * c)) * (1.0 - np.exp(-c * t_arr))
+
+    def sse_for_c(c):
+        basis = basis_for_c(c)
+        denom = float(np.dot(basis, basis))
+        if denom < 1e-12:
+            return float("inf"), 0.0
+        b = float(np.dot(basis, theta_arr) / denom)
+        resid = theta_arr - b * basis
+        return float(np.dot(resid, resid)), b
+
+    best_c, best_sse, best_b = None, float("inf"), None
+
+    def scan(lo, hi, steps):
+        nonlocal best_c, best_sse, best_b
+        for c in np.geomspace(lo, hi, steps):
+            sse, b = sse_for_c(c)
+            if sse < best_sse:
+                best_sse, best_c, best_b = sse, float(c), b
+
+    scan(c_min, c_max, 80)
+    for _ in range(3):
+        lo = max(best_c / 3.0, c_min)
+        hi = min(best_c * 3.0, c_max)
+        scan(lo, hi, 60)
+
+    ss_tot = float(np.sum((theta_arr - np.mean(theta_arr)) ** 2))
+    r_squared = 1.0 - best_sse / ss_tot if ss_tot > 1e-9 else float("nan")
+    return float(best_b), float(best_c), r_squared, len(t_list)
+
+
 def fit_from_log(path):
     records = parse_file(path)
     runs = group_step_response_runs(records)
@@ -162,3 +231,11 @@ if __name__ == "__main__":
         print("\n電圧補正なしR^2=%.4f -> 電圧補正版R^2=%.4f (%s)" % (
             r2, r2_v,
             "改善" if r2_v > r2 else "改善なし(床材一定なら電圧以外の要因が主、または電圧依存が小さい)"))
+
+    b_t, c_t, r2_t, n_t = fit_b_c_trajectory(runs)
+    print("\n=== 軌跡全体フィット版(2026-10-25追加) ===")
+    print("(隣接サンプルの差分でomegaを作らず、各試行のheading(t)全体にモデルを当てはめる。"
+          "R^2はthetaに対する値で、上のomega基準のR^2とは比較できない)")
+    print("b(出力->角加速度) = %.6f deg/s^2 per power" % b_t)
+    print("c(粘性減衰)       = %.6f 1/s" % c_t)
+    print("決定係数 R^2       = %.4f (サンプル数 %d)" % (r2_t, n_t))
