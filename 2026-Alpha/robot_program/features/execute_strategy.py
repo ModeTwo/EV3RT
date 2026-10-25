@@ -369,6 +369,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         fine_tolerance_deg=turn_fine_tolerance_deg,
                         lag_compensation_deg=turn_lag_compensation_deg,
                         adaptive_lag_compensation=turn_adaptive_lag_compensation,
+                        backlash_preload_deg=turn_backlash_preload_deg,
+                        left_target_scale=turn_left_target_scale,
                     )
                 )
             elif turn_method == 'lqi':

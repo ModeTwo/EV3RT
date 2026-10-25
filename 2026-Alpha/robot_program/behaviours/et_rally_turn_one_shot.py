@@ -14,7 +14,10 @@
              同じ理由(片輪が先に止まった後、もう片輪の反力で引き込まれて動く分)で
              lag_compensation_deg/adaptive_lag_compensationによる左右非対称の
              目標値補正を行う(2026-10-24追加。実測で確認された、phase1が
-             大きな残差を残してしまう不具合への対処)。
+             大きな残差を残してしまう不具合への対処)。方向反転時のバックラッシュ
+             先詰め(backlash_preload_deg)・左右の実効径差補正(left_target_scale)も
+             EtRallySpinAroundByEncoderと同じ考え方で追加(2026-10-25、spin_encoderと
+             同条件で比較するため)。
   フェーズ2: PULSE_TABLE(wireless_device/et_rally_lqi/one_shot_pulse.pyで、
              実測データから計算する)を引いて、残差にちょうど合うtick数だけ
              floor_powerを与えて停止する。1回で収まらなければ、残差を測り直して
@@ -94,6 +97,11 @@ _LAG_REFERENCE_MOTOR_DEG = 121.0
 _lag_estimate_ratio = 22.67 / _LAG_REFERENCE_MOTOR_DEG
 _LAG_ESTIMATE_ALPHA = 0.2
 
+# DD-22較正用: 直前の旋回の方向(+1/-1)。0=まだ旋回していない(反転判定をしない)。
+# et_rally_drive.pyの_last_turn_directionとは別物(クラス間でモジュール変数も
+# 共有しない設計方針のため)。
+_last_turn_direction = 0
+
 
 def _current_heading():
     return (-1) * runtime.course * runtime.gyro_sensor.get_angle()
@@ -114,7 +122,9 @@ class EtRallyTurnOneShot(Behaviour):
                  floor_power: int = FLOOR_POWER, pulse_table=None,
                  fine_tolerance_deg: float = 0.5, max_pulse_attempts: int = MAX_PULSE_ATTEMPTS,
                  lag_compensation_deg: float = 0.0,
-                 adaptive_lag_compensation: bool = False) -> None:
+                 adaptive_lag_compensation: bool = False,
+                 backlash_preload_deg: float = 0.0,
+                 left_target_scale: float = 1.0) -> None:
         super().__init__(name)
         self.target = target
         self.target_type = target_type
@@ -129,6 +139,13 @@ class EtRallyTurnOneShot(Behaviour):
         # 止まった後の引き込まれ分の補正。0.0/Falseなら無効(既定、挙動は変えない)。
         self.lag_compensation_deg = lag_compensation_deg
         self.adaptive_lag_compensation = adaptive_lag_compensation
+        # DD-22較正用: 前の旋回と逆方向に切り替わる旋回だけ、phase1の目標エンコーダ
+        # 角度にこの分を上乗せする(機構内のバックラッシュの先詰め)。0なら無効。
+        self.backlash_preload_deg = backlash_preload_deg
+        # DD-22較正用: 右輪の方が同じエンコーダ回転量に対して実際の方位を多く変える
+        # (実効径・グリップの定常的な左右差)分の補正。常に左輪の目標値にだけかける。
+        # 1.0なら無効(既定、挙動は変えない)。
+        self.left_target_scale = left_target_scale
         self.running = False
 
     # --- フェーズ1: エンコーダ主導(EtRallySpinAroundByEncoder/EtRallyTurnLqiと同じ考え方) ---
@@ -145,6 +162,15 @@ class EtRallyTurnOneShot(Behaviour):
         self.target_motor_deg = arc_length_mm / (math.pi * runtime.plotter.tire_diameter) * 360.0
         self.direction = 1 if error > 0 else -1
 
+        # DD-22較正用: et_rally_drive.EtRallySpinAroundByEncoderと同じ考え方(前の
+        # 旋回と逆方向に切り替わるときだけ、機構内のバックラッシュを先に詰める分を
+        # 上乗せする)。
+        global _last_turn_direction
+        if (self.backlash_preload_deg > 0.0 and _last_turn_direction != 0
+                and self.direction != _last_turn_direction):
+            self.target_motor_deg += self.backlash_preload_deg
+        _last_turn_direction = self.direction
+
         # DD-22較正用: et_rally_drive.EtRallySpinAroundByEncoderと同じ考え方(先に
         # 止まる側は、もう片方がまだ回っている間の反力で引き込まれて動く分だけ、
         # 目標値を低くしておく)。right_power_sign<0の側(=course*direction<0)が
@@ -153,7 +179,7 @@ class EtRallyTurnOneShot(Behaviour):
         compensation_ratio = (_lag_estimate_ratio if self.adaptive_lag_compensation
                                else self.lag_compensation_deg / _LAG_REFERENCE_MOTOR_DEG)
         self.right_base_motor_deg = self.target_motor_deg
-        self.left_base_motor_deg = self.target_motor_deg
+        self.left_base_motor_deg = self.target_motor_deg * self.left_target_scale
         right_power_sign = runtime.course * self.direction
         self.early_side = 'right' if right_power_sign < 0 else 'left'
         if right_power_sign < 0:
