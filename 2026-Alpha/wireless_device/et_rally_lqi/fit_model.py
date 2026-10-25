@@ -55,6 +55,60 @@ def fit_b_c(runs, min_omega_for_damping_term=0.0):
     return float(b_coef), float(c_coef), r_squared, len(rows)
 
 
+def fit_b_c_with_voltage(runs, v_ref_mv=None):
+    """uの代わりにu*(battery_mv/v_ref_mv)を使って最小二乗する(電圧補正版)。
+
+    モーターはPWM駆動のDCモーターなので、同じpower(デューティ比)でも実際に
+    かかる電圧はバッテリー電圧に比例する。較正中の電圧変動がそのままb・cの
+    誤差(fit_b_c()のR^2の低さ)に混ざっている可能性を検証するため、2026-10-25追加。
+    較正ログにbattery_mvが無い(旧ログ)場合はValueErrorになる。
+
+    v_ref_mv: 基準電圧。省略時は使うサンプル全体の平均(bの値を電圧補正前と
+        近いスケールに保つため)。
+
+    戻り値: (b, c, r_squared, n_samples, v_ref_mv)
+    """
+    voltages = []
+    for run in runs:
+        for sample in run["samples"]:
+            if "battery_mv" in sample and sample["battery_mv"] > 0:
+                voltages.append(sample["battery_mv"])
+    if not voltages:
+        raise ValueError(
+            "battery_mvが記録されていない較正ログ(旧ログ、または--check-tree実行)。"
+            "et_rally_turn_calibration.pyの修正(2026-10-25)以降に取り直した"
+            "ログを使うこと。"
+        )
+    if v_ref_mv is None:
+        v_ref_mv = sum(voltages) / len(voltages)
+
+    rows = []
+    targets = []
+    for run in runs:
+        samples = run["samples"]
+        u = run["power"]
+        for a, b_sample in zip(samples, samples[1:]):
+            if a.get("battery_mv", -1) <= 0:
+                continue
+            dt = b_sample["t"] - a["t"]
+            if dt <= 1e-6:
+                continue
+            y = (b_sample["omega"] - a["omega"]) / dt
+            u_v = u * (a["battery_mv"] / v_ref_mv)
+            rows.append([u_v, -a["omega"]])
+            targets.append(y)
+    if len(rows) < 2:
+        raise ValueError("フィットに使えるサンプルが不足している(較正ログを確認すること)")
+    design = np.array(rows, dtype=float)
+    target = np.array(targets, dtype=float)
+    (b_coef, c_coef), residuals, rank, _ = np.linalg.lstsq(design, target, rcond=None)
+    predicted = design @ np.array([b_coef, c_coef])
+    ss_res = float(np.sum((target - predicted) ** 2))
+    ss_tot = float(np.sum((target - np.mean(target)) ** 2))
+    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 1e-9 else float("nan")
+    return float(b_coef), float(c_coef), r_squared, len(rows), v_ref_mv
+
+
 def fit_from_log(path):
     records = parse_file(path)
     runs = group_step_response_runs(records)
@@ -84,6 +138,7 @@ if __name__ == "__main__":
         print("使い方: python -m wireless_device.et_rally_lqi.fit_model <ログファイル>", file=sys.stderr)
         raise SystemExit(1)
     b, c, r2, n = fit_from_log(sys.argv[1])
+    print("=== 電圧補正なし(従来) ===")
     print("b(出力->角加速度) = %.6f deg/s^2 per power" % b)
     print("c(粘性減衰)       = %.6f 1/s" % c)
     print("決定係数 R^2       = %.4f (サンプル数 %d)" % (r2, n))
@@ -91,3 +146,19 @@ if __name__ == "__main__":
         print("注意: R^2が低い。不感帯の影響が混ざっている(出力が低い試行を除く)、"
               "ノイズが大きい(ジャイロの平滑化を検討)、モデルが単純すぎる、等の可能性がある。",
               file=sys.stderr)
+
+    records = parse_file(sys.argv[1])
+    runs = group_step_response_runs(records)
+    try:
+        b_v, c_v, r2_v, n_v, v_ref = fit_b_c_with_voltage(runs)
+    except ValueError as error:
+        print("\n=== 電圧補正版 ===\n(スキップ: %s)" % error)
+    else:
+        print("\n=== 電圧補正版(2026-10-25追加) ===")
+        print("基準電圧 v_ref     = %.0f mV (サンプル平均)" % v_ref)
+        print("b(出力*電圧比->角加速度) = %.6f deg/s^2 per (power*mV/v_ref)" % b_v)
+        print("c(粘性減衰)       = %.6f 1/s" % c_v)
+        print("決定係数 R^2       = %.4f (サンプル数 %d)" % (r2_v, n_v))
+        print("\n電圧補正なしR^2=%.4f -> 電圧補正版R^2=%.4f (%s)" % (
+            r2, r2_v,
+            "改善" if r2_v > r2 else "改善なし(床材一定なら電圧以外の要因が主、または電圧依存が小さい)"))

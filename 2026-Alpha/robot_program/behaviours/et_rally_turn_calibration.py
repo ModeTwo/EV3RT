@@ -90,9 +90,19 @@ class HoldSymmetricPower(Behaviour):
         dt = max(now - self.prev_time, 1e-6)
         omega = (heading - self.prev_heading) / dt
         elapsed = now - self.start_time
+        # 2026-10-25較正用: b・cがpowerのみを入力にしており、較正中の電圧変動を
+        # 誤差として取り込んでしまっている可能性を検証するため、battery_mvも残す
+        # (fit_model.pyのfit_b_c_with_voltage()で使う)。power_log.pyと同じガードで、
+        # hub未接続(--check-tree等)でも落ちないようにする。
+        battery_mv = -1
+        if runtime.hub is not None:
+            try:
+                battery_mv = runtime.hub.get_battery_voltage()
+            except Exception:
+                battery_mv = -1
         self.logger.info(
-            "%s step power=%+d t=%.3f heading=%.3f omega=%.3f"
-            % (TAG, self.direction * self.power, elapsed, heading, omega)
+            "%s step power=%+d t=%.3f heading=%.3f omega=%.3f battery_mv=%d"
+            % (TAG, self.direction * self.power, elapsed, heading, omega, battery_mv)
         )
         self.prev_time, self.prev_heading = now, heading
 
