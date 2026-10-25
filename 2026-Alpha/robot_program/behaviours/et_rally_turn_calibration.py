@@ -21,10 +21,12 @@ b・c(応答特性)とstiction_floor(不感帯)という汎用的な較正デー
      フェーズ2と同じPID構成を、ログ目的だけのために、ここで独立して再実装する。
      既存クラスへは一切手を入れない)。
   4. 固定tickパルス実測(FixedTickPulse、2026-10-25追加): 一発パルス仕上げの
-     FLOOR_POWERと同じ出力で、tick数を変えて実際に何度回るかを直接測る。
+     FLOOR_POWER等、複数の出力候補で、tick数を変えて実際に何度回るかを直接測る。
      ブレーキをかけた直後と、settle_sec待って落ち着いた後の両方のheadingを記録し、
-     その差から「ブレーキ後の慣性オーバーシュート」(ticks_for_target()のモデルには
-     入っていない)を切り分ける。
+     その差から「ブレーキ後の慣性オーバーシュート」を切り分ける(実測の結果、
+     この仮説はほぼ否定された。代わりに、FLOOR_POWER=40だけではtick数を増やしても
+     到達角度が2〜3度で頭打ちになる=失速する現象が見つかったため、複数の出力候補
+     (PULSE_TEST_POWERS)で同じ測定をして、失速しない出力を探す)。
 
 ログの読み方: すべての行に "TURN_CAL" という目印を付けている。
     grep "TURN_CAL" run_logs/xxxx.log
@@ -403,7 +405,15 @@ FINE_TRIM_TARGETS_DEG = (3.0, -3.0, 5.0, -5.0, 2.0, -2.0)
 # 固定tickパルステスト(目的4)の条件。一発パルス仕上げ(et_rally_turn_one_shot.py)の
 # FLOOR_POWERと同じ出力で、tick数を変えて実際にどれだけ回るか・ブレーキ後に
 # どれだけ余計に回るかを直接測る(2026-10-25追加、ブレーキ後オーバーシュート仮説の検証用)。
-PULSE_TEST_POWER = FLOOR_POWER
+#
+# 2026-10-25追記: FLOOR_POWER(40)単体での実測で、ブレーキ後オーバーシュートは
+# ほぼゼロ(仮説は否定)だったが、代わりにtick数を10→40まで増やしても到達角度が
+# 2〜3度のまま変わらない(失速している)ことが分かった。CCWの不感帯閾値がこの回
+# power=40と測定されたことと整合する。FLOOR_POWER=40では力不足で、動き続けるには
+# 足りない可能性があるため、複数のpower候補でも同じテストを行い、tick数を増やすと
+# 到達角度も増える(失速しない)出力を探す。PULSE_TEST_POWERSの先頭はFLOOR_POWER
+# そのもの(比較の基準)。
+PULSE_TEST_POWERS = (FLOOR_POWER, 45, 50, 60)
 PULSE_TEST_TICKS = (5, 10, 15, 20, 25, 30, 35, 40)
 PULSE_TEST_REPEATS = 3
 PULSE_TEST_SETTLE_SEC = 0.5
@@ -436,19 +446,21 @@ def build_et_rally_turn_calibration_sequence() -> Sequence:
                                        target_relative_deg=target))
         children.append(StopNow(name="settle fine_trim %d" % index))
         children.append(IsTimePassed(name="wait fine_trim %d" % index, delta_time=STEP_SETTLE_SEC))
-    for ticks in PULSE_TEST_TICKS:
-        for rep in range(PULSE_TEST_REPEATS):
-            for direction in (1, -1):
-                children.append(FixedTickPulse(
-                    name="pulse_test ticks=%d dir=%+d rep=%d" % (ticks, direction, rep),
-                    power=PULSE_TEST_POWER, direction=direction, ticks=ticks,
-                    settle_sec=PULSE_TEST_SETTLE_SEC,
-                ))
-                children.append(StopNow(name="settle pulse_test ticks=%d dir=%+d rep=%d" % (ticks, direction, rep)))
-                children.append(IsTimePassed(
-                    name="wait pulse_test ticks=%d dir=%+d rep=%d" % (ticks, direction, rep),
-                    delta_time=STEP_SETTLE_SEC,
-                ))
+    for power in PULSE_TEST_POWERS:
+        for ticks in PULSE_TEST_TICKS:
+            for rep in range(PULSE_TEST_REPEATS):
+                for direction in (1, -1):
+                    children.append(FixedTickPulse(
+                        name="pulse_test power=%d ticks=%d dir=%+d rep=%d" % (power, ticks, direction, rep),
+                        power=power, direction=direction, ticks=ticks,
+                        settle_sec=PULSE_TEST_SETTLE_SEC,
+                    ))
+                    children.append(StopNow(
+                        name="settle pulse_test power=%d ticks=%d dir=%+d rep=%d" % (power, ticks, direction, rep)))
+                    children.append(IsTimePassed(
+                        name="wait pulse_test power=%d ticks=%d dir=%+d rep=%d" % (power, ticks, direction, rep),
+                        delta_time=STEP_SETTLE_SEC,
+                    ))
     children.append(StopNow(name="et_rally_turn_calibration final stop"))
     root.add_children(children)
     return root
