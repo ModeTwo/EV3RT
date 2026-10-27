@@ -107,8 +107,8 @@ class StrategyExchange:
                         raise ValueError("Strategy heading frame mismatch; update PC and robot together")
                     strategy = validate_strategy(payload.get("strategy"))
                     selected_laps = payload.get("selectedLaps")
-                    if type(selected_laps) is not int or not 1 <= selected_laps <= 3:
-                        raise ValueError("selectedLaps must be 1, 2, or 3")
+                    if type(selected_laps) is not int or selected_laps <= 0:
+                        raise ValueError("selectedLaps must be a positive integer")
                 except ValueError as error:
                     LOG.warning("Invalid strategy ignored: %s", error)
                     continue
