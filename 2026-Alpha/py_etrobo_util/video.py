@@ -511,6 +511,7 @@ class Video(object):
                     self._vision_sessions.publish_bottle(capture_session, self.frame_id, self._bottle_stamped)
 
         else: # TargetInterested.LINE
+            merge_geometry = None
             # ---- LINE runs on the downsized frame ----
             # 640x480 (4:3) capture -> center-crop to 16:9 -> 320x180.
             # Cropping (not squashing) preserves the pixel->angle/mm geometry
@@ -650,6 +651,9 @@ class Video(object):
 
                     bias = 0
                     sep = near_row - far_row
+                    if sep >= CURV_MIN_ROWS_SEP and 0 < self.range_of_edges <= ROE_DEGEN:
+                        merge_geometry = ((int(cx_raw), int(near_row)),
+                                          (int(cx_far), int(far_row)))
                     self.band_sep = sep          # publish for the feed-forward gate
 
                     # Line tilt across the band (px/row): how far the line drifts
@@ -735,6 +739,8 @@ class Video(object):
             dist = plotter.get_distance() if plotter is not None else 0
             with self._theta_lock:
                 self._theta_stamped = (self.theta, self.frame_id, t_cap, dist)
+                self._line_geometry_stamped = (
+                    (self.frame_id, t_cap, *merge_geometry) if merge_geometry is not None else None)
             #print(
             #    "%+06d VID fid=%06d cap=%.3f cx=%d mx=%d roi=(%d,%d,%d,%d) roe=%03d theta=%+06.1f insight=%d lat=%.1f" % (
             #        dist, self.frame_id, t_cap, self.cx, self.mx,
@@ -779,6 +785,11 @@ class Video(object):
         
     def get_theta(self) -> float:
         return self.theta
+
+    def get_line_geometry_stamped(self):
+        """同一LINEフレームの未補正の近点/遠点。320x180画像座標。"""
+        with self._theta_lock:
+            return getattr(self, '_line_geometry_stamped', None)
 
     def get_theta_stamped(self):
         with self._theta_lock:
