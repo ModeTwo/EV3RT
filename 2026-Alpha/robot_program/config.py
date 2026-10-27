@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 from .sumo_types import SumoSettings
+from .features.sumo_align_settings import SumoAlignSettings
 from .integration_settings import IntegrationSettings
 
 
@@ -93,6 +94,7 @@ class RaceConfig:
     strategy_port: int = 50000
     strategy_timeout_s: float = 20.0
     sumo: SumoSettings = SumoSettings()
+    sumo_align: SumoAlignSettings = SumoAlignSettings()
     integration: IntegrationSettings = IntegrationSettings()
 
 
@@ -112,6 +114,7 @@ MISSION_CHOICES = (
     'rally',
     'rally-drive',
     'sumo',
+    'sumo-align',
     'finish',
     'full',
     'hint2',
@@ -137,6 +140,9 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         enable_et_sumo=False,
         enable_finish=False,
     )
+    if mission == 'sumo-align':
+        disabled['enable_et_sumo'] = True
+        return replace(config, mission_mode=mission, **disabled)
     if mission in INTEGRATION_MISSIONS:
         if mission in ('bottle-rally', 'rally-sumo'):
             disabled['enable_et_rally'] = True

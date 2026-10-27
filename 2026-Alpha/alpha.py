@@ -1200,7 +1200,7 @@ def _run_main(argv, startup_cleanup):
         help='Held bottle color for bottle-final, to-bottle or bottle-rally',
     )
     parser.add_argument("--sumo-initial-bearing", type=float, default=None,
-                        help="Placement bearing for sumo or sumo-garage: up=0, clockwise positive")
+                        help="Placement bearing for sumo, sumo-garage or sumo-align: up=0, clockwise positive")
     parser.add_argument(
         '--rally-hint1',
         default=None,
@@ -1221,6 +1221,12 @@ def _run_main(argv, startup_cleanup):
     )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
+    parser.add_argument('--sumo-distance-mm', type=float, default=None,
+                        help='Prescribed straight distance for sumo-align (default: 1000mm)')
+    parser.add_argument('--sumo-power', type=int, default=None,
+                        help='Straight PWM for sumo-align (default: 80)')
+    parser.add_argument('--sumo-target-cx', type=float, default=None,
+                        help='Calibrated bottle center in the 320px image (default: 160)')
     args = parser.parse_args(argv)
     if args.mission == 'to-bottle':
         if args.delivery_initial_heading is None:
@@ -1242,6 +1248,16 @@ def _run_main(argv, startup_cleanup):
     # 未実装ノードは明示警告するが、PendingFeature自身のSUCCESSで後続工程へ進める。
     print(" -- shutdown-v8 control interval=%.3fs mission=%s" % (EXEC_INTERVAL, args.mission))
     mission_config = config_for_mission(args.mission)
+    sumo_overrides = {key: value for key, value in (
+        ('distance_mm', args.sumo_distance_mm), ('power', args.sumo_power),
+        ('target_cx', args.sumo_target_cx)) if value is not None}
+    if sumo_overrides and args.mission != 'sumo-align':
+        parser.error('--sumo-distance-mm, --sumo-power and --sumo-target-cx require sumo-align')
+    try:
+        mission_config = dataclasses.replace(mission_config,
+            sumo_align=dataclasses.replace(mission_config.sumo_align, **sumo_overrides))
+    except ValueError as error:
+        parser.error(str(error))
     if args.rally_plan_path is not None:
         # PC接続・Hint計算を一切使わず、指定したplan.json(steps形式)をそのまま実行する
         # (直進距離やキャスター引きずりの実機較正など、固定動作だけを試したいときに使う)。

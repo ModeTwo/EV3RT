@@ -1,5 +1,13 @@
 # 走行関連の補足資料・変更履歴
 
+## ET相撲 接近動画撮影テスト v2
+
+alpha.pyベースで規定距離を走行し、黒候補を動画とCSVへ記録する試験プログラムです。[使い方](SUMO_APPROACH_VIDEO_TEST_v2.md)。実行ファイルはリポジトリルートの `alpha_sumo_approach_video_test_v2.py`。旧独立版v1は `SUMO_APPROACH_VIDEO_TEST_v1.md` に履歴を保持しています。
+
+## ET相撲 黒ボトル検出画像の撮影確認
+
+USBカメラ画像を保存し、`video.py` と同じ固定HSV・輪郭条件の検出枠とマスクを確認する静止画ツールです。[使い方](SUMO_BLACK_CAMERA_CAPTURE_v1.md)。プログラムはリポジトリルートの `sumo_black_camera_capture.py`。Sで保存、Q/Escで終了。
+
 2026-09-15更新: ETラリーの絶対方位が360度境界をまたぐとき、`SpinAround`の終了判定だけでなく、`SpinAround`と固定角度`RunByGyro`のPID目標も現在方位に最も近い等価角へ変換するよう修正した。たとえば現在314度・受信目標-44度はPID目標316度となり、-358度方向の大回転を指示しない。開始ログへ`requested`、`resolved`、`delta`を追加。経路計算、相対旋回、距離プロファイル走行は変更していない。PC上で構文と境界値を確認済み、実機未検証。
 
 2026-09-14更新: devREコミット`334b33d`「9月13日スタート～LAPの完成版プロファイルです」を正としてLAP走行を復元。`start_lap_profile_v1.py`はpull後すでに同一。RunByGyro一つ、相対方位、青検知開始・見逃し上限、LAP単体距離終了を同コミットへ合わせ、P=1.8/I=0/D=0.03、FF=1、横ずれlookahead=300、power=80を採用。5100mmライントレース切替と未使用の個別カーブ調整設定を撤去。構文、完成版との差分、実効距離を確認。実機未検証。
@@ -586,3 +594,12 @@ LAP青検知で方位安定を待たずATへ引渡し、青検知起点の最初
 検証はETロボコン側`work/start-to-lap-turn90-v1/verify_start_to_lap_turn90.py`を全面更新し、両ファイルの新しい構造とパラメータの出所を確認。全8件成功。副次的に、`to_hint_route.py`が本セッション外で`RunByGyro`/`SpinAround`の実装元を`corrected_run.py`/`encoder_spin.py`へ切り替えていたのを確認し、無関係に失敗するようになっていた`work/sumo-style-hint1-recovery-v1/verify_hint1_black_recovery.py`のスタブを追随修正した(全5件成功に復帰)。
 
 全変更ファイル（修正）: `robot_program/features/start_to_lap_gate.py`、`robot_program/features/move_to_sumo_start.py`、`robot_program/sumo_types.py`。ETロボコン側HANDOFF.mdおよび`work/start-to-lap-turn90-v1/verify_start_to_lap_turn90.py`、`work/sumo-style-hint1-recovery-v1/verify_hint1_black_recovery.py`にも記録。既存の未コミット変更は保持。
+
+## ET相撲 規定距離直進の動画撮影テスト
+
+\alpha_sumo_approach_video_test.pyはタッチ開始後、指定PWM・規定距離をジャイロ方位保持で直進し、検出枠付き動画とフレームごとの距離/ジャイロ/PWM CSVを保存する。走行中検出は操舵に使わず、押し出しもしない。詳細は[使い方](SUMO_APPROACH_VIDEO_TEST_v1.md)。
+
+
+## 2026-10-26 規定距離接近・正対停止
+
+[SUMO_ALIGN_v1.md](SUMO_ALIGN_v1.md)：alpha.py --mission sumo-align からfeaturesの専用機能を呼び出す。既存RunByGyro・IsDistanceEarned・エンコーダ旋回を再利用し、規定距離直進→停止→新規画像で正対→停止まで。キャッチ・押し出しは実行しない。
