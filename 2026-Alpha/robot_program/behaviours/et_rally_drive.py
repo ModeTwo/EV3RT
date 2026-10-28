@@ -57,6 +57,17 @@ _LAG_ESTIMATE_MIN_EARLY_BASE_DEG = 20.0
 _LAG_ESTIMATE_MAX_RATIO = 0.5
 
 
+def forward_mm_since(start_r, start_l):
+    """start_r/start_l(左右エンコーダ値)から今までに、車体中心が前後に動いた量(mm、前が+)。
+
+    2026-10-28: 直進の終了直後、止まりきる前に旋回へ移ったときの「直進の惰性で前へ
+    流れた量」を診断するため追加(plotterと同じく左右の回転量の平均から求める。
+    その場旋回なら左右が打ち消し合って0に近くなる)。ログ専用で、制御には使わない。
+    """
+    delta = (runtime.right_motor.get_count() - start_r) + (runtime.left_motor.get_count() - start_l)
+    return math.pi * runtime.plotter.tire_diameter * delta / 2.0 / 360.0
+
+
 class EtRallySpinAroundByEncoder(Behaviour):
     """左右のタイヤの回転量(エンコーダ)を揃えて回すことで、「その場旋回」であること
     そのものを幾何学的に保証する旋回ノード。SpinAround(上記)の代替。
@@ -265,8 +276,9 @@ class EtRallySpinAroundByEncoder(Behaviour):
                 if not self.fine_trim:
                     # 仕上げなし: 停止したまま終了する。残った誤差はログにだけ残す。
                     residual = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
-                    self.logger.info("%+06d %s.encoder-spin ended without fine-trim at heading=%d, residual=%+.1f loc=(%d,%d)" % (
+                    self.logger.info("%+06d %s.encoder-spin ended without fine-trim at heading=%d, residual=%+.1f fwd_mm=%+.1f loc=(%d,%d)" % (
                         runtime.plotter.get_distance(), self.__class__.__name__, current_heading, residual,
+                        forward_mm_since(self.start_r, self.start_l),
                         runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
                     return Status.SUCCESS
                 self.phase = 2
@@ -311,9 +323,10 @@ class EtRallySpinAroundByEncoder(Behaviour):
             runtime.right_motor.set_brake(True)
             runtime.left_motor.set_power(0)
             runtime.left_motor.set_brake(True)
-            self.logger.info("%+06d %s.encoder-spin ended at heading=%d residual=%+.1f reversals=%d samples=%d loc=(%d,%d)" % (
+            self.logger.info("%+06d %s.encoder-spin ended at heading=%d residual=%+.1f reversals=%d samples=%d fwd_mm=%+.1f loc=(%d,%d)" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, current_heading, error,
                 self.oscillation.reversal_count, self.oscillation.sample_count,
+                forward_mm_since(self.start_r, self.start_l),
                 runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
             return Status.SUCCESS
 
@@ -423,6 +436,8 @@ class EtRallyRunByGyro(Behaviour):
             # 2026-09-20: PID比較用に、区間ごとの向きの誤差と、その誤差による横ズレの
             # 推定値(進んだ距離 x sin(向き - 目標))を集計し、区間の最後に1行で出す。
             self.prev_dist_lat = self.orig_dist
+            # 2026-10-28: 直進終了時点の速度(直近約0.1秒の平均)を診断ログに出すための履歴。
+            self.speed_history = []
             self.lat_mm = 0.0
             self.err_sum = 0.0
             self.err_n = 0
@@ -455,6 +470,9 @@ class EtRallyRunByGyro(Behaviour):
         self.pid.setpoint = current_heading + error
 
         now_dist = runtime.plotter.get_distance()
+        self.speed_history.append((time.monotonic(), now_dist))
+        if len(self.speed_history) > 6:
+            self.speed_history.pop(0)
         self.lat_mm += (now_dist - self.prev_dist_lat) * math.sin(math.radians(-error))
         self.prev_dist_lat = now_dist
         self.err_sum += error
@@ -464,9 +482,11 @@ class EtRallyRunByGyro(Behaviour):
                 and now_dist - self.orig_dist >= self.distance_mm):
             self.summarized = True
             actual_dist = now_dist - self.orig_dist
-            self.logger.info("%+06d %s.run summary: dist=%d target_dist=%d dist_err=%+d err_mean=%+.2f err_max=%.2f lat=%+.0fmm (+=目標より反時計回り側へ) loc=(%d,%d)" % (
+            (t0, d0), (t1, d1) = self.speed_history[0], self.speed_history[-1]
+            end_speed = (d1 - d0) / (t1 - t0) if t1 - t0 > 1e-6 else 0.0
+            self.logger.info("%+06d %s.run summary: dist=%d target_dist=%d dist_err=%+d err_mean=%+.2f err_max=%.2f lat=%+.0fmm (+=目標より反時計回り側へ) end_speed=%.0fmm/s loc=(%d,%d)" % (
                 now_dist, self.__class__.__name__, actual_dist, self.distance_mm, actual_dist - self.distance_mm,
-                self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm,
+                self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm, end_speed,
                 runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
 
         turn = int(self.pid(current_heading))  # まっすぐ走るために必要な微修正の旋回量
