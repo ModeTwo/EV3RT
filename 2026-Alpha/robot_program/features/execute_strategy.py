@@ -213,6 +213,26 @@ def _finite_number(value, field_name):
     return value
 
 
+def _merge_consecutive_moves(steps):
+    """同じ向きの直進が旋回を挟まずに続くとき、1本の直進にまとめる。
+
+    2026-10-28: 計画では、ゲートの手前(entry)と通過(exit)が別の直進になっており、
+    2周目以降の赤ゲートのように向きが変わらないと直進が2本続く。直進ごとに
+    move_stop_lead_mm手前で終えると、1本目は止まらずに2本目へ続くため惰性が出ず、
+    その分(周回コースのログで約8mm/周)足りなくなっていた。まとめれば、手前で
+    終える処理は最後に1回だけになる。ラベルは1本目のものを残す(周回の区切りの判定に使う)。
+    """
+    merged = []
+    for step in steps:
+        prev = merged[-1] if merged else None
+        if (step["type"] == "move" and prev is not None and prev["type"] == "move"
+                and abs(step["target_heading_deg"] - prev["target_heading_deg"]) < 1e-6):
+            prev["distance_mm"] += step["distance_mm"]
+            continue
+        merged.append(dict(step))
+    return merged
+
+
 def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # 2026-09(会話にもとづく): 発進・停止それぞれの直前直後だけを
                         # 短く加減速する。区間全体をゆっくり加減速するのではない
@@ -309,6 +329,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         steps, mm_per_deg_a=lateral_drift_mm_per_deg_a,
         mm_per_deg_b=lateral_drift_mm_per_deg_b, sign=lateral_drift_sign,
         initial_heading_deg=initial_heading_deg)
+    steps = _merge_consecutive_moves(steps)
 
     nodes = []
     prev_lap = None
