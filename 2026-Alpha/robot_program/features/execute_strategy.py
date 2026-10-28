@@ -215,8 +215,10 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         move_decel_mm=80.0, move_decel_min_power=40,
                         # 2026-10-28: 減速しても残る惰性と、目標到達の判定の行き過ぎ
                         # (20msごとの判定の刻み)の分だけ、直進を手前で終える量(mm)。
-                        # 減速区間を延ばした後の床の実測で決める(それまでは0)。
-                        move_stop_lead_mm=0.0,
+                        # 2026-10-28: タイヤ径55.56・減速80mmで300mm直進を床で実測すると317mm
+                        # (ログ上も316mmで一致=タイヤ径は正しい)。目標到達時の行き過ぎ+惰性の
+                        # 約16mmを手前で止める。
+                        move_stop_lead_mm=16.0,
                         turn_main_power=SPIN_MAX_POWER,
                         turn_fine_max_power=60, turn_fine_min_power=50,
                         turn_fine_tolerance_deg=0.5,
