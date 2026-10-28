@@ -119,8 +119,10 @@ class RaceConfig:
     # 差で、どちらが先に止まるかとは無関係。既定1.0=無効。
     et_rally_turn_left_target_scale: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
-    # (ベースライン計測用。較正値そのものは変えない)。
-    et_rally_compensation_enabled: bool = True
+    # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
+    # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、
+    # 既定を無効にした(ユーザー判断)。有効にするには--rally-compensation on。
+    et_rally_compensation_enabled: bool = False
     # Falseでジャイロ倍率補正(DD-17、GYRO_SCALE_FACTOR)とタイヤ径較正(ET_RALLY_TIRE_DIAMETER)を
     # 両方無効化する(ベースライン計測用。phases/et_rally.pyのEnableGyroScale/SetTireDiameterを省略する)。
     et_rally_gyro_tire_calibration_enabled: bool = True

@@ -57,7 +57,7 @@ class DeferredStrategySequence(Sequence):
     """Build motor behaviours only when this subtree starts running."""
 
     def __init__(self, name, loader, initial_heading_deg=0.0, fallback_loader=None,
-                 turn_method='spin_encoder', compensation_enabled=True,
+                 turn_method='spin_encoder', compensation_enabled=False,
                  turn_fine_tolerance_deg=None, turn_decel_deg=None,
                  turn_backlash_preload_deg=None, turn_fine_trim=None,
                  turn_main_power=None, turn_lag_compensation_deg=None,
@@ -146,7 +146,7 @@ def build_execute_strategy(context, config, lap_number=None):
                 (lambda: full_start_to_gyro(fallback_strategy(), config.mission_mode))
                 if getattr(config, "et_rally_fallback_enabled", False) else None),
             turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
-            compensation_enabled=getattr(config, "et_rally_compensation_enabled", True),
+            compensation_enabled=getattr(config, "et_rally_compensation_enabled", False),
             turn_fine_tolerance_deg=getattr(config, "et_rally_turn_fine_tolerance_deg", None),
             turn_decel_deg=getattr(config, "et_rally_turn_decel_deg", None),
             turn_backlash_preload_deg=getattr(config, "et_rally_turn_backlash_preload_deg", None),
@@ -164,7 +164,7 @@ def build_execute_strategy(context, config, lap_number=None):
             fallback_loader=(fallback_planner_steps
                              if getattr(config, "et_rally_fallback_enabled", False) else None),
             turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
-            compensation_enabled=getattr(config, "et_rally_compensation_enabled", True),
+            compensation_enabled=getattr(config, "et_rally_compensation_enabled", False),
             turn_fine_tolerance_deg=getattr(config, "et_rally_turn_fine_tolerance_deg", None),
             turn_decel_deg=getattr(config, "et_rally_turn_decel_deg", None),
             turn_backlash_preload_deg=getattr(config, "et_rally_turn_backlash_preload_deg", None),
@@ -226,7 +226,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         lateral_drift_sign=1.0,
                         initial_heading_deg=0.0,
                         turn_method='spin_encoder',
-                        compensation_enabled=True):
+                        compensation_enabled=False):
     """Convert a received or file-loaded strategy to behaviour tree nodes.
 
     走行にはETラリー専用のEtRallyRunByGyro/EtRallySpinAroundByEncoder

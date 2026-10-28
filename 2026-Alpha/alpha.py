@@ -1234,7 +1234,8 @@ def _run_main(argv, startup_cleanup):
         choices=['on', 'off'],
         default=None,
         help=('DD-19 calibration: off disables both caster-drag (DD-15) and lateral-drift '
-              '(DD-16) compensation for a clean baseline run. Default (unset) keeps on.'),
+              '(DD-16) compensation. Default (unset) keeps the config value, which is off '
+              'since 2026-10-28; pass on to re-enable both.'),
     )
     parser.add_argument(
         '--rally-gyro-tire-calibration',
