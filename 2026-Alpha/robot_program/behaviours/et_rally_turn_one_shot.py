@@ -101,10 +101,14 @@ SETTLE_MAX_TICKS = 15
 # DD-22較正用(et_rally_drive.pyと同じ考え方を、このクラス独立で持つ。
 # クラス間の変更・継承はしない設計方針のため、モジュール変数も別に持つ)。
 # phase1で先に止まった側が、もう片方の反力で引き込まれて動いてしまう分の
-# 推定値(指数移動平均、target_motor_degに対する比率)。初期値はet_rally_drive.py
-# と同じ実測(2026-10-10、power=70・90度旋回・n=60、平均22.67度/121度)から。
+# 推定値(指数移動平均、target_motor_degに対する比率)。
+# 2026-10-28: 初期値を、et_rally_drive.pyと同じ2026-10-10の実測値(22.67/121≈0.187)から、
+# 現在の構成(タイヤ径55.56・phase1_scale 0.961/0.950・tolerance 0.6)での旋回30回テストで
+# 落ち着いた値(後半20旋回の平均0.077)に変更。0.187のままだと走行開始直後の数旋回で
+# phase1が6〜8度手前で止まっていた。周回コースでは0.04前後まで下がるため、周回の
+# 実測を見て見直すこと。
 _LAG_REFERENCE_MOTOR_DEG = 121.0
-_lag_estimate_ratio = 22.67 / _LAG_REFERENCE_MOTOR_DEG
+_lag_estimate_ratio = 0.078
 _LAG_ESTIMATE_ALPHA = 0.2
 # 2026-10-25較正用: et_rally_drive.pyと同じ不具合(引き込まれ量はほぼ一定なのに
 # 小さい旋回のearly_baseで割るため比率が発散する、実機ログでratioが1.0超へ
