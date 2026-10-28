@@ -24,7 +24,10 @@ import statistics
 _START = re.compile(
     r"(turn\d+)[^:]*: \S+ EtRallyTurnOneShot\.phase1 started at heading=(-?\d+) for (-?\d+) "
     r"\(target_motor_deg=[\d.]+\)(?: phase1_scale=([\d.]+))?")
-_PULSE1 = re.compile(r"(turn\d+)[^:]*: \S+ EtRallyTurnOneShot\.phase2 pulse#1 error=([-+\d.]+)")
+# phase1後の静止時の誤差。1回目のパルスを打たずに終えた旋回(誤差が許容範囲内、
+# 2026-10-28以降)は "done attempts=0 error=" に出る。
+_PULSE1 = re.compile(
+    r"(turn\d+)[^:]*: \S+ EtRallyTurnOneShot\.phase2 (?:pulse#1|done attempts=0) error=([-+\d.]+)")
 
 
 def parse_turns(path):

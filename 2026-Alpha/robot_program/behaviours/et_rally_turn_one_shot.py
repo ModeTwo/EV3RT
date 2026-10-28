@@ -338,10 +338,14 @@ class EtRallyTurnOneShot(Behaviour):
         if self.settling:
             if not self._tick_settle(current_heading):
                 return "running"
-            if self.pulse_attempt == 0:
+            error = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
+            # 2026-10-28: 1回目のパルスの前にも許容範囲を確認する。headingは約1度刻みでしか
+            # 読めないため、目盛り1つ分の誤差(例: 目標90度に対し89.57度=-0.57度)に1tickの
+            # パルスを打っても、実機ではほぼ動かず時間だけかかっていた(旋回30回テストの
+            # ログ、drift=+0.00)。--rally-turn-tolerance-deg 0.6 と組み合わせて使う。
+            if self.pulse_attempt == 0 and abs(error) >= self.fine_tolerance_deg:
                 self._start_pulse(current_heading)
                 return "running"
-            error = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
             if abs(error) < self.fine_tolerance_deg or self.pulse_attempt >= self.max_pulse_attempts:
                 self.logger.info(
                     "%+06d %s.phase2 done attempts=%d error=%+.2f fwd_mm=%+.1f loc=(%d,%d)" % (
