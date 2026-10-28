@@ -97,6 +97,10 @@ MAX_PULSE_ATTEMPTS = 2  # これ以上は追いかけない(不感帯より細�
 # 続けて変わらなくなってから残差を測る。SETTLE_MAX_TICKSで打ち切る(1tick=0.02s)。
 SETTLE_STABLE_TICKS = 3
 SETTLE_MAX_TICKS = 15
+# 2026-10-28: pre_stop有効時、phase1の前にブレーキをかけ、左右のエンコーダが
+# このtick数だけ続けて変わらなくなる(=直進の惰性が止まる)まで待つ。PRE_STOP_MAX_TICKSで打ち切る。
+PRE_STOP_STABLE_TICKS = 2
+PRE_STOP_MAX_TICKS = 20
 
 # DD-22較正用(et_rally_drive.pyと同じ考え方を、このクラス独立で持つ。
 # クラス間の変更・継承はしない設計方針のため、モジュール変数も別に持つ)。
@@ -145,6 +149,7 @@ class EtRallyTurnOneShot(Behaviour):
                  backlash_preload_deg: float = 0.0,
                  left_target_scale: float = 1.0,
                  phase1_scale=(1.0, 1.0),
+                 pre_stop: bool = False,
                  settle_stable_ticks: int = SETTLE_STABLE_TICKS,
                  settle_max_ticks: int = SETTLE_MAX_TICKS) -> None:
         super().__init__(name)
@@ -175,6 +180,12 @@ class EtRallyTurnOneShot(Behaviour):
         # wireless_device/et_rally_lqi/phase1_scale_from_log.py で求めた値を使う。
         # (1.0, 1.0)なら無効(既定、挙動は変えない)。
         self.phase1_scale = phase1_scale
+        # 2026-10-28: Trueなら、phase1の前に車体が止まるまで待つ。直進の直後の旋回では、
+        # 直進の勢いが残ったまま回り始めるため、phase1後の流れが旋回単体のテストより
+        # 大きく(最大8〜10度)、小さい旋回ほど行き過ぎていた(周回コースのログ)。
+        # 止まってから回れば、旋回30回テスト(止まった状態から回る)と同じ条件になる。
+        self.pre_stop = pre_stop
+        self.pre_stopping = False
         self.settle_stable_ticks = settle_stable_ticks
         self.settle_max_ticks = settle_max_ticks
         self.settling = False
@@ -379,9 +390,34 @@ class EtRallyTurnOneShot(Behaviour):
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
         if not self.running:
             ensure_scaled_gyro()
-            current_heading = _current_heading()
-            self._enter_phase1(current_heading)
             self.running = True
+            if self.pre_stop:
+                self._stop_motors()
+                self.pre_stopping = True
+                self.pre_stop_ticks = 0
+                self.pre_stop_stable = 0
+                self.pre_stop_start_r = runtime.right_motor.get_count()
+                self.pre_stop_start_l = runtime.left_motor.get_count()
+                self.pre_stop_prev = (self.pre_stop_start_r, self.pre_stop_start_l)
+                self.pre_stop_start_heading = _current_heading()
+                return Status.RUNNING
+            self._enter_phase1(_current_heading())
+
+        if self.pre_stopping:
+            counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
+            self.pre_stop_ticks += 1
+            self.pre_stop_stable = self.pre_stop_stable + 1 if counts == self.pre_stop_prev else 0
+            self.pre_stop_prev = counts
+            if self.pre_stop_stable < PRE_STOP_STABLE_TICKS and self.pre_stop_ticks < PRE_STOP_MAX_TICKS:
+                return Status.RUNNING
+            current_heading = _current_heading()
+            self.logger.info("%+06d %s.pre-stop settled ticks=%d fwd_mm=%+.1f drift=%+.2f%s" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, self.pre_stop_ticks,
+                forward_mm_since(self.pre_stop_start_r, self.pre_stop_start_l),
+                current_heading - self.pre_stop_start_heading,
+                "" if self.pre_stop_stable >= PRE_STOP_STABLE_TICKS else " (timeout)"))
+            self.pre_stopping = False
+            self._enter_phase1(current_heading)
 
         current_heading = _current_heading()
         if self.phase == 1:
@@ -400,4 +436,5 @@ class EtRallyTurnOneShot(Behaviour):
         if runtime.left_motor is not None:
             runtime.left_motor.set_power(0)
         self.settling = False
+        self.pre_stopping = False
         self.running = False

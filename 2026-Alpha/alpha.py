@@ -1318,6 +1318,13 @@ def _run_main(argv, startup_cleanup):
               'for turns that increase / decrease the heading (computed by '
               'wireless_device/et_rally_lqi/phase1_scale_from_log.py). Default (unset) = 1.0,1.0.'),
     )
+    parser.add_argument(
+        '--rally-turn-pre-stop',
+        choices=['on', 'off'],
+        default=None,
+        help=('one_shot only: on waits (brake) until both wheel encoders stop before phase1, '
+              'so a turn right after a straight starts from rest. Default (unset) = off.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1422,6 +1429,11 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-phase1-scale values must be within 0.5..1.5')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_phase1_scale=(pos_scale, neg_scale))
+    if args.rally_turn_pre_stop is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-pre-stop requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_pre_stop=(args.rally_turn_pre_stop == 'on'))
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,

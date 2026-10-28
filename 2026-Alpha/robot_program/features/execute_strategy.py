@@ -62,7 +62,7 @@ class DeferredStrategySequence(Sequence):
                  turn_backlash_preload_deg=None, turn_fine_trim=None,
                  turn_main_power=None, turn_lag_compensation_deg=None,
                  turn_adaptive_lag_compensation=None, turn_left_target_scale=None,
-                 turn_phase1_scale=None):
+                 turn_phase1_scale=None, turn_pre_stop=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -79,6 +79,7 @@ class DeferredStrategySequence(Sequence):
         self._turn_adaptive_lag_compensation = turn_adaptive_lag_compensation
         self._turn_left_target_scale = turn_left_target_scale
         self._turn_phase1_scale = turn_phase1_scale
+        self._turn_pre_stop = turn_pre_stop
         self._loaded = False
 
     def _load_children(self):
@@ -106,6 +107,8 @@ class DeferredStrategySequence(Sequence):
             extra_kwargs["turn_left_target_scale"] = self._turn_left_target_scale
         if self._turn_phase1_scale is not None:
             extra_kwargs["turn_phase1_scale"] = self._turn_phase1_scale
+        if self._turn_pre_stop is not None:
+            extra_kwargs["turn_pre_stop"] = self._turn_pre_stop
         try:
             nodes = steps_from_strategy(
                 self._loader(), initial_heading_deg=self._initial_heading_deg,
@@ -160,6 +163,7 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_adaptive_lag_compensation=getattr(config, "et_rally_turn_adaptive_lag_compensation", None),
             turn_left_target_scale=getattr(config, "et_rally_turn_left_target_scale", None),
             turn_phase1_scale=getattr(config, "et_rally_turn_phase1_scale", None),
+            turn_pre_stop=getattr(config, "et_rally_turn_pre_stop", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -179,6 +183,7 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_adaptive_lag_compensation=getattr(config, "et_rally_turn_adaptive_lag_compensation", None),
             turn_left_target_scale=getattr(config, "et_rally_turn_left_target_scale", None),
             turn_phase1_scale=getattr(config, "et_rally_turn_phase1_scale", None),
+            turn_pre_stop=getattr(config, "et_rally_turn_pre_stop", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -235,6 +240,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         turn_adaptive_lag_compensation=False,
                         turn_left_target_scale=1.0,
                         turn_phase1_scale=(1.0, 1.0),
+                        turn_pre_stop=False,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -390,6 +396,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         backlash_preload_deg=turn_backlash_preload_deg,
                         left_target_scale=turn_left_target_scale,
                         phase1_scale=turn_phase1_scale,
+                        pre_stop=turn_pre_stop,
                     )
                 )
             elif turn_method == 'lqi':
