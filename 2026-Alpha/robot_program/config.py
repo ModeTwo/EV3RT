@@ -118,6 +118,9 @@ class RaceConfig:
     # 定常的な左右差)分を補正する。lag_compensationとは別の、物理的な車輪特性による
     # 差で、どちらが先に止まるかとは無関係。既定1.0=無効。
     et_rally_turn_left_target_scale: Optional[float] = None
+    # 2026-10-28: one_shotのphase1の目標エンコーダ角度に掛ける係数
+    # (headingが増える向きの旋回, 減る向きの旋回)。既定None=(1.0, 1.0)で無効。
+    et_rally_turn_phase1_scale: Optional[tuple] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

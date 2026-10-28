@@ -140,6 +140,7 @@ class EtRallyTurnOneShot(Behaviour):
                  adaptive_lag_compensation: bool = False,
                  backlash_preload_deg: float = 0.0,
                  left_target_scale: float = 1.0,
+                 phase1_scale=(1.0, 1.0),
                  settle_stable_ticks: int = SETTLE_STABLE_TICKS,
                  settle_max_ticks: int = SETTLE_MAX_TICKS) -> None:
         super().__init__(name)
@@ -163,6 +164,13 @@ class EtRallyTurnOneShot(Behaviour):
         # (実効径・グリップの定常的な左右差)分の補正。常に左輪の目標値にだけかける。
         # 1.0なら無効(既定、挙動は変えない)。
         self.left_target_scale = left_target_scale
+        # 2026-10-28: phase1の目標エンコーダ角度に掛ける係数(headingが増える向きの旋回,
+        # 減る向きの旋回)。目標角度->エンコーダ角度の換算はタイヤ径と車輪間隔だけで
+        # 決めているため、その場旋回の滑りや左右の止まり方の差で、向きごとに実際の
+        # 回転量がずれる。旋回30回テストのログから
+        # wireless_device/et_rally_lqi/phase1_scale_from_log.py で求めた値を使う。
+        # (1.0, 1.0)なら無効(既定、挙動は変えない)。
+        self.phase1_scale = phase1_scale
         self.settle_stable_ticks = settle_stable_ticks
         self.settle_max_ticks = settle_max_ticks
         self.settling = False
@@ -181,6 +189,8 @@ class EtRallyTurnOneShot(Behaviour):
         # --rally-gyro-tire-calibration offの切替が反映されない)。
         self.target_motor_deg = arc_length_mm / (math.pi * runtime.plotter.tire_diameter) * 360.0
         self.direction = 1 if error > 0 else -1
+        self.applied_phase1_scale = self.phase1_scale[0] if self.direction > 0 else self.phase1_scale[1]
+        self.target_motor_deg *= self.applied_phase1_scale
 
         # DD-22較正用: et_rally_drive.EtRallySpinAroundByEncoderと同じ考え方(前の
         # 旋回と逆方向に切り替わるときだけ、機構内のバックラッシュを先に詰める分を
@@ -219,9 +229,9 @@ class EtRallyTurnOneShot(Behaviour):
         self.left_done_at_count = self.start_l
         self.phase = 1
         self.logger.info(
-            "%+06d %s.phase1 started at heading=%d for %d (target_motor_deg=%.1f)" % (
+            "%+06d %s.phase1 started at heading=%d for %d (target_motor_deg=%.1f) phase1_scale=%.4f" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, current_heading,
-                self.target_heading, self.target_motor_deg))
+                self.target_heading, self.target_motor_deg, self.applied_phase1_scale))
 
     def _tick_phase1(self):
         delta_r = abs(runtime.right_motor.get_count() - self.start_r)

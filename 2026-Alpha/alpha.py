@@ -1311,6 +1311,13 @@ def _run_main(argv, startup_cleanup):
               '(measured ~0.9%%, right wheel turns the robot slightly more per encoder degree). '
               'Default (unset/1.0) keeps both wheels equal.'),
     )
+    parser.add_argument(
+        '--rally-turn-phase1-scale',
+        default=None,
+        help=('one_shot only: "POS,NEG" factors multiplied into the phase1 target encoder angle '
+              'for turns that increase / decrease the heading (computed by '
+              'wireless_device/et_rally_lqi/phase1_scale_from_log.py). Default (unset) = 1.0,1.0.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1404,6 +1411,17 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-left-target-scale requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_left_target_scale=args.rally_turn_left_target_scale)
+    if args.rally_turn_phase1_scale is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-phase1-scale requires --mission rally-drive, bottle-rally or rally-sumo')
+        try:
+            pos_scale, neg_scale = (float(v) for v in args.rally_turn_phase1_scale.split(','))
+        except ValueError:
+            parser.error('--rally-turn-phase1-scale must be "POS,NEG" (e.g. 0.98,0.95)')
+        if not (0.5 <= pos_scale <= 1.5 and 0.5 <= neg_scale <= 1.5):
+            parser.error('--rally-turn-phase1-scale values must be within 0.5..1.5')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_phase1_scale=(pos_scale, neg_scale))
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,
