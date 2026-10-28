@@ -22,7 +22,14 @@ UNCALIBRATED_TIRE_DIAMETER: float = 55.0
 # 57.33 * 0.992 に較正した。1回のみの試行なので暫定値。繰り返しテストの結果で再計算すること。
 # 他工程(ライントレース等)の距離には影響させないため、Plotter.tire_diameterを
 # ETラリー工程の開始時だけこの値へ切り替え、終了時に元へ戻す(phases/et_rally.py)。
-ET_RALLY_TIRE_DIAMETER: float = 56.87
+#
+# 2026-10-28: 56.87は直進後の惰性(止まるまでに約1〜2cm進む分)を含んだ実測で較正されて
+# いたため、1m直進でだけ誤差が打ち消し合っていた。床の実測(1000mm×3回・300mm×3回)で、
+# 実距離÷ログ上の距離(目標到達時+惰性)が長さによらず約0.977で一定だったため、
+# 56.87*0.977に修正した。惰性そのものは直進側(減速区間・手前で止める量)で扱う
+# (robot_program/features/execute_strategy.py)。
+# ET_RALLY_TIRE_DIAMETER: float = 56.87  # 2026-10-28以前(惰性込みの較正値)
+ET_RALLY_TIRE_DIAMETER: float = 55.56
 # WHEEL_TREAD: 2026-09-12に実測(左右タイヤの接地面中心間の距離、11.7cm)。
 # et_rally_planner側でのその場旋回の位置ズレ調査(SpinAroundByEncoder、
 # sample_comment.py参照)に使う。

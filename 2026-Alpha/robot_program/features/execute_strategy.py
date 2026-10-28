@@ -209,7 +209,14 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # 【要実機調整】30mm/半分のパワー、はまだ最初の見立てで、
                         # 実測して詰める前提の値。
                         move_accel_mm=30.0, move_accel_min_power=40,
-                        move_decel_mm=30.0, move_decel_min_power=40,
+                        # 2026-10-28: 30mmでは減速が間に合わず、目標到達時も約340mm/sで
+                        # 走っていて、止まるまでに1〜2cm進んでいた(床の実測)。80mmに
+                        # 延ばして到達時の速度を下げ、惰性を小さくする。
+                        move_decel_mm=80.0, move_decel_min_power=40,
+                        # 2026-10-28: 減速しても残る惰性と、目標到達の判定の行き過ぎ
+                        # (20msごとの判定の刻み)の分だけ、直進を手前で終える量(mm)。
+                        # 減速区間を延ばした後の床の実測で決める(それまでは0)。
+                        move_stop_lead_mm=0.0,
                         turn_main_power=SPIN_MAX_POWER,
                         turn_fine_max_power=60, turn_fine_min_power=50,
                         turn_fine_tolerance_deg=0.5,
@@ -306,7 +313,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             prev_lap = cur_lap
 
         if step["type"] == "move":
-            distance_mm = int(round(step["distance_mm"]))
+            # 惰性で進む分を見込み、手前で直進を終える(短すぎる区間でも最低1mmは走る)。
+            run_distance_mm = max(step["distance_mm"] - move_stop_lead_mm, 1.0)
+            distance_mm = int(round(run_distance_mm))
             # DD-19ベースライン: spin_pid指定時は直進PIDも、DD-14の調整値(4.0,0.6,0.06)ではなく
             # sample.pyのRunByGyroと同じ値(1.1,0.1,0.03)に揃える。
             active_move_pid = (1.1, 0.1, 0.03) if turn_method == 'spin_pid' else move_pid
@@ -324,7 +333,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         pid_i=active_move_pid[1],
                         pid_d=active_move_pid[2],
                         target_type=HeadingType.ABSOLUTE,
-                        distance_mm=step["distance_mm"],
+                        distance_mm=run_distance_mm,
                         accel_mm=move_accel_mm,
                         accel_min_power=move_accel_min_power,
                         decel_mm=move_decel_mm,
