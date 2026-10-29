@@ -88,9 +88,18 @@ class EtRallyPause(Behaviour):
             if self.log_interval_sec:
                 self.next_log = now + self.log_interval_sec
         if self.next_log is not None and now >= self.next_log:
-            self.logger.info("%+06d %s.still %.0fs heading=%+.2f drift=%+.2f" % (
+            # 2026-10-29: ずれの速さとバッテリーの関係を見るため、電圧・電流も残す
+            # (power_log.pyと同じガードで、hub未接続でも落ちないようにする)。
+            battery_mv = battery_ma = -1
+            if runtime.hub is not None:
+                try:
+                    battery_mv = runtime.hub.get_battery_voltage()
+                    battery_ma = runtime.hub.get_battery_current()
+                except Exception:
+                    battery_mv = battery_ma = -1
+            self.logger.info("%+06d %s.still %.0fs heading=%+.2f drift=%+.2f battery_mv=%d battery_ma=%d" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, now - self.still_time,
-                heading, heading - self.still_heading))
+                heading, heading - self.still_heading, battery_mv, battery_ma))
             self.next_log += self.log_interval_sec
         if elapsed < self.max_seconds and (elapsed < self.min_seconds or self.stable < self.STABLE_TICKS):
             return Status.RUNNING
