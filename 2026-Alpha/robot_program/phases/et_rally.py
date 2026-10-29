@@ -70,10 +70,14 @@ def build_et_rally_phase(context, config):
         children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
     arm_up = ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP)
     if install_heading and drift_compensation:
-        # 2026-10-29: アームを上げている間にジャイロのずれの速さを測る(et_rally_heading.py)。
+        # 2026-10-29: アームを上げ切って振動が収まってから、止まってジャイロのずれの速さを測る
+        # (et_rally_heading.py)。既定は振動待ち1秒+測定2秒。
+        settle_sec = getattr(config, "et_rally_gyro_drift_settle_sec", None)
+        measure_sec = getattr(config, "et_rally_gyro_drift_extra_sec", None)
         arm_up = EtRallyArmUpWithDriftMeasure(
             "et_rally arm up", arm_up,
-            extra_sec=getattr(config, "et_rally_gyro_drift_extra_sec", None) or 0.0)
+            settle_sec=1.0 if settle_sec is None else settle_sec,
+            measure_sec=2.0 if measure_sec is None else measure_sec)
     children.append(arm_up)
     if config.et_rally_strategy_source == "received":
         children.append(build_receive_strategy(context, config))

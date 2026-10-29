@@ -1378,8 +1378,11 @@ def _run_main(argv, startup_cleanup):
               'subtract it over time. Default (unset) = off.'),
     )
     parser.add_argument('--rally-gyro-drift-extra-sec', type=float, default=None,
-                        help=('With --rally-gyro-drift-comp on: after raising the arm, stay still this many '
-                              'more seconds to measure the drift rate. Default (unset) = 0.'))
+                        help=('With --rally-gyro-drift-comp on: seconds to stay still and measure the drift '
+                              'rate after the arm is up and has settled. Default (unset) = 2.'))
+    parser.add_argument('--rally-gyro-drift-settle-sec', type=float, default=None,
+                        help=('With --rally-gyro-drift-comp on: seconds to wait after raising the arm before '
+                              'measuring (the arm vibrates). Default (unset) = 1.'))
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1521,10 +1524,15 @@ def _run_main(argv, startup_cleanup):
             parser.error(option + ' requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(mission_config, **{field: value == 'on'})
     if args.rally_gyro_drift_extra_sec is not None:
-        if not 0.0 <= args.rally_gyro_drift_extra_sec <= 10.0:
-            parser.error('--rally-gyro-drift-extra-sec must be between 0 and 10')
+        if not 0.5 <= args.rally_gyro_drift_extra_sec <= 10.0:
+            parser.error('--rally-gyro-drift-extra-sec must be between 0.5 and 10')
         mission_config = dataclasses.replace(
             mission_config, et_rally_gyro_drift_extra_sec=args.rally_gyro_drift_extra_sec)
+    if args.rally_gyro_drift_settle_sec is not None:
+        if not 0.0 <= args.rally_gyro_drift_settle_sec <= 5.0:
+            parser.error('--rally-gyro-drift-settle-sec must be between 0 and 5')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_gyro_drift_settle_sec=args.rally_gyro_drift_settle_sec)
     if args.rally_gyro_still_sweep is not None:
         if args.rally_gyro_still_sec is None:
             parser.error('--rally-gyro-still-sweep requires --rally-gyro-still-sec')

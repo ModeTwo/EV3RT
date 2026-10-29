@@ -13,9 +13,12 @@ runtime.gyro_sensor.get_angle()を読むだけなので、クラス側は変え�
    (imu.cのpbio_imu_is_stationary)。走行中はモーターにブレーキや出力が入っているので測り直されず、
    静止テストでは0.01〜0.05度/秒のずれが続いた。脱力をやめると、くせは10秒ほどで変わっていく
    (2026-10-29の静止テスト、全モーター脱力→全モーターブレーキ)ので、脱力中に測った値は使えない。
-   そこで、ETラリー開始時にアームを上げている間(約2秒、車輪にはブレーキ)に、ハブの回転の速さ
-   (z軸、くせを引いた後の値)を平均し、それをずれの速さとしてETラリーの間ずっと差し引く
-   (EtRallyArmUpWithDriftMeasure)。ハブの向きは時計回りが正で、回転の速さのz軸とは符号が逆
+   そこで、ETラリー開始時にアームを上げ終えたあと、振動が収まるのを待ってから止まったまま
+   (車輪にはブレーキ)ハブの回転の速さ(z軸、くせを引いた後の値)を平均し、それをずれの速さとして
+   ETラリーの間ずっと差し引く(EtRallyArmUpWithDriftMeasure)。
+   2026-10-29: アームを上げている間に測ると、アームの動きと上の端に当たった衝撃でz軸が乱れ、
+   ずれの速さを逆の符号で読んだ(-0.079度/秒、実際は+0.019度/秒)。アームが動いている間と、
+   上げ切ったあとの振動の間(settle_sec)は測らない。ハブの向きは時計回りが正で、回転の速さのz軸とは符号が逆
    (静止テストで確認)なので、ずれの速さ = -(z軸の平均)。
    2026-10-29: 走行中の短い停止(旋回の前後)でも測っていたが、エンコーダが止まっていても歯車の
    あそびで車体がまだ回っており、ずれの速さを逆の符号で読んでいた(1周目の開始時に-0.26度/秒、
@@ -140,14 +143,15 @@ class RestoreEtRallyHeading(Behaviour):
 
 
 class EtRallyArmUpWithDriftMeasure(Behaviour):
-    """ETラリー開始時にアームを上げながら、その間のz軸の回転の速さを平均して、ずれの速さを決める。
-    車輪には走行中と同じくブレーキをかける(モーターの状態でジャイロのくせが変わるため)。
-    extra_secを指定すると、アームを上げ終えたあと、その秒数だけ止まったまま測り続ける。"""
+    """ETラリー開始時にアームを上げ、上げ切ったあとsettle_sec秒待って振動を収めてから、measure_sec秒
+    止まったままz軸の回転の速さを平均して、ずれの速さを決める。車輪には走行中と同じくブレーキをかける
+    (モーターの状態でジャイロのくせが変わるため)。待っている間の揺れ幅もログに残す。"""
 
-    def __init__(self, name, arm_up, extra_sec=0.0):
+    def __init__(self, name, arm_up, settle_sec=1.0, measure_sec=2.0):
         super().__init__(name)
         self.arm_up = arm_up
-        self.extra_sec = extra_sec
+        self.settle_sec = settle_sec
+        self.measure_sec = measure_sec
         self.started = False
 
     def update(self):
@@ -161,27 +165,37 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
             self.arm_done_time = None
             self.values = []
             self.rejected = 0
-        self._sample()
+            self.settle_min = None
+            self.settle_max = None
         if self.arm_done_time is None:
             if self.arm_up.update() != Status.SUCCESS:
                 return Status.RUNNING
             self.arm_done_time = now
-        if now - self.arm_done_time < self.extra_sec:
+            return Status.RUNNING
+        elapsed = now - self.arm_done_time
+        angv_z = self._read_angv_z()
+        if elapsed < self.settle_sec:
+            if angv_z is not None:
+                self.settle_min = angv_z if self.settle_min is None else min(self.settle_min, angv_z)
+                self.settle_max = angv_z if self.settle_max is None else max(self.settle_max, angv_z)
+            return Status.RUNNING
+        if angv_z is not None:
+            if abs(angv_z) > MEASURE_MAX_ANGV_DEG_S:
+                self.rejected += 1
+            else:
+                self.values.append(angv_z)
+        if elapsed < self.settle_sec + self.measure_sec:
             return Status.RUNNING
         self._finish(now)
         return Status.SUCCESS
 
-    def _sample(self):
+    def _read_angv_z(self):
         if runtime.hub is None:
-            return
+            return None
         try:
-            angv_z = float(runtime.hub.hub_imu_get_angular_velocity()[2])
+            return float(runtime.hub.hub_imu_get_angular_velocity()[2])
         except Exception:
-            return
-        if abs(angv_z) > MEASURE_MAX_ANGV_DEG_S:
-            self.rejected += 1
-            return
-        self.values.append(angv_z)
+            return None
 
     def _finish(self, now):
         n = len(self.values)
@@ -191,10 +205,12 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
         used = isinstance(heading, EtRallyHeading) and heading.drift_compensation and n >= MEASURE_MIN_SAMPLES
         if used:
             heading.set_drift_rate(-mean, n)
+        settle_range = (self.settle_max - self.settle_min) if self.settle_min is not None else -1.0
         self.logger.info(
-            "drift measure: %.2fs (arm %.2fs) samples=%d rejected=%d angv_z_mean=%+.4f std=%.3f "
-            "-> drift_rate=%+.4f deg/s (%s)" % (
-                now - self.start_time, self.arm_done_time - self.start_time, n, self.rejected, mean, std,
+            "drift measure: %.2fs (arm %.2fs, settle %.1fs range=%.2f, measure %.1fs) samples=%d rejected=%d "
+            "angv_z_mean=%+.4f std=%.3f -> drift_rate=%+.4f deg/s (%s)" % (
+                now - self.start_time, self.arm_done_time - self.start_time, self.settle_sec, settle_range,
+                self.measure_sec, n, self.rejected, mean, std,
                 -mean if used else 0.0, "used" if used else "not used"))
 
     def terminate(self, new_status):
