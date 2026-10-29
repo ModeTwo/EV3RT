@@ -97,6 +97,10 @@ MAX_PULSE_ATTEMPTS = 2  # これ以上は追いかけない(不感帯より細�
 # 続けて変わらなくなってから残差を測る。SETTLE_MAX_TICKSで打ち切る(1tick=0.02s)。
 SETTLE_STABLE_TICKS = 3
 SETTLE_MAX_TICKS = 15
+# 2026-10-29: 1tickの向きの変化がこれ未満なら「変わらない」とみなす。四捨五入前の向き(--rally-gyro-float)
+# では値が完全に同じになることがなく、毎回SETTLE_MAX_TICKSまで待っていた。整数の向き(1度刻み)では
+# 変化は0か1度以上なので、従来と同じ判定になる。
+SETTLE_STABLE_DEG = 0.05
 # 2026-10-28: pre_stop有効時、phase1の前にブレーキをかけ、左右のエンコーダが
 # このtick数だけ続けて変わらなくなる(=直進の惰性が止まる)まで待つ。PRE_STOP_MAX_TICKSで打ち切る。
 PRE_STOP_STABLE_TICKS = 2
@@ -314,7 +318,7 @@ class EtRallyTurnOneShot(Behaviour):
     def _tick_settle(self, current_heading):
         """静止を確認できたらTrue。headingは約1度刻みなので、値が同じかどうかで判定する。"""
         self.settle_ticks += 1
-        if abs(current_heading - self.settle_prev_heading) < 1e-6:
+        if abs(current_heading - self.settle_prev_heading) < SETTLE_STABLE_DEG:
             self.settle_stable_count += 1
         else:
             self.settle_stable_count = 0
