@@ -99,6 +99,23 @@ def _format_range(ranges):
     return "none" if ranges is None else "(%s)" % ",".join("%.3f" % (high - low) for low, high in ranges)
 
 
+def _coast_all_motors():
+    """車輪とアームを含む全モーターを脱力させる。ハブ側(Pybricks由来のpbio)は、全モーターが脱力して
+    いるときだけ「止まっている」と判定し、ジャイロのくせを測り直す(2026-10-29、imu.cの
+    pbio_imu_is_stationary)。etrobo_pythonのstop_all_motors(pup_motor_stop)を使い、読めなければ
+    各モーターのブレーキを外すだけにする。戻り値: stop_all_motorsを使えたらTrue。"""
+    try:
+        from etrobo_python.backends.raspike_art.device import stop_all_motors
+        stop_all_motors()
+        return True
+    except Exception:
+        for motor in (runtime.right_motor, runtime.left_motor, runtime.arm_motor):
+            if motor is not None:
+                motor.set_power(0)
+                motor.set_brake(False)
+        return False
+
+
 def _read_cpu_temp_c():
     """Raspberry PiのCPU温度(℃)。ハブのジャイロの温度ではなく、本体が温まったかの目安。読めなければNone。"""
     try:
@@ -123,6 +140,7 @@ class EtRallyPause(Behaviour):
         super().__init__(name)
         self.min_seconds = min_seconds
         # 2026-10-29: Falseなら車輪にブレーキをかけない(ジャイロの静止判定を邪魔しているかの確認用)。
+        # "coast_all"なら、アームも含む全モーターを脱力させる。"brake_all"なら、アームにもブレーキをかける。
         self.brake = brake
         # 長く止まるときは、車輪が止まらなくてもmin_secondsの1秒後には終える。
         self.max_seconds = max(self.MAX_SECONDS, min_seconds + 1.0)
@@ -135,9 +153,16 @@ class EtRallyPause(Behaviour):
         counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
         heading = (-1) * runtime.course * runtime.gyro_sensor.get_angle()
         if self.started is None:
-            for motor in (runtime.right_motor, runtime.left_motor):
-                motor.set_power(0)
-                motor.set_brake(self.brake)
+            if self.brake == "coast_all":
+                used = _coast_all_motors()
+                self.logger.info("%s.all motors coasting (stop_all_motors=%s)" % (self.__class__.__name__, used))
+            else:
+                motors = [runtime.right_motor, runtime.left_motor]
+                if self.brake == "brake_all" and runtime.arm_motor is not None:
+                    motors.append(runtime.arm_motor)
+                for motor in motors:
+                    motor.set_power(0)
+                    motor.set_brake(bool(self.brake))
             self.started = now
             self.prev = counts
             self.stable = 0
@@ -154,6 +179,8 @@ class EtRallyPause(Behaviour):
             self.raw_heading_start = None
             self.angv_range = None
             self.accel_range = None
+            self.accel_sum = None
+            self.accel_n = 0
             return Status.RUNNING
         self.stable = self.stable + 1 if counts == self.prev else 0
         self.prev = counts
@@ -185,6 +212,11 @@ class EtRallyPause(Behaviour):
             accel = _read_acceleration()
             if accel is not None:
                 self.accel_range = _update_range(self.accel_range, accel)
+                if self.accel_sum is None:
+                    self.accel_sum = [0.0] * len(accel)
+                for axis, value in enumerate(accel):
+                    self.accel_sum[axis] += value
+                self.accel_n += 1
             stationary, raw_heading = _read_imu_stationary_and_heading()
             if stationary is not None:
                 self.stationary_n += 1
@@ -227,9 +259,20 @@ class EtRallyPause(Behaviour):
                 stationary_text, raw_text, "none" if cpu_temp is None else "%.1f" % cpu_temp))
             # 2026-10-29: この間隔の、回転の速さ(度/秒)と加速度(mm/s^2)の最大と最小の差。ハブの静止判定の
             # しきい値(hub_imu.cの既定値: 回転2.0度/秒、加速度2500mm/s^2)を揺れが超えているかの目安。
-            self.logger.info("%+06d %s.still %.0fs angv_range=%s accel_range=%s" % (
+            # accel_mean: この間隔の加速度の平均。重力の向きから、ハブの傾きの設定(etrobo_pythonが起動時に
+            # hub_imu_set_tilt(51.0)で設定)が実際の取り付けと合っているかを見る。合っていれば重力はほぼz軸だけに出る。
+            # tilt_xz/tilt_yz: 重力がz軸からx・y方向へ何度傾いているか。
+            if self.accel_n > 0:
+                ax, ay, az = (value / self.accel_n for value in self.accel_sum[:3])
+                accel_text = " accel_mean=(%+.1f,%+.1f,%+.1f) tilt_xz=%+.2f tilt_yz=%+.2f" % (
+                    ax, ay, az, math.degrees(math.atan2(ax, abs(az))), math.degrees(math.atan2(ay, abs(az))))
+            else:
+                accel_text = " accel_mean=none"
+            self.logger.info("%+06d %s.still %.0fs angv_range=%s accel_range=%s%s" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, now - self.still_time,
-                _format_range(self.angv_range), _format_range(self.accel_range)))
+                _format_range(self.angv_range), _format_range(self.accel_range), accel_text))
+            self.accel_sum = None
+            self.accel_n = 0
             self.angv_range = None
             self.accel_range = None
             self.stationary_true = 0
@@ -619,19 +662,20 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         if not gyro_still_sweep:
             return [EtRallyPause(name="et_rally gyro still", min_seconds=gyro_still_sec,
                                  log_interval_sec=5.0)]
-        # ETラリー工程の最初でアームは上がっているので、上→下の順に試す。アームを下げたあとは、
-        # 揺れが収まるまで3秒待ってから測る(その間はログを出さない)。
+        # 2026-10-29: 4状態(アーム上下×車輪ブレーキ有無)ではどれも静止判定が出なかった。ハブ側は全モーターが
+        # 脱力しているときだけ静止と判定するため、次の順に試す:
+        #   1. いつもの状態(アーム上・車輪ブレーキ)  2. アームを下げる
+        #   3. 全モーター脱力(2倍の時間): 静止判定が出て、ハブがくせを測り直し、ずれが止まるか
+        #   4. 全モーターにブレーキ: 脱力をやめた直後に、くせ(ずれの速さ)が変わるか
         return [
             EtRallyPause(name="et_rally gyro still arm_up brake", min_seconds=gyro_still_sec,
                          log_interval_sec=5.0, brake=True),
-            EtRallyPause(name="et_rally gyro still arm_up float", min_seconds=gyro_still_sec,
-                         log_interval_sec=5.0, brake=False),
             ArmUpDownFull(name="et_rally gyro still arm down", direction=ArmDirection.DOWN),
             EtRallyPause(name="et_rally gyro still arm_down settle", min_seconds=3.0, brake=False),
-            EtRallyPause(name="et_rally gyro still arm_down float", min_seconds=gyro_still_sec,
-                         log_interval_sec=5.0, brake=False),
-            EtRallyPause(name="et_rally gyro still arm_down brake", min_seconds=gyro_still_sec,
-                         log_interval_sec=5.0, brake=True),
+            EtRallyPause(name="et_rally gyro still coast_all", min_seconds=2 * gyro_still_sec,
+                         log_interval_sec=5.0, brake="coast_all"),
+            EtRallyPause(name="et_rally gyro still brake_all", min_seconds=gyro_still_sec,
+                         log_interval_sec=5.0, brake="brake_all"),
         ]
 
     nodes = []
