@@ -29,7 +29,9 @@ import math
 # 再確認して発覚)。25.7cmは正しい24.6cm前後より約1.1cm(4.5%)大きく、
 # 原点(0,0)から離れたゲートほど計算上の位置ズレが比例して大きくなる形で
 # 実機の誤差(特に青・黄色ゲートの周回ごとの位置ズレ)に効いていたと考えられる。
-GRID_PITCH_CM = 24.6          # グレー●同士の間隔(中心間)
+# 2026-10-29: 右コースの布で、●の中心どうしを直接実測(X1〜X5: 98.6/98.7cm、Y1〜Y5: 98.4/98.6cm)。
+# 4本の平均98.575cmを4間隔で割った24.64cmにする(X方向とY方向の差は1辺で約1.5mmで、1つの値で扱う)。
+GRID_PITCH_CM = 24.64         # グレー●同士の間隔(中心間)
 # GATE_INNER_WIDTH_CM: 2026-09-15に実測(22.2cm)。rule_route.pyの安全性判定
 # (POST_AVOID_RADIUS_CM等)には使われておらず、generate_diagram.pyが描く
 # 「有効通過区間」の可視化線(Gate.valid_half_length()経由)にのみ使用。
@@ -118,7 +120,8 @@ POST_AVOID_RADIUS_CM = ROBOT_PIVOT_SWEEP_RADIUS_CM + POST_RADIUS_CM + SAFETY_MAR
 # (4,3)-(4,4)中点から垂直に18.0cm)。ゴール側は2026-09-15に実測し14.8cmに更新。
 # 2026-10-10に再実測し、スタート17.9cm・ゴール14.6cmに更新。
 START_OFFSET_CM = 17.9
-GOAL_OFFSET_CM = 14.6
+# 2026-10-29: 再実測で14.9cm。
+GOAL_OFFSET_CM = 14.9
 
 # スタート: グリッド(4,3)-(4,4)を結ぶ線の中心点から、その線と垂直に
 # START_OFFSET_CMだけ離れた点。
@@ -127,7 +130,9 @@ GOAL_OFFSET_CM = 14.6
 # 2026-09-22: 実走(黄ゲートのゴール側支柱への接触)を受け、さらにゴールと反対方向(+X)へ1.0cm、
 # ゴールと反対方向/北(+Y)へ0.7cm移動した(合計でX-0.5+1.0=+0.5cm、Y-2.7+0.7=-2.0cm)。
 # 従来の位置に戻すときは START_SHIFT_CM を (0.0, 0.0) にする。
-START_SHIFT_CM = (0.5, -2.0)
+# 2026-10-29: いつもの置き方で、タイヤの軸の中心からX5の列の線までを実測すると17.8cm
+# (計画は17.9+0.5=18.4cm)。進入禁止エリアの基準(START_OFFSET_CM)は動かさず、ずらす量で合わせる。
+START_SHIFT_CM = (-0.1, -2.0)
 START_POS_CM = (4 * GRID_PITCH_CM + START_OFFSET_CM + START_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + START_SHIFT_CM[1])
 START_HEADING_DEG = 180.0   # -x方向を向く
 
