@@ -132,8 +132,6 @@ class RaceConfig:
     et_rally_straight_pause_min_mm: Optional[float] = None
     # 2026-10-29: 経路の前に、この秒数だけ止まったまま向きをログに残す(ジャイロのずれの検証用)。既定None=しない。
     et_rally_gyro_still_sec: Optional[float] = None
-    # 2026-10-29: 経路のあとに、最後の向きのままこの距離(mm)だけ前進→後退して、走り終わった時点の向きを確かめる。既定None=しない。
-    et_rally_end_check_mm: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

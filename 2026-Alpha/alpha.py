@@ -1356,13 +1356,6 @@ def _run_main(argv, startup_cleanup):
         help=('Before the route, stand still this many seconds and log the heading every 5 s '
               '(to check gyro drift while stationary). Default (unset) = none.'),
     )
-    parser.add_argument(
-        '--rally-end-check-mm',
-        type=float,
-        default=None,
-        help=('After the route, drive this many mm ahead at the final heading, stop, drive back, stop '
-              '(to check the heading at the end). Default (unset) = none.'),
-    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1487,8 +1480,7 @@ def _run_main(argv, startup_cleanup):
             ('--rally-straight-pause-sec', args.rally_straight_pause_sec, 0.5, 30.0, 'et_rally_straight_pause_sec'),
             ('--rally-straight-pause-min-mm', args.rally_straight_pause_min_mm, 1.0, 3000.0,
              'et_rally_straight_pause_min_mm'),
-            ('--rally-gyro-still-sec', args.rally_gyro_still_sec, 1.0, 600.0, 'et_rally_gyro_still_sec'),
-            ('--rally-end-check-mm', args.rally_end_check_mm, 50.0, 2000.0, 'et_rally_end_check_mm')):
+            ('--rally-gyro-still-sec', args.rally_gyro_still_sec, 1.0, 600.0, 'et_rally_gyro_still_sec')):
         if value is None:
             continue
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:

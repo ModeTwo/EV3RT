@@ -135,7 +135,7 @@ class DeferredStrategySequence(Sequence):
                  turn_adaptive_lag_compensation=None, turn_left_target_scale=None,
                  turn_phase1_scale=None, turn_pre_stop=None, turn_forward_compensation=None,
                  start_check_mm=None, straight_pause_sec=None, straight_pause_min_mm=None,
-                 gyro_still_sec=None, end_check_mm=None):
+                 gyro_still_sec=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -159,7 +159,6 @@ class DeferredStrategySequence(Sequence):
             "straight_pause_sec": straight_pause_sec,
             "straight_pause_min_mm": straight_pause_min_mm,
             "gyro_still_sec": gyro_still_sec,
-            "end_check_mm": end_check_mm,
         }
         self._loaded = False
 
@@ -257,7 +256,6 @@ def build_execute_strategy(context, config, lap_number=None):
             straight_pause_sec=getattr(config, "et_rally_straight_pause_sec", None),
             straight_pause_min_mm=getattr(config, "et_rally_straight_pause_min_mm", None),
             gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
-            end_check_mm=getattr(config, "et_rally_end_check_mm", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -283,7 +281,6 @@ def build_execute_strategy(context, config, lap_number=None):
             straight_pause_sec=getattr(config, "et_rally_straight_pause_sec", None),
             straight_pause_min_mm=getattr(config, "et_rally_straight_pause_min_mm", None),
             gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
-            end_check_mm=getattr(config, "et_rally_end_check_mm", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -373,9 +370,6 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # 2026-10-29: 0より大きければ、経路の前に、この秒数だけ止まったまま
                         # 向きをログに残す(止まっているときのジャイロのずれの検証用)。
                         gyro_still_sec=0.0,
-                        # 2026-10-29: 0より大きければ、経路のあとに、最後の向きのままこの距離だけ
-                        # 前進→停止→後退→停止する(走り終わった時点の向きが合っているかを目で確かめる用)。
-                        end_check_mm=0.0,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -626,9 +620,6 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         left_target_scale=turn_left_target_scale,
                     )
                 )
-    if end_check_mm and end_check_mm > 0:
-        nodes.append(EtRallyPause(name="et_rally end check settle", min_seconds=1.0))
-        nodes.extend(check_legs("end check", steps[-1]["target_heading_deg"], end_check_mm))
     return nodes
 
 
