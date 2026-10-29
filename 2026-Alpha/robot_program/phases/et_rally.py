@@ -12,7 +12,7 @@ from ..behaviours.motor_control import StopNow
 from ..features.receive_strategy import build_receive_strategy
 from .. import gyro_scale
 from ..gyro_scale import EnableGyroScale
-from ..et_rally_heading import InstallEtRallyHeading, RestoreEtRallyHeading
+from ..et_rally_heading import EtRallyArmUpWithDriftMeasure, InstallEtRallyHeading, RestoreEtRallyHeading
 from ..runtime import runtime
 
 
@@ -68,7 +68,13 @@ def build_et_rally_phase(context, config):
         # EtRallyRunByGyro等はフラグに関わらず内部でensure_scaled_gyro()を呼ぶため、
         # 窓口自体を無効化してジャイロ倍率補正を確実に無しにする。
         children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
-    children.append(ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP))
+    arm_up = ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP)
+    if install_heading and drift_compensation:
+        # 2026-10-29: アームを上げている間にジャイロのずれの速さを測る(et_rally_heading.py)。
+        arm_up = EtRallyArmUpWithDriftMeasure(
+            "et_rally arm up", arm_up,
+            extra_sec=getattr(config, "et_rally_gyro_drift_extra_sec", None) or 0.0)
+    children.append(arm_up)
     if config.et_rally_strategy_source == "received":
         children.append(build_receive_strategy(context, config))
     elif config.et_rally_strategy_source != "file":

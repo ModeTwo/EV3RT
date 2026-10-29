@@ -139,6 +139,8 @@ class RaceConfig:
     # (robot_program/et_rally_heading.py)。既定None=どちらもしない。
     et_rally_gyro_float_heading: Optional[bool] = None
     et_rally_gyro_drift_compensation: Optional[bool] = None
+    # 2026-10-29: ずれの速さを、アームを上げ終えたあとさらにこの秒数だけ止まって測る。既定None=0(アームを上げている間だけ)。
+    et_rally_gyro_drift_extra_sec: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

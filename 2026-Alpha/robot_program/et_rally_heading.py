@@ -13,10 +13,13 @@ runtime.gyro_sensor.get_angle()を読むだけなので、クラス側は変え�
    (imu.cのpbio_imu_is_stationary)。走行中はモーターにブレーキや出力が入っているので測り直されず、
    静止テストでは0.01〜0.05度/秒のずれが続いた。脱力をやめると、くせは10秒ほどで変わっていく
    (2026-10-29の静止テスト、全モーター脱力→全モーターブレーキ)ので、脱力中に測った値は使えない。
-   そこで、走行中と同じ状態(ブレーキあり)で車輪とアームが止まっている間に、ハブの回転の速さ
-   (z軸、くせを引いた後の値)を平均し、それをずれの速さとして経過時間ぶん差し引く。
-   ハブの向きは時計回りが正で、回転の速さのz軸とは符号が逆(静止テストで確認)なので、
-   ずれの速さ = -(z軸の平均)。
+   そこで、ETラリー開始時にアームを上げている間(約2秒、車輪にはブレーキ)に、ハブの回転の速さ
+   (z軸、くせを引いた後の値)を平均し、それをずれの速さとしてETラリーの間ずっと差し引く
+   (EtRallyArmUpWithDriftMeasure)。ハブの向きは時計回りが正で、回転の速さのz軸とは符号が逆
+   (静止テストで確認)なので、ずれの速さ = -(z軸の平均)。
+   2026-10-29: 走行中の短い停止(旋回の前後)でも測っていたが、エンコーダが止まっていても歯車の
+   あそびで車体がまだ回っており、ずれの速さを逆の符号で読んでいた(1周目の開始時に-0.26度/秒、
+   静止テストでは毎回プラス)。走行中に測るのはやめ、開始時に測った値で固定する。
 """
 
 import time
@@ -27,17 +30,11 @@ from py_trees.common import Status
 from .gyro_scale import ScaledGyro, ensure_scaled_gyro
 from .runtime import runtime
 
-# 止まっているとみなす条件: 左右の車輪のエンコーダが変わらず、z軸の回転の速さがこれ以下。
-# アームは見ない(ETラリー開始時のアームを上げている約2秒も測れるようにするため。アームは上下に
-# 動くだけで、旋回の軸(z軸)の平均はほぼ0になる想定。ログのsamplesと静止テストで確かめる)。
-STILL_MAX_ANGV_DEG_S = 1.0
-# 車輪が止まってから、この回数(読み取り)続いたら平均に入れ始める(止まった直後の揺れを外すため)。
-STILL_SETTLE_SAMPLES = 5
-# 読み取りの最小間隔(秒)。get_angle()は1tickに何度も呼ばれるので、平均に入れるのはこの間隔ごと。
-SAMPLE_INTERVAL_SEC = 0.015
-# ずれの速さの平均の重み。最初はただの平均、件数がこれを超えたら直近ほど重く(約この件数ぶんの平均)。
-# 0.02秒ごとなら500件で約10秒ぶん。走行中に温度でずれの速さが変わっても追いかけられるようにする。
-RATE_WINDOW_SAMPLES = 500
+# 平均に入れるz軸の回転の速さの上限(度/秒)。アームの動きによる大きな揺れの読み取りを外す。
+# アームは上下に動くだけで、旋回の軸(z軸)への影響は平均すれば小さい想定(ログのstd・rejectedで確かめる)。
+MEASURE_MAX_ANGV_DEG_S = 1.0
+# この件数に満たなければ、ずれの速さは0のまま(差し引かない)にする。
+MEASURE_MIN_SAMPLES = 30
 
 
 class EtRallyHeading(ScaledGyro):
@@ -49,13 +46,12 @@ class EtRallyHeading(ScaledGyro):
         self.float_heading = float_heading
         self.drift_compensation = drift_compensation
         # ずれの速さ(ハブの向きの単位、度/秒)と、これまでに差し引いた量(度)。
+        # ずれの速さはset_drift_rate()で決まるまで0。決まったら、差し替えた時点から差し引く。
         self.drift_rate = 0.0
         self.drift_total = 0.0
         self.rate_samples = 0
-        self.last_time = time.monotonic()
-        self.last_sample_time = 0.0
-        self.prev_counts = None
-        self.still_count = 0
+        self.installed_time = time.monotonic()
+        self.last_time = self.installed_time
 
     def _raw_heading(self):
         if self.float_heading and runtime.hub is not None:
@@ -66,27 +62,17 @@ class EtRallyHeading(ScaledGyro):
         return float(self._sensor.get_angle())
 
     def _update_drift(self, now):
-        # これまでのずれの速さで、前回からの経過時間ぶんの差し引きを足す。
+        # ずれの速さで、前回からの経過時間ぶんの差し引きを足す。
         self.drift_total += self.drift_rate * (now - self.last_time)
         self.last_time = now
-        if now - self.last_sample_time < SAMPLE_INTERVAL_SEC:
-            return
-        self.last_sample_time = now
-        try:
-            counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
-            angv_z = float(runtime.hub.hub_imu_get_angular_velocity()[2])
-        except Exception:
-            return
-        if counts != self.prev_counts or abs(angv_z) > STILL_MAX_ANGV_DEG_S:
-            self.prev_counts = counts
-            self.still_count = 0
-            return
-        self.still_count += 1
-        if self.still_count < STILL_SETTLE_SAMPLES:
-            return
-        self.rate_samples += 1
-        weight = max(1.0 / self.rate_samples, 1.0 / RATE_WINDOW_SAMPLES)
-        self.drift_rate += weight * (-angv_z - self.drift_rate)
+
+    def set_drift_rate(self, rate, samples):
+        """ずれの速さを決める。差し替えた時点から今までの分も、まとめて差し引く。"""
+        now = time.monotonic()
+        self.drift_rate = rate
+        self.rate_samples = samples
+        self.drift_total = rate * (now - self.installed_time)
+        self.last_time = now
 
     def get_angle(self):
         raw = self._raw_heading()
@@ -151,3 +137,65 @@ class RestoreEtRallyHeading(Behaviour):
             current.base._origin = current._origin
             runtime.gyro_sensor = current.base
         return Status.SUCCESS
+
+
+class EtRallyArmUpWithDriftMeasure(Behaviour):
+    """ETラリー開始時にアームを上げながら、その間のz軸の回転の速さを平均して、ずれの速さを決める。
+    車輪には走行中と同じくブレーキをかける(モーターの状態でジャイロのくせが変わるため)。
+    extra_secを指定すると、アームを上げ終えたあと、その秒数だけ止まったまま測り続ける。"""
+
+    def __init__(self, name, arm_up, extra_sec=0.0):
+        super().__init__(name)
+        self.arm_up = arm_up
+        self.extra_sec = extra_sec
+        self.started = False
+
+    def update(self):
+        now = time.monotonic()
+        if not self.started:
+            self.started = True
+            for motor in (runtime.right_motor, runtime.left_motor):
+                motor.set_power(0)
+                motor.set_brake(True)
+            self.start_time = now
+            self.arm_done_time = None
+            self.values = []
+            self.rejected = 0
+        self._sample()
+        if self.arm_done_time is None:
+            if self.arm_up.update() != Status.SUCCESS:
+                return Status.RUNNING
+            self.arm_done_time = now
+        if now - self.arm_done_time < self.extra_sec:
+            return Status.RUNNING
+        self._finish(now)
+        return Status.SUCCESS
+
+    def _sample(self):
+        if runtime.hub is None:
+            return
+        try:
+            angv_z = float(runtime.hub.hub_imu_get_angular_velocity()[2])
+        except Exception:
+            return
+        if abs(angv_z) > MEASURE_MAX_ANGV_DEG_S:
+            self.rejected += 1
+            return
+        self.values.append(angv_z)
+
+    def _finish(self, now):
+        n = len(self.values)
+        mean = sum(self.values) / n if n else 0.0
+        std = (sum((v - mean) ** 2 for v in self.values) / n) ** 0.5 if n else 0.0
+        heading = runtime.gyro_sensor
+        used = isinstance(heading, EtRallyHeading) and heading.drift_compensation and n >= MEASURE_MIN_SAMPLES
+        if used:
+            heading.set_drift_rate(-mean, n)
+        self.logger.info(
+            "drift measure: %.2fs (arm %.2fs) samples=%d rejected=%d angv_z_mean=%+.4f std=%.3f "
+            "-> drift_rate=%+.4f deg/s (%s)" % (
+                now - self.start_time, self.arm_done_time - self.start_time, n, self.rejected, mean, std,
+                -mean if used else 0.0, "used" if used else "not used"))
+
+    def terminate(self, new_status):
+        self.started = False
