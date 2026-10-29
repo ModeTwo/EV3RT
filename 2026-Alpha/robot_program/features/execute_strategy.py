@@ -44,6 +44,27 @@ TURN_FORWARD_MARGIN_MM = 30
 SHORT_MOVE_NO_LEAD_MM = 50.0
 
 
+def _read_angular_velocity():
+    """ハブのIMUの回転の速さ(x,y,z、度/秒)を読む。読めなければNone(2026-10-29、静止中のジャイロの
+    くせを短時間で測れるかの確認用。どの軸が旋回の軸かは、静止テストのログで確かめる)。"""
+    if runtime.hub is None:
+        return None
+    try:
+        values = runtime.hub.hub_imu_get_angular_velocity()
+        return tuple(float(value) for value in values)
+    except Exception:
+        return None
+
+
+def _read_cpu_temp_c():
+    """Raspberry PiのCPU温度(℃)。ハブのジャイロの温度ではなく、本体が温まったかの目安。読めなければNone。"""
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as file:
+            return int(file.read().strip()) / 1000.0
+    except Exception:
+        return None
+
+
 class EtRallyPause(Behaviour):
     """ブレーキをかけ、左右のエンコーダが止まり、かつmin_seconds以上経つまで待つ(2026-10-29、
     スタート直後の直進確認で、前進と後退の間・後退のあとに止まるため)。止まったときの向きと位置をログに残す。
@@ -78,6 +99,11 @@ class EtRallyPause(Behaviour):
             self.still_heading = None
             self.still_time = None
             self.next_log = None
+            self.angv_sum = None
+            self.angv_n = 0
+            self.angv_total_sum = None
+            self.angv_total_n = 0
+            self.angv_values = set()
             return Status.RUNNING
         self.stable = self.stable + 1 if counts == self.prev else 0
         self.prev = counts
@@ -87,6 +113,24 @@ class EtRallyPause(Behaviour):
             self.still_time = now
             if self.log_interval_sec:
                 self.next_log = now + self.log_interval_sec
+                angv = _read_angular_velocity()
+                self.logger.info("%s.angular velocity sample=%r cpu_temp=%s" % (
+                    self.__class__.__name__, angv, _read_cpu_temp_c()))
+        if self.next_log is not None:
+            # 静止中の回転の速さを毎ティック足し、ログの間隔ごとと、静止の始めからの平均を出す。
+            # 値が何種類出たか(angv_distinct)で、どのくらい細かく読めるかの目安にする。
+            angv = _read_angular_velocity()
+            if angv is not None:
+                if self.angv_sum is None:
+                    self.angv_sum = [0.0] * len(angv)
+                    self.angv_total_sum = [0.0] * len(angv)
+                for axis, value in enumerate(angv):
+                    self.angv_sum[axis] += value
+                    self.angv_total_sum[axis] += value
+                self.angv_n += 1
+                self.angv_total_n += 1
+                if len(self.angv_values) < 1000:
+                    self.angv_values.update(angv)
         if self.next_log is not None and now >= self.next_log:
             # 2026-10-29: ずれの速さとバッテリーの関係を見るため、電圧・電流も残す
             # (power_log.pyと同じガードで、hub未接続でも落ちないようにする)。
@@ -97,10 +141,22 @@ class EtRallyPause(Behaviour):
                     battery_ma = runtime.hub.get_battery_current()
                 except Exception:
                     battery_mv = battery_ma = -1
-            self.logger.info("%+06d %s.still %.0fs heading=%+.2f drift=%+.2f battery_mv=%d battery_ma=%d" % (
+            if self.angv_n > 0:
+                angv_text = " angv_mean=(%s) angv_total_mean=(%s) n=%d angv_distinct=%d" % (
+                    ",".join("%+.4f" % (value / self.angv_n) for value in self.angv_sum),
+                    ",".join("%+.4f" % (value / self.angv_total_n) for value in self.angv_total_sum),
+                    self.angv_n, len(self.angv_values))
+            else:
+                angv_text = " angv=none"
+            cpu_temp = _read_cpu_temp_c()
+            self.logger.info("%+06d %s.still %.0fs heading=%+.2f drift=%+.2f battery_mv=%d battery_ma=%d%s cpu_temp=%s" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, now - self.still_time,
-                heading, heading - self.still_heading, battery_mv, battery_ma))
+                heading, heading - self.still_heading, battery_mv, battery_ma, angv_text,
+                "none" if cpu_temp is None else "%.1f" % cpu_temp))
             self.next_log += self.log_interval_sec
+            if self.angv_sum is not None:
+                self.angv_sum = [0.0] * len(self.angv_sum)
+            self.angv_n = 0
         if elapsed < self.max_seconds and (elapsed < self.min_seconds or self.stable < self.STABLE_TICKS):
             return Status.RUNNING
         if self.still_heading is None:
