@@ -1356,6 +1356,13 @@ def _run_main(argv, startup_cleanup):
         help=('Instead of the route, stand still this many seconds and log the heading every 5 s, '
               'then end (to check gyro drift while stationary). Default (unset) = none.'),
     )
+    parser.add_argument(
+        '--rally-gyro-still-sweep',
+        choices=['on', 'off'],
+        default=None,
+        help=('With --rally-gyro-still-sec: on runs the still test in four states (arm up/down x '
+              'wheel brake on/off), each for --rally-gyro-still-sec seconds. Default (unset) = off.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1488,6 +1495,11 @@ def _run_main(argv, startup_cleanup):
         if not low <= value <= high:
             parser.error('%s must be between %g and %g' % (option, low, high))
         mission_config = dataclasses.replace(mission_config, **{field: value})
+    if args.rally_gyro_still_sweep is not None:
+        if args.rally_gyro_still_sec is None:
+            parser.error('--rally-gyro-still-sweep requires --rally-gyro-still-sec')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_gyro_still_sweep=(args.rally_gyro_still_sweep == 'on'))
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,

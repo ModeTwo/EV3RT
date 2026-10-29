@@ -132,6 +132,9 @@ class RaceConfig:
     et_rally_straight_pause_min_mm: Optional[float] = None
     # 2026-10-29: 経路を走らずに、この秒数だけ止まったまま向きをログに残して終える(ジャイロのずれの検証用)。既定None=しない。
     et_rally_gyro_still_sec: Optional[float] = None
+    # 2026-10-29: Trueなら静止テストを、アーム(上/下)×車輪のブレーキ(あり/なし)の4状態で、
+    # et_rally_gyro_still_secずつ順に行う。既定None=False。
+    et_rally_gyro_still_sweep: Optional[bool] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

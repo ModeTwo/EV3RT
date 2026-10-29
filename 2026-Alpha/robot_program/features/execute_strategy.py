@@ -17,6 +17,7 @@ from ..behaviours.et_rally_turn_lqi import EtRallyTurnLqi
 from ..behaviours.et_rally_turn_direction_test import EtRallySpinAroundDirectionTest
 from ..behaviours.gyro_drive import SpinAround
 from ..behaviours.conditions import IsDistanceEarned
+from ..behaviours.device_control import ArmDirection, ArmUpDownFull
 from ..runtime import runtime
 from ..et_rally_compensation import apply_caster_drag_compensation, apply_lateral_drift_compensation
 from ..et_rally_fallback import fallback_planner_steps, fallback_strategy
@@ -94,9 +95,11 @@ class EtRallyPause(Behaviour):
     STABLE_TICKS = 3
     MAX_SECONDS = 2.0
 
-    def __init__(self, name, min_seconds=0.5, log_interval_sec=None):
+    def __init__(self, name, min_seconds=0.5, log_interval_sec=None, brake=True):
         super().__init__(name)
         self.min_seconds = min_seconds
+        # 2026-10-29: Falseなら車輪にブレーキをかけない(ジャイロの静止判定を邪魔しているかの確認用)。
+        self.brake = brake
         # 長く止まるときは、車輪が止まらなくてもmin_secondsの1秒後には終える。
         self.max_seconds = max(self.MAX_SECONDS, min_seconds + 1.0)
         self.log_interval_sec = log_interval_sec
@@ -110,7 +113,7 @@ class EtRallyPause(Behaviour):
         if self.started is None:
             for motor in (runtime.right_motor, runtime.left_motor):
                 motor.set_power(0)
-                motor.set_brake(True)
+                motor.set_brake(self.brake)
             self.started = now
             self.prev = counts
             self.stable = 0
@@ -241,7 +244,7 @@ class DeferredStrategySequence(Sequence):
                  turn_adaptive_lag_compensation=None, turn_left_target_scale=None,
                  turn_phase1_scale=None, turn_pre_stop=None, turn_forward_compensation=None,
                  start_check_mm=None, straight_pause_sec=None, straight_pause_min_mm=None,
-                 gyro_still_sec=None):
+                 gyro_still_sec=None, gyro_still_sweep=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -265,6 +268,7 @@ class DeferredStrategySequence(Sequence):
             "straight_pause_sec": straight_pause_sec,
             "straight_pause_min_mm": straight_pause_min_mm,
             "gyro_still_sec": gyro_still_sec,
+            "gyro_still_sweep": gyro_still_sweep,
         }
         self._loaded = False
 
@@ -362,6 +366,7 @@ def build_execute_strategy(context, config, lap_number=None):
             straight_pause_sec=getattr(config, "et_rally_straight_pause_sec", None),
             straight_pause_min_mm=getattr(config, "et_rally_straight_pause_min_mm", None),
             gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
+            gyro_still_sweep=getattr(config, "et_rally_gyro_still_sweep", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -387,6 +392,7 @@ def build_execute_strategy(context, config, lap_number=None):
             straight_pause_sec=getattr(config, "et_rally_straight_pause_sec", None),
             straight_pause_min_mm=getattr(config, "et_rally_straight_pause_min_mm", None),
             gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
+            gyro_still_sweep=getattr(config, "et_rally_gyro_still_sweep", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -476,6 +482,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # 2026-10-29: 0より大きければ、経路を走らずに、この秒数だけ止まったまま
                         # 向きをログに残して終える(止まっているときのジャイロのずれの検証用)。
                         gyro_still_sec=0.0,
+                        # 2026-10-29: Trueなら静止テストを、アーム(上/下)と車輪のブレーキ(あり/なし)の
+                        # 4つの状態で、gyro_still_secずつ順に行う(ハブの静止判定を邪魔しているものを探す)。
+                        gyro_still_sweep=False,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -570,8 +579,23 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
 
     if gyro_still_sec and gyro_still_sec > 0:
         # 静止テストだけを行い、経路は走らない(スタートの確認もしない)。
-        return [EtRallyPause(name="et_rally gyro still", min_seconds=gyro_still_sec,
-                             log_interval_sec=5.0)]
+        if not gyro_still_sweep:
+            return [EtRallyPause(name="et_rally gyro still", min_seconds=gyro_still_sec,
+                                 log_interval_sec=5.0)]
+        # ETラリー工程の最初でアームは上がっているので、上→下の順に試す。アームを下げたあとは、
+        # 揺れが収まるまで3秒待ってから測る(その間はログを出さない)。
+        return [
+            EtRallyPause(name="et_rally gyro still arm_up brake", min_seconds=gyro_still_sec,
+                         log_interval_sec=5.0, brake=True),
+            EtRallyPause(name="et_rally gyro still arm_up float", min_seconds=gyro_still_sec,
+                         log_interval_sec=5.0, brake=False),
+            ArmUpDownFull(name="et_rally gyro still arm down", direction=ArmDirection.DOWN),
+            EtRallyPause(name="et_rally gyro still arm_down settle", min_seconds=3.0, brake=False),
+            EtRallyPause(name="et_rally gyro still arm_down float", min_seconds=gyro_still_sec,
+                         log_interval_sec=5.0, brake=False),
+            EtRallyPause(name="et_rally gyro still arm_down brake", min_seconds=gyro_still_sec,
+                         log_interval_sec=5.0, brake=True),
+        ]
 
     nodes = []
     if start_check_mm and start_check_mm > 0:
