@@ -167,6 +167,8 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
             self.rejected = 0
             self.settle_min = None
             self.settle_max = None
+            self.stationary_true = 0
+            self.stationary_n = 0
         if self.arm_done_time is None:
             if self.arm_up.update() != Status.SUCCESS:
                 return Status.RUNNING
@@ -179,6 +181,15 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
                 self.settle_min = angv_z if self.settle_min is None else min(self.settle_min, angv_z)
                 self.settle_max = angv_z if self.settle_max is None else max(self.settle_max, angv_z)
             return Status.RUNNING
+        # ハブが「止まっている」と判定しているか(ハブのプログラムを書き換えた版では、ブレーキ中も
+        # 判定が出てハブ自身がくせを測り直す。元の版では全モーター脱力のときだけ)。
+        if runtime.hub is not None:
+            try:
+                self.stationary_n += 1
+                if runtime.hub.hub_imu_is_stationary():
+                    self.stationary_true += 1
+            except Exception:
+                pass
         if angv_z is not None:
             if abs(angv_z) > MEASURE_MAX_ANGV_DEG_S:
                 self.rejected += 1
@@ -208,9 +219,9 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
         settle_range = (self.settle_max - self.settle_min) if self.settle_min is not None else -1.0
         self.logger.info(
             "drift measure: %.2fs (arm %.2fs, settle %.1fs range=%.2f, measure %.1fs) samples=%d rejected=%d "
-            "angv_z_mean=%+.4f std=%.3f -> drift_rate=%+.4f deg/s (%s)" % (
+            "angv_z_mean=%+.4f std=%.3f imu_stationary=%d/%d -> drift_rate=%+.4f deg/s (%s)" % (
                 now - self.start_time, self.arm_done_time - self.start_time, self.settle_sec, settle_range,
-                self.measure_sec, n, self.rejected, mean, std,
+                self.measure_sec, n, self.rejected, mean, std, self.stationary_true, self.stationary_n,
                 -mean if used else 0.0, "used" if used else "not used"))
 
     def terminate(self, new_status):

@@ -69,6 +69,15 @@ def build_et_rally_phase(context, config):
         # 窓口自体を無効化してジャイロ倍率補正を確実に無しにする。
         children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
     arm_up = ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP)
+    # 2026-10-29: ハブのプログラムを書き換えた版(ブレーキ中もハブがジャイロのくせを測り直す)用に、
+    # アームを上げ切って振動が収まってから、この秒数だけブレーキをかけて止まる。
+    hub_recal_sec = getattr(config, "et_rally_gyro_hub_recal_sec", None)
+    if hub_recal_sec and not (install_heading and drift_compensation):
+        settle_sec = getattr(config, "et_rally_gyro_drift_settle_sec", None)
+        arm_up = EtRallyArmUpWithDriftMeasure(
+            "et_rally arm up", arm_up,
+            settle_sec=1.0 if settle_sec is None else settle_sec,
+            measure_sec=hub_recal_sec)
     if install_heading and drift_compensation:
         # 2026-10-29: アームを上げ切って振動が収まってから、止まってジャイロのずれの速さを測る
         # (et_rally_heading.py)。既定は振動待ち1秒+測定2秒。

@@ -143,6 +143,9 @@ class RaceConfig:
     # 既定None=測定2秒・振動待ち1秒。
     et_rally_gyro_drift_extra_sec: Optional[float] = None
     et_rally_gyro_drift_settle_sec: Optional[float] = None
+    # 2026-10-29: ハブのプログラムを書き換えた版用。ETラリー開始時、アームを上げ切って振動待ちのあと、
+    # この秒数だけブレーキで止まり、ハブ自身にジャイロのくせを測り直させる。既定None=止まらない。
+    et_rally_gyro_hub_recal_sec: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、
