@@ -46,20 +46,28 @@ SHORT_MOVE_NO_LEAD_MM = 50.0
 
 class EtRallyPause(Behaviour):
     """ブレーキをかけ、左右のエンコーダが止まり、かつmin_seconds以上経つまで待つ(2026-10-29、
-    スタート直後の直進確認で、前進と後退の間・後退のあとに止まるため)。止まったときの向きと位置をログに残す。"""
+    スタート直後の直進確認で、前進と後退の間・後退のあとに止まるため)。止まったときの向きと位置をログに残す。
+
+    2026-10-29: ジャイロのずれの検証用に、車輪が止まった時点の向きと、待ち終わりの向きの差
+    (still_drift、止まっている間にジャイロの値がどれだけ動いたか)も記録する。
+    log_interval_secを指定すると、待っている間もその間隔で向きをログに残す。"""
 
     STABLE_TICKS = 3
     MAX_SECONDS = 2.0
 
-    def __init__(self, name, min_seconds=0.5):
+    def __init__(self, name, min_seconds=0.5, log_interval_sec=None):
         super().__init__(name)
         self.min_seconds = min_seconds
+        # 長く止まるときは、車輪が止まらなくてもmin_secondsの1秒後には終える。
+        self.max_seconds = max(self.MAX_SECONDS, min_seconds + 1.0)
+        self.log_interval_sec = log_interval_sec
         self.started = None
 
     def update(self) -> Status:
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
         now = time.monotonic()
         counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
+        heading = (-1) * runtime.course * runtime.gyro_sensor.get_angle()
         if self.started is None:
             for motor in (runtime.right_motor, runtime.left_motor):
                 motor.set_power(0)
@@ -67,15 +75,31 @@ class EtRallyPause(Behaviour):
             self.started = now
             self.prev = counts
             self.stable = 0
+            self.still_heading = None
+            self.still_time = None
+            self.next_log = None
             return Status.RUNNING
         self.stable = self.stable + 1 if counts == self.prev else 0
         self.prev = counts
         elapsed = now - self.started
-        if elapsed < self.MAX_SECONDS and (elapsed < self.min_seconds or self.stable < self.STABLE_TICKS):
+        if self.still_heading is None and self.stable >= self.STABLE_TICKS:
+            self.still_heading = heading
+            self.still_time = now
+            if self.log_interval_sec:
+                self.next_log = now + self.log_interval_sec
+        if self.next_log is not None and now >= self.next_log:
+            self.logger.info("%+06d %s.still %.0fs heading=%+.2f drift=%+.2f" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, now - self.still_time,
+                heading, heading - self.still_heading))
+            self.next_log += self.log_interval_sec
+        if elapsed < self.max_seconds and (elapsed < self.min_seconds or self.stable < self.STABLE_TICKS):
             return Status.RUNNING
-        self.logger.info("%+06d %s.paused %.2fs heading=%d loc=(%d,%d)" % (
-            runtime.plotter.get_distance(), self.__class__.__name__, elapsed,
-            (-1) * runtime.course * runtime.gyro_sensor.get_angle(),
+        if self.still_heading is None:
+            still_text = " still=none"
+        else:
+            still_text = " still=%.2fs still_drift=%+.2f" % (now - self.still_time, heading - self.still_heading)
+        self.logger.info("%+06d %s.paused %.2fs heading=%+.2f%s loc=(%d,%d)" % (
+            runtime.plotter.get_distance(), self.__class__.__name__, elapsed, heading, still_text,
             runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
         return Status.SUCCESS
 
@@ -110,7 +134,8 @@ class DeferredStrategySequence(Sequence):
                  turn_main_power=None, turn_lag_compensation_deg=None,
                  turn_adaptive_lag_compensation=None, turn_left_target_scale=None,
                  turn_phase1_scale=None, turn_pre_stop=None, turn_forward_compensation=None,
-                 start_check_mm=None):
+                 start_check_mm=None, straight_pause_sec=None, straight_pause_min_mm=None,
+                 gyro_still_sec=None, end_check_mm=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -130,6 +155,12 @@ class DeferredStrategySequence(Sequence):
         self._turn_pre_stop = turn_pre_stop
         self._turn_forward_compensation = turn_forward_compensation
         self._start_check_mm = start_check_mm
+        self._optional_kwargs = {
+            "straight_pause_sec": straight_pause_sec,
+            "straight_pause_min_mm": straight_pause_min_mm,
+            "gyro_still_sec": gyro_still_sec,
+            "end_check_mm": end_check_mm,
+        }
         self._loaded = False
 
     def _load_children(self):
@@ -163,6 +194,9 @@ class DeferredStrategySequence(Sequence):
             extra_kwargs["turn_forward_compensation"] = self._turn_forward_compensation
         if self._start_check_mm is not None:
             extra_kwargs["start_check_mm"] = self._start_check_mm
+        for key, value in self._optional_kwargs.items():
+            if value is not None:
+                extra_kwargs[key] = value
         try:
             nodes = steps_from_strategy(
                 self._loader(), initial_heading_deg=self._initial_heading_deg,
@@ -220,6 +254,10 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_pre_stop=getattr(config, "et_rally_turn_pre_stop", None),
             turn_forward_compensation=getattr(config, "et_rally_turn_forward_compensation", None),
             start_check_mm=getattr(config, "et_rally_start_check_mm", None),
+            straight_pause_sec=getattr(config, "et_rally_straight_pause_sec", None),
+            straight_pause_min_mm=getattr(config, "et_rally_straight_pause_min_mm", None),
+            gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
+            end_check_mm=getattr(config, "et_rally_end_check_mm", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -242,6 +280,10 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_pre_stop=getattr(config, "et_rally_turn_pre_stop", None),
             turn_forward_compensation=getattr(config, "et_rally_turn_forward_compensation", None),
             start_check_mm=getattr(config, "et_rally_start_check_mm", None),
+            straight_pause_sec=getattr(config, "et_rally_straight_pause_sec", None),
+            straight_pause_min_mm=getattr(config, "et_rally_straight_pause_min_mm", None),
+            gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
+            end_check_mm=getattr(config, "et_rally_end_check_mm", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -324,6 +366,16 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # 2026-10-29: 0より大きければ、経路の前に、スタートの向き(0度)へこの距離だけ
                         # 前進→停止→同じ距離だけ後退→停止する(置いた向きがまっすぐかを目で確かめる用)。
                         start_check_mm=0.0,
+                        # 2026-10-29: 0より大きければ、straight_pause_min_mm以上の直進の前後で、
+                        # この秒数だけ止まる(直進の始めと終わりの位置を測るため)。
+                        straight_pause_sec=0.0,
+                        straight_pause_min_mm=400.0,
+                        # 2026-10-29: 0より大きければ、経路の前に、この秒数だけ止まったまま
+                        # 向きをログに残す(止まっているときのジャイロのずれの検証用)。
+                        gyro_still_sec=0.0,
+                        # 2026-10-29: 0より大きければ、経路のあとに、最後の向きのままこの距離だけ
+                        # 前進→停止→後退→停止する(走り終わった時点の向きが合っているかを目で確かめる用)。
+                        end_check_mm=0.0,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -394,25 +446,34 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         initial_heading_deg=initial_heading_deg)
     steps = _merge_consecutive_moves(steps)
 
-    nodes = []
-    if start_check_mm and start_check_mm > 0:
+    def check_legs(prefix, heading, check_mm):
+        # 指定の向きへcheck_mmだけ前進→停止→同じ距離だけ後退→停止する。
+        legs = []
         for tag, reverse in (("forward", False), ("back", True)):
-            check_distance_mm = max(start_check_mm - move_stop_lead_mm, 1.0)
-            leg = Parallel(name="et_rally start check %s" % tag, policy=ParallelPolicy.SuccessOnOne())
+            check_distance_mm = max(check_mm - move_stop_lead_mm, 1.0)
+            leg = Parallel(name="et_rally %s %s" % (prefix, tag), policy=ParallelPolicy.SuccessOnOne())
             leg.add_children([
                 EtRallyRunByGyro(
-                    name="et_rally start check %s run" % tag, target=0.0, power=move_power,
+                    name="et_rally %s %s run" % (prefix, tag), target=heading, power=move_power,
                     pid_p=move_pid[0], pid_i=move_pid[1], pid_d=move_pid[2],
                     target_type=HeadingType.ABSOLUTE, distance_mm=check_distance_mm,
                     accel_mm=move_accel_mm, accel_min_power=move_accel_min_power,
                     decel_mm=move_decel_mm, decel_min_power=move_decel_min_power,
                     reverse=reverse,
                 ),
-                IsDistanceEarned(name="et_rally start check %s dist" % tag,
+                IsDistanceEarned(name="et_rally %s %s dist" % (prefix, tag),
                                  delta_dist=int(round(check_distance_mm))),
             ])
-            nodes.append(leg)
-            nodes.append(EtRallyPause(name="et_rally start check %s pause" % tag, min_seconds=1.0))
+            legs.append(leg)
+            legs.append(EtRallyPause(name="et_rally %s %s pause" % (prefix, tag), min_seconds=1.0))
+        return legs
+
+    nodes = []
+    if gyro_still_sec and gyro_still_sec > 0:
+        nodes.append(EtRallyPause(name="et_rally gyro still", min_seconds=gyro_still_sec,
+                                  log_interval_sec=5.0))
+    if start_check_mm and start_check_mm > 0:
+        nodes.extend(check_legs("start check", 0.0, start_check_mm))
     prev_lap = None
     for index, step in enumerate(steps):
         heading = step["target_heading_deg"]
@@ -429,6 +490,11 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 lap_tag="lap%s-start" % cur_lap))
             prev_lap = cur_lap
 
+        pause_this_move = (step["type"] == "move" and straight_pause_sec and straight_pause_sec > 0
+                           and step["distance_mm"] >= straight_pause_min_mm)
+        if pause_this_move:
+            nodes.append(EtRallyPause(name="et_rally pause before move%d%s" % (index, label_text),
+                                      min_seconds=straight_pause_sec))
         if step["type"] == "move":
             # 惰性で進む分を見込み、手前で直進を終える(短すぎる区間でも最低1mmは走る)。
             if step["distance_mm"] < SHORT_MOVE_NO_LEAD_MM:
@@ -470,6 +536,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 ]
             )
             nodes.append(leg)
+            if pause_this_move:
+                nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),
+                                          min_seconds=straight_pause_sec))
         else:
             turn_name = "et_rally turn%d%s" % (index, label_text)
             if turn_method == 'spin_pid':
@@ -557,6 +626,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         left_target_scale=turn_left_target_scale,
                     )
                 )
+    if end_check_mm and end_check_mm > 0:
+        nodes.append(EtRallyPause(name="et_rally end check settle", min_seconds=1.0))
+        nodes.extend(check_legs("end check", steps[-1]["target_heading_deg"], end_check_mm))
     return nodes
 
 

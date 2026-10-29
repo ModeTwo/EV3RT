@@ -1340,6 +1340,29 @@ def _run_main(argv, startup_cleanup):
               'drive the same distance back, stop, then start the route (to check the placement). '
               'Default (unset) = none.'),
     )
+    parser.add_argument(
+        '--rally-straight-pause-sec',
+        type=float,
+        default=None,
+        help=('Stop this many seconds before and after each straight of at least '
+              '--rally-straight-pause-min-mm (default 400). Default (unset) = no stop.'),
+    )
+    parser.add_argument('--rally-straight-pause-min-mm', type=float, default=None,
+                        help='Shortest straight that gets the stops of --rally-straight-pause-sec. Default 400.')
+    parser.add_argument(
+        '--rally-gyro-still-sec',
+        type=float,
+        default=None,
+        help=('Before the route, stand still this many seconds and log the heading every 5 s '
+              '(to check gyro drift while stationary). Default (unset) = none.'),
+    )
+    parser.add_argument(
+        '--rally-end-check-mm',
+        type=float,
+        default=None,
+        help=('After the route, drive this many mm ahead at the final heading, stop, drive back, stop '
+              '(to check the heading at the end). Default (unset) = none.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1460,6 +1483,19 @@ def _run_main(argv, startup_cleanup):
         if not 50.0 <= args.rally_start_check_mm <= 2000.0:
             parser.error('--rally-start-check-mm must be between 50 and 2000')
         mission_config = dataclasses.replace(mission_config, et_rally_start_check_mm=args.rally_start_check_mm)
+    for option, value, low, high, field in (
+            ('--rally-straight-pause-sec', args.rally_straight_pause_sec, 0.5, 30.0, 'et_rally_straight_pause_sec'),
+            ('--rally-straight-pause-min-mm', args.rally_straight_pause_min_mm, 1.0, 3000.0,
+             'et_rally_straight_pause_min_mm'),
+            ('--rally-gyro-still-sec', args.rally_gyro_still_sec, 1.0, 600.0, 'et_rally_gyro_still_sec'),
+            ('--rally-end-check-mm', args.rally_end_check_mm, 50.0, 2000.0, 'et_rally_end_check_mm')):
+        if value is None:
+            continue
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error(option + ' requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not low <= value <= high:
+            parser.error('%s must be between %g and %g' % (option, low, high))
+        mission_config = dataclasses.replace(mission_config, **{field: value})
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,
