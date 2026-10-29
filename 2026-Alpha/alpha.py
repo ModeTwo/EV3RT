@@ -1529,8 +1529,8 @@ def _run_main(argv, startup_cleanup):
         mission_config = dataclasses.replace(
             mission_config, et_rally_gyro_drift_extra_sec=args.rally_gyro_drift_extra_sec)
     if args.rally_gyro_drift_settle_sec is not None:
-        if not 0.0 <= args.rally_gyro_drift_settle_sec <= 5.0:
-            parser.error('--rally-gyro-drift-settle-sec must be between 0 and 5')
+        if not 0.0 <= args.rally_gyro_drift_settle_sec <= 30.0:
+            parser.error('--rally-gyro-drift-settle-sec must be between 0 and 30')
         mission_config = dataclasses.replace(
             mission_config, et_rally_gyro_drift_settle_sec=args.rally_gyro_drift_settle_sec)
     if args.rally_gyro_still_sweep is not None:
