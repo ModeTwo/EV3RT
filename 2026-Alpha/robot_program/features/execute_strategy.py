@@ -367,8 +367,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # この秒数だけ止まる(直進の始めと終わりの位置を測るため)。
                         straight_pause_sec=0.0,
                         straight_pause_min_mm=400.0,
-                        # 2026-10-29: 0より大きければ、経路の前に、この秒数だけ止まったまま
-                        # 向きをログに残す(止まっているときのジャイロのずれの検証用)。
+                        # 2026-10-29: 0より大きければ、経路を走らずに、この秒数だけ止まったまま
+                        # 向きをログに残して終える(止まっているときのジャイロのずれの検証用)。
                         gyro_still_sec=0.0,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
@@ -462,10 +462,12 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             legs.append(EtRallyPause(name="et_rally %s %s pause" % (prefix, tag), min_seconds=1.0))
         return legs
 
-    nodes = []
     if gyro_still_sec and gyro_still_sec > 0:
-        nodes.append(EtRallyPause(name="et_rally gyro still", min_seconds=gyro_still_sec,
-                                  log_interval_sec=5.0))
+        # 静止テストだけを行い、経路は走らない(スタートの確認もしない)。
+        return [EtRallyPause(name="et_rally gyro still", min_seconds=gyro_still_sec,
+                             log_interval_sec=5.0)]
+
+    nodes = []
     if start_check_mm and start_check_mm > 0:
         nodes.extend(check_legs("start check", 0.0, start_check_mm))
     prev_lap = None

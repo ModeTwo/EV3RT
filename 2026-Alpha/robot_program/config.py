@@ -130,7 +130,7 @@ class RaceConfig:
     # 2026-10-29: 長い直進(et_rally_straight_pause_min_mm以上、既定400mm)の前後で、この秒数だけ止まる。既定None=止まらない。
     et_rally_straight_pause_sec: Optional[float] = None
     et_rally_straight_pause_min_mm: Optional[float] = None
-    # 2026-10-29: 経路の前に、この秒数だけ止まったまま向きをログに残す(ジャイロのずれの検証用)。既定None=しない。
+    # 2026-10-29: 経路を走らずに、この秒数だけ止まったまま向きをログに残して終える(ジャイロのずれの検証用)。既定None=しない。
     et_rally_gyro_still_sec: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に

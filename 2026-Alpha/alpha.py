@@ -1353,8 +1353,8 @@ def _run_main(argv, startup_cleanup):
         '--rally-gyro-still-sec',
         type=float,
         default=None,
-        help=('Before the route, stand still this many seconds and log the heading every 5 s '
-              '(to check gyro drift while stationary). Default (unset) = none.'),
+        help=('Instead of the route, stand still this many seconds and log the heading every 5 s, '
+              'then end (to check gyro drift while stationary). Default (unset) = none.'),
     )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
