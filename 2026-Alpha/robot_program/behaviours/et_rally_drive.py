@@ -397,7 +397,7 @@ class EtRallyRunByGyro(Behaviour):
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType,
                  distance_mm: float = 0.0, decel_mm: float = 0.0, decel_min_power: int = 40,
                  accel_mm: float = 0.0, accel_min_power: int = 40,
-                 turn_forward_compensation: bool = False) -> None:
+                 turn_forward_compensation: bool = False, reverse: bool = False) -> None:
         super(EtRallyRunByGyro, self).__init__(name)
         self.target = target
         self.target_type = target_type
@@ -427,6 +427,10 @@ class EtRallyRunByGyro(Behaviour):
         # 短くした分はこのノードで終える)。Falseなら従来どおり(終了はIsDistanceEarned任せ)。
         self.turn_forward_compensation = turn_forward_compensation
         self.base_distance_mm = distance_mm
+        # 2026-10-29: Trueなら後退する(スタート直後の直進確認用)。向きの補正(turn)は
+        # その場で回る成分なので、進む向きに関係なく同じ符号のまま使える。
+        # plotterの距離は絶対値で積算されるため、距離の判定もそのまま使える。
+        self.reverse = reverse
         self.last_log_time = None
         self.running = False
 
@@ -529,8 +533,9 @@ class EtRallyRunByGyro(Behaviour):
         # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める
         # (PID自体の上限は巡航パワーで作ってあるため)。
         turn = max(-power_now, min(power_now, turn))
-        right_power = power_now + runtime.course * turn
-        left_power = power_now - runtime.course * turn
+        base_power = -power_now if self.reverse else power_now
+        right_power = base_power + runtime.course * turn
+        left_power = base_power - runtime.course * turn
         runtime.right_motor.set_power(right_power)
         runtime.left_motor.set_power(left_power)
         log_power_state(self.__class__.__name__, right_power, left_power)

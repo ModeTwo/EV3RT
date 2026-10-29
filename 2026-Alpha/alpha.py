@@ -1332,6 +1332,14 @@ def _run_main(argv, startup_cleanup):
         help=('one_shot only: on shortens each straight by how far the preceding turn moved the '
               'robot forward (wheel encoders). Default (unset) = off.'),
     )
+    parser.add_argument(
+        '--rally-start-check-mm',
+        type=float,
+        default=None,
+        help=('Before the route, drive this many mm straight ahead at the start heading, stop, '
+              'drive the same distance back, stop, then start the route (to check the placement). '
+              'Default (unset) = none.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1446,6 +1454,12 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-forward-comp requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_forward_compensation=(args.rally_turn_forward_comp == 'on'))
+    if args.rally_start_check_mm is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-start-check-mm requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 50.0 <= args.rally_start_check_mm <= 2000.0:
+            parser.error('--rally-start-check-mm must be between 50 and 2000')
+        mission_config = dataclasses.replace(mission_config, et_rally_start_check_mm=args.rally_start_check_mm)
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,
