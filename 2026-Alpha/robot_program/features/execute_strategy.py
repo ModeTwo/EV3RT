@@ -75,6 +75,30 @@ def _read_imu_stationary_and_heading():
     return stationary, heading
 
 
+def _read_acceleration():
+    """ハブのIMUの加速度(x,y,z、mm/s^2)。読めなければNone(静止判定のしきい値と比べる揺れの大きさの確認用)。"""
+    if runtime.hub is None:
+        return None
+    try:
+        return tuple(float(value) for value in runtime.hub.hub_imu_get_acceleration())
+    except Exception:
+        return None
+
+
+def _update_range(ranges, values):
+    """軸ごとの[最小, 最大]を更新する。"""
+    if ranges is None:
+        return [[value, value] for value in values]
+    for axis, value in enumerate(values):
+        ranges[axis][0] = min(ranges[axis][0], value)
+        ranges[axis][1] = max(ranges[axis][1], value)
+    return ranges
+
+
+def _format_range(ranges):
+    return "none" if ranges is None else "(%s)" % ",".join("%.3f" % (high - low) for low, high in ranges)
+
+
 def _read_cpu_temp_c():
     """Raspberry PiのCPU温度(℃)。ハブのジャイロの温度ではなく、本体が温まったかの目安。読めなければNone。"""
     try:
@@ -128,6 +152,8 @@ class EtRallyPause(Behaviour):
             self.stationary_true = 0
             self.stationary_n = 0
             self.raw_heading_start = None
+            self.angv_range = None
+            self.accel_range = None
             return Status.RUNNING
         self.stable = self.stable + 1 if counts == self.prev else 0
         self.prev = counts
@@ -155,6 +181,10 @@ class EtRallyPause(Behaviour):
                 self.angv_total_n += 1
                 if len(self.angv_values) < 1000:
                     self.angv_values.update(angv)
+                self.angv_range = _update_range(self.angv_range, angv)
+            accel = _read_acceleration()
+            if accel is not None:
+                self.accel_range = _update_range(self.accel_range, accel)
             stationary, raw_heading = _read_imu_stationary_and_heading()
             if stationary is not None:
                 self.stationary_n += 1
@@ -195,6 +225,13 @@ class EtRallyPause(Behaviour):
                 runtime.plotter.get_distance(), self.__class__.__name__, now - self.still_time,
                 heading, heading - self.still_heading, battery_mv, battery_ma, angv_text,
                 stationary_text, raw_text, "none" if cpu_temp is None else "%.1f" % cpu_temp))
+            # 2026-10-29: この間隔の、回転の速さ(度/秒)と加速度(mm/s^2)の最大と最小の差。ハブの静止判定の
+            # しきい値(hub_imu.cの既定値: 回転2.0度/秒、加速度2500mm/s^2)を揺れが超えているかの目安。
+            self.logger.info("%+06d %s.still %.0fs angv_range=%s accel_range=%s" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, now - self.still_time,
+                _format_range(self.angv_range), _format_range(self.accel_range)))
+            self.angv_range = None
+            self.accel_range = None
             self.stationary_true = 0
             self.stationary_n = 0
             self.next_log += self.log_interval_sec
