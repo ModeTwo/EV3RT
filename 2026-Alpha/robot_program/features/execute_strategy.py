@@ -56,6 +56,24 @@ def _read_angular_velocity():
         return None
 
 
+def _read_imu_stationary_and_heading():
+    """ハブのIMUの「止まっている」判定と、四捨五入前の向き(度)を読む。読めなければ(None, None)。
+    2026-10-29: ハブ側(Pybricks由来のpbio)は、止まっていると判定している間だけジャイロのくせを
+    測り直す。静止テストでずれが消えないのは、その判定が出ていないからかを確かめるため。
+    get_angle()は向きを四捨五入して整数にしているので、細かい値はhub_imu_get_heading()から読む。"""
+    if runtime.hub is None:
+        return None, None
+    try:
+        stationary = bool(runtime.hub.hub_imu_is_stationary())
+    except Exception:
+        stationary = None
+    try:
+        heading = float(runtime.hub.hub_imu_get_heading())
+    except Exception:
+        heading = None
+    return stationary, heading
+
+
 def _read_cpu_temp_c():
     """Raspberry PiのCPU温度(℃)。ハブのジャイロの温度ではなく、本体が温まったかの目安。読めなければNone。"""
     try:
@@ -104,6 +122,9 @@ class EtRallyPause(Behaviour):
             self.angv_total_sum = None
             self.angv_total_n = 0
             self.angv_values = set()
+            self.stationary_true = 0
+            self.stationary_n = 0
+            self.raw_heading_start = None
             return Status.RUNNING
         self.stable = self.stable + 1 if counts == self.prev else 0
         self.prev = counts
@@ -131,6 +152,13 @@ class EtRallyPause(Behaviour):
                 self.angv_total_n += 1
                 if len(self.angv_values) < 1000:
                     self.angv_values.update(angv)
+            stationary, raw_heading = _read_imu_stationary_and_heading()
+            if stationary is not None:
+                self.stationary_n += 1
+                if stationary:
+                    self.stationary_true += 1
+            if self.raw_heading_start is None and raw_heading is not None:
+                self.raw_heading_start = raw_heading
         if self.next_log is not None and now >= self.next_log:
             # 2026-10-29: ずれの速さとバッテリーの関係を見るため、電圧・電流も残す
             # (power_log.pyと同じガードで、hub未接続でも落ちないようにする)。
@@ -148,11 +176,24 @@ class EtRallyPause(Behaviour):
                     self.angv_n, len(self.angv_values))
             else:
                 angv_text = " angv=none"
+            # imu_stationary: この間隔のうち、ハブが「止まっている」と判定していた割合。
+            # raw_heading: 四捨五入前の向き(ハブの値そのまま、補正係数なし)と、静止の始めからの変化。
+            if self.stationary_n > 0:
+                stationary_text = " imu_stationary=%d/%d" % (self.stationary_true, self.stationary_n)
+            else:
+                stationary_text = " imu_stationary=none"
+            _, raw_heading = _read_imu_stationary_and_heading()
+            if raw_heading is not None and self.raw_heading_start is not None:
+                raw_text = " raw_heading=%+.3f raw_drift=%+.3f" % (raw_heading, raw_heading - self.raw_heading_start)
+            else:
+                raw_text = " raw_heading=none"
             cpu_temp = _read_cpu_temp_c()
-            self.logger.info("%+06d %s.still %.0fs heading=%+.2f drift=%+.2f battery_mv=%d battery_ma=%d%s cpu_temp=%s" % (
+            self.logger.info("%+06d %s.still %.0fs heading=%+.2f drift=%+.2f battery_mv=%d battery_ma=%d%s%s%s cpu_temp=%s" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, now - self.still_time,
                 heading, heading - self.still_heading, battery_mv, battery_ma, angv_text,
-                "none" if cpu_temp is None else "%.1f" % cpu_temp))
+                stationary_text, raw_text, "none" if cpu_temp is None else "%.1f" % cpu_temp))
+            self.stationary_true = 0
+            self.stationary_n = 0
             self.next_log += self.log_interval_sec
             if self.angv_sum is not None:
                 self.angv_sum = [0.0] * len(self.angv_sum)
