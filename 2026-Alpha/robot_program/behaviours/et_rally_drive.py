@@ -68,6 +68,26 @@ def forward_mm_since(start_r, start_l):
     return math.pi * runtime.plotter.tire_diameter * delta / 2.0 / 360.0
 
 
+# 2026-10-29: 旋回中に車体が前へ出た量(mm)を、次の直進へ渡すための受け渡し場所。
+# one_shot旋回は最後に片方の車輪だけが回るため、車体の中心が次に走る向きへ数mm出る
+# (周回コースのログで-1〜+10mm)。コースの形によっては周回ごとに同じ向きへ積み重なる
+# (2026-10-28、ゴール向きに約7mm/周)。EtRallyRunByGyro(turn_forward_compensation=True)が
+# 直進の開始時に受け取り、その分だけ短く走る。
+_pending_turn_forward_mm = None
+
+
+def set_turn_forward_mm(value):
+    global _pending_turn_forward_mm
+    _pending_turn_forward_mm = value
+
+
+def take_turn_forward_mm():
+    """渡された量を受け取り、受け渡し場所を空にする(次の直進で二重に引かないため)。"""
+    global _pending_turn_forward_mm
+    value, _pending_turn_forward_mm = _pending_turn_forward_mm, None
+    return value
+
+
 class EtRallySpinAroundByEncoder(Behaviour):
     """左右のタイヤの回転量(エンコーダ)を揃えて回すことで、「その場旋回」であること
     そのものを幾何学的に保証する旋回ノード。SpinAround(上記)の代替。
@@ -376,7 +396,8 @@ class EtRallyRunByGyro(Behaviour):
     def __init__(self, name: str, target: int, power: int,
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType,
                  distance_mm: float = 0.0, decel_mm: float = 0.0, decel_min_power: int = 40,
-                 accel_mm: float = 0.0, accel_min_power: int = 40) -> None:
+                 accel_mm: float = 0.0, accel_min_power: int = 40,
+                 turn_forward_compensation: bool = False) -> None:
         super(EtRallyRunByGyro, self).__init__(name)
         self.target = target
         self.target_type = target_type
@@ -392,13 +413,20 @@ class EtRallyRunByGyro(Behaviour):
         # decel_mm=0にして巡航のまま走らせる。
         self.distance_mm = distance_mm
         self.decel_mm = min(decel_mm, distance_mm * 0.6) if distance_mm > 0 else 0.0
+        self.decel_mm_setting = decel_mm
         self.decel_min_power = min(decel_min_power, power)
         # 2026-09(会話にもとづく): 開始直後の急発進を避けるための、減速と対になる
         # 加速区間。区間全体をゆっくり加減速させるのではなく、あくまで開始直後・
         # 終了直前の「短い」区間だけで済ませる想定(accel_mm/decel_mmを小さく保つ)。
         # accel_mm=0なら従来通り、開始直後から巡航パワーで走る(無効化)。
         self.accel_mm = min(accel_mm, distance_mm * 0.6) if distance_mm > 0 else 0.0
+        self.accel_mm_setting = accel_mm
         self.accel_min_power = min(accel_min_power, power)
+        # 2026-10-29: Trueなら、直前の旋回で前へ出た量(take_turn_forward_mm)だけ短く走り、
+        # 自分で距離に達したらSUCCESSを返す(IsDistanceEarnedは元の距離のままなので、
+        # 短くした分はこのノードで終える)。Falseなら従来どおり(終了はIsDistanceEarned任せ)。
+        self.turn_forward_compensation = turn_forward_compensation
+        self.base_distance_mm = distance_mm
         self.last_log_time = None
         self.running = False
 
@@ -427,6 +455,14 @@ class EtRallyRunByGyro(Behaviour):
                 self.target_heading = current_heading + self.target
             else:
                 self.target_heading = self.target
+            if self.turn_forward_compensation:
+                turn_forward_mm = take_turn_forward_mm() or 0.0
+                self.distance_mm = max(self.base_distance_mm - turn_forward_mm, 1.0)
+                self.decel_mm = min(self.decel_mm_setting, self.distance_mm * 0.6)
+                self.accel_mm = min(self.accel_mm_setting, self.distance_mm * 0.6)
+                self.logger.info("%+06d %s.turn forward compensation: turn_fwd_mm=%+.1f distance %.1f -> %.1f" % (
+                    runtime.plotter.get_distance(), self.__class__.__name__, turn_forward_mm,
+                    self.base_distance_mm, self.distance_mm))
             # 算出した旋回量が直進パワーを超えて暴走しないよう、output_limitsでしっかりキャップをかける
             self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
             self.logger.info("%+06d %s.gyro run started toward heading=%d target_dist=%d loc=(%d,%d)" % (
@@ -498,5 +534,7 @@ class EtRallyRunByGyro(Behaviour):
         runtime.right_motor.set_power(right_power)
         runtime.left_motor.set_power(left_power)
         log_power_state(self.__class__.__name__, right_power, left_power)
+        if self.turn_forward_compensation and self.summarized:
+            return Status.SUCCESS
         return Status.RUNNING
 

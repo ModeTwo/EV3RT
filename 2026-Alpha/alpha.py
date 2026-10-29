@@ -1325,6 +1325,13 @@ def _run_main(argv, startup_cleanup):
         help=('one_shot only: on waits (brake) until both wheel encoders stop before phase1, '
               'so a turn right after a straight starts from rest. Default (unset) = off.'),
     )
+    parser.add_argument(
+        '--rally-turn-forward-comp',
+        choices=['on', 'off'],
+        default=None,
+        help=('one_shot only: on shortens each straight by how far the preceding turn moved the '
+              'robot forward (wheel encoders). Default (unset) = off.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1434,6 +1441,11 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-pre-stop requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_pre_stop=(args.rally_turn_pre_stop == 'on'))
+    if args.rally_turn_forward_comp is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-forward-comp requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_forward_compensation=(args.rally_turn_forward_comp == 'on'))
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,

@@ -123,6 +123,8 @@ class RaceConfig:
     et_rally_turn_phase1_scale: Optional[tuple] = None
     # 2026-10-28: one_shotで、旋回の前に車体が止まるまで待つ。既定None=False(待たない)。
     et_rally_turn_pre_stop: Optional[bool] = None
+    # 2026-10-29: one_shot旋回で車体が前へ出た量を、次の直進から差し引く。既定None=False。
+    et_rally_turn_forward_compensation: Optional[bool] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

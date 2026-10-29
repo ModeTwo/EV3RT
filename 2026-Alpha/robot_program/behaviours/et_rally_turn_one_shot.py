@@ -40,7 +40,7 @@ from ..gyro_scale import ensure_scaled_gyro
 from ..power_log import log_power_state
 from ..runtime import runtime
 from ..types import HeadingType
-from .et_rally_drive import forward_mm_since
+from .et_rally_drive import forward_mm_since, set_turn_forward_mm
 
 # 2026-10-25(再較正): FLOOR_POWER=40は、tick数を10→40まで増やしても到達角度が
 # 2〜3度のまま変わらない(失速する)不具合が、FixedTickPulse較正(et_rally_turn_calibration.py)
@@ -362,10 +362,13 @@ class EtRallyTurnOneShot(Behaviour):
                 self._start_pulse(current_heading)
                 return "running"
             if abs(error) < self.fine_tolerance_deg or self.pulse_attempt >= self.max_pulse_attempts:
+                turn_forward_mm = forward_mm_since(self.start_r, self.start_l)
+                # 2026-10-29: 次の直進が(オプション有効時に)この分だけ短く走れるよう渡す。
+                set_turn_forward_mm(turn_forward_mm)
                 self.logger.info(
                     "%+06d %s.phase2 done attempts=%d error=%+.2f fwd_mm=%+.1f loc=(%d,%d)" % (
                         runtime.plotter.get_distance(), self.__class__.__name__,
-                        self.pulse_attempt, error, forward_mm_since(self.start_r, self.start_l),
+                        self.pulse_attempt, error, turn_forward_mm,
                         runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
                 return "done"
             # 1回で収まらなかった場合、残差を測り直してもう1回だけ試す。
