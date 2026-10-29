@@ -12,6 +12,7 @@ from ..behaviours.motor_control import StopNow
 from ..features.receive_strategy import build_receive_strategy
 from .. import gyro_scale
 from ..gyro_scale import EnableGyroScale
+from ..et_rally_heading import InstallEtRallyHeading, RestoreEtRallyHeading
 from ..runtime import runtime
 
 
@@ -48,12 +49,18 @@ def build_et_rally_phase(context, config):
     # DD-19ベースライン計測用: Falseならジャイロ倍率補正・タイヤ径較正(DD-17)を適用しない。
     gyro_tire_calibration = getattr(config, "et_rally_gyro_tire_calibration_enabled", True)
     children = []
+    # 2026-10-29: 四捨五入前の向き・止まっている間のずれの差し引き(robot_program/et_rally_heading.py)。
+    float_heading = bool(getattr(config, "et_rally_gyro_float_heading", None))
+    drift_compensation = bool(getattr(config, "et_rally_gyro_drift_compensation", None))
+    install_heading = gyro_tire_calibration and (float_heading or drift_compensation)
     if gyro_tire_calibration:
         children.extend([
             # 通しの実行ではラップゲート後に有効済み(何もしない)。ETラリーだけ単独で走らせる場合の保険。
             EnableGyroScale("et_rally gyro scale"),
             SetTireDiameter("et_rally tire diameter", ET_RALLY_TIRE_DIAMETER),
         ])
+    if install_heading:
+        children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation))
     else:
         # TIRE_DIAMETER(57.33)自体が既に2段階較正済みの値のため、「補正なし」の
         # ベースラインでは、較正前の最初の想定値(55.0)を明示的に使う。
@@ -75,6 +82,8 @@ def build_et_rally_phase(context, config):
     # calibration有効時はET_RALLY_TIRE_DIAMETERから、無効時はUNCALIBRATED_TIRE_DIAMETERから、
     # いずれの場合も共通デフォルト(TIRE_DIAMETER)へ戻す。
     children.append(SetTireDiameter("et_rally tire diameter restore", TIRE_DIAMETER))
+    if install_heading:
+        children.append(RestoreEtRallyHeading("et_rally heading restore"))
     if not gyro_tire_calibration:
         # 後続の工程(同一プロセス内の別ミッション等)に影響させないよう元に戻す。
         children.append(SetGyroScaleDisabled("et_rally gyro scale re-enabled", False))

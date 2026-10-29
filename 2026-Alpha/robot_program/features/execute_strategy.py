@@ -310,6 +310,10 @@ class LogLapBoundary(Behaviour):
             runtime.plotter.get_distance(), self.lap_tag,
             runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(),
             runtime.plotter.get_degree()))
+        # 2026-10-29: ETラリー用の向きの窓口を使っているときは、ずれの速さと差し引いた量も残す。
+        summary = getattr(runtime.gyro_sensor, "summary", None)
+        if summary is not None:
+            self.logger.info("LAP_BOUNDARY %s heading %s" % (self.lap_tag, summary()))
         return Status.SUCCESS
 
 
