@@ -36,6 +36,11 @@ DEFAULT_PLAN_PATH = Path(__file__).resolve().parents[1] / "tests" / "plan_seed93
 _LAP_LABEL_RE = re.compile(r"^lap(\d+)")
 # 2026-10-29: turn_forward_compensation有効時の、IsDistanceEarned側の余裕(mm)。
 TURN_FORWARD_MARGIN_MM = 30
+# 2026-10-29: これより短い直進は、move_stop_lead_mm手前で終えずに計画どおりの距離を走る。
+# 手前で終える量(16mm)は巡航(約260mm/s)からの惰性に合わせた値で、短い直進は速度が
+# 出ず惰性もほとんどない。以前は最低1mmまで削っていたため、ゴール手前の20mmの直進が
+# 4mm(差し引き有効時は1mm)しか走らず、その分ゴールでスタート側に寄っていた。
+SHORT_MOVE_NO_LEAD_MM = 50.0
 
 
 class LogLapBoundary(Behaviour):
@@ -359,7 +364,10 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
 
         if step["type"] == "move":
             # 惰性で進む分を見込み、手前で直進を終える(短すぎる区間でも最低1mmは走る)。
-            run_distance_mm = max(step["distance_mm"] - move_stop_lead_mm, 1.0)
+            if step["distance_mm"] < SHORT_MOVE_NO_LEAD_MM:
+                run_distance_mm = step["distance_mm"]
+            else:
+                run_distance_mm = max(step["distance_mm"] - move_stop_lead_mm, 1.0)
             distance_mm = int(round(run_distance_mm))
             # DD-19ベースライン: spin_pid指定時は直進PIDも、DD-14の調整値(4.0,0.6,0.06)ではなく
             # sample.pyのRunByGyroと同じ値(1.1,0.1,0.03)に揃える。

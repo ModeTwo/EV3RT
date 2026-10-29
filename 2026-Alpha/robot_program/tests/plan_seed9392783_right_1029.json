@@ -36,8 +36,8 @@
   },
   "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution: negated from the planner's raw CCW-positive, already-geometrically-mirrored angle, to compensate for file-mode skipping shared_communication/heading_frame.py's course normalization (received-SEQ execution gets this automatically). For course=right the net transform is gyro_target = -planner_angle; for course=left it is the identity. GOAL_FINAL_TURN=True (2026-10-24): includes a final turn-in-place at the goal to face GOAL_HEADING_DEG=90deg (world-frame +y, project convention = north).",
   "total_distance_mm": 8424.6,
-  "move_count": 31,
-  "turn_count": 30,
+  "move_count": 28,
+  "turn_count": 27,
   "steps": [
     {
       "type": "turn",
@@ -107,24 +107,13 @@
     },
     {
       "type": "turn",
-      "target_heading_deg": -129.32,
+      "target_heading_deg": -129.4,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -129.32,
-      "distance_mm": 525.8,
-      "label": null
-    },
-    {
-      "type": "turn",
-      "target_heading_deg": -132.27,
-      "label": null
-    },
-    {
-      "type": "move",
-      "target_heading_deg": -132.27,
-      "distance_mm": 14.9,
+      "target_heading_deg": -129.4,
+      "distance_mm": 540.7,
       "label": "lap1-yellow-entry"
     },
     {
@@ -212,24 +201,13 @@
     },
     {
       "type": "turn",
-      "target_heading_deg": -129.32,
+      "target_heading_deg": -129.4,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -129.32,
-      "distance_mm": 525.8,
-      "label": null
-    },
-    {
-      "type": "turn",
-      "target_heading_deg": -132.27,
-      "label": null
-    },
-    {
-      "type": "move",
-      "target_heading_deg": -132.27,
-      "distance_mm": 14.9,
+      "target_heading_deg": -129.4,
+      "distance_mm": 540.7,
       "label": "lap2-yellow-entry"
     },
     {
@@ -317,24 +295,13 @@
     },
     {
       "type": "turn",
-      "target_heading_deg": -129.32,
+      "target_heading_deg": -129.4,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -129.32,
-      "distance_mm": 525.8,
-      "label": null
-    },
-    {
-      "type": "turn",
-      "target_heading_deg": -132.27,
-      "label": null
-    },
-    {
-      "type": "move",
-      "target_heading_deg": -132.27,
-      "distance_mm": 14.9,
+      "target_heading_deg": -129.4,
+      "distance_mm": 540.7,
       "label": "lap3-yellow-entry"
     },
     {
@@ -375,5 +342,6 @@
       "target_heading_deg": -90.0,
       "label": "goal"
     }
-  ]
+  ],
+  "note_1029": "黄ゲート手前の中継点(62.6,89.96)を取り除き、(95.92,49.28)から黄ゲート入口まで1本の直進にした(元は526mm+15mm、間に約3度の旋回)。黄のT字パーツとの車体クリアランスは3.4cm→3.1cm(計画上)。"
 }
