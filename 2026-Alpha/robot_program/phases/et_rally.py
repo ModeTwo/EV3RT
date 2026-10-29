@@ -59,8 +59,6 @@ def build_et_rally_phase(context, config):
             EnableGyroScale("et_rally gyro scale"),
             SetTireDiameter("et_rally tire diameter", ET_RALLY_TIRE_DIAMETER),
         ])
-    if install_heading:
-        children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation))
     else:
         # TIRE_DIAMETER(57.33)自体が既に2段階較正済みの値のため、「補正なし」の
         # ベースラインでは、較正前の最初の想定値(55.0)を明示的に使う。
@@ -68,6 +66,8 @@ def build_et_rally_phase(context, config):
         # EtRallyRunByGyro等はフラグに関わらず内部でensure_scaled_gyro()を呼ぶため、
         # 窓口自体を無効化してジャイロ倍率補正を確実に無しにする。
         children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
+    if install_heading:
+        children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation))
     arm_up = ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP)
     # 2026-10-29: ハブのプログラムを書き換えた版(ブレーキ中もハブがジャイロのくせを測り直す)用に、
     # アームを上げ切って振動が収まってから、この秒数だけブレーキをかけて止まる。
