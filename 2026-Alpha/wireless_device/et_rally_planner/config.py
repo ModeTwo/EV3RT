@@ -119,7 +119,9 @@ POST_AVOID_RADIUS_CM = ROBOT_PIVOT_SWEEP_RADIUS_CM + POST_RADIUS_CM + SAFETY_MAR
 # 2026-09-12に再実測し18.0cmに更新(グレー●の中心間距離ベースの
 # (4,3)-(4,4)中点から垂直に18.0cm)。ゴール側は2026-09-15に実測し14.8cmに更新。
 # 2026-10-10に再実測し、スタート17.9cm・ゴール14.6cmに更新。
-START_OFFSET_CM = 17.9
+# 2026-10-30: 10/29の実測(タイヤの軸の中心からX5の列の線まで17.8cm)に合わせ、ずらす量を使わずここを直した
+# (進入禁止エリアの境界もこれに合わせて1mm動く)。
+START_OFFSET_CM = 17.8
 # 2026-10-29: 再実測で14.9cm。
 GOAL_OFFSET_CM = 14.9
 
@@ -133,7 +135,8 @@ GOAL_OFFSET_CM = 14.9
 # 2026-10-29: いつもの置き方で、タイヤの軸の中心からX5の列の線までを実測すると17.8cm
 # (計画は17.9+0.5=18.4cm)。進入禁止エリアの基準(START_OFFSET_CM)は動かさず、ずらす量で合わせる。
 # 2026-10-30: Y方向の-2.0cmを外した(実機はグレーポイントの中点に置いていたため、プランとYが2cmずれていた)。
-START_SHIFT_CM = (-0.1, 0.0)
+# X方向の-0.1cmも、START_OFFSET_CMを17.8cmに直して外した。ずらす量は使わない。
+START_SHIFT_CM = (0.0, 0.0)
 START_POS_CM = (4 * GRID_PITCH_CM + START_OFFSET_CM + START_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + START_SHIFT_CM[1])
 START_HEADING_DEG = 180.0   # -x方向を向く
 
