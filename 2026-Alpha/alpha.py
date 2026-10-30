@@ -1384,6 +1384,13 @@ def _run_main(argv, startup_cleanup):
                         help=('For the modified hub firmware: after raising the arm and waiting for it to '
                               'settle, stand still with brakes this many seconds so the hub recalibrates '
                               'the gyro bias. Default (unset) = none.'))
+    parser.add_argument(
+        '--rally-move-carry-i',
+        choices=['on', 'off'],
+        default=None,
+        help=('During the ET rally, start each straight with the heading PID integral left by the '
+              'previous straight (the left/right motor difference). Default (unset) = off.'),
+    )
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
                               'heading-decreasing direction (left turns). Default (unset) = same as the '
@@ -1525,7 +1532,8 @@ def _run_main(argv, startup_cleanup):
         mission_config = dataclasses.replace(mission_config, **{field: value})
     for option, value, field in (
             ('--rally-gyro-float', args.rally_gyro_float, 'et_rally_gyro_float_heading'),
-            ('--rally-gyro-drift-comp', args.rally_gyro_drift_comp, 'et_rally_gyro_drift_compensation')):
+            ('--rally-gyro-drift-comp', args.rally_gyro_drift_comp, 'et_rally_gyro_drift_compensation'),
+            ('--rally-move-carry-i', args.rally_move_carry_i, 'et_rally_move_carry_integral')):
         if value is None:
             continue
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:

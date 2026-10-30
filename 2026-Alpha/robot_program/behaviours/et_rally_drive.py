@@ -77,6 +77,20 @@ def forward_mm_since(start_r, start_l):
 _pending_turn_forward_mm = None
 
 
+# 2026-10-30: 直進の向きのPIDで、前の直進の最後にたまっていたI成分を次の直進の初期値にする
+# (set_move_carry_integralで有効化、ETラリー工程の開始時)。左右のモーター差のため、まっすぐ走るには
+# 常に左右差(ログで右78・左82など)が要り、I成分が0から始まる直進ごとに約0.5度ずれたまま走っていた
+# (10/30ジグザグ: 直進3本ともerr_mean +0.53〜+0.63、実測で左へ12mm)。後退の直進では使わない。
+_carry_integral_enabled = False
+_carried_integral = None
+
+
+def set_move_carry_integral(enabled):
+    global _carry_integral_enabled, _carried_integral
+    _carry_integral_enabled = enabled
+    _carried_integral = None
+
+
 def set_turn_forward_mm(value):
     global _pending_turn_forward_mm
     _pending_turn_forward_mm = value
@@ -436,6 +450,7 @@ class EtRallyRunByGyro(Behaviour):
         self.running = False
 
     def update(self) -> Status:
+        global _carried_integral
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
         # 2026-09-19: SpinAroundByEncoder(GYRO_SCALE_FACTOR適用済み)は旋回終了時点で
         # 真の向きをtarget_heading_degに正しく一致させているが、直後にRunByGyroが
@@ -470,9 +485,15 @@ class EtRallyRunByGyro(Behaviour):
                     self.base_distance_mm, self.distance_mm))
             # 算出した旋回量が直進パワーを超えて暴走しないよう、output_limitsでしっかりキャップをかける
             self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
-            self.logger.info("%+06d %s.gyro run started toward heading=%d target_dist=%d loc=(%d,%d)%s" % (
+            carry_text = ""
+            if _carry_integral_enabled and not self.reverse:
+                if _carried_integral is not None:
+                    self.pid.set_auto_mode(False)
+                    self.pid.set_auto_mode(True, last_output=_carried_integral)
+                carry_text = " start_i=%s" % ("%+.2f" % _carried_integral if _carried_integral is not None else "none")
+            self.logger.info("%+06d %s.gyro run started toward heading=%d target_dist=%d loc=(%d,%d)%s%s" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, self.target_heading, self.distance_mm,
-                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text()))
+                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(), carry_text))
             self.orig_dist = runtime.plotter.get_distance()
             # 2026-09-20: PID比較用に、区間ごとの向きの誤差と、その誤差による横ズレの
             # 推定値(進んだ距離 x sin(向き - 目標))を集計し、区間の最後に1行で出す。
@@ -483,6 +504,9 @@ class EtRallyRunByGyro(Behaviour):
             self.err_sum = 0.0
             self.err_n = 0
             self.err_max = 0.0
+            # 2026-10-30: 区間の後半のPID出力(まっすぐ保つのに要った左右差)の平均。次の直進のI成分の初期値にする。
+            self.out_sum = 0.0
+            self.out_n = 0
             self.summarized = False
             self.running = True
 
@@ -522,15 +546,25 @@ class EtRallyRunByGyro(Behaviour):
         if (not self.summarized and self.distance_mm > 0.0
                 and now_dist - self.orig_dist >= self.distance_mm):
             self.summarized = True
+            if _carry_integral_enabled and not self.reverse and self.out_n > 0:
+                # I成分そのものは1区間(約1.2秒)では十分たまらない(I=0.6だと1区間に約0.3ずつ)ため、
+                # 区間の後半に実際に出していた出力の平均を、次の区間のI成分の初期値にする。
+                _carried_integral = self.out_sum / self.out_n
             actual_dist = now_dist - self.orig_dist
             (t0, d0), (t1, d1) = self.speed_history[0], self.speed_history[-1]
             end_speed = (d1 - d0) / (t1 - t0) if t1 - t0 > 1e-6 else 0.0
-            self.logger.info("%+06d %s.run summary: dist=%d target_dist=%d dist_err=%+d err_mean=%+.2f err_max=%.2f lat=%+.0fmm (+=目標より反時計回り側へ) end_speed=%.0fmm/s loc=(%d,%d)%s" % (
+            self.logger.info("%+06d %s.run summary: dist=%d target_dist=%d dist_err=%+d err_mean=%+.2f err_max=%.2f lat=%+.0fmm (+=目標より反時計回り側へ) end_speed=%.0fmm/s loc=(%d,%d)%s end_i=%+.2f" % (
                 now_dist, self.__class__.__name__, actual_dist, self.distance_mm, actual_dist - self.distance_mm,
                 self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm, end_speed,
-                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text()))
+                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(),
+                self.pid.components[1]))
 
-        turn = int(self.pid(current_heading))  # まっすぐ走るために必要な微修正の旋回量
+        output = self.pid(current_heading)
+        if (not self.summarized and self.distance_mm > 0.0
+                and now_dist - self.orig_dist >= self.distance_mm * 0.5):
+            self.out_sum += output
+            self.out_n += 1
+        turn = int(output)  # まっすぐ走るために必要な微修正の旋回量
         # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める
         # (PID自体の上限は巡航パワーで作ってあるため)。
         turn = max(-power_now, min(power_now, turn))

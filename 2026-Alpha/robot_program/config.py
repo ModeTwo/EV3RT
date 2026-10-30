@@ -150,6 +150,8 @@ class RaceConfig:
     # 30回旋回テストで、右回りは1.00579で合い、左回りは2回とも実際が多く回った(平均1.35度/2700度)。
     # 既定None=左右とも1.00579。
     et_rally_gyro_scale_neg: Optional[float] = None
+    # 2026-10-30: 直進の向きのPIDのI成分を、前の直進から引き継ぐ(et_rally_drive.py)。既定None=引き継がない。
+    et_rally_move_carry_integral: Optional[bool] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

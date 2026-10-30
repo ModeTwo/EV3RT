@@ -9,6 +9,7 @@ from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, TIRE_DIAMETER, UNCALI
 from ..behaviours.device_control import ArmDirection, ArmUpDownFull
 from ..features.execute_strategy import build_execute_strategy
 from ..behaviours.motor_control import StopNow
+from ..behaviours.et_rally_drive import set_move_carry_integral
 from ..features.receive_strategy import build_receive_strategy
 from .. import gyro_scale
 from ..gyro_scale import EnableGyroScale
@@ -26,6 +27,18 @@ class SetGyroScaleDisabled(Behaviour):
     def update(self):
         gyro_scale.set_disabled(self.disabled)
         self.logger.info("gyro scale disabled=%s" % self.disabled)
+        return Status.SUCCESS
+
+
+class SetMoveCarryIntegral(Behaviour):
+    # 2026-10-30: 直進の向きのPIDのI成分を、前の直進から引き継ぐかどうか(et_rally_drive.py)。
+    def __init__(self, name, enabled):
+        super().__init__(name)
+        self.enabled = enabled
+
+    def update(self):
+        set_move_carry_integral(self.enabled)
+        self.logger.info("move carry integral=%s" % self.enabled)
         return Status.SUCCESS
 
 
@@ -90,6 +103,9 @@ def build_et_rally_phase(context, config):
             settle_sec=1.0 if settle_sec is None else settle_sec,
             measure_sec=2.0 if measure_sec is None else measure_sec)
     children.append(arm_up)
+    carry_integral = bool(getattr(config, "et_rally_move_carry_integral", None))
+    if carry_integral:
+        children.append(SetMoveCarryIntegral("et_rally move carry integral", True))
     if config.et_rally_strategy_source == "received":
         children.append(build_receive_strategy(context, config))
     elif config.et_rally_strategy_source != "file":
@@ -103,6 +119,8 @@ def build_et_rally_phase(context, config):
     # calibration有効時はET_RALLY_TIRE_DIAMETERから、無効時はUNCALIBRATED_TIRE_DIAMETERから、
     # いずれの場合も共通デフォルト(TIRE_DIAMETER)へ戻す。
     children.append(SetTireDiameter("et_rally tire diameter restore", TIRE_DIAMETER))
+    if carry_integral:
+        children.append(SetMoveCarryIntegral("et_rally move carry integral off", False))
     if install_heading:
         children.append(RestoreEtRallyHeading("et_rally heading restore"))
     if not gyro_tire_calibration:
