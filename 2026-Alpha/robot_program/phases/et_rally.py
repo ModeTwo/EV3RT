@@ -52,7 +52,9 @@ def build_et_rally_phase(context, config):
     # 2026-10-29: 四捨五入前の向き・止まっている間のずれの差し引き(robot_program/et_rally_heading.py)。
     float_heading = bool(getattr(config, "et_rally_gyro_float_heading", None))
     drift_compensation = bool(getattr(config, "et_rally_gyro_drift_compensation", None))
-    install_heading = gyro_tire_calibration and (float_heading or drift_compensation)
+    # 2026-10-30: 左回り(headingが減る向き)だけの倍率。
+    scale_neg = getattr(config, "et_rally_gyro_scale_neg", None)
+    install_heading = gyro_tire_calibration and (float_heading or drift_compensation or scale_neg is not None)
     if gyro_tire_calibration:
         children.extend([
             # 通しの実行ではラップゲート後に有効済み(何もしない)。ETラリーだけ単独で走らせる場合の保険。
@@ -67,7 +69,7 @@ def build_et_rally_phase(context, config):
         # 窓口自体を無効化してジャイロ倍率補正を確実に無しにする。
         children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
     if install_heading:
-        children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation))
+        children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation, scale_neg))
     arm_up = ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP)
     # 2026-10-29: ハブのプログラムを書き換えた版(ブレーキ中もハブがジャイロのくせを測り直す)用に、
     # アームを上げ切って振動が収まってから、この秒数だけブレーキをかけて止まる。
