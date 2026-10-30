@@ -37,7 +37,7 @@ from py_trees.common import Status
 from py_etrobo_util.plotter import WHEEL_TREAD
 
 from ..gyro_scale import ensure_scaled_gyro
-from ..et_rally_heading import et_pose_text
+from ..et_rally_heading import et_pose_text, set_et_turning
 from ..power_log import log_power_state
 from ..runtime import runtime
 from ..types import HeadingType
@@ -243,6 +243,8 @@ class EtRallyTurnOneShot(Behaviour):
 
         self.start_r = runtime.right_motor.get_count()
         self.start_l = runtime.left_motor.get_count()
+        # 2026-10-30: ここから旋回が終わるまで、ETラリー用の位置(et_loc)は動かさない(et_rally_heading.py)。
+        set_et_turning(True)
         self.right_done = self.right_target_motor_deg < 1e-6
         self.left_done = self.left_target_motor_deg < 1e-6
         self.right_done_at_count = self.start_r
@@ -370,6 +372,7 @@ class EtRallyTurnOneShot(Behaviour):
                 turn_forward_mm = forward_mm_since(self.start_r, self.start_l)
                 # 2026-10-29: 次の直進が(オプション有効時に)この分だけ短く走れるよう渡す。
                 set_turn_forward_mm(turn_forward_mm)
+                set_et_turning(False)
                 self.logger.info(
                     "%+06d %s.phase2 done attempts=%d error=%+.2f fwd_mm=%+.1f loc=(%d,%d)%s" % (
                         runtime.plotter.get_distance(), self.__class__.__name__,
@@ -446,3 +449,4 @@ class EtRallyTurnOneShot(Behaviour):
         self.settling = False
         self.pre_stopping = False
         self.running = False
+        set_et_turning(False)

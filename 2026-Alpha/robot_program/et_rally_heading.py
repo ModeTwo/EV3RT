@@ -76,6 +76,15 @@ class EtRallyHeading(ScaledGyro):
         self.pose_y = float(runtime.plotter.loc_y) if runtime.plotter is not None else 0.0
         self.pose_counts = None
         self.pose_azimuth = None
+        # 2026-10-30: その場旋回の間は位置を動かさない(set_et_turning)。0⇔90度の交互旋回30回で、
+        # エンコーダからは前50.7mm・右21.2mm動いた計算になったが、実測は前7mm・左1.5mm
+        # (1旋回あたり約0.2mm)だった。旋回中の左右の回転量の差は滑りで、車体の移動にはなっていない。
+        self.turning = False
+
+    def set_turning(self, turning):
+        # 切り替える前に、ここまでの位置を今の状態で確定させる(旋回前の惰性は数え、旋回中の分は数えない)。
+        self.get_angle()
+        self.turning = turning
 
     def _update_pose(self, heading_deg):
         """左右のエンコーダの変化と、前回と今回の向きの中間で、位置を進める(plotter.pyと同じ式)。"""
@@ -85,7 +94,7 @@ class EtRallyHeading(ScaledGyro):
         except Exception:
             return
         azimuth = math.radians(heading_deg)
-        if self.pose_counts is None:
+        if self.pose_counts is None or self.turning:
             self.pose_counts = counts
             self.pose_azimuth = azimuth
             return
@@ -165,6 +174,13 @@ def et_pose_text():
     """ETラリー用の位置(四捨五入前の向きで計算)をログ用の文字列で返す。使っていなければ空文字。"""
     pose_text = getattr(runtime.gyro_sensor, "pose_text", None)
     return pose_text() if pose_text is not None else ""
+
+
+def set_et_turning(turning):
+    """その場旋回の始まり(True)と終わり(False)を知らせる。ETラリー用の位置を使っていなければ何もしない。"""
+    set_turning = getattr(runtime.gyro_sensor, "set_turning", None)
+    if set_turning is not None:
+        set_turning(turning)
 
 
 class InstallEtRallyHeading(Behaviour):
