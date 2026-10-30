@@ -9,7 +9,7 @@ from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, TIRE_DIAMETER, UNCALI
 from ..behaviours.device_control import ArmDirection, ArmUpDownFull
 from ..features.execute_strategy import build_execute_strategy
 from ..behaviours.motor_control import StopNow
-from ..behaviours.et_rally_drive import set_move_carry_integral
+from ..behaviours.et_rally_drive import set_move_carry_integral, set_move_tuning
 from ..features.receive_strategy import build_receive_strategy
 from .. import gyro_scale
 from ..gyro_scale import EnableGyroScale
@@ -39,6 +39,19 @@ class SetMoveCarryIntegral(Behaviour):
     def update(self):
         set_move_carry_integral(self.enabled)
         self.logger.info("move carry integral=%s" % self.enabled)
+        return Status.SUCCESS
+
+
+class SetMoveTuning(Behaviour):
+    # 2026-10-31: 直進の左右の出力を小数のまま出すか、向きのPIDのIを変えるか(et_rally_drive.py)。
+    def __init__(self, name, fine_power, pid_i):
+        super().__init__(name)
+        self.fine_power = fine_power
+        self.pid_i = pid_i
+
+    def update(self):
+        set_move_tuning(self.fine_power, self.pid_i)
+        self.logger.info("move tuning: fine_power=%s pid_i=%s" % (self.fine_power, self.pid_i))
         return Status.SUCCESS
 
 
@@ -106,6 +119,11 @@ def build_et_rally_phase(context, config):
     carry_integral = bool(getattr(config, "et_rally_move_carry_integral", None))
     if carry_integral:
         children.append(SetMoveCarryIntegral("et_rally move carry integral", True))
+    fine_power = bool(getattr(config, "et_rally_move_fine_power", None))
+    move_pid_i = getattr(config, "et_rally_move_pid_i", None)
+    move_tuning = fine_power or move_pid_i is not None
+    if move_tuning:
+        children.append(SetMoveTuning("et_rally move tuning", fine_power, move_pid_i))
     if config.et_rally_strategy_source == "received":
         children.append(build_receive_strategy(context, config))
     elif config.et_rally_strategy_source != "file":
@@ -121,6 +139,8 @@ def build_et_rally_phase(context, config):
     children.append(SetTireDiameter("et_rally tire diameter restore", TIRE_DIAMETER))
     if carry_integral:
         children.append(SetMoveCarryIntegral("et_rally move carry integral off", False))
+    if move_tuning:
+        children.append(SetMoveTuning("et_rally move tuning off", False, None))
     if install_heading:
         children.append(RestoreEtRallyHeading("et_rally heading restore"))
     if not gyro_tire_calibration:

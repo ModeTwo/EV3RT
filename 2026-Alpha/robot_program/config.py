@@ -152,6 +152,10 @@ class RaceConfig:
     et_rally_gyro_scale_neg: Optional[float] = None
     # 2026-10-30: 直進の向きのPIDのI成分を、前の直進から引き継ぐ(et_rally_drive.py)。既定None=引き継がない。
     et_rally_move_carry_integral: Optional[bool] = None
+    # 2026-10-31: 直進の左右の出力を小数のまま出す(端数を次のtickへ持ち越す、et_rally_drive.py)。既定None=従来の切り捨て。
+    et_rally_move_fine_power: Optional[bool] = None
+    # 2026-10-31: 直進の向きのPIDのI(既定None=0.6のまま)。
+    et_rally_move_pid_i: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

@@ -96,6 +96,22 @@ def set_move_carry_integral(enabled):
     _carry_n = 0
 
 
+# 2026-10-31: 直進の左右の出力を、向きのPIDの出力(小数)から作るときの調整(set_move_tuningで、
+# ETラリー工程の間だけ有効化。corrected_run.py経由の他工程は従来のまま)。
+# fine_power: int()で切り捨てると左右差が2刻みになり、向きの誤差0.25度未満では何も直さない。
+#   左右それぞれ、整数にしたときの端数を次のtickへ持ち越し、平均で小数の出力を出す。
+# pid_i: 向きのPIDのI。0.6では1回の直進(1〜3秒)でほとんどたまらず、Pだけで左右差を作るため
+#   約0.5度の向きのずれを残したまま走っていた(10/30周回ログ、赤ゲートへの直進で横7mm)。
+_fine_power_enabled = False
+_move_pid_i_override = None
+
+
+def set_move_tuning(fine_power, pid_i):
+    global _fine_power_enabled, _move_pid_i_override
+    _fine_power_enabled = fine_power
+    _move_pid_i_override = pid_i
+
+
 def set_turn_forward_mm(value):
     global _pending_turn_forward_mm
     _pending_turn_forward_mm = value
@@ -489,13 +505,19 @@ class EtRallyRunByGyro(Behaviour):
                     runtime.plotter.get_distance(), self.__class__.__name__, turn_forward_mm,
                     self.base_distance_mm, self.distance_mm))
             # 算出した旋回量が直進パワーを超えて暴走しないよう、output_limitsでしっかりキャップをかける
-            self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
+            pid_i = self.pid_i if _move_pid_i_override is None else _move_pid_i_override
+            self.pid = PID(self.pid_p, pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
+            # fine_power用の、左右それぞれの整数にしきれなかった端数。
+            self.right_residual = 0.0
+            self.left_residual = 0.0
             carry_text = ""
+            if _move_pid_i_override is not None or _fine_power_enabled:
+                carry_text = " ki=%.2f fine_power=%s" % (pid_i, _fine_power_enabled)
             if _carry_integral_enabled and not self.reverse:
                 if _carried_integral is not None:
                     self.pid.set_auto_mode(False)
                     self.pid.set_auto_mode(True, last_output=_carried_integral)
-                carry_text = " start_i=%s" % ("%+.2f" % _carried_integral if _carried_integral is not None else "none")
+                carry_text += " start_i=%s" % ("%+.2f" % _carried_integral if _carried_integral is not None else "none")
             self.logger.info("%+06d %s.gyro run started toward heading=%d target_dist=%d loc=(%d,%d)%s%s" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, self.target_heading, self.distance_mm,
                 runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(), carry_text))
@@ -571,13 +593,22 @@ class EtRallyRunByGyro(Behaviour):
                 and now_dist - self.orig_dist >= self.distance_mm * 0.5):
             self.out_sum += output
             self.out_n += 1
-        turn = int(output)  # まっすぐ走るために必要な微修正の旋回量
-        # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める
-        # (PID自体の上限は巡航パワーで作ってあるため)。
-        turn = max(-power_now, min(power_now, turn))
         base_power = -power_now if self.reverse else power_now
-        right_power = base_power + runtime.course * turn
-        left_power = base_power - runtime.course * turn
+        if _fine_power_enabled:
+            turn_f = max(-power_now, min(power_now, output))
+            self.right_residual += base_power + runtime.course * turn_f
+            self.left_residual += base_power - runtime.course * turn_f
+            right_power = int(round(self.right_residual))
+            left_power = int(round(self.left_residual))
+            self.right_residual -= right_power
+            self.left_residual -= left_power
+        else:
+            turn = int(output)  # まっすぐ走るために必要な微修正の旋回量
+            # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める
+            # (PID自体の上限は巡航パワーで作ってあるため)。
+            turn = max(-power_now, min(power_now, turn))
+            right_power = base_power + runtime.course * turn
+            left_power = base_power - runtime.course * turn
         runtime.right_motor.set_power(right_power)
         runtime.left_motor.set_power(left_power)
         log_power_state(self.__class__.__name__, right_power, left_power)
