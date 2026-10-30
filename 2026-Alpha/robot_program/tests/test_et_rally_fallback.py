@@ -55,7 +55,7 @@ class FallbackRouteTest(unittest.TestCase):
     def test_route_points(self):
         pts = fb.fallback_waypoints()
         self.assertEqual([tuple(round(v, 1) for v in p) for p in pts],
-                         [(116.8, 84.1), (98.4, 86.1), (-22.0, 86.1), (-22.0, 0.0), (-14.6, 86.1)])
+                         [(116.4, 86.2), (98.6, 86.2), (-22.0, 86.2), (-22.0, 0.0), (-14.9, 86.2)])
 
     def test_planner_steps_reach_the_goal(self):
         # step列から座標を復元して、ゴールに着くこと・総距離を確認する
@@ -71,13 +71,14 @@ class FallbackRouteTest(unittest.TestCase):
                 y += d * math.sin(math.radians(heading))
         self.assertAlmostEqual(x, fb.GOAL_POS_CM[0], delta=0.5)
         self.assertAlmostEqual(y, fb.GOAL_POS_CM[1], delta=0.5)
-        self.assertAlmostEqual(total, 311.4, delta=0.2)
+        self.assertAlmostEqual(total, 311.1, delta=0.2)
 
     def test_strategy_is_course_normalized(self):
         steps = fb.fallback_strategy()
         self.assertEqual(steps[-1]["label"], "goal")
         # 最初の向きはラリー開始の向き(-90度)に、スタート向きからのずれを足したもの
-        self.assertAlmostEqual(steps[0]["target_heading_deg"], -90.0 + (-6.17), places=1)
+        # (2026-10-30: スタートのYずらしを外し、AとYが同じになったため、ずれは0)
+        self.assertAlmostEqual(steps[0]["target_heading_deg"], -90.0, places=1)
 
 
 class _Config:

@@ -132,7 +132,8 @@ GOAL_OFFSET_CM = 14.9
 # 従来の位置に戻すときは START_SHIFT_CM を (0.0, 0.0) にする。
 # 2026-10-29: いつもの置き方で、タイヤの軸の中心からX5の列の線までを実測すると17.8cm
 # (計画は17.9+0.5=18.4cm)。進入禁止エリアの基準(START_OFFSET_CM)は動かさず、ずらす量で合わせる。
-START_SHIFT_CM = (-0.1, -2.0)
+# 2026-10-30: Y方向の-2.0cmを外した(実機はグレーポイントの中点に置いていたため、プランとYが2cmずれていた)。
+START_SHIFT_CM = (-0.1, 0.0)
 START_POS_CM = (4 * GRID_PITCH_CM + START_OFFSET_CM + START_SHIFT_CM[0], 3.5 * GRID_PITCH_CM + START_SHIFT_CM[1])
 START_HEADING_DEG = 180.0   # -x方向を向く
 
