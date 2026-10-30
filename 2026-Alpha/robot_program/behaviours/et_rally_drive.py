@@ -18,6 +18,7 @@ from py_etrobo_util import SymmetricClamper
 from py_etrobo_util.plotter import WHEEL_TREAD
 
 from ..gyro_scale import ensure_scaled_gyro
+from ..et_rally_heading import et_pose_text
 from ..power_log import OscillationTracker, log_power_state
 from ..runtime import runtime
 from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
@@ -469,9 +470,9 @@ class EtRallyRunByGyro(Behaviour):
                     self.base_distance_mm, self.distance_mm))
             # 算出した旋回量が直進パワーを超えて暴走しないよう、output_limitsでしっかりキャップをかける
             self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
-            self.logger.info("%+06d %s.gyro run started toward heading=%d target_dist=%d loc=(%d,%d)" % (
+            self.logger.info("%+06d %s.gyro run started toward heading=%d target_dist=%d loc=(%d,%d)%s" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, self.target_heading, self.distance_mm,
-                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
+                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text()))
             self.orig_dist = runtime.plotter.get_distance()
             # 2026-09-20: PID比較用に、区間ごとの向きの誤差と、その誤差による横ズレの
             # 推定値(進んだ距離 x sin(向き - 目標))を集計し、区間の最後に1行で出す。
@@ -524,10 +525,10 @@ class EtRallyRunByGyro(Behaviour):
             actual_dist = now_dist - self.orig_dist
             (t0, d0), (t1, d1) = self.speed_history[0], self.speed_history[-1]
             end_speed = (d1 - d0) / (t1 - t0) if t1 - t0 > 1e-6 else 0.0
-            self.logger.info("%+06d %s.run summary: dist=%d target_dist=%d dist_err=%+d err_mean=%+.2f err_max=%.2f lat=%+.0fmm (+=目標より反時計回り側へ) end_speed=%.0fmm/s loc=(%d,%d)" % (
+            self.logger.info("%+06d %s.run summary: dist=%d target_dist=%d dist_err=%+d err_mean=%+.2f err_max=%.2f lat=%+.0fmm (+=目標より反時計回り側へ) end_speed=%.0fmm/s loc=(%d,%d)%s" % (
                 now_dist, self.__class__.__name__, actual_dist, self.distance_mm, actual_dist - self.distance_mm,
                 self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm, end_speed,
-                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
+                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text()))
 
         turn = int(self.pid(current_heading))  # まっすぐ走るために必要な微修正の旋回量
         # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める

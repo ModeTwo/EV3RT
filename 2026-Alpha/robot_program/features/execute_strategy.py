@@ -19,6 +19,7 @@ from ..behaviours.gyro_drive import SpinAround
 from ..behaviours.conditions import IsDistanceEarned
 from ..behaviours.device_control import ArmDirection, ArmUpDownFull
 from ..runtime import runtime
+from ..et_rally_heading import et_pose_text
 from ..et_rally_compensation import apply_caster_drag_compensation, apply_lateral_drift_compensation
 from ..et_rally_fallback import fallback_planner_steps, fallback_strategy
 
@@ -306,10 +307,10 @@ class LogLapBoundary(Behaviour):
 
     def update(self) -> Status:
         runtime.require("plotter")
-        self.logger.info("%+06d LAP_BOUNDARY %s loc=(%d,%d) degree=%d" % (
+        self.logger.info("%+06d LAP_BOUNDARY %s loc=(%d,%d) degree=%d%s" % (
             runtime.plotter.get_distance(), self.lap_tag,
             runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(),
-            runtime.plotter.get_degree()))
+            runtime.plotter.get_degree(), et_pose_text()))
         # 2026-10-29: ETラリー用の向きの窓口を使っているときは、ずれの速さと差し引いた量も残す。
         summary = getattr(runtime.gyro_sensor, "summary", None)
         if summary is not None:

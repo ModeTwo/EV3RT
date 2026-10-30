@@ -37,6 +37,7 @@ from py_trees.common import Status
 from py_etrobo_util.plotter import WHEEL_TREAD
 
 from ..gyro_scale import ensure_scaled_gyro
+from ..et_rally_heading import et_pose_text
 from ..power_log import log_power_state
 from ..runtime import runtime
 from ..types import HeadingType
@@ -370,10 +371,10 @@ class EtRallyTurnOneShot(Behaviour):
                 # 2026-10-29: 次の直進が(オプション有効時に)この分だけ短く走れるよう渡す。
                 set_turn_forward_mm(turn_forward_mm)
                 self.logger.info(
-                    "%+06d %s.phase2 done attempts=%d error=%+.2f fwd_mm=%+.1f loc=(%d,%d)" % (
+                    "%+06d %s.phase2 done attempts=%d error=%+.2f fwd_mm=%+.1f loc=(%d,%d)%s" % (
                         runtime.plotter.get_distance(), self.__class__.__name__,
                         self.pulse_attempt, error, turn_forward_mm,
-                        runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
+                        runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text()))
                 return "done"
             # 1回で収まらなかった場合、残差を測り直してもう1回だけ試す。
             self._start_pulse(current_heading)

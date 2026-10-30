@@ -25,6 +25,7 @@ runtime.gyro_sensor.get_angle()を読むだけなので、クラス側は変え�
    静止テストでは毎回プラス)。走行中に測るのはやめ、開始時に測った値で固定する。
 """
 
+import math
 import time
 
 from py_trees.behaviour import Behaviour
@@ -55,6 +56,37 @@ class EtRallyHeading(ScaledGyro):
         self.rate_samples = 0
         self.installed_time = time.monotonic()
         self.last_time = self.installed_time
+        # 2026-10-30: ETラリー用の位置(plotterと同じ座標・同じ式で、向きだけ四捨五入前の値を使う)。
+        # plotterはジャイロの整数値で向きを計算するため、0.5度丸められると757mmの直進で約7mm横にずれる。
+        self.pose_x = float(runtime.plotter.loc_x) if runtime.plotter is not None else 0.0
+        self.pose_y = float(runtime.plotter.loc_y) if runtime.plotter is not None else 0.0
+        self.pose_counts = None
+        self.pose_azimuth = None
+
+    def _update_pose(self, heading_deg):
+        """左右のエンコーダの変化と、前回と今回の向きの中間で、位置を進める(plotter.pyと同じ式)。"""
+        try:
+            counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
+            diameter = runtime.plotter.tire_diameter
+        except Exception:
+            return
+        azimuth = math.radians(heading_deg)
+        if self.pose_counts is None:
+            self.pose_counts = counts
+            self.pose_azimuth = azimuth
+            return
+        if counts == self.pose_counts:
+            self.pose_azimuth = azimuth
+            return
+        dist = math.pi * diameter * ((counts[0] - self.pose_counts[0]) + (counts[1] - self.pose_counts[1])) / 2.0 / 360.0
+        mid = (self.pose_azimuth + azimuth) / 2.0
+        self.pose_x += dist * math.sin(mid)
+        self.pose_y += dist * math.cos(mid)
+        self.pose_counts = counts
+        self.pose_azimuth = azimuth
+
+    def pose_text(self):
+        return " et_loc=(%.1f,%.1f)" % (self.pose_x, self.pose_y)
 
     def _raw_heading(self):
         if self.float_heading and runtime.hub is not None:
@@ -82,7 +114,10 @@ class EtRallyHeading(ScaledGyro):
         if self.drift_compensation:
             self._update_drift(time.monotonic())
             raw -= self.drift_total
-        return self._origin + (raw - self._origin) * self._scale
+        heading = self._origin + (raw - self._origin) * self._scale
+        if self.float_heading:
+            self._update_pose(heading)
+        return heading
 
     def reset(self):
         super().reset()
@@ -91,6 +126,12 @@ class EtRallyHeading(ScaledGyro):
     def summary(self):
         return "float_heading=%s drift_compensation=%s drift_rate=%+.4f deg/s drift_total=%+.3f deg samples=%d" % (
             self.float_heading, self.drift_compensation, self.drift_rate, self.drift_total, self.rate_samples)
+
+
+def et_pose_text():
+    """ETラリー用の位置(四捨五入前の向きで計算)をログ用の文字列で返す。使っていなければ空文字。"""
+    pose_text = getattr(runtime.gyro_sensor, "pose_text", None)
+    return pose_text() if pose_text is not None else ""
 
 
 class InstallEtRallyHeading(Behaviour):
