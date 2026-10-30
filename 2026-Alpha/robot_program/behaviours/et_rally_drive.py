@@ -81,14 +81,19 @@ _pending_turn_forward_mm = None
 # (set_move_carry_integralで有効化、ETラリー工程の開始時)。左右のモーター差のため、まっすぐ走るには
 # 常に左右差(ログで右78・左82など)が要り、I成分が0から始まる直進ごとに約0.5度ずれたまま走っていた
 # (10/30ジグザグ: 直進3本ともerr_mean +0.53〜+0.63、実測で左へ12mm)。後退の直進では使わない。
+# 2026-10-30: 1区間ごとの値は振れる(ジグザグで +3.68 の次が +0.47)ため、これまでの全区間の平均を渡す。
 _carry_integral_enabled = False
 _carried_integral = None
+_carry_sum = 0.0
+_carry_n = 0
 
 
 def set_move_carry_integral(enabled):
-    global _carry_integral_enabled, _carried_integral
+    global _carry_integral_enabled, _carried_integral, _carry_sum, _carry_n
     _carry_integral_enabled = enabled
     _carried_integral = None
+    _carry_sum = 0.0
+    _carry_n = 0
 
 
 def set_turn_forward_mm(value):
@@ -450,7 +455,7 @@ class EtRallyRunByGyro(Behaviour):
         self.running = False
 
     def update(self) -> Status:
-        global _carried_integral
+        global _carried_integral, _carry_sum, _carry_n
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
         # 2026-09-19: SpinAroundByEncoder(GYRO_SCALE_FACTOR適用済み)は旋回終了時点で
         # 真の向きをtarget_heading_degに正しく一致させているが、直後にRunByGyroが
@@ -549,7 +554,9 @@ class EtRallyRunByGyro(Behaviour):
             if _carry_integral_enabled and not self.reverse and self.out_n > 0:
                 # I成分そのものは1区間(約1.2秒)では十分たまらない(I=0.6だと1区間に約0.3ずつ)ため、
                 # 区間の後半に実際に出していた出力の平均を、次の区間のI成分の初期値にする。
-                _carried_integral = self.out_sum / self.out_n
+                _carry_sum += self.out_sum / self.out_n
+                _carry_n += 1
+                _carried_integral = _carry_sum / _carry_n
             actual_dist = now_dist - self.orig_dist
             (t0, d0), (t1, d1) = self.speed_history[0], self.speed_history[-1]
             end_speed = (d1 - d0) / (t1 - t0) if t1 - t0 > 1e-6 else 0.0
