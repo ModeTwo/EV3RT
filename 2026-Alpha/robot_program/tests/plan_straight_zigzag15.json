@@ -1,0 +1,11 @@
+{
+  "note": "2026-10-30: easy-to-measure version of plan_straight_300_turn15_300. straight 300mm at 0 deg, turn to +15, straight 300mm, turn back to -15, straight 300mm, turn to 0 (stop). Ideal end point is on the start line (no sideways offset) at 300 + 2*300*cos15 = 879.6mm ahead. Measure the sideways offset from the start line and the distance along it.",
+  "steps": [
+    {"type": "move", "target_heading_deg": 0.0, "distance_mm": 300.0},
+    {"type": "turn", "target_heading_deg": 15.0},
+    {"type": "move", "target_heading_deg": 15.0, "distance_mm": 300.0},
+    {"type": "turn", "target_heading_deg": -15.0},
+    {"type": "move", "target_heading_deg": -15.0, "distance_mm": 300.0},
+    {"type": "turn", "target_heading_deg": 0.0}
+  ]
+}
