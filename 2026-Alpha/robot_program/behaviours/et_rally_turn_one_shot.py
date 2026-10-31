@@ -95,6 +95,9 @@ MAX_PULSE_ATTEMPTS = 2  # これ以上は追いかけない(不感帯より細�
 PHASE1_FLOW_FULL_DEG = 40.0
 # 2026-10-31: wheel_sync使用時の、片輪の出力の下限(不感帯CW35/CCW40前後で止まりきらないよう少し下)。
 WHEEL_SYNC_MIN_POWER = 30
+# 2026-10-31: wheel_sync中に両輪の回転量がこのtick数より長く増えなければ、1tickごとに基準の出力をSTEPずつ上げる。
+WHEEL_SYNC_STALL_TICKS = 3
+WHEEL_SYNC_STALL_STEP = 2
 
 # 2026-10-25: phase1終了直後・各パルス直後は、ブレーキをかけてもロボットがまだ回っている
 # (旋回30回テストで、pulse#2時点の残差が旋回方向に15回中15回とも同じ符号で行き過ぎ、
@@ -296,6 +299,9 @@ class EtRallyTurnOneShot(Behaviour):
         # 0⇔110度の往復30回で車体が左へ10〜13cm動き、plotterの位置(旋回中もエンコーダを足す)も
         # 同じ向きに動いていたため、区間ごとの左右の回転量を残す。
         self.wheel_marks = [("start", self.start_r, self.start_l, current_heading)]
+        self.sync_last_progress = -1
+        self.sync_stall_ticks = 0
+        self.sync_stall_logged = False
         self.phase = 1
         self.logger.info(
             "%+06d %s.phase1 started at heading=%d for %d (target_motor_deg=%.1f) phase1_scale=%.4f%s" % (
@@ -379,6 +385,21 @@ class EtRallyTurnOneShot(Behaviour):
             p = decel_power if remaining < zone else self.main_power
         else:
             p = self.decel_power if use_decel and remaining < self.decel_deg else self.main_power
+        # 2026-10-31: 減速中に出力が不感帯(CW35/CCW40前後)付近まで下がると両輪が止まったまま進まないことがある
+        # (出力50・減速(40,40)の0⇔110度30回で、1回だけ約6秒止まっていた)。回転量が増えないtickが続いたら
+        # 基準の出力を少しずつ上げる。
+        progress = delta_r + delta_l
+        if progress == self.sync_last_progress:
+            self.sync_stall_ticks += 1
+        else:
+            self.sync_stall_ticks = 0
+        self.sync_last_progress = progress
+        if self.sync_stall_ticks > WHEEL_SYNC_STALL_TICKS:
+            p = min(100, p + WHEEL_SYNC_STALL_STEP * (self.sync_stall_ticks - WHEEL_SYNC_STALL_TICKS))
+            if not self.sync_stall_logged:
+                self.sync_stall_logged = True
+                self.logger.info("%+06d %s.phase1 wheel_sync stall: no wheel motion for %d ticks, raising power" % (
+                    runtime.plotter.get_distance(), self.__class__.__name__, self.sync_stall_ticks))
         correction = self.wheel_sync_gain * lead
         right_mag = int(round(max(WHEEL_SYNC_MIN_POWER, min(100, p - correction))))
         left_mag = int(round(max(WHEEL_SYNC_MIN_POWER, min(100, p + correction))))
