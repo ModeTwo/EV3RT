@@ -274,6 +274,10 @@ class EtRallyTurnOneShot(Behaviour):
         self.left_done = self.left_target_motor_deg < 1e-6
         self.right_done_at_count = self.start_r
         self.left_done_at_count = self.start_l
+        # 2026-10-31: 旋回のどの区間で左右の車輪の回転量がずれるかを見るための記録(ログ専用)。
+        # 0⇔110度の往復30回で車体が左へ10〜13cm動き、plotterの位置(旋回中もエンコーダを足す)も
+        # 同じ向きに動いていたため、区間ごとの左右の回転量を残す。
+        self.wheel_marks = [("start", self.start_r, self.start_l, current_heading)]
         self.phase = 1
         self.logger.info(
             "%+06d %s.phase1 started at heading=%d for %d (target_motor_deg=%.1f) phase1_scale=%.4f" % (
@@ -293,6 +297,9 @@ class EtRallyTurnOneShot(Behaviour):
             self.left_done_at_count = runtime.left_motor.get_count()
             runtime.left_motor.set_power(0)
             runtime.left_motor.set_brake(True)
+        if (self.right_done != self.left_done) and len(self.wheel_marks) == 1:
+            # 片方の車輪だけが止まった時点(ここから先は片輪だけが回る)。
+            self._mark_wheels("both", _current_heading())
         if self.right_done and self.left_done:
             lag_right_delta = runtime.right_motor.get_count() - self.right_done_at_count
             lag_left_delta = runtime.left_motor.get_count() - self.left_done_at_count
@@ -329,7 +336,28 @@ class EtRallyTurnOneShot(Behaviour):
 
     # --- フェーズ2: 一発サイズのパルス補正 ---
 
+    def _mark_wheels(self, label, current_heading):
+        self.wheel_marks.append((label, runtime.right_motor.get_count(),
+                                 runtime.left_motor.get_count(), current_heading))
+
+    def _wheel_marks_text(self):
+        """区間ごとの左右の回転量(度)・車体中心の前後(mm)・向きの変化(度)。"""
+        mm_per_deg = math.pi * runtime.plotter.tire_diameter / 360.0
+        first, last = self.wheel_marks[0], self.wheel_marks[-1]
+        parts = ["total dR=%+d dL=%+d fwd=%+.1f dh=%+.1f" % (
+            last[1] - first[1], last[2] - first[2],
+            ((last[1] - first[1]) + (last[2] - first[2])) * mm_per_deg / 2.0, last[3] - first[3])]
+        for prev, cur in zip(self.wheel_marks, self.wheel_marks[1:]):
+            d_r, d_l = cur[1] - prev[1], cur[2] - prev[2]
+            parts.append("%s dR=%+d dL=%+d fwd=%+.1f dh=%+.1f" % (
+                cur[0], d_r, d_l, (d_r + d_l) * mm_per_deg / 2.0, cur[3] - prev[3]))
+        return " | ".join(parts)
+
     def _enter_phase2(self, current_heading):
+        if len(self.wheel_marks) == 1:
+            # 左右が同じtickで止まった(片輪だけの区間がない)。
+            self._mark_wheels("both", current_heading)
+        self._mark_wheels("tail", current_heading)
         self.phase = 2
         self.pulse_attempt = 0
         self._begin_settle(current_heading, "phase1")
@@ -355,6 +383,7 @@ class EtRallyTurnOneShot(Behaviour):
                 and self.settle_ticks < self.settle_max_ticks):
             return False
         self.settling = False
+        self._mark_wheels("coast" if self.settle_reason == "phase1" else self.settle_reason, current_heading)
         self.logger.info(
             "%+06d %s.phase2 settled after %s ticks=%d drift=%+.2f%s" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, self.settle_reason,
@@ -403,6 +432,8 @@ class EtRallyTurnOneShot(Behaviour):
                         runtime.plotter.get_distance(), self.__class__.__name__,
                         self.pulse_attempt, error, turn_forward_mm,
                         runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text()))
+                self.logger.info("%+06d %s.wheels %s" % (
+                    runtime.plotter.get_distance(), self.__class__.__name__, self._wheel_marks_text()))
                 return "done"
             # 1回で収まらなかった場合、残差を測り直してもう1回だけ試す。
             self._start_pulse(current_heading)
