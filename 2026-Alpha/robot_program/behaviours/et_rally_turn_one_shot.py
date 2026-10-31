@@ -93,6 +93,8 @@ PULSE_TABLE = [
 MAX_PULSE_ATTEMPTS = 2  # これ以上は追いかけない(不感帯より細かい残差を無理に追わない)
 # 2026-10-31: phase1_model使用時、一定の流れを満額見込む旋回の大きさ(度)。これ未満は角度に比例して小さくする。
 PHASE1_FLOW_FULL_DEG = 40.0
+# 2026-10-31: wheel_sync使用時の、片輪の出力の下限(不感帯CW35/CCW40前後で止まりきらないよう少し下)。
+WHEEL_SYNC_MIN_POWER = 30
 
 # 2026-10-25: phase1終了直後・各パルス直後は、ブレーキをかけてもロボットがまだ回っている
 # (旋回30回テストで、pulse#2時点の残差が旋回方向に15回中15回とも同じ符号で行き過ぎ、
@@ -159,8 +161,15 @@ class EtRallyTurnOneShot(Behaviour):
                  pre_stop: bool = False,
                  settle_stable_ticks: int = SETTLE_STABLE_TICKS,
                  settle_max_ticks: int = SETTLE_MAX_TICKS,
-                 phase1_model=None) -> None:
+                 phase1_model=None,
+                 wheel_sync_gain=None) -> None:
         super().__init__(name)
+        # 2026-10-31: 0より大きければ、phase1で左右の車輪の回転量(目標に対する割合をエンコーダ度に直したもの)の
+        # 差×この係数だけ、進んでいる側の出力を下げ・遅れている側を上げる。引き込まれ補正はかけない。
+        # 0⇔110度の往復で、同じ出力(±70)でも後ろへ回る車輪の方が2〜3割多く回り(右回り 右-222・左+185度、
+        # 左回り 右+160・左-231度)、車体は回りながら後ろへ9〜17mm下がり、最後に遅れた車輪だけが回って
+        # 前へ10〜19mm出ていた。下がる向きと出る向きが違うため、30回で車体が左へ10〜13cm動いた。
+        self.wheel_sync_gain = wheel_sync_gain if wheel_sync_gain else 0.0
         # 2026-10-31: phase1の回転量を「実際の角度 = 係数×指令の角度 + 一定の流れ(度)」で見込む
         # ((headingが増える向きの係数, 流れ), (減る向きの係数, 流れ))。指定時はphase1_scaleを使わない。
         # 10/30 13:14周回の27旋回で、phase1の実際の回転には旋回の大きさによらない流れが加わっており、
@@ -257,7 +266,11 @@ class EtRallyTurnOneShot(Behaviour):
         self.left_base_motor_deg = self.target_motor_deg * self.left_target_scale
         right_power_sign = runtime.course * self.direction
         self.early_side = 'right' if right_power_sign < 0 else 'left'
-        if right_power_sign < 0:
+        if self.wheel_sync_gain > 0.0:
+            # 左右を同時に同じだけ回すので、先に止まる側を短くしない。
+            self.right_target_motor_deg = self.right_base_motor_deg
+            self.left_target_motor_deg = self.left_base_motor_deg
+        elif right_power_sign < 0:
             capped = min(self.right_base_motor_deg * compensation_ratio, self.right_base_motor_deg * 0.5)
             self.right_target_motor_deg = max(self.right_base_motor_deg - capped, 0.0)
             self.left_target_motor_deg = self.left_base_motor_deg
@@ -280,9 +293,10 @@ class EtRallyTurnOneShot(Behaviour):
         self.wheel_marks = [("start", self.start_r, self.start_l, current_heading)]
         self.phase = 1
         self.logger.info(
-            "%+06d %s.phase1 started at heading=%d for %d (target_motor_deg=%.1f) phase1_scale=%.4f" % (
+            "%+06d %s.phase1 started at heading=%d for %d (target_motor_deg=%.1f) phase1_scale=%.4f%s" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, current_heading,
-                self.target_heading, self.target_motor_deg, self.applied_phase1_scale))
+                self.target_heading, self.target_motor_deg, self.applied_phase1_scale,
+                " wheel_sync=%.1f" % self.wheel_sync_gain if self.wheel_sync_gain > 0.0 else ""))
 
     def _tick_phase1(self):
         delta_r = abs(runtime.right_motor.get_count() - self.start_r)
@@ -303,7 +317,7 @@ class EtRallyTurnOneShot(Behaviour):
         if self.right_done and self.left_done:
             lag_right_delta = runtime.right_motor.get_count() - self.right_done_at_count
             lag_left_delta = runtime.left_motor.get_count() - self.left_done_at_count
-            if self.adaptive_lag_compensation:
+            if self.adaptive_lag_compensation and self.wheel_sync_gain <= 0.0:
                 global _lag_estimate_ratio
                 observed = abs(lag_right_delta if self.early_side == 'right' else lag_left_delta)
                 early_base = (self.right_base_motor_deg if self.early_side == 'right'
@@ -320,6 +334,12 @@ class EtRallyTurnOneShot(Behaviour):
             return True
 
         use_decel = self.decel_deg > 0 and self.target_motor_deg >= 2 * self.decel_deg
+        if self.wheel_sync_gain > 0.0 and not (self.right_done or self.left_done):
+            right_power, left_power = self._synced_powers(delta_r, delta_l, use_decel)
+            runtime.right_motor.set_power(right_power)
+            runtime.left_motor.set_power(left_power)
+            log_power_state(self.__class__.__name__ + ".phase1", right_power, left_power)
+            return False
         right_power = left_power = 0
         if not self.right_done:
             p = (self.decel_power if use_decel and self.right_target_motor_deg - delta_r < self.decel_deg
@@ -333,6 +353,24 @@ class EtRallyTurnOneShot(Behaviour):
             runtime.left_motor.set_power(left_power)
         log_power_state(self.__class__.__name__ + ".phase1", right_power, left_power)
         return False
+
+    def _synced_powers(self, delta_r, delta_l, use_decel):
+        """左右を同時に同じだけ回すための出力(right_power, left_power)。
+
+        左の回転量を右の目標に対する割合に直して比べ(left_target_scaleの分を除く)、進んでいる側を
+        下げ・遅れている側を上げる。減速は左右の平均の残りで一緒に始める。
+        """
+        scale = (self.right_target_motor_deg / self.left_target_motor_deg
+                 if self.left_target_motor_deg > 1e-6 else 1.0)
+        delta_l_in_r = delta_l * scale
+        lead = delta_r - delta_l_in_r
+        remaining = self.right_target_motor_deg - (delta_r + delta_l_in_r) / 2.0
+        p = self.decel_power if use_decel and remaining < self.decel_deg else self.main_power
+        correction = self.wheel_sync_gain * lead
+        right_mag = int(round(max(WHEEL_SYNC_MIN_POWER, min(100, p - correction))))
+        left_mag = int(round(max(WHEEL_SYNC_MIN_POWER, min(100, p + correction))))
+        return (runtime.course * self.direction * right_mag,
+                (-1) * runtime.course * self.direction * left_mag)
 
     # --- フェーズ2: 一発サイズのパルス補正 ---
 

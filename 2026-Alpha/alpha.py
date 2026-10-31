@@ -1327,6 +1327,14 @@ def _run_main(argv, startup_cleanup):
               'lag compensation, which still applies. Replaces --rally-turn-phase1-scale. Default (unset) = off.'),
     )
     parser.add_argument(
+        '--rally-turn-wheel-sync',
+        type=float,
+        default=None,
+        help=('one_shot only: GAIN (power per encoder deg, e.g. 2). During phase1 the wheel that is ahead '
+              'is slowed and the one behind is sped up so both wheels turn the same amount at the same time '
+              'and stop together; the lag compensation is not applied. 0 or unset = off.'),
+    )
+    parser.add_argument(
         '--rally-turn-pre-stop',
         choices=['on', 'off'],
         default=None,
@@ -1537,6 +1545,13 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-phase1-model gains must be within 0.5..1.5 and flows within 0..20 deg')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_phase1_model=((pos_gain, pos_flow), (neg_gain, neg_flow)))
+    if args.rally_turn_wheel_sync is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-wheel-sync requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not (0.0 <= args.rally_turn_wheel_sync <= 20.0):
+            parser.error('--rally-turn-wheel-sync must be within 0..20')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_wheel_sync_gain=args.rally_turn_wheel_sync)
     if args.rally_turn_pre_stop is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-turn-pre-stop requires --mission rally-drive, bottle-rally or rally-sumo')

@@ -124,6 +124,9 @@ class RaceConfig:
     # 2026-10-31: one_shotのphase1を「実際の角度 = 係数×指令 + 一定の流れ」で計算する
     # ((増える向きの係数, 流れ), (減る向きの係数, 流れ))。指定時はphase1_scaleを使わない(lag補正はかける)。既定None=従来どおり。
     et_rally_turn_phase1_model: Optional[tuple] = None
+    # 2026-10-31: one_shotのphase1で、左右の車輪の回転量の差(エンコーダ度)×この係数だけ、進んでいる側の
+    # 出力を下げ・遅れている側を上げて、左右を同時に同じだけ回す(lag補正はかけない)。既定None/0=無効。
+    et_rally_turn_wheel_sync_gain: Optional[float] = None
     # 2026-10-28: one_shotで、旋回の前に車体が止まるまで待つ。既定None=False(待たない)。
     et_rally_turn_pre_stop: Optional[bool] = None
     # 2026-10-29: one_shot旋回で車体が前へ出た量を、次の直進から差し引く。既定None=False。

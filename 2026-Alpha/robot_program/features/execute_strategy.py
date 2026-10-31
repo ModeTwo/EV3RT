@@ -330,7 +330,7 @@ class DeferredStrategySequence(Sequence):
                  turn_phase1_scale=None, turn_pre_stop=None, turn_forward_compensation=None,
                  start_check_mm=None, straight_pause_sec=None, straight_pause_min_mm=None,
                  gyro_still_sec=None, gyro_still_sweep=None, turn_phase1_model=None,
-                 straight_pause_labels=None):
+                 straight_pause_labels=None, turn_wheel_sync_gain=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -357,6 +357,7 @@ class DeferredStrategySequence(Sequence):
             "gyro_still_sweep": gyro_still_sweep,
             "turn_phase1_model": turn_phase1_model,
             "straight_pause_labels": straight_pause_labels,
+            "turn_wheel_sync_gain": turn_wheel_sync_gain,
         }
         self._loaded = False
 
@@ -456,6 +457,7 @@ def build_execute_strategy(context, config, lap_number=None):
             gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
             gyro_still_sweep=getattr(config, "et_rally_gyro_still_sweep", None),
             turn_phase1_model=getattr(config, "et_rally_turn_phase1_model", None),
+            turn_wheel_sync_gain=getattr(config, "et_rally_turn_wheel_sync_gain", None),
             straight_pause_labels=getattr(config, "et_rally_straight_pause_labels", None),
         )
     if source == "file":
@@ -484,6 +486,7 @@ def build_execute_strategy(context, config, lap_number=None):
             gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
             gyro_still_sweep=getattr(config, "et_rally_gyro_still_sweep", None),
             turn_phase1_model=getattr(config, "et_rally_turn_phase1_model", None),
+            turn_wheel_sync_gain=getattr(config, "et_rally_turn_wheel_sync_gain", None),
             straight_pause_labels=getattr(config, "et_rally_straight_pause_labels", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
@@ -582,6 +585,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # 2026-10-31: one_shotのphase1を「実際の角度 = 係数×指令 + 一定の流れ」で計算する
                         # ((headingが増える向きの係数, 流れ), (減る向きの係数, 流れ))。Noneなら従来どおり。
                         turn_phase1_model=None,
+                        # 2026-10-31: 0より大きければ、one_shotのphase1で左右の車輪を同時に同じだけ回す(係数=出力/エンコーダ度)。
+                        turn_wheel_sync_gain=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -807,6 +812,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         phase1_scale=turn_phase1_scale,
                         pre_stop=turn_pre_stop,
                         phase1_model=turn_phase1_model,
+                        wheel_sync_gain=turn_wheel_sync_gain,
                     )
                 )
             elif turn_method == 'lqi':
