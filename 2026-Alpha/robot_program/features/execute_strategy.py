@@ -329,7 +329,8 @@ class DeferredStrategySequence(Sequence):
                  turn_adaptive_lag_compensation=None, turn_left_target_scale=None,
                  turn_phase1_scale=None, turn_pre_stop=None, turn_forward_compensation=None,
                  start_check_mm=None, straight_pause_sec=None, straight_pause_min_mm=None,
-                 gyro_still_sec=None, gyro_still_sweep=None, turn_phase1_model=None):
+                 gyro_still_sec=None, gyro_still_sweep=None, turn_phase1_model=None,
+                 straight_pause_labels=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -355,6 +356,7 @@ class DeferredStrategySequence(Sequence):
             "gyro_still_sec": gyro_still_sec,
             "gyro_still_sweep": gyro_still_sweep,
             "turn_phase1_model": turn_phase1_model,
+            "straight_pause_labels": straight_pause_labels,
         }
         self._loaded = False
 
@@ -454,6 +456,7 @@ def build_execute_strategy(context, config, lap_number=None):
             gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
             gyro_still_sweep=getattr(config, "et_rally_gyro_still_sweep", None),
             turn_phase1_model=getattr(config, "et_rally_turn_phase1_model", None),
+            straight_pause_labels=getattr(config, "et_rally_straight_pause_labels", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -481,6 +484,7 @@ def build_execute_strategy(context, config, lap_number=None):
             gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
             gyro_still_sweep=getattr(config, "et_rally_gyro_still_sweep", None),
             turn_phase1_model=getattr(config, "et_rally_turn_phase1_model", None),
+            straight_pause_labels=getattr(config, "et_rally_straight_pause_labels", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -567,6 +571,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # この秒数だけ止まる(直進の始めと終わりの位置を測るため)。
                         straight_pause_sec=0.0,
                         straight_pause_min_mm=400.0,
+                        # 2026-10-31: ラベルの集まり。指定時は、そのラベルの直進の後だけstraight_pause_sec止まる。
+                        straight_pause_labels=None,
                         # 2026-10-29: 0より大きければ、経路を走らずに、この秒数だけ止まったまま
                         # 向きをログに残して終える(止まっているときのジャイロのずれの検証用)。
                         gyro_still_sec=0.0,
@@ -708,8 +714,15 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 lap_tag="lap%s-start" % cur_lap))
             prev_lap = cur_lap
 
-        pause_this_move = (step["type"] == "move" and straight_pause_sec and straight_pause_sec > 0
-                           and step["distance_mm"] >= straight_pause_min_mm)
+        # 2026-10-31: straight_pause_labels指定時は、そのラベルの直進の後だけ止まる(位置を測る地点だけ)。
+        if straight_pause_labels:
+            pause_this_move = False
+            pause_after_move = (step["type"] == "move" and straight_pause_sec and straight_pause_sec > 0
+                                and label in straight_pause_labels)
+        else:
+            pause_this_move = (step["type"] == "move" and straight_pause_sec and straight_pause_sec > 0
+                               and step["distance_mm"] >= straight_pause_min_mm)
+            pause_after_move = pause_this_move
         if pause_this_move:
             nodes.append(EtRallyPause(name="et_rally pause before move%d%s" % (index, label_text),
                                       min_seconds=straight_pause_sec))
@@ -754,7 +767,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 ]
             )
             nodes.append(leg)
-            if pause_this_move:
+            if pause_after_move:
                 nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),
                                           min_seconds=straight_pause_sec))
         else:

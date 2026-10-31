@@ -1357,6 +1357,10 @@ def _run_main(argv, startup_cleanup):
     )
     parser.add_argument('--rally-straight-pause-min-mm', type=float, default=None,
                         help='Shortest straight that gets the stops of --rally-straight-pause-sec. Default 400.')
+    parser.add_argument('--rally-straight-pause-labels', default=None,
+                        help=('Comma-separated step labels (e.g. lap1-blue-entry). With --rally-straight-pause-sec, '
+                              'stop only after the straights with these labels (overrides '
+                              '--rally-straight-pause-min-mm). Default (unset) = by length.'))
     parser.add_argument(
         '--rally-gyro-still-sec',
         type=float,
@@ -1571,6 +1575,13 @@ def _run_main(argv, startup_cleanup):
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error(option + ' requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(mission_config, **{field: value == 'on'})
+    if args.rally_straight_pause_labels is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-straight-pause-labels requires --mission rally-drive, bottle-rally or rally-sumo')
+        labels = tuple(v.strip() for v in args.rally_straight_pause_labels.split(',') if v.strip())
+        if not labels:
+            parser.error('--rally-straight-pause-labels must name at least one label')
+        mission_config = dataclasses.replace(mission_config, et_rally_straight_pause_labels=labels)
     if args.rally_move_pid_i is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-move-pid-i requires --mission rally-drive, bottle-rally or rally-sumo')

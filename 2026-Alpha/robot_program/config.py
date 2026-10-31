@@ -133,6 +133,8 @@ class RaceConfig:
     # 2026-10-29: 長い直進(et_rally_straight_pause_min_mm以上、既定400mm)の前後で、この秒数だけ止まる。既定None=止まらない。
     et_rally_straight_pause_sec: Optional[float] = None
     et_rally_straight_pause_min_mm: Optional[float] = None
+    # 2026-10-31: ラベル(例 lap1-blue-entry)の集まり。指定時は、そのラベルの直進の後だけ止まる。既定None=長さで決める。
+    et_rally_straight_pause_labels: Optional[tuple] = None
     # 2026-10-29: 経路を走らずに、この秒数だけ止まったまま向きをログに残して終える(ジャイロのずれの検証用)。既定None=しない。
     et_rally_gyro_still_sec: Optional[float] = None
     # 2026-10-29: Trueなら静止テストを、アーム(上/下)×車輪のブレーキ(あり/なし)の4状態で、
