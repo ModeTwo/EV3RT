@@ -1319,6 +1319,14 @@ def _run_main(argv, startup_cleanup):
               'wireless_device/et_rally_lqi/phase1_scale_from_log.py). Default (unset) = 1.0,1.0.'),
     )
     parser.add_argument(
+        '--rally-turn-phase1-model',
+        default=None,
+        help=('one_shot only: "POS_GAIN,POS_FLOW,NEG_GAIN,NEG_FLOW". phase1 is commanded so that '
+              'GAIN x command + FLOW (deg, the rotation that continues after braking, scaled down '
+              'for turns under 40 deg) equals the target. Replaces --rally-turn-phase1-scale and the '
+              'lag compensation. Default (unset) = off.'),
+    )
+    parser.add_argument(
         '--rally-turn-pre-stop',
         choices=['on', 'off'],
         default=None,
@@ -1513,6 +1521,18 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-phase1-scale values must be within 0.5..1.5')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_phase1_scale=(pos_scale, neg_scale))
+    if args.rally_turn_phase1_model is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-phase1-model requires --mission rally-drive, bottle-rally or rally-sumo')
+        try:
+            pos_gain, pos_flow, neg_gain, neg_flow = (float(v) for v in args.rally_turn_phase1_model.split(','))
+        except ValueError:
+            parser.error('--rally-turn-phase1-model must be "POS_GAIN,POS_FLOW,NEG_GAIN,NEG_FLOW" (e.g. 1.0,5.7,0.958,8.6)')
+        if not (0.5 <= pos_gain <= 1.5 and 0.5 <= neg_gain <= 1.5
+                and 0.0 <= pos_flow <= 20.0 and 0.0 <= neg_flow <= 20.0):
+            parser.error('--rally-turn-phase1-model gains must be within 0.5..1.5 and flows within 0..20 deg')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_phase1_model=((pos_gain, pos_flow), (neg_gain, neg_flow)))
     if args.rally_turn_pre_stop is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-turn-pre-stop requires --mission rally-drive, bottle-rally or rally-sumo')

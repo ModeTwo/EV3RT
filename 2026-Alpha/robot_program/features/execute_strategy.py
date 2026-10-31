@@ -329,7 +329,7 @@ class DeferredStrategySequence(Sequence):
                  turn_adaptive_lag_compensation=None, turn_left_target_scale=None,
                  turn_phase1_scale=None, turn_pre_stop=None, turn_forward_compensation=None,
                  start_check_mm=None, straight_pause_sec=None, straight_pause_min_mm=None,
-                 gyro_still_sec=None, gyro_still_sweep=None):
+                 gyro_still_sec=None, gyro_still_sweep=None, turn_phase1_model=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -354,6 +354,7 @@ class DeferredStrategySequence(Sequence):
             "straight_pause_min_mm": straight_pause_min_mm,
             "gyro_still_sec": gyro_still_sec,
             "gyro_still_sweep": gyro_still_sweep,
+            "turn_phase1_model": turn_phase1_model,
         }
         self._loaded = False
 
@@ -452,6 +453,7 @@ def build_execute_strategy(context, config, lap_number=None):
             straight_pause_min_mm=getattr(config, "et_rally_straight_pause_min_mm", None),
             gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
             gyro_still_sweep=getattr(config, "et_rally_gyro_still_sweep", None),
+            turn_phase1_model=getattr(config, "et_rally_turn_phase1_model", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -478,6 +480,7 @@ def build_execute_strategy(context, config, lap_number=None):
             straight_pause_min_mm=getattr(config, "et_rally_straight_pause_min_mm", None),
             gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
             gyro_still_sweep=getattr(config, "et_rally_gyro_still_sweep", None),
+            turn_phase1_model=getattr(config, "et_rally_turn_phase1_model", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -570,6 +573,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # 2026-10-29: Trueなら静止テストを、アーム(上/下)と車輪のブレーキ(あり/なし)の
                         # 4つの状態で、gyro_still_secずつ順に行う(ハブの静止判定を邪魔しているものを探す)。
                         gyro_still_sweep=False,
+                        # 2026-10-31: one_shotのphase1を「実際の角度 = 係数×指令 + 一定の流れ」で計算する
+                        # ((headingが増える向きの係数, 流れ), (減る向きの係数, 流れ))。Noneなら従来どおり。
+                        turn_phase1_model=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -787,6 +793,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         left_target_scale=turn_left_target_scale,
                         phase1_scale=turn_phase1_scale,
                         pre_stop=turn_pre_stop,
+                        phase1_model=turn_phase1_model,
                     )
                 )
             elif turn_method == 'lqi':
