@@ -331,7 +331,7 @@ class DeferredStrategySequence(Sequence):
                  start_check_mm=None, straight_pause_sec=None, straight_pause_min_mm=None,
                  gyro_still_sec=None, gyro_still_sweep=None, turn_phase1_model=None,
                  straight_pause_labels=None, turn_wheel_sync_gain=None,
-                 turn_sync_decel=None):
+                 turn_sync_decel=None, move_short_lead_mm=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -360,6 +360,7 @@ class DeferredStrategySequence(Sequence):
             "straight_pause_labels": straight_pause_labels,
             "turn_wheel_sync_gain": turn_wheel_sync_gain,
             "turn_sync_decel": turn_sync_decel,
+            "move_short_lead_mm": move_short_lead_mm,
         }
         self._loaded = False
 
@@ -462,6 +463,7 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_wheel_sync_gain=getattr(config, "et_rally_turn_wheel_sync_gain", None),
             turn_sync_decel=getattr(config, "et_rally_turn_sync_decel", None),
             straight_pause_labels=getattr(config, "et_rally_straight_pause_labels", None),
+            move_short_lead_mm=getattr(config, "et_rally_move_short_lead_mm", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -492,6 +494,7 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_wheel_sync_gain=getattr(config, "et_rally_turn_wheel_sync_gain", None),
             turn_sync_decel=getattr(config, "et_rally_turn_sync_decel", None),
             straight_pause_labels=getattr(config, "et_rally_straight_pause_labels", None),
+            move_short_lead_mm=getattr(config, "et_rally_move_short_lead_mm", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -593,6 +596,10 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         turn_wheel_sync_gain=None,
                         # 2026-10-31: wheel_sync有効時のphase1終盤の減速(エンコーダ度, 出力)。Noneなら(15, 50)。
                         turn_sync_decel=None,
+                        # 2026-10-31: SHORT_MOVE_NO_LEAD_MMより短い直進を、この距離(mm)だけ手前で終える。
+                        # Noneなら従来どおり計画の距離を走る。周回(1031b)のゴール手前の20mmの直進が、
+                        # 到達の行き過ぎ1mm+止まるまでの惰性8.5mmで約30mm進み、ゴールで右に15mmずれた。
+                        move_short_lead_mm=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -743,6 +750,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             # 惰性で進む分を見込み、手前で直進を終える(短すぎる区間でも最低1mmは走る)。
             if step["distance_mm"] < SHORT_MOVE_NO_LEAD_MM:
                 run_distance_mm = step["distance_mm"]
+                if move_short_lead_mm:
+                    run_distance_mm = max(run_distance_mm - move_short_lead_mm, 1.0)
             else:
                 run_distance_mm = max(step["distance_mm"] - move_stop_lead_mm, 1.0)
             distance_mm = int(round(run_distance_mm))

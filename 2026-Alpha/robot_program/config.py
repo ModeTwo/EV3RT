@@ -167,6 +167,8 @@ class RaceConfig:
     et_rally_move_fine_power: Optional[bool] = None
     # 2026-10-31: 直進の向きのPIDのI(既定None=0.6のまま)。
     et_rally_move_pid_i: Optional[float] = None
+    # 2026-10-31: 50mmより短い直進を、この距離(mm)だけ手前で終える(既定None=計画どおりの距離を走る)。
+    et_rally_move_short_lead_mm: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、
