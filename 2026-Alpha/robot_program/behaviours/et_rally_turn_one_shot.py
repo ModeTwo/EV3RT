@@ -162,7 +162,8 @@ class EtRallyTurnOneShot(Behaviour):
                  settle_stable_ticks: int = SETTLE_STABLE_TICKS,
                  settle_max_ticks: int = SETTLE_MAX_TICKS,
                  phase1_model=None,
-                 wheel_sync_gain=None) -> None:
+                 wheel_sync_gain=None,
+                 sync_decel=None) -> None:
         super().__init__(name)
         # 2026-10-31: 0より大きければ、phase1で左右の車輪の回転量(目標に対する割合をエンコーダ度に直したもの)の
         # 差×この係数だけ、進んでいる側の出力を下げ・遅れている側を上げる。引き込まれ補正はかけない。
@@ -170,6 +171,10 @@ class EtRallyTurnOneShot(Behaviour):
         # 左回り 右+160・左-231度)、車体は回りながら後ろへ9〜17mm下がり、最後に遅れた車輪だけが回って
         # 前へ10〜19mm出ていた。下がる向きと出る向きが違うため、30回で車体が左へ10〜13cm動いた。
         self.wheel_sync_gain = wheel_sync_gain if wheel_sync_gain else 0.0
+        # 2026-10-31: wheel_sync有効時の終盤の減速(エンコーダ度, 出力)。Noneならdecel_deg/decel_power。
+        # 同期ありでは最後まで両輪が速いまま止まるため、止めた後の流れが約12度(同期なしは4〜6度)に増え、
+        # phase1が右回り平均9度・左回り13度行き過ぎて、同期していないパルスが8〜20度に大きくなっていた。
+        self.sync_decel = sync_decel
         # 2026-10-31: phase1の回転量を「実際の角度 = 係数×指令の角度 + 一定の流れ(度)」で見込む
         # ((headingが増える向きの係数, 流れ), (減る向きの係数, 流れ))。指定時はphase1_scaleを使わない。
         # 10/30 13:14周回の27旋回で、phase1の実際の回転には旋回の大きさによらない流れが加わっており、
@@ -296,7 +301,9 @@ class EtRallyTurnOneShot(Behaviour):
             "%+06d %s.phase1 started at heading=%d for %d (target_motor_deg=%.1f) phase1_scale=%.4f%s" % (
                 runtime.plotter.get_distance(), self.__class__.__name__, current_heading,
                 self.target_heading, self.target_motor_deg, self.applied_phase1_scale,
-                " wheel_sync=%.1f" % self.wheel_sync_gain if self.wheel_sync_gain > 0.0 else ""))
+                (" wheel_sync=%.1f" % self.wheel_sync_gain if self.wheel_sync_gain > 0.0 else "")
+                + (" sync_decel=%g,%d" % tuple(self.sync_decel)
+                   if self.wheel_sync_gain > 0.0 and self.sync_decel is not None else "")))
 
     def _tick_phase1(self):
         delta_r = abs(runtime.right_motor.get_count() - self.start_r)
@@ -365,7 +372,13 @@ class EtRallyTurnOneShot(Behaviour):
         delta_l_in_r = delta_l * scale
         lead = delta_r - delta_l_in_r
         remaining = self.right_target_motor_deg - (delta_r + delta_l_in_r) / 2.0
-        p = self.decel_power if use_decel and remaining < self.decel_deg else self.main_power
+        if self.sync_decel is not None:
+            decel_deg, decel_power = self.sync_decel
+            # 小さい旋回でも減速するよう、減速区間は旋回の半分までにする。
+            zone = min(decel_deg, self.right_target_motor_deg / 2.0)
+            p = decel_power if remaining < zone else self.main_power
+        else:
+            p = self.decel_power if use_decel and remaining < self.decel_deg else self.main_power
         correction = self.wheel_sync_gain * lead
         right_mag = int(round(max(WHEEL_SYNC_MIN_POWER, min(100, p - correction))))
         left_mag = int(round(max(WHEEL_SYNC_MIN_POWER, min(100, p + correction))))

@@ -1335,6 +1335,13 @@ def _run_main(argv, startup_cleanup):
               'and stop together; the lag compensation is not applied. 0 or unset = off.'),
     )
     parser.add_argument(
+        '--rally-turn-sync-decel',
+        default=None,
+        help=('one_shot with --rally-turn-wheel-sync only: "DEG,POWER". Both wheels slow to POWER for the '
+              'last DEG encoder degrees of phase1 (capped at half of the turn) so the turn coasts less after '
+              'braking. Unset = the normal 15 deg / power 50.'),
+    )
+    parser.add_argument(
         '--rally-turn-pre-stop',
         choices=['on', 'off'],
         default=None,
@@ -1552,6 +1559,17 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-wheel-sync must be within 0..20')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_wheel_sync_gain=args.rally_turn_wheel_sync)
+    if args.rally_turn_sync_decel is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-sync-decel requires --mission rally-drive, bottle-rally or rally-sumo')
+        try:
+            sync_decel_deg, sync_decel_power = (float(v) for v in args.rally_turn_sync_decel.split(','))
+        except ValueError:
+            parser.error('--rally-turn-sync-decel must be "DEG,POWER" (e.g. 40,40)')
+        if not (0.0 <= sync_decel_deg <= 200.0 and 35.0 <= sync_decel_power <= 100.0):
+            parser.error('--rally-turn-sync-decel DEG must be within 0..200 and POWER within 35..100')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_sync_decel=(sync_decel_deg, int(sync_decel_power)))
     if args.rally_turn_pre_stop is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-turn-pre-stop requires --mission rally-drive, bottle-rally or rally-sumo')
