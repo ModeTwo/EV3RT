@@ -1,0 +1,125 @@
+{
+  "note": "2026-10-31: alternating 0 <-> 110 deg x30 (ends at 0). The pivot offset cancels; what remains is the per-turn slip of 110-degree turns (compare with plan_spin_alternating30.json, 0<->90: 0.5cm).",
+  "steps": [
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 110.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    }
+  ]
+}
