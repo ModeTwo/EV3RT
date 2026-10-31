@@ -1,0 +1,349 @@
+{
+  "gates": {
+    "mode": "random",
+    "seed": 9392783,
+    "course": "right",
+    "red": {
+      "a": [
+        2,
+        2
+      ],
+      "b": [
+        1,
+        2
+      ]
+    },
+    "blue": {
+      "a": [
+        3,
+        1
+      ],
+      "b": [
+        3,
+        2
+      ]
+    },
+    "yellow": {
+      "a": [
+        3,
+        4
+      ],
+      "b": [
+        2,
+        4
+      ]
+    }
+  },
+  "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution: negated from the planner's raw CCW-positive, already-geometrically-mirrored angle, to compensate for file-mode skipping shared_communication/heading_frame.py's course normalization (received-SEQ execution gets this automatically). For course=right the net transform is gyro_target = -planner_angle; for course=left it is the identity. GOAL_FINAL_TURN=True (2026-10-24): includes a final turn-in-place at the goal to face GOAL_HEADING_DEG=90deg (world-frame +y, project convention = north).",
+  "total_distance_mm": 8439.9,
+  "move_count": 28,
+  "turn_count": 27,
+  "steps": [
+    {
+      "type": "turn",
+      "target_heading_deg": 25.11,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 25.11,
+      "distance_mm": 436.2,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 34.91,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 34.91,
+      "distance_mm": 192.2,
+      "label": "lap1-red-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 295.0,
+      "label": "lap1-red-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -18.19,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -18.19,
+      "distance_mm": 310.1,
+      "label": "lap1-blue-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 295.0,
+      "label": "lap1-blue-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 123.2,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -129.4,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -129.4,
+      "distance_mm": 540.7,
+      "label": "lap1-yellow-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 295.0,
+      "label": "lap1-yellow-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -180.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -180.0,
+      "distance_mm": 123.2,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 127.98,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 127.98,
+      "distance_mm": 200.2,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 480.0,
+      "label": "lap2-red-entry"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 295.0,
+      "label": "lap2-red-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -18.19,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -18.19,
+      "distance_mm": 310.1,
+      "label": "lap2-blue-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 295.0,
+      "label": "lap2-blue-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 123.2,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -129.4,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -129.4,
+      "distance_mm": 540.7,
+      "label": "lap2-yellow-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 295.0,
+      "label": "lap2-yellow-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -180.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -180.0,
+      "distance_mm": 123.2,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 127.98,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 127.98,
+      "distance_mm": 200.2,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 480.0,
+      "label": "lap3-red-entry"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 295.0,
+      "label": "lap3-red-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -18.19,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -18.19,
+      "distance_mm": 310.1,
+      "label": "lap3-blue-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 295.0,
+      "label": "lap3-blue-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 123.2,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -129.4,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -129.4,
+      "distance_mm": 540.7,
+      "label": "lap3-yellow-entry"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 295.0,
+      "label": "lap3-yellow-exit"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 20.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 34.96,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 34.96,
+      "distance_mm": 607.7,
+      "label": "goal"
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": "goal"
+    }
+  ],
+  "note_1029": "黄ゲート手前の中継点(62.6,89.96)を取り除き、(95.92,49.28)から黄ゲート入口まで1本の直進にした(元は526mm+15mm、間に約3度の旋回)。黄のT字パーツとの車体クリアランスは3.4cm→3.1cm(計画上)。",
+  "note_1030": "スタート地点のずらし(START_SHIFT_CMのY -2.0cm)を外した版。スタートはグレーポイントの中点。1029版の最初の直進(22.88度・423.3mm)だけを、同じ中継点へ向かうよう 25.33度・431.5mmに変えた。以降は同じ。",
+  "note_1031b": "2026-10-31: 左右同期(--rally-turn-wheel-sync 2 --rally-turn-sync-decel 40,40 --rally-turn-power 50)の旋回では、同じ向き90度x2回(最後180度)が後ろ10mm・左1mm(従来 後ろ19〜20mm・右2mm)で、旋回の中心は駆動輪の接地点の中点より約5mm後ろ・0.5mm左。1030版の最初と最後の直進だけを、この中心のスタート位置とゴール位置に合わせて変えた(1031版は9.5mm後ろ・1mm右の値)。"
+}
