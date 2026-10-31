@@ -726,10 +726,12 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             prev_lap = cur_lap
 
         # 2026-10-31: straight_pause_labels指定時は、そのラベルの直進の後だけ止まる(位置を測る地点だけ)。
+        # "before:ラベル"なら、その直進の前(前の旋回で向きを変え終えた後)に止まる。青ゲートの手前は
+        # 斜めの直進の後だと車体がゲートに対して斜めなので、ゲートに垂直に向き直した後で測るため。
         if straight_pause_labels:
-            pause_this_move = False
-            pause_after_move = (step["type"] == "move" and straight_pause_sec and straight_pause_sec > 0
-                                and label in straight_pause_labels)
+            pause_on = step["type"] == "move" and straight_pause_sec and straight_pause_sec > 0 and label
+            pause_this_move = bool(pause_on and ("before:" + label) in straight_pause_labels)
+            pause_after_move = bool(pause_on and label in straight_pause_labels)
         else:
             pause_this_move = (step["type"] == "move" and straight_pause_sec and straight_pause_sec > 0
                                and step["distance_mm"] >= straight_pause_min_mm)

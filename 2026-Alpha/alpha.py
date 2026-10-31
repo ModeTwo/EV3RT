@@ -1375,7 +1375,8 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument('--rally-straight-pause-labels', default=None,
                         help=('Comma-separated step labels (e.g. lap1-blue-entry). With --rally-straight-pause-sec, '
                               'stop only after the straights with these labels (overrides '
-                              '--rally-straight-pause-min-mm). Default (unset) = by length.'))
+                              '--rally-straight-pause-min-mm). "before:LABEL" stops before that straight instead '
+                              '(after the preceding turn), e.g. before:lap1-blue-exit. Default (unset) = by length.'))
     parser.add_argument(
         '--rally-gyro-still-sec',
         type=float,
