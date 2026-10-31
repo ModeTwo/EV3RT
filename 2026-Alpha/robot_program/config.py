@@ -122,7 +122,7 @@ class RaceConfig:
     # (headingが増える向きの旋回, 減る向きの旋回)。既定None=(1.0, 1.0)で無効。
     et_rally_turn_phase1_scale: Optional[tuple] = None
     # 2026-10-31: one_shotのphase1を「実際の角度 = 係数×指令 + 一定の流れ」で計算する
-    # ((増える向きの係数, 流れ), (減る向きの係数, 流れ))。指定時はphase1_scaleとlag補正を使わない。既定None=従来どおり。
+    # ((増える向きの係数, 流れ), (減る向きの係数, 流れ))。指定時はphase1_scaleを使わない(lag補正はかける)。既定None=従来どおり。
     et_rally_turn_phase1_model: Optional[tuple] = None
     # 2026-10-28: one_shotで、旋回の前に車体が止まるまで待つ。既定None=False(待たない)。
     et_rally_turn_pre_stop: Optional[bool] = None

@@ -1323,8 +1323,8 @@ def _run_main(argv, startup_cleanup):
         default=None,
         help=('one_shot only: "POS_GAIN,POS_FLOW,NEG_GAIN,NEG_FLOW". phase1 is commanded so that '
               'GAIN x command + FLOW (deg, the rotation that continues after braking, scaled down '
-              'for turns under 40 deg) equals the target. Replaces --rally-turn-phase1-scale and the '
-              'lag compensation. Default (unset) = off.'),
+              'for turns under 40 deg) equals the target. COMMAND is the base wheel rotation before the '
+              'lag compensation, which still applies. Replaces --rally-turn-phase1-scale. Default (unset) = off.'),
     )
     parser.add_argument(
         '--rally-turn-pre-stop',
@@ -1527,7 +1527,7 @@ def _run_main(argv, startup_cleanup):
         try:
             pos_gain, pos_flow, neg_gain, neg_flow = (float(v) for v in args.rally_turn_phase1_model.split(','))
         except ValueError:
-            parser.error('--rally-turn-phase1-model must be "POS_GAIN,POS_FLOW,NEG_GAIN,NEG_FLOW" (e.g. 1.0,5.7,0.958,8.6)')
+            parser.error('--rally-turn-phase1-model must be "POS_GAIN,POS_FLOW,NEG_GAIN,NEG_FLOW" (e.g. 0.961,6.9,0.913,8.9)')
         if not (0.5 <= pos_gain <= 1.5 and 0.5 <= neg_gain <= 1.5
                 and 0.0 <= pos_flow <= 20.0 and 0.0 <= neg_flow <= 20.0):
             parser.error('--rally-turn-phase1-model gains must be within 0.5..1.5 and flows within 0..20 deg')

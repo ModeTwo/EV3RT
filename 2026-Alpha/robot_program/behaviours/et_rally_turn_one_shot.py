@@ -162,11 +162,14 @@ class EtRallyTurnOneShot(Behaviour):
                  phase1_model=None) -> None:
         super().__init__(name)
         # 2026-10-31: phase1の回転量を「実際の角度 = 係数×指令の角度 + 一定の流れ(度)」で見込む
-        # ((headingが増える向きの係数, 流れ), (減る向きの係数, 流れ))。指定時はphase1_scaleと
-        # 引き込まれ補正(lag)を使わない。10/30 13:14周回の27旋回で、phase1の実際の回転は
-        # 指令にほぼ比例(左回り0.958倍、誤差±1.3度)し、それに旋回の大きさによらない流れ(左回り約8.6度、
-        # 右回り約5.7度)が加わっていた。比例の補正(lag比率・phase1_scale)では一定分を打ち消せず、
-        # 90度以外で外れていた(大きい左回りで7〜11度足りず、40度前後で2〜4度行き過ぎ)。
+        # ((headingが増える向きの係数, 流れ), (減る向きの係数, 流れ))。指定時はphase1_scaleを使わない。
+        # 10/30 13:14周回の27旋回で、phase1の実際の回転には旋回の大きさによらない流れが加わっており、
+        # 比例の係数(phase1_scale)では90度以外で外れていた(大きい左回りで7〜11度足りず、40度前後で
+        # 2〜4度行き過ぎ)。指令の角度は左右の車輪の基準の回転量(引き込まれ補正で先に止まる側を
+        # 短くする前)で、引き込まれ補正は通常どおりかける。
+        # 2026-10-31: 引き込まれ補正を外した版(左右の目標を同じにした)では、±40/90/110度の旋回30回で
+        # 車体が左へ6cm動いた(補正ありの従来方式は右0.3cm・前2.5cm)。先に止まった車輪は反対側に
+        # 引きずられて12〜24度(エンコーダ)余分に回るため、補正がないと左右の回転量がそろわない。
         self.phase1_model = phase1_model
         self.target = target
         self.target_type = target_type
@@ -227,10 +230,8 @@ class EtRallyTurnOneShot(Behaviour):
             # 流れだけで目標に届く旋回は、phase1を回さずにパルスで仕上げる。
             command_deg = max((abs(error) - flow) / gain, 0.0)
             self.applied_phase1_scale = command_deg / abs(error) if abs(error) > 1e-9 else 0.0
-            # 左右の目標の平均が指令の角度になるように、left_target_scaleの分を右へも振り分ける。
             self.target_motor_deg = (math.radians(command_deg) * (WHEEL_TREAD / 2.0)
-                                     / (math.pi * runtime.plotter.tire_diameter) * 360.0
-                                     * 2.0 / (1.0 + self.left_target_scale))
+                                     / (math.pi * runtime.plotter.tire_diameter) * 360.0)
         else:
             self.applied_phase1_scale = self.phase1_scale[0] if self.direction > 0 else self.phase1_scale[1]
             self.target_motor_deg *= self.applied_phase1_scale
@@ -248,13 +249,10 @@ class EtRallyTurnOneShot(Behaviour):
         # DD-22較正用: et_rally_drive.EtRallySpinAroundByEncoderと同じ考え方(先に
         # 止まる側は、もう片方がまだ回っている間の反力で引き込まれて動く分だけ、
         # 目標値を低くしておく)。right_power_sign<0の側(=course*direction<0)が
-        # 先に止まる(実測、2026-10-10)。phase1_model指定時は使わない(流れに含めて見込む)。
+        # 先に止まる(実測、2026-10-10)。
         global _lag_estimate_ratio
-        if self.phase1_model is not None:
-            compensation_ratio = 0.0
-        else:
-            compensation_ratio = (_lag_estimate_ratio if self.adaptive_lag_compensation
-                                   else self.lag_compensation_deg / _LAG_REFERENCE_MOTOR_DEG)
+        compensation_ratio = (_lag_estimate_ratio if self.adaptive_lag_compensation
+                               else self.lag_compensation_deg / _LAG_REFERENCE_MOTOR_DEG)
         self.right_base_motor_deg = self.target_motor_deg
         self.left_base_motor_deg = self.target_motor_deg * self.left_target_scale
         right_power_sign = runtime.course * self.direction
@@ -298,7 +296,7 @@ class EtRallyTurnOneShot(Behaviour):
         if self.right_done and self.left_done:
             lag_right_delta = runtime.right_motor.get_count() - self.right_done_at_count
             lag_left_delta = runtime.left_motor.get_count() - self.left_done_at_count
-            if self.adaptive_lag_compensation and self.phase1_model is None:
+            if self.adaptive_lag_compensation:
                 global _lag_estimate_ratio
                 observed = abs(lag_right_delta if self.early_side == 'right' else lag_left_delta)
                 early_base = (self.right_base_motor_deg if self.early_side == 'right'
