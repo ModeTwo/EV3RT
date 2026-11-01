@@ -1,0 +1,13 @@
+{
+  "note": "2026-11-01: EtRallyPathSegment(reverse/stopの指定がある計画)での直進の距離の確認用。床で実際に進んだ距離を測り、前進と後退で同じかを見る。",
+  "steps": [
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 1000.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    }
+  ]
+}
