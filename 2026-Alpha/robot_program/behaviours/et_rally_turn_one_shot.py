@@ -100,6 +100,11 @@ WHEEL_SYNC_STALL_TICKS = 3
 WHEEL_SYNC_STALL_STEP = 2
 # 2026-11-01: 片輪だけの区間(tail)で、最後にこの度数以上進んでから同じtick数が過ぎたら止まりとみなす。
 TAIL_STALL_MIN_DEG = 2
+# 2026-11-01: パルスで左右の車輪の回転量の合計がこれ未満なら止まりとみなし、次のパルスの出力をSTEP上げる
+# (止まったパルスは回数に数えず、MAX_RETRY回まで)。
+PULSE_STALL_MIN_DEG = 4
+PULSE_STALL_STEP = 10
+PULSE_STALL_MAX_RETRY = 3
 
 # 2026-10-25: phase1終了直後・各パルス直後は、ブレーキをかけてもロボットがまだ回っている
 # (旋回30回テストで、pulse#2時点の残差が旋回方向に15回中15回とも同じ符号で行き過ぎ、
@@ -458,6 +463,8 @@ class EtRallyTurnOneShot(Behaviour):
         self._mark_wheels("tail", current_heading)
         self.phase = 2
         self.pulse_attempt = 0
+        self.pulse_boost = 0
+        self.stalled_pulses = 0
         self._begin_settle(current_heading, "phase1")
 
     def _begin_settle(self, current_heading, reason):
@@ -493,14 +500,34 @@ class EtRallyTurnOneShot(Behaviour):
         error = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
         ticks = _lookup_ticks(error, self.pulse_table)
         self.pulse_ticks_remaining = ticks
-        self.pulse_power = int(math.copysign(self.floor_power, error)) if ticks > 0 else 0
+        self.pulse_power = (int(math.copysign(min(100, self.floor_power + self.pulse_boost), error))
+                            if ticks > 0 else 0)
         self.pulse_attempt += 1
+        self.pulse_start_counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
         self.logger.info(
             "%+06d %s.phase2 pulse#%d error=%+.2f ticks=%d power=%+d" % (
                 runtime.plotter.get_distance(), self.__class__.__name__,
                 self.pulse_attempt, error, ticks, self.pulse_power))
         if ticks == 0:
             self._stop_motors()
+
+    def _check_pulse_stall(self):
+        """直前のパルスで車輪がほとんど回らなかったら、次のパルスの出力を上げ、回数に数えない。
+
+        2026-11-01: 周回の+127度の旋回で、出力50・6tickのパルスを2回打っても車輪が1〜2度しか
+        回らず、-5.3度ずれたまま旋回が終わっていた。左右同期を使うときだけ働く。
+        """
+        if self.wheel_sync_gain <= 0.0 or self.pulse_power == 0:
+            return
+        moved = (abs(runtime.right_motor.get_count() - self.pulse_start_counts[0])
+                 + abs(runtime.left_motor.get_count() - self.pulse_start_counts[1]))
+        if moved >= PULSE_STALL_MIN_DEG or self.stalled_pulses >= PULSE_STALL_MAX_RETRY:
+            return
+        self.stalled_pulses += 1
+        self.pulse_boost += PULSE_STALL_STEP
+        self.logger.info("%+06d %s.phase2 pulse#%d stall: wheels moved %d deg, next pulse power +%d" % (
+            runtime.plotter.get_distance(), self.__class__.__name__, self.pulse_attempt, moved,
+            self.pulse_boost))
 
     def _stop_motors(self):
         runtime.right_motor.set_power(0)
@@ -520,7 +547,10 @@ class EtRallyTurnOneShot(Behaviour):
             if self.pulse_attempt == 0 and abs(error) >= self.fine_tolerance_deg:
                 self._start_pulse(current_heading)
                 return "running"
-            if abs(error) < self.fine_tolerance_deg or self.pulse_attempt >= self.max_pulse_attempts:
+            if self.pulse_attempt > 0 and abs(error) >= self.fine_tolerance_deg:
+                self._check_pulse_stall()
+            if (abs(error) < self.fine_tolerance_deg
+                    or self.pulse_attempt - self.stalled_pulses >= self.max_pulse_attempts):
                 turn_forward_mm = forward_mm_since(self.start_r, self.start_l)
                 # 2026-10-29: 次の直進が(オプション有効時に)この分だけ短く走れるよう渡す。
                 set_turn_forward_mm(turn_forward_mm)
