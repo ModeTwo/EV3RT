@@ -145,6 +145,130 @@ def best_conn(A, hA, B, hB, tail=0.0):
     for t, prims in cands:
         if all(prim_ok(p) for p in prims):
             return t, prims
+    if USE_WP:
+        t, prims = via_conn(A, hA, Bm, hB)
+        if prims is not None:
+            if tail > 0:
+                prims = prims + [('line', Bm, B, 1)]
+                t += tail / V_LINE
+            return t, prims
+    return INF, None
+
+
+# --- 中継の姿勢(点+向き)を1つ経由する遠回り(直接の Dubins 経路が全部当たるときだけ) ---
+WP_STEP = float(os.environ.get('FR_WP_STEP', '8'))
+WP_HEADINGS = int(os.environ.get('FR_WP_HEADINGS', '12'))
+WP_TRIES = int(os.environ.get('FR_WP_TRIES', '150'))
+USE_WP = os.environ.get('FR_WAYPOINTS', '1') == '1'
+
+
+def _wp_poses():
+    out = []
+    for x in np.arange(BOUNDS[0], BOUNDS[1] + 0.1, WP_STEP):
+        for y in np.arange(BOUNDS[2], BOUNDS[3] + 0.1, WP_STEP):
+            p = np.array([x, y])
+            if any(x0 < x < x1 and y0 < y < y1 for x0, x1, y0, y1 in KEEPOUT):
+                continue
+            for k in range(WP_HEADINGS):
+                h = 360.0 * k / WP_HEADINGS
+                if body_ok(p, h, -REAR, FRONT):
+                    out.append((x, y, math.radians(h)))
+    return np.array(out)
+
+
+def _ccw_v(x):
+    x = np.mod(x, TAU)
+    return np.where(x > TAU - 1e-7, 0.0, x)
+
+
+def dubins_times_vec(x0, y0, t0, x1, y1, t1, r):
+    """配列どうしで、8つの形(円弧-直進-円弧×4、円弧-円弧-円弧×4)の時間を返す。shape (8, N)。だめなものはINF。"""
+    va = v_arc(r)
+    out = []
+    for s1 in (1, -1):
+        for s2 in (1, -1):
+            c1x = x0 - s1 * r * np.sin(t0); c1y = y0 + s1 * r * np.cos(t0)
+            c2x = x1 - s2 * r * np.sin(t1); c2y = y1 + s2 * r * np.cos(t1)
+            dx, dy = c2x - c1x, c2y - c1y
+            D = np.hypot(dx, dy); k = (s1 - s2) * r
+            ok = D > abs(k) + 1e-9
+            Ds = np.where(ok, D, 1.0)
+            phi = np.arctan2(dy, dx) + np.arcsin(np.clip(k / Ds, -1, 1))
+            L = np.sqrt(np.maximum(Ds ** 2 - k ** 2, 0))
+            a = _ccw_v(s1 * (phi - t0)) + _ccw_v(s2 * (t1 - phi))
+            out.append(np.where(ok, r * a / va + L / V_LINE, INF))
+    for s in (1, -1):
+        c1x = x0 - s * r * np.sin(t0); c1y = y0 + s * r * np.cos(t0)
+        c3x = x1 - s * r * np.sin(t1); c3y = y1 + s * r * np.cos(t1)
+        dx, dy = c3x - c1x, c3y - c1y
+        D = np.hypot(dx, dy)
+        ok = (D > 1e-9) & (D < 4 * r)
+        al = np.arctan2(dy, dx); be = np.arccos(np.clip(D / (4 * r), -1, 1))
+        for sg in (1, -1):
+            c2x = c1x + 2 * r * np.cos(al + sg * be); c2y = c1y + 2 * r * np.sin(al + sg * be)
+            v1x, v1y = (c1x - c2x) / (2 * s * r), (c1y - c2y) / (2 * s * r)
+            v2x, v2y = (c3x - c2x) / (2 * s * r), (c3y - c2y) / (2 * s * r)
+            th1 = np.arctan2(-v1x, v1y); th2 = np.arctan2(-v2x, v2y)
+            a = _ccw_v(s * (th1 - t0)) + _ccw_v(-s * (th2 - th1)) + _ccw_v(s * (t1 - th2))
+            out.append(np.where(ok, r * a / va, INF))
+    return np.array(out)
+
+
+_WP = None
+_wp_from, _wp_to = {}, {}
+
+
+def _table(pose, to_wp):
+    """pose→全中継(to_wp)または全中継→pose の、(半径×8形)ごとの時間。shape (len(RADII)*8, K)"""
+    x, y, t = pose
+    X, Y, T = _WP[:, 0], _WP[:, 1], _WP[:, 2]
+    rows = []
+    for r in RADII:
+        if to_wp:
+            rows.append(dubins_times_vec(x, y, t, X, Y, T, r))
+        else:
+            rows.append(dubins_times_vec(X, Y, T, x, y, t, r))
+    return np.concatenate(rows, 0)
+
+
+def _best_ok(A, thA, B, thB, budget):
+    """A→Bの当たらない Dubins 経路のうち、時間が budget 以下で最短のもの。"""
+    cands = []
+    for r in RADII:
+        for prims in dubins(A, thA, B, thB, r):
+            t = sum(prim_time(p) for p in prims)
+            if t <= budget + 1e-6:
+                cands.append((t, prims))
+    cands.sort(key=lambda c: c[0])
+    for t, prims in cands:
+        if all(prim_ok(p) for p in prims):
+            return t, prims
+    return None
+
+
+def via_conn(A, hA, B, hB):
+    global _WP
+    if _WP is None:
+        _WP = _wp_poses()
+    kA = (round(float(A[0]), 3), round(float(A[1]), 3), round(hA, 3))
+    kB = (round(float(B[0]), 3), round(float(B[1]), 3), round(hB, 3))
+    if kA not in _wp_from:
+        _wp_from[kA] = _table((A[0], A[1], math.radians(hA)), True).min(0)
+    if kB not in _wp_to:
+        _wp_to[kB] = _table((B[0], B[1], math.radians(hB)), False).min(0)
+    tot = _wp_from[kA] + _wp_to[kB]
+    order = np.argsort(tot)
+    for i in order[:WP_TRIES]:
+        if tot[i] >= INF:
+            break
+        w = _WP[i]; P_ = np.array(w[:2]); hw = math.degrees(w[2])
+        first = _best_ok(A, math.radians(hA), P_, w[2], _wp_from[kA][i] + 3.0)
+        if first is None:
+            continue
+        second = _best_ok(P_, w[2], B, math.radians(hB), _wp_to[kB][i] + 3.0)
+        if second is None:
+            continue
+        return first[0] + second[0], first[1] + second[1]
     return INF, None
 
 
@@ -195,8 +319,14 @@ def main():
                 if ke not in cur or tot < cur[ke][0]:
                     cur[ke] = (tot, (kp, v, prims))
         hist.append(cur)
+        if not cur:
+            print(f'NO ROUTE: stage {len(hist)} ({color}) unreachable from {prev_color}')
+            return
         prev, prev_color = cur, color
     tab = conn[(prev_color, 'GOAL')]
+    if all(tab[(kp, 'GOAL')][0] >= INF for kp in prev):
+        print('NO ROUTE: goal unreachable after the last yellow')
+        return
     total, kp = min(((cp + tab[(kp, 'GOAL')][0], kp) for kp, (cp, _) in prev.items()), key=lambda x: x[0])
     goal_prims = tab[(kp, 'GOAL')][1]
     steps = []
