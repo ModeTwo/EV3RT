@@ -98,6 +98,8 @@ WHEEL_SYNC_MIN_POWER = 30
 # 2026-10-31: wheel_sync中に両輪の回転量がこのtick数より長く増えなければ、1tickごとに基準の出力をSTEPずつ上げる。
 WHEEL_SYNC_STALL_TICKS = 3
 WHEEL_SYNC_STALL_STEP = 2
+# 2026-11-01: 片輪だけの区間(tail)で、最後にこの度数以上進んでから同じtick数が過ぎたら止まりとみなす。
+TAIL_STALL_MIN_DEG = 2
 
 # 2026-10-25: phase1終了直後・各パルス直後は、ブレーキをかけてもロボットがまだ回っている
 # (旋回30回テストで、pulse#2時点の残差が旋回方向に15回中15回とも同じ符号で行き過ぎ、
@@ -302,6 +304,9 @@ class EtRallyTurnOneShot(Behaviour):
         self.sync_last_progress = -1
         self.sync_stall_ticks = 0
         self.sync_stall_logged = False
+        self.tail_stall_logged = False
+        self.tail_ref_progress = None
+        self.tail_stall_ticks = 0
         self.phase = 1
         self.logger.info(
             "%+06d %s.phase1 started at heading=%d for %d (target_motor_deg=%.1f) phase1_scale=%.4f%s" % (
@@ -354,18 +359,39 @@ class EtRallyTurnOneShot(Behaviour):
             log_power_state(self.__class__.__name__ + ".phase1", right_power, left_power)
             return False
         right_power = left_power = 0
+        boost = self._tail_stall_boost(delta_r + delta_l) if self.wheel_sync_gain > 0.0 else 0
         if not self.right_done:
             p = (self.decel_power if use_decel and self.right_target_motor_deg - delta_r < self.decel_deg
                  else self.main_power)
-            right_power = runtime.course * self.direction * p
+            right_power = runtime.course * self.direction * min(100, p + boost)
             runtime.right_motor.set_power(right_power)
         if not self.left_done:
             p = (self.decel_power if use_decel and self.left_target_motor_deg - delta_l < self.decel_deg
                  else self.main_power)
-            left_power = (-1) * runtime.course * self.direction * p
+            left_power = (-1) * runtime.course * self.direction * min(100, p + boost)
             runtime.left_motor.set_power(left_power)
         log_power_state(self.__class__.__name__ + ".phase1", right_power, left_power)
         return False
+
+    def _tail_stall_boost(self, progress):
+        """片輪だけを回す区間(tail)で、回転量が増えないtickが続いたら足す出力。
+
+        2026-11-01: 周回の-129度の旋回で、残った右輪が出力50のまま約4秒動かなかった(止まり検知は
+        両輪を回す区間にしかなかった)。エンコーダの1度のゆれで数え直しにならないよう、最後に
+        TAIL_STALL_MIN_DEG以上進んでからのtick数で判定し、少しずつ出力を上げる。
+        """
+        if self.tail_ref_progress is None or progress - self.tail_ref_progress >= TAIL_STALL_MIN_DEG:
+            self.tail_ref_progress = progress
+            self.tail_stall_ticks = 0
+            return 0
+        self.tail_stall_ticks += 1
+        if self.tail_stall_ticks <= WHEEL_SYNC_STALL_TICKS:
+            return 0
+        if not self.tail_stall_logged:
+            self.tail_stall_logged = True
+            self.logger.info("%+06d %s.phase1 tail stall: no wheel motion for %d ticks, raising power" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, self.tail_stall_ticks))
+        return WHEEL_SYNC_STALL_STEP * (self.tail_stall_ticks - WHEEL_SYNC_STALL_TICKS)
 
     def _synced_powers(self, delta_r, delta_l, use_decel):
         """左右を同時に同じだけ回すための出力(right_power, left_power)。
