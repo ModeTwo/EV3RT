@@ -12,6 +12,7 @@ from py_trees.common import Status
 
 from .bt_imports import Failure, HeadingType, Parallel, ParallelPolicy, Sequence
 from ..behaviours.et_rally_drive import EtRallyRunByGyro, EtRallySpinAroundByEncoder
+from ..behaviours.et_rally_path_segment import EtRallyPathSegment
 from ..behaviours.et_rally_turn_one_shot import EtRallyTurnOneShot
 from ..behaviours.et_rally_turn_lqi import EtRallyTurnLqi
 from ..behaviours.et_rally_turn_direction_test import EtRallySpinAroundDirectionTest
@@ -331,7 +332,7 @@ class DeferredStrategySequence(Sequence):
                  start_check_mm=None, straight_pause_sec=None, straight_pause_min_mm=None,
                  gyro_still_sec=None, gyro_still_sweep=None, turn_phase1_model=None,
                  straight_pause_labels=None, turn_wheel_sync_gain=None,
-                 turn_sync_decel=None, move_short_lead_mm=None):
+                 turn_sync_decel=None, move_short_lead_mm=None, path_lead_sec=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -361,6 +362,7 @@ class DeferredStrategySequence(Sequence):
             "turn_wheel_sync_gain": turn_wheel_sync_gain,
             "turn_sync_decel": turn_sync_decel,
             "move_short_lead_mm": move_short_lead_mm,
+            "path_lead_sec": path_lead_sec,
         }
         self._loaded = False
 
@@ -464,6 +466,7 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_sync_decel=getattr(config, "et_rally_turn_sync_decel", None),
             straight_pause_labels=getattr(config, "et_rally_straight_pause_labels", None),
             move_short_lead_mm=getattr(config, "et_rally_move_short_lead_mm", None),
+            path_lead_sec=getattr(config, "et_rally_path_lead_sec", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -495,6 +498,7 @@ def build_execute_strategy(context, config, lap_number=None):
             turn_sync_decel=getattr(config, "et_rally_turn_sync_decel", None),
             straight_pause_labels=getattr(config, "et_rally_straight_pause_labels", None),
             move_short_lead_mm=getattr(config, "et_rally_move_short_lead_mm", None),
+            path_lead_sec=getattr(config, "et_rally_path_lead_sec", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -537,11 +541,58 @@ def _merge_consecutive_moves(steps):
     for step in steps:
         prev = merged[-1] if merged else None
         if (step["type"] == "move" and prev is not None and prev["type"] == "move"
-                and abs(step["target_heading_deg"] - prev["target_heading_deg"]) < 1e-6):
+                and abs(step["target_heading_deg"] - prev["target_heading_deg"]) < 1e-6
+                and step.get("reverse", False) == prev.get("reverse", False)):
             prev["distance_mm"] += step["distance_mm"]
+            # 2026-11-01: 後ろの直進が止まるかどうか(stop)を引き継ぐ。
+            if "stop" in step:
+                prev["stop"] = step["stop"]
             continue
         merged.append(dict(step))
     return merged
+
+
+def _prepare_path_chains(steps):
+    """2026-11-01: 止まらずに続く直進・円弧のつながり(chain)を確定させる。
+
+    stop=Falseでも、次がturn・計画の終わり・前後の向きが変わる区間なら、止まる(stop=True)に直す
+    (前後の切り替えは、止まりきってからでないとできないため)。各区間に、止まるまでに後ろへ続く
+    距離(remaining_after_mm)と、前の区間から止まらずに続くか(continue_from_prev)を書き込む。
+    """
+    moving = ("move", "arc")
+    for i, step in enumerate(steps):
+        if step["type"] not in moving or step.get("stop", True):
+            continue
+        nxt = steps[i + 1] if i + 1 < len(steps) else None
+        if nxt is None or nxt["type"] not in moving or nxt.get("reverse", False) != step.get("reverse", False):
+            step["stop"] = True
+    remaining = 0.0
+    for i in range(len(steps) - 1, -1, -1):
+        step = steps[i]
+        if step["type"] not in moving:
+            remaining = 0.0
+            continue
+        if step.get("stop", True):
+            remaining = 0.0
+        step["remaining_after_mm"] = remaining
+        remaining += step["distance_mm"]
+    for i, step in enumerate(steps):
+        if step["type"] in moving:
+            prev = steps[i - 1] if i > 0 else None
+            step["continue_from_prev"] = bool(prev is not None and prev["type"] in moving and not prev.get("stop", True))
+    # 先読み用に、止まるまでに続く区間の形(kind, 長さ, 始めの向き, 向きの変化, 半径)を持たせる。
+    for i, step in enumerate(steps):
+        if step["type"] not in moving:
+            continue
+        profile = []
+        j = i
+        while steps[j]["type"] in moving and not steps[j].get("stop", True) and j + 1 < len(steps):
+            j += 1
+            nxt = steps[j]
+            sweep = nxt.get("sweep_deg", 0.0) if nxt["type"] == "arc" else 0.0
+            profile.append(("arc" if nxt["type"] == "arc" else "line", nxt["distance_mm"],
+                            nxt["target_heading_deg"] - sweep, sweep, nxt.get("radius_mm", 0.0)))
+        step["next_profile"] = profile
 
 
 def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
@@ -600,6 +651,10 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # Noneなら従来どおり計画の距離を走る。周回(1031b)のゴール手前の20mmの直進が、
                         # 到達の行き過ぎ1mm+止まるまでの惰性8.5mmで約30mm進み、ゴールで右に15mmずれた。
                         move_short_lead_mm=None,
+                        # 2026-11-01: 後退・円弧・止まらずに続く区間を含む計画(EtRallyPathSegment)で、目標の向きと
+                        # 曲がり具合を先読みする時間(秒、×今の速さ=先読みの距離)。車輪の速さが出力に追いつくまでの
+                        # 遅れの分だけ、曲がり始め・曲がり終わりを早める。従来の計画では使わない。Noneなら0.06。
+                        path_lead_sec=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -627,22 +682,46 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
 
     # 検証済みの新しいdictに詰め替えてから、実機の癖の補正を掛ける。
     steps = []
+    path_mode = False
     for step in strategy:
         if not isinstance(step, dict):
             raise ValueError("Strategy step must be an object")
         step_type = step.get("type")
-        if step_type not in ("move", "turn"):
+        if step_type not in ("move", "turn", "arc"):
             raise ValueError("Unknown strategy step type: " + str(step_type))
         checked = {
             "type": step_type,
             "target_heading_deg": _finite_number(step.get("target_heading_deg"), "target_heading_deg"),
             "label": step.get("label"),
         }
+        if step_type in ("move", "arc"):
+            # 2026-11-01: 後退(reverse)と、止まらずに次へ続ける(stop=False)の指定。
+            # どちらかが計画にあるとき(またはarcがあるとき)だけ、EtRallyPathSegmentで走る。
+            for key in ("reverse", "stop"):
+                if key in step and not isinstance(step[key], bool):
+                    raise ValueError(key + " must be true or false")
+            checked["reverse"] = step.get("reverse", False)
+            checked["stop"] = step.get("stop", True)
+            if "reverse" in step or "stop" in step:
+                path_mode = True
         if step_type == "move":
             distance = _finite_number(step.get("distance_mm"), "distance_mm")
             if int(round(distance)) <= 0:
                 raise ValueError("distance_mm must be greater than zero")
             checked["distance_mm"] = distance
+        elif step_type == "arc":
+            # 2026-11-01: 円弧。target_heading_degは終わりの向き、sweep_degは向きの変化(符号つき、
+            # 始めの向き = target_heading_deg - sweep_deg)、radius_mmは車体中心の半径。
+            radius = _finite_number(step.get("radius_mm"), "radius_mm")
+            sweep = _finite_number(step.get("sweep_deg"), "sweep_deg")
+            if radius <= 0.0:
+                raise ValueError("radius_mm must be greater than zero")
+            if not 0.0 < abs(sweep) <= 360.0:
+                raise ValueError("sweep_deg must be non-zero and within 360")
+            checked["radius_mm"] = radius
+            checked["sweep_deg"] = sweep
+            checked["distance_mm"] = radius * math.radians(abs(sweep))
+            path_mode = True
         elif step_type == "turn":
             # 検証専用(spin_encoder_dir_test)のときだけ使う、回転方向の明示指定(+1/-1、省略時0=自動)。
             direction = step.get("direction", 0)
@@ -669,6 +748,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         mm_per_deg_b=lateral_drift_mm_per_deg_b, sign=lateral_drift_sign,
         initial_heading_deg=initial_heading_deg)
     steps = _merge_consecutive_moves(steps)
+    if path_mode:
+        _prepare_path_chains(steps)
 
     def check_legs(prefix, heading, check_mm):
         # 指定の向きへcheck_mmだけ前進→停止→同じ距離だけ後退→停止する。
@@ -743,10 +824,49 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             pause_this_move = (step["type"] == "move" and straight_pause_sec and straight_pause_sec > 0
                                and step["distance_mm"] >= straight_pause_min_mm)
             pause_after_move = pause_this_move
+        if path_mode and step["type"] == "move":
+            # 2026-11-01: 止まらずに続く区間の途中では止まらない(前から続く区間の前、続く区間の後)。
+            if step.get("continue_from_prev"):
+                pause_this_move = False
+            if not step.get("stop", True):
+                pause_after_move = False
         if pause_this_move:
             nodes.append(EtRallyPause(name="et_rally pause before move%d%s" % (index, label_text),
                                       min_seconds=straight_pause_sec))
-        if step["type"] == "move":
+        if path_mode and step["type"] in ("move", "arc"):
+            # 2026-11-01: 後退・円弧・止まらずに続く区間を含む計画は、EtRallyPathSegmentで走る。
+            # 惰性の分を手前で終えるのは、止まる区間だけ(止まるまでに続く全体の距離で判定する)。
+            chain_mm = step["distance_mm"] + step.get("remaining_after_mm", 0.0)
+            if not step.get("stop", True):
+                stop_lead_mm = 0.0
+            elif chain_mm < SHORT_MOVE_NO_LEAD_MM:
+                stop_lead_mm = move_short_lead_mm or 0.0
+            else:
+                stop_lead_mm = move_stop_lead_mm
+            active_move_pid = (1.1, 0.1, 0.03) if turn_method == 'spin_pid' else move_pid
+            nodes.append(EtRallyPathSegment(
+                name="et_rally %s%d%s" % (step["type"], index, label_text),
+                kind="arc" if step["type"] == "arc" else "line",
+                end_heading_deg=heading,
+                length_mm=step["distance_mm"],
+                power=move_power,
+                pid_p=active_move_pid[0], pid_i=active_move_pid[1], pid_d=active_move_pid[2],
+                sweep_deg=step.get("sweep_deg", 0.0),
+                radius_mm=step.get("radius_mm", 0.0),
+                reverse=step.get("reverse", False),
+                stop=step.get("stop", True),
+                continue_from_prev=step.get("continue_from_prev", False),
+                remaining_after_mm=step.get("remaining_after_mm", 0.0),
+                stop_lead_mm=stop_lead_mm,
+                accel_mm=move_accel_mm, accel_min_power=move_accel_min_power,
+                decel_mm=move_decel_mm, decel_min_power=move_decel_min_power,
+                next_profile=step.get("next_profile", ()),
+                lead_sec=0.06 if path_lead_sec is None else path_lead_sec,
+            ))
+            if pause_after_move:
+                nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),
+                                          min_seconds=straight_pause_sec))
+        elif step["type"] == "move":
             # 惰性で進む分を見込み、手前で直進を終える(短すぎる区間でも最低1mmは走る)。
             if step["distance_mm"] < SHORT_MOVE_NO_LEAD_MM:
                 run_distance_mm = step["distance_mm"]
