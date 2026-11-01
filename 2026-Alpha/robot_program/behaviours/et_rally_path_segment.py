@@ -101,7 +101,12 @@ class EtRallyPathSegment(Behaviour):
                 s -= length
                 continue
             if s > length:
-                # 止まるまでに続く区間の、さらに先: 最後の向きのまま、まっすぐ
+                # 止まるまでに続く区間の、さらに先。最後が円弧なら、その曲がり具合のまま左右の差をかけ続ける
+                # (先読みの分だけ手前で左右の差が0になり、止まって終わる円弧が最後の約2cmで曲がりきらず、
+                # 止まった位置が約1cmずれていた。run_20261101T063540のarc2・arc15)。目標の向きは終わりの向き。
+                if kind == "arc" and radius > 0:
+                    return (h0 + sweep, math.copysign(HALF_TREAD_MM / radius, sweep),
+                            1.0 / (1.0 + HALF_TREAD_MM / radius))
                 return h0 + sweep, 0.0, 1.0
             if kind == "arc" and radius > 0 and length > 0:
                 ratio = max(0.0, s / length)
