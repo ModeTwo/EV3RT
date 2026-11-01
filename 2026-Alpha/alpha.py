@@ -1438,6 +1438,9 @@ def _run_main(argv, startup_cleanup):
                         help=('During the ET rally, for plans with reverse/arc/non-stop segments only: look ahead '
                               'this many seconds (x current speed) along the path for the heading target and the '
                               'arc feed-forward, to make up for the wheel-speed lag. Default (unset) = 0.06.'))
+    parser.add_argument('--rally-path-arc-pid-i', type=float, default=None,
+                        help=('During the ET rally, for plans with arcs: the I gain of the heading PID used inside '
+                              'arcs only (straights keep --rally-move-pid-i). Default (unset) = 0.6.'))
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
                               'heading-decreasing direction (left turns). Default (unset) = same as the '
@@ -1643,6 +1646,12 @@ def _run_main(argv, startup_cleanup):
         if not 0.0 <= args.rally_path_lead_sec <= 0.5:
             parser.error('--rally-path-lead-sec must be between 0 and 0.5')
         mission_config = dataclasses.replace(mission_config, et_rally_path_lead_sec=args.rally_path_lead_sec)
+    if args.rally_path_arc_pid_i is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-arc-pid-i requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.0 <= args.rally_path_arc_pid_i <= 20.0:
+            parser.error('--rally-path-arc-pid-i must be between 0 and 20')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_arc_pid_i=args.rally_path_arc_pid_i)
     if args.rally_gyro_drift_extra_sec is not None:
         if not 0.5 <= args.rally_gyro_drift_extra_sec <= 10.0:
             parser.error('--rally-gyro-drift-extra-sec must be between 0.5 and 10')

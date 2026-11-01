@@ -171,6 +171,8 @@ class RaceConfig:
     et_rally_move_short_lead_mm: Optional[float] = None
     # 2026-11-01: 後退・円弧・止まらずに続く区間を含む計画で、目標の向きと曲がり具合を先読みする時間(秒)。Noneなら0.06。
     et_rally_path_lead_sec: Optional[float] = None
+    # 2026-11-01: 同じ計画で、円弧の中だけ使う向きのPIDのI。Noneなら0.6。
+    et_rally_path_arc_pid_i: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

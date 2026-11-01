@@ -57,7 +57,7 @@ class EtRallyPathSegment(Behaviour):
                  stop: bool = True, continue_from_prev: bool = False, remaining_after_mm: float = 0.0,
                  stop_lead_mm: float = 0.0, accel_mm: float = 0.0, accel_min_power: int = 40,
                  decel_mm: float = 0.0, decel_min_power: int = 40,
-                 next_profile=(), lead_sec: float = 0.0) -> None:
+                 next_profile=(), lead_sec: float = 0.0, arc_pid_i: float = 0.6) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -86,6 +86,9 @@ class EtRallyPathSegment(Behaviour):
         # 左右の差を出し、曲がり始め・曲がり終わりを早める(遅れたまま曲がると、その分だけ経路がずれる)。
         self.profile = [(kind, self.length_mm, self.start_heading, self.sweep, self.radius_mm)] + list(next_profile)
         self.lead_sec = lead_sec
+        # 2026-11-01: 円弧の中だけ向きのPIDのIを弱くする(直進用の強いI(--rally-move-pid-i 8など)のままだと、
+        # 目標の向きが動き続ける円弧で出力が約0.5秒周期で揺れた。run_20261101T061925)。
+        self.arc_pid_i = arc_pid_i
         self.running = False
         self.stopping = False
 
@@ -128,6 +131,10 @@ class EtRallyPathSegment(Behaviour):
             self.pid = PID(self.pid_gains[0], pid_i, self.pid_gains[2], setpoint=self._target_heading(0.0),
                            sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
         _chain_pid = None
+        # 区間をまたいで引き継いだPIDでも、Iの係数はこの区間の種類に合わせる(たまっているIの値はそのまま)。
+        line_i = self.pid_gains[1] if et_rally_drive._move_pid_i_override is None else et_rally_drive._move_pid_i_override
+        self.pid.Ki = self.arc_pid_i if self.kind == "arc" else line_i
+        self.saturated_ticks = 0
         self.right_residual = 0.0
         self.left_residual = 0.0
         self.err_sum = 0.0
@@ -146,9 +153,10 @@ class EtRallyPathSegment(Behaviour):
 
     def _finish_log(self, now, tag=""):
         current = _heading()
-        self.logger.info("%+06d %s.%s summary: dist=%d planned=%d end_heading=%.1f target=%.1f err_mean=%+.2f err_max=%.2f lat=%+.0fmm loc=(%d,%d)%s%s" % (
+        self.logger.info("%+06d %s.%s summary: dist=%d planned=%d end_heading=%.1f target=%.1f err_mean=%+.2f err_max=%.2f lat=%+.0fmm sat=%d loc=(%d,%d)%s%s" % (
             now, self.__class__.__name__, self.kind, now - self.orig_dist, self.run_length_mm,
             current, self.end_heading, self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm,
+            self.saturated_ticks,
             runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(), tag))
 
     def update(self) -> Status:
@@ -219,6 +227,14 @@ class EtRallyPathSegment(Behaviour):
         ff = abs(power_now) * ff_ratio
         turn = max(-power_now, min(power_now, output)) + ff
         base = -power_now if self.reverse else power_now
+        # 2026-11-01: 左右の出力を±100に収める。左右の差(曲がる分)を優先して残し、はみ出す分は全体の出力を下げる
+        # (円弧の入りで右+131・左-29のように上限を超え、超えた分が削られて曲がり方が計画と変わっていた)。
+        if abs(turn) > 100.0:
+            turn = math.copysign(100.0, turn)
+        headroom = 100.0 - abs(turn)
+        if abs(base) > headroom:
+            base = math.copysign(headroom, base)
+            self.saturated_ticks += 1
         self.right_residual += base + runtime.course * turn
         self.left_residual += base - runtime.course * turn
         right_power = int(round(self.right_residual))
