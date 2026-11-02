@@ -35,6 +35,9 @@ PARAMS = dict(
     start_at='default',
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
     keepout_body=True, start_exempt_cm=20.0,
+    # 進入禁止の長方形(右コースのplanner座標cm、[xmin, xmax, ymin, ymax]、±1e9で無限)。None なら plannerの設定(左コース)を左右反転した今の3つ。
+    # 暫定(ユーザー11/02: 測り直す予定、今より狭くなる)。
+    keepout=None,
     allow_reverse=True, allow_pivot=True,
     # 時間: 直進 cm/s、円弧は arc_k*v_line/(1+half_tread/r)、後退は rev_speed_scale 倍の速さ
     v_line=36.0, arc_k=0.77, half_tread=5.85, rev_speed_scale=1.0,
@@ -67,6 +70,8 @@ _mx = lambda x: 4 * P - x
 KEEPOUT = [(_mx(INF), _mx(-17.0), -INF, -37.0),
            (_mx(INF), _mx(4 * P + 17.8 + 14.0), -INF, INF),
            (_mx(-28.0), INF, 0.0, INF)]
+if PARAMS['keepout'] is not None:
+    KEEPOUT = [tuple(float(v) for v in r) for r in PARAMS['keepout']]
 BOUNDS = (-31.0, 126.0, -36.0, 4 * P + 40)
 
 
