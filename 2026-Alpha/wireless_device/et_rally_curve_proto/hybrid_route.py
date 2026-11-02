@@ -33,6 +33,8 @@ PARAMS = dict(
     oblique_policy='safest', angle_scan=[-30.0, 30.0, 1.0],
     # スタート: 'default' = 今のスタート位置(向き0)、'goal' = 今のゴール地点(向き180、フィールドの方を向く)
     start_at='default',
+    # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
+    keepout_body=True, start_exempt_cm=20.0,
     allow_reverse=True, allow_pivot=True,
     # 時間: 直進 cm/s、円弧は arc_k*v_line/(1+half_tread/r)、後退は rev_speed_scale 倍の速さ
     v_line=36.0, arc_k=0.77, half_tread=5.85, rev_speed_scale=1.0,
@@ -149,6 +151,43 @@ def pivot_interval(p, h):
     return _piv_int[key]
 
 
+_KO_CORNERS = None
+_START_EXEMPT = None
+_EXEMPT_ON = False   # スタートから最初のゲートへのつなぎ区間を判定している間だけ True
+
+
+def body_keepout(px, py, hdeg):
+    """姿勢(配列)のどれかで、車体の箱が進入禁止の長方形にかかるか。"""
+    global _KO_CORNERS, _START_EXEMPT
+    if not KEEPOUT_BODY:
+        return bool(np.any(in_keepout(px, py)))
+    px = np.asarray(px, float); py = np.asarray(py, float); h = np.radians(np.asarray(hdeg, float))
+    if _KO_CORNERS is None:
+        _KO_CORNERS = [[(x, y) for x in (x0, x1) for y in (y0, y1) if abs(x) < INF / 2 and abs(y) < INF / 2]
+                       for x0, x1, y0, y1 in KEEPOUT]
+    xs = np.concatenate([np.linspace(-REAR, FRONT, 14), np.full(8, FRONT), np.linspace(FRONT, -REAR, 14), np.full(8, -REAR)])
+    ys = np.concatenate([np.full(14, HALF_WIDTH), np.linspace(HALF_WIDTH, -HALF_WIDTH, 8), np.full(14, -HALF_WIDTH),
+                         np.linspace(-HALF_WIDTH, HALF_WIDTH, 8)])
+    c = np.cos(h)[:, None]; sn = np.sin(h)[:, None]
+    bx = px[:, None] + xs * c - ys * sn; by = py[:, None] + xs * sn + ys * c
+    if _START_EXEMPT is None:
+        sb = [(START[0] + a * math.cos(math.radians(START_H)) - b * math.sin(math.radians(START_H)),
+               START[1] + a * math.sin(math.radians(START_H)) + b * math.cos(math.radians(START_H)))
+              for a, b in zip(xs, ys)]
+        _START_EXEMPT = {k for k, (x0, x1, y0, y1) in enumerate(KEEPOUT) if any(x0 < x < x1 and y0 < y < y1 for x, y in sb)}
+    near_start = np.hypot(px - START[0], py - START[1]) <= START_EXEMPT_CM
+    for k, (x0, x1, y0, y1) in enumerate(KEEPOUT):
+        hit = np.any((bx > x0) & (bx < x1) & (by > y0) & (by < y1), axis=1)
+        for cx, cy in _KO_CORNERS[k]:   # 長方形の角が車体の中に入る場合
+            lx = (cx - px) * np.cos(h) + (cy - py) * np.sin(h); ly = -(cx - px) * np.sin(h) + (cy - py) * np.cos(h)
+            hit |= (lx > -REAR) & (lx < FRONT) & (np.abs(ly) < HALF_WIDTH)
+        if k in _START_EXEMPT and _EXEMPT_ON:
+            hit &= ~near_start
+        if np.any(hit):
+            return True
+    return False
+
+
 def in_keepout(px, py):
     bad = np.zeros(len(px), bool)
     for x0, x1, y0, y1 in KEEPOUT:
@@ -188,6 +227,9 @@ def line_ok(a, b, m, allow=None):
     n = max(2, int(L / 2) + 1)
     xs = np.linspace(a[0], b[0], n); ys = np.linspace(a[1], b[1], n)
     if np.any(in_keepout(xs, ys)):
+        return False
+    nb = max(2, int(L) + 1)
+    if body_keepout(np.linspace(a[0], b[0], nb), np.linspace(a[1], b[1], nb), np.full(nb, math.degrees(h))):
         return False
     return not crosses_gate(xs, ys, allow)
 
@@ -231,7 +273,7 @@ def arc_ok(pr, allow=None):
     xs, ys, hb = arc_samples(pr)
     if not poses_ok(xs, ys, hb):
         return False
-    if np.any(in_keepout(xs, ys)):
+    if np.any(in_keepout(xs, ys)) or body_keepout(xs, ys, hb):
         return False
     return not crosses_gate(xs, ys, allow)
 
@@ -243,10 +285,10 @@ def pivot_ok(p, h_from, h_to):
     dd = nd(h_to - h_from)
     if abs(dd) < 0.3:
         return True
-    key = (round(float(p[0]), 2), round(float(p[1]), 2), round(h_from, 2), round(h_to, 2))
+    key = (round(float(p[0]), 2), round(float(p[1]), 2), round(h_from, 2), round(h_to, 2), _EXEMPT_ON)
     if key not in _pivot_cache:
         hs = h_from + dd * np.linspace(0, 1, int(abs(dd)) + 2)
-        _pivot_cache[key] = poses_ok(np.full(len(hs), p[0]), np.full(len(hs), p[1]), hs)
+        _pivot_cache[key] = poses_ok(np.full(len(hs), p[0]), np.full(len(hs), p[1]), hs) and             not body_keepout(np.full(len(hs), p[0]), np.full(len(hs), p[1]), hs)
     return _pivot_cache[key]
 
 
@@ -445,7 +487,7 @@ def _visit_candidates(g, pairs_override=None, only=None):
             radii = (rr if rr else SPLIT_RADII) if abs(a_in - a_out) > 1e-9 else [0.0]
             for off in (OFFSETS if not oblique else [0.0]):
                 C = g.c + g.t * off
-                for mode in (modes if not oblique else [mo for mo in modes if mo in ('F', 'B')]):
+                for mode in modes:
                     if only is not None and (sg, mode) not in only:
                         continue
                     if mode in ('F', 'FB'):
@@ -459,6 +501,15 @@ def _visit_candidates(g, pairs_override=None, only=None):
                                     prims = _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r)
                                     if prims is None:
                                         continue
+                                elif oblique:
+                                    # 斜めの往復: 斜めの通過(抜けの余りなし)で抜けきったら止まり、同じ道を後退で戻って、
+                                    # 入りの点からさらに ee だけ戻る(戻りも行きと同じ道なので、柱とのすき間も同じ)
+                                    fwd = _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, 0.0, r)
+                                    if fwd is None:
+                                        continue
+                                    back = [_retrace(q) for q in reversed(fwd)]
+                                    S0 = fwd[0][1]; u_in = _rot(base_u, a_in)
+                                    prims = fwd + back + ([('line', S0, S0 - u_in * ee, -m)] if ee > 0 else [])
                                 else:
                                     # 往復(垂直だけ): 抜けきったら戻って、元の側へ抜けきる
                                     u = base_u
@@ -515,19 +566,29 @@ def pass_clearance(prims):
 OBLIQUE_CHOICE = []   # 記録: (色, 側, 通り方, 入り, 抜け, 半径, すき間)
 
 
+def _retrace(q):
+    """プリミティブを逆向きにたどる(後退と前進を入れ替える)。"""
+    if q[0] == 'line':
+        return ('line', q[2], q[1], -q[3])
+    _, c, r, theta, sgn, sweep, m, p0 = q
+    p_end, th_end = arc_end(q)
+    return arc_prim(p_end, th_end + math.pi, -sgn, sweep, r, -m)
+
+
 def visit_candidates(g):
     if OBLIQUE_POLICY != 'safest':
         return _visit_candidates(g)
     perp = _visit_candidates(g, pairs_override=[(0.0, 0.0)])
     have = {(v['sign'], v['mode']) for v in perp}
     modes = ['F', 'B'] if ALLOW_REVERSE else ['F']
+    modes = ['F', 'B', 'FB', 'BF'] if ALLOW_REVERSE else ['F']
     missing = [(sg, mo) for sg in (1, -1) for mo in modes if (sg, mo) not in have]
     out = list(perp)
     lo, hi, step = ANGLE_SCAN
     angles = [a for a in np.arange(lo, hi + 1e-9, step) if abs(a) > 1e-9]
     for sg, mo in missing:
         base_u = g.n * sg
-        lead, trail, m = (FRONT, REAR, 1) if mo == 'F' else (REAR, FRONT, -1)
+        lead, trail, m = (FRONT, REAR, 1) if mo in ('F', 'FB') else (REAR, FRONT, -1)
         # 入りを斜め / 抜けを斜め の両方から、通過の間の一番近い柱までの距離が最大のものを1つだけ選ぶ
         best = None
         for kind in ('in', 'out'):
@@ -772,7 +833,7 @@ _run_cache = {}
 
 def _best_run(A, hA, B, hB, m, tail):
     key = (round(float(A[0]), 3), round(float(A[1]), 3), round(hA, 3), round(float(B[0]), 3), round(float(B[1]), 3),
-           round(hB, 3), m, tail)
+           round(hB, 3), m, tail, _EXEMPT_ON)
     if key not in _run_cache:
         _run_cache[key] = _best_run0(A, hA, B, hB, m, tail)
     return _run_cache[key]
@@ -821,8 +882,9 @@ def build_via(opt, ep, sp):
 
 # ---------------- 表(つなぎ区間ごとの候補の状態) ----------------
 class Table:
-    def __init__(self, ends, starts):
+    def __init__(self, ends, starts, is_start=False):
         self.ends, self.starts = ends, starts
+        self.is_start = is_start
         nE, nS = len(ends), len(starts)
         Ea = [np.repeat(np.array(v, float), nS) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in ends])]
         Sa = [np.tile(np.array(v, float), nE) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in starts])]
@@ -840,8 +902,16 @@ class Table:
 
     def resolve(self, e, s):
         """(e,s) の今の候補を厳密に判定し、当たらない最初の候補に確定する。"""
+        global _EXEMPT_ON
         if self.done[e, s]:
             return False
+        _EXEMPT_ON = self.is_start
+        try:
+            return self._resolve(e, s)
+        finally:
+            _EXEMPT_ON = False
+
+    def _resolve(self, e, s):
         ep, sp = self.ends[e], self.starts[s]
         old = self.C[e, s]
         while self.ptr[e, s] < len(OPTS) and self.approx[e, s, self.ptr[e, s]] < INF / 2:
@@ -892,7 +962,7 @@ def main():
                 v[key] = idx[k]
     start_pose = [(START, START_H, 0)]
     goal_pose = [(GOAL, GOAL_H, 0)]
-    T = {('START', 'red'): Table(start_pose, starts['red']),
+    T = {('START', 'red'): Table(start_pose, starts['red'], is_start=True),
          ('red', 'blue'): Table(ends['red'], starts['blue']),
          ('blue', 'yellow'): Table(ends['blue'], starts['yellow']),
          ('yellow', 'red'): Table(ends['yellow'], starts['red']),
