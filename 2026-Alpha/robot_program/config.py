@@ -19,7 +19,7 @@ class RaceConfig:
     start_lap_mode: str = 'profile'
     #start_lap_mode: str = 'legacy'
     #start_lap_mode: str = 'alltrace'
-    start_lap_power: int = 85
+    start_lap_power: int = 100
     # 車軸中心から最初のカーブまで。アーム先端から500mm＋前方100mm。
     start_lap_first_straight_mm: float = 600.0
     # 最初のカーブ以降の距離倍率。別途実測するまでは旧表の長さを維持。
@@ -75,7 +75,8 @@ class RaceConfig:
     enable_et_rally: bool = True
     et_rally_laps: int = 3
     # received: PCから受信したSEQ、file: 従来の固定plan JSONを実行する。
-    et_rally_strategy_source: str = "received"
+    # et_rally_strategy_source: str = "received"
+    et_rally_strategy_source: str = "file"
     # ETラリー開始時にエラー(経路の受信失敗、Hint不足、経路の変換失敗)が出たとき、ミッションを失敗にせず、
     # 固定ルートでゴール(ガレージ)へ向かう(et_rally_fallback.py)。Falseなら、従来どおり失敗で止まる。
     et_rally_fallback_enabled: bool = True
@@ -116,6 +117,7 @@ MISSION_CHOICES = (
     'full',
     'hint2',
     'hint2-return',
+    'et-rally-lqi-calibration',
 )
 
 
@@ -150,6 +152,9 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'bottle-final':
         # Hint2後移動の終了位置から、Bottle Delivery後半だけを単体実行する。
+        return replace(config, mission_mode=mission, **disabled)
+    if mission == 'et-rally-lqi-calibration':
+        # ETラリー旋回のLQI設計に使う実測データ収集専用。準備工程・PC通信は一切実行しない。
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'rally-drive':
         # 復号済みHintを外部入力し、準備工程なしでPC受信と周回走行だけを試す。
