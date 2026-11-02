@@ -24,7 +24,7 @@ PARAMS = dict(
     front=7.5, rear=17.5, half_width=6.85, margin_front=1.5, margin_rear=0.4,
     # 経路の形
     radii=[20.0, 15.0, 12.0, 10.0], tail_cm=4.0,
-    ext=[0.0, 4.0, 8.0, 14.0, 22.0, 35.0], offsets=[-2.5, 0.0, 2.5],
+    ext=[0.0, 4.0, 8.0, 14.0, 22.0, 35.0], offsets=[-2.5, 0.0, 2.5], angles=[0.0],
     allow_reverse=True, allow_pivot=True,
     # 時間: 直進 cm/s、円弧は arc_k*v_line/(1+half_tread/r)、後退は rev_speed_scale 倍の速さ
     v_line=36.0, arc_k=0.77, half_tread=5.85, rev_speed_scale=1.0,
@@ -385,35 +385,43 @@ DIRS = (1, -1) if ALLOW_REVERSE else (1,)
 
 
 def visit_candidates(g):
+    """ゲートの通り方の候補。angles が0以外なら、車軸の中心がゲートの真ん中を通る斜めの通過(横のずれは0だけ)。
+    通過前/後の条件は、車体の角(斜めなら幅の分も)がゲートの線から CLR 手前 / PM 越える所(線に垂直な距離)。"""
     out = []
     modes = ['F', 'B', 'FB', 'BF'] if ALLOW_REVERSE else ['F']
     for sg in (1, -1):
-        u = g.n * sg
-        hu = math.degrees(math.atan2(u[1], u[0])); hm = nd(hu + 180)
-        for off in OFFSETS:
-            C = g.c + g.t * off
-            for mode in modes:
-                if mode in ('F', 'FB'):
-                    base_a, h, d1, tip = FRONT + CLR, hu, 1, REAR + PM
-                else:
-                    base_a, h, d1, tip = REAR + CLR, hm, -1, FRONT + PM
-                base_b = FRONT + CLR if mode == 'FB' else REAR + CLR
-                for ea in EXT:
-                    S = C - u * (base_a + ea)
-                    for ee in EXT:
-                        if mode in ('F', 'B'):
-                            E = C + u * (tip + ee); legs = [(S, E, d1)]; dend = d1
-                        else:
-                            T = C + u * tip; E = C - u * (base_b + ee); legs = [(S, T, d1), (T, E, -d1)]; dend = -d1
-                        if not all(line_ok(a, b, d, allow=g.color) for a, b, d in legs):
-                            continue
-                        t = sum(float(np.hypot(*(b - a))) / V_LINE * spd(d) for a, b, d in legs)
-                        rv = sum(float(np.hypot(*(b - a))) for a, b, d in legs if d < 0)
-                        if len(legs) == 2:
-                            t += T_STOP + PEN_STOP
-                        t += PEN_REV_M * rv / 100.0
-                        out.append(dict(color=g.color, mode=mode, sign=sg, off=off, ea=ea, ee=ee, legs=legs, cost=t,
-                                        start=(S, h, d1), end=(E, h, dend)))
+        for alpha in ANGLES:
+            ca, sa = math.cos(math.radians(alpha)), abs(math.sin(math.radians(alpha)))
+            base_u = g.n * sg
+            u = np.array([base_u[0] * ca - base_u[1] * math.sin(math.radians(alpha)),
+                          base_u[0] * math.sin(math.radians(alpha)) + base_u[1] * ca])
+            hu = math.degrees(math.atan2(u[1], u[0])); hm = nd(hu + 180)
+            # 線に垂直な距離 → 進む向きの距離
+            reach = lambda end_len, extra: (end_len * ca + HALF_WIDTH * sa + extra) / ca
+            for off in (OFFSETS if abs(alpha) < 1e-9 else [0.0]):
+                C = g.c + g.t * off
+                for mode in modes:
+                    if mode in ('F', 'FB'):
+                        base_a, h, d1, tip = reach(FRONT, CLR), hu, 1, reach(REAR, PM)
+                    else:
+                        base_a, h, d1, tip = reach(REAR, CLR), hm, -1, reach(FRONT, PM)
+                    base_b = reach(FRONT, CLR) if mode == 'FB' else reach(REAR, CLR)
+                    for ea in EXT:
+                        S = C - u * (base_a + ea)
+                        for ee in EXT:
+                            if mode in ('F', 'B'):
+                                E = C + u * (tip + ee); legs = [(S, E, d1)]; dend = d1
+                            else:
+                                T = C + u * tip; E = C - u * (base_b + ee); legs = [(S, T, d1), (T, E, -d1)]; dend = -d1
+                            if not all(line_ok(a, b, d, allow=g.color) for a, b, d in legs):
+                                continue
+                            t = sum(float(np.hypot(*(b - a))) / V_LINE * spd(d) for a, b, d in legs)
+                            rv = sum(float(np.hypot(*(b - a))) for a, b, d in legs if d < 0)
+                            if len(legs) == 2:
+                                t += T_STOP + PEN_STOP
+                            t += PEN_REV_M * rv / 100.0
+                            out.append(dict(color=g.color, mode=mode, sign=sg, off=off, angle=alpha, ea=ea, ee=ee, legs=legs,
+                                            cost=t, start=(S, h, d1), end=(E, h, dend)))
     return out
 
 
@@ -834,10 +842,10 @@ def main():
         blocks.append(dict(kind='conn', lap=None, color=None, prims=[ser(p) for p in T[key].prims[(e, s)]]))
         if i < len(visits):
             v = visits[i]
-            blocks.append(dict(kind='visit', lap=i // 3 + 1, color=v['color'], mode=v['mode'], sign=v['sign'], off=v['off'],
+            blocks.append(dict(kind='visit', lap=i // 3 + 1, color=v['color'], mode=v['mode'], sign=v['sign'], off=v['off'], angle=v['angle'],
                                prims=[ser(('line', a, b, d)) for a, b, d in v['legs']]))
     for i, v in enumerate(visits[:3]):
-        print(f'  lap1 {v["color"]:6s} {v["mode"]:2s} sign={v["sign"]:+d} off={v["off"]:+.1f} ea={v["ea"]} ee={v["ee"]}')
+        print(f'  lap1 {v["color"]:6s} {v["mode"]:2s} sign={v["sign"]:+d} off={v["off"]:+.1f} angle={v["angle"]:+.0f} ea={v["ea"]} ee={v["ee"]}')
     json.dump(dict(total=total, params=PARAMS, blocks=blocks), open(sys.argv[2], 'w'))
 
 
