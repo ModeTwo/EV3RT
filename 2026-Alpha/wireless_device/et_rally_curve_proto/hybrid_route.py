@@ -21,10 +21,10 @@ import numpy as np
 PARAMS = dict(
     laps=4,
     # 車体と当たり判定(cm)
-    front=7.5, rear=17.5, half_width=6.85, margin_front=1.5, margin_rear=0.4,
+    front=7.5, rear=17.5, half_width=6.85, margin_front=1.5, margin_rear=1.5,   # 11/02: 前後とも1.5cm(以前は後ろ0.4cm)
     # 経路の形
     radii=[20.0, 15.0, 12.0, 10.0], tail_cm=4.0,
-    ext=[0.0, 4.0, 8.0, 14.0, 22.0, 35.0], offsets=[-2.5, 0.0, 2.5], angles=[0.0],
+    ext=[0.0, 4.0, 8.0, 14.0, 22.0, 35.0], offsets=[0.0], angles=[0.0],   # 11/02: 横のずらしは使わない(反対側の支柱に近づくため)
     # 斜めの通過: 'split' = 真ん中で向きを変える(斜めに入って垂直に抜ける/垂直に入って斜めに抜ける)、
     # 'straight' = 入りから抜けまで同じ斜め、'both' = 両方。split の向きを変える円弧の半径(cm)は split_radii。
     oblique_mode='split', split_radii=[20.0, 15.0, 10.0],
@@ -36,8 +36,8 @@ PARAMS = dict(
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
     keepout_body=True, start_exempt_cm=20.0,
     # 進入禁止の長方形(右コースのplanner座標cm、[xmin, xmax, ymin, ymax]、±1e9で無限)。None なら plannerの設定(左コース)を左右反転した今の3つ。
-    # 暫定(ユーザー11/02: 測り直す予定、今より狭くなる)。
-    keepout=None,
+    # 暫定(ユーザー11/02: 測り直す予定、今より狭くなる)。11/02からは、測り直すまで判定しない([])。今の3つを使うときは 'planner'。
+    keepout=[],
     allow_reverse=True, allow_pivot=True,
     # 時間: 直進 cm/s、円弧は arc_k*v_line/(1+half_tread/r)、後退は rev_speed_scale 倍の速さ
     v_line=36.0, arc_k=0.77, half_tread=5.85, rev_speed_scale=1.0,
@@ -45,7 +45,11 @@ PARAMS = dict(
     # 精度の重み(秒に換算して時間に足す。0なら時間だけで選ぶ)
     pen_stop=0.0, pen_pivot=0.0, pen_rev_m=0.0, pen_arc_100deg=0.0,
     # 中継
-    wp_step=8.0, wp_headings=12, wp_tries=60, via_max_tries=150,
+    wp_step=8.0, wp_headings=12, wp_tries=60, via_max_tries=40,
+    # True: 遠回りなしで経路が見つかっても、遠回りで速くなる区間がないか探す(最速の取りこぼしを防ぐ)
+    via_always=False, via_budget_sec=8.0,
+    # その場の旋回の中心が車軸からどれだけ後ろか(cm)。10/31の左右同期の旋回で約0.5cm(測り直し予定)
+    pivot_back_cm=0.5,   # 2段目(遠回りで速くなるか)の時間の上限。超えたら1段目の経路を使う
 )
 if os.environ.get('HR_PARAMS'):
     PARAMS.update(json.load(open(os.environ['HR_PARAMS'], encoding='utf-8')))
@@ -70,7 +74,7 @@ _mx = lambda x: 4 * P - x
 KEEPOUT = [(_mx(INF), _mx(-17.0), -INF, -37.0),
            (_mx(INF), _mx(4 * P + 17.8 + 14.0), -INF, INF),
            (_mx(-28.0), INF, 0.0, INF)]
-if PARAMS['keepout'] is not None:
+if PARAMS['keepout'] != 'planner':
     KEEPOUT = [tuple(float(v) for v in r) for r in PARAMS['keepout']]
 BOUNDS = (-31.0, 126.0, -36.0, 4 * P + 40)
 
@@ -120,11 +124,19 @@ def box_clear(px, py, h_rad, x0, x1):
     return np.min(np.hypot(ex, ey), axis=1) - POST_R
 
 
+_BODY_REACH = math.hypot(max(FRONT, REAR), HALF_WIDTH) + POST_R + max(MARGIN_FRONT, MARGIN_REAR) + 0.5
+
+
 def poses_clear(px, py, h_deg):
     """姿勢ごとに、前の部分と後ろの部分のすき間が足りているか(bool配列)。"""
+    # 車体の近く(車軸から車体の一番遠い角+支柱+すき間)にある支柱の点だけで判定する
+    rr = _BODY_REACH
+    sel = CAP[(CAP[:, 0] > px.min() - rr) & (CAP[:, 0] < px.max() + rr) & (CAP[:, 1] > py.min() - rr) & (CAP[:, 1] < py.max() + rr)]
+    if len(sel) == 0:
+        return np.ones(len(px), bool)
     h = np.radians(h_deg)
     c = np.cos(h)[:, None]; s = np.sin(h)[:, None]
-    dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
+    dx = sel[None, :, 0] - px[:, None]; dy = sel[None, :, 1] - py[:, None]
     lx = dx * c + dy * s; ly = -dx * s + dy * c
     ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
     ef = np.maximum(np.maximum(-lx, lx - FRONT), 0.0)
@@ -141,13 +153,23 @@ def poses_ok(px, py, h_deg):
 _piv_int = {}
 
 
+def _pivot_axle(p, h_from, hs):
+    """その場の旋回で、回る中心が車軸の PIVOT_BACK_CM 後ろにあるときの、向き hs での車軸の位置。"""
+    hs = np.asarray(hs, float)
+    if PIVOT_BACK_CM == 0:
+        return np.full(len(hs), p[0]), np.full(len(hs), p[1])
+    qx = p[0] - PIVOT_BACK_CM * math.cos(math.radians(h_from)); qy = p[1] - PIVOT_BACK_CM * math.sin(math.radians(h_from))
+    return qx + PIVOT_BACK_CM * np.cos(np.radians(hs)), qy + PIVOT_BACK_CM * np.sin(np.radians(hs))
+
+
 def pivot_interval(p, h):
     """点pで向きhから、その場で回れる最大の角度(左回り, 右回り)。"""
     key = (round(float(p[0]), 3), round(float(p[1]), 3), round(float(h), 3))
     if key not in _piv_int:
         ks = np.arange(1, 182)
         hs = np.concatenate([h + ks, h - ks])
-        ok = poses_clear(np.full(len(hs), p[0]), np.full(len(hs), p[1]), hs)
+        ax, ay = _pivot_axle(p, h, hs)
+        ok = poses_clear(ax, ay, hs)
         res = []
         for part in (ok[:181], ok[181:]):
             bad = np.flatnonzero(~part)
@@ -164,6 +186,8 @@ _EXEMPT_ON = False   # スタートから最初のゲートへのつなぎ区間
 def body_keepout(px, py, hdeg):
     """姿勢(配列)のどれかで、車体の箱が進入禁止の長方形にかかるか。"""
     global _KO_CORNERS, _START_EXEMPT
+    if not KEEPOUT:
+        return False
     if not KEEPOUT_BODY:
         return bool(np.any(in_keepout(px, py)))
     px = np.asarray(px, float); py = np.asarray(py, float); h = np.radians(np.asarray(hdeg, float))
@@ -272,7 +296,50 @@ def arc_samples(pr, step=1.0):
     return xs, ys, hb
 
 
+_arc_memo = {}   # (始点, 向き, 半径, 回る向き, 前後, allow) -> [当たらないと確かめた角度, 当たる最初の角度]
+
+
 def arc_ok(pr, allow=None):
+    """円弧が当たらないか。同じ始点・半径・回る向きの円弧は、どこまで当たらないかを覚えて使い回す。"""
+    if pr[5] < 1e-6:
+        return True
+    _, c, r, theta, sgn, sweep, m, p0 = pr
+    key = (round(float(p0[0]), 3), round(float(p0[1]), 3), round(float(theta), 6), r, sgn, m, allow)
+    memo = _arc_memo.get(key)
+    if memo is not None:
+        if memo[1] is not None and sweep >= memo[1] - 1e-9:
+            return False
+        if sweep <= memo[0] + 1e-9:
+            return True
+    ok, fail_at = _arc_check(pr, allow)
+    if memo is None:
+        memo = _arc_memo[key] = [0.0, None]
+    if ok:
+        memo[0] = max(memo[0], sweep)
+    else:
+        memo[1] = fail_at if memo[1] is None else min(memo[1], fail_at)
+    return ok
+
+
+def _arc_check(pr, allow=None):
+    """(当たらないか, 当たる最初の角度rad)"""
+    _, c, r, theta, sgn, sweep, m, p0 = pr
+    xs, ys, hb = arc_samples(pr)
+    n = len(xs) - 1
+    okp = poses_clear(xs, ys, hb)
+    if KEEPOUT:
+        okp &= ~np.array([body_keepout(xs[i:i + 1], ys[i:i + 1], hb[i:i + 1]) for i in range(len(xs))])             if not np.all(okp) or body_keepout(xs, ys, hb) else okp
+    bad = np.flatnonzero(~okp)
+    if len(bad):
+        return False, sweep * max(bad[0] - 1, 0) / n
+    if KEEPOUT and np.any(in_keepout(xs, ys)):
+        return False, 0.0
+    if crosses_gate(xs, ys, allow):
+        return False, 0.0
+    return True, None
+
+
+def _arc_ok_old(pr, allow=None):
     if pr[5] < 1e-6:
         return True
     xs, ys, hb = arc_samples(pr)
@@ -293,7 +360,8 @@ def pivot_ok(p, h_from, h_to):
     key = (round(float(p[0]), 2), round(float(p[1]), 2), round(h_from, 2), round(h_to, 2), _EXEMPT_ON)
     if key not in _pivot_cache:
         hs = h_from + dd * np.linspace(0, 1, int(abs(dd)) + 2)
-        _pivot_cache[key] = poses_ok(np.full(len(hs), p[0]), np.full(len(hs), p[1]), hs) and             not body_keepout(np.full(len(hs), p[0]), np.full(len(hs), p[1]), hs)
+        ax, ay = _pivot_axle(p, h_from, hs)
+        _pivot_cache[key] = poses_ok(ax, ay, hs) and not body_keepout(ax, ay, hs)
     return _pivot_cache[key]
 
 
@@ -770,8 +838,8 @@ def _wp():
                     continue
                 hs = np.arange(WP_HEADINGS) * 360.0 / WP_HEADINGS
                 okh = [h for h in hs if poses_ok(np.array([x]), np.array([y]), np.array([h]))]
-                if len(okh) == len(hs):
-                    pts.append((x, y))       # どの向きにも回れる点(旋回の中継)
+                if okh:
+                    pts.append((x, y))       # 旋回の中継の候補(必要な角度だけ回れるかは、組み立てたあとに判定する)
                 poses += [(x, y, h) for h in okh]
         _WPT = np.array(pts); _WPP = np.array(poses)
     return _WPT, _WPP
@@ -887,9 +955,10 @@ def build_via(opt, ep, sp):
 
 # ---------------- 表(つなぎ区間ごとの候補の状態) ----------------
 class Table:
-    def __init__(self, ends, starts, is_start=False):
+    def __init__(self, ends, starts, is_start=False, via_first=False):
         self.ends, self.starts = ends, starts
         self.is_start = is_start
+        self.via_first = via_first   # スタート・ゴールの区間: 組み合わせが少ないので、最初から遠回りも比べる
         nE, nS = len(ends), len(starts)
         Ea = [np.repeat(np.array(v, float), nS) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in ends])]
         Sa = [np.tile(np.array(v, float), nE) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in starts])]
@@ -902,8 +971,39 @@ class Table:
         self.prims = {}
         self.via = {}
         self.checks = 0
-        self.allow_via = False
+        self.allow_via = via_first
         self.pending = set()   # 1と2が全部当たり、中継はまだ試していない区間
+
+    def _best_via(self, e, s, ep, sp, limit):
+        """遠回りの候補のうち、limit より速く当たらない最初のもの。(cost, prims) か (INF, None)。"""
+        if (e, s) not in self.via:
+            self.via[(e, s)] = via_options(ep, sp)
+        for c0, opt in self.via[(e, s)][:VIA_MAX_TRIES]:
+            if c0 >= limit:
+                break
+            pr = build_via(opt, ep, sp)
+            self.checks += 1
+            if pr is not None and all(prim_ok(q) for q in pr):
+                c = seq_cost(ep[2], pr, sp[2])
+                if c < limit:
+                    return c, pr
+        return INF, None
+
+    def open_via(self):
+        """2段目: 直接つなげなかった区間に、遠回りの見込みの時間(当たりを無視)を入れて、解き直せるようにする。"""
+        global _EXEMPT_ON
+        self.allow_via = True
+        for (pe, ps) in self.pending:
+            _EXEMPT_ON = self.is_start
+            try:
+                if (pe, ps) not in self.via:
+                    self.via[(pe, ps)] = via_options(self.ends[pe], self.starts[ps])
+            finally:
+                _EXEMPT_ON = False
+            v = self.via[(pe, ps)]
+            self.C[pe, ps] = v[0][0] if v else INF
+            self.done[pe, ps] = not v
+        self.pending = set()
 
     def resolve(self, e, s):
         """(e,s) の今の候補を厳密に判定し、当たらない最初の候補に確定する。"""
@@ -926,6 +1026,10 @@ class Table:
             if pr is not None and all(prim_ok(q) for q in pr):
                 c = seq_cost(ep[2], pr, sp[2])
                 if c < INF / 2:
+                    if self.via_first:
+                        cv, pv = self._best_via(e, s, ep, sp, c)
+                        if pv is not None:
+                            c, pr = cv, pv
                     self.C[e, s] = c; self.done[e, s] = True; self.prims[(e, s)] = pr
                     return abs(c - old) > 1e-9
             self.ptr[e, s] += 1
@@ -945,6 +1049,47 @@ class Table:
                     return True
         self.C[e, s] = INF; self.done[e, s] = True
         return True
+
+
+def route_audit(conn_prims, visits, used):
+    """できた経路全体を細かく(直進0.5cm・円弧と旋回1°)調べ、柱までの一番小さいすき間と、進入禁止へのはみ出しを出す。"""
+    allp = []
+    for i, (key, e, s) in enumerate(used):
+        allp.append(('conn', key))
+        if i < len(visits):
+            allp.append(('visit', visits[i]))
+    xs, ys, hs = [], [], []
+    def add_prims(prims):
+        for q in prims:
+            if q[0] == 'line':
+                L = prim_len(q); k = np.linspace(0, 1, max(2, int(L / 0.5) + 1))
+                h = math.degrees(math.atan2(*(q[2] - q[1])[::-1])) + (0 if q[3] > 0 else 180)
+                xs.append(q[1][0] + (q[2][0] - q[1][0]) * k); ys.append(q[1][1] + (q[2][1] - q[1][1]) * k); hs.append(np.full(len(k), h))
+            elif q[0] == 'arc':
+                ax, ay, ah = arc_samples(q, 0.5); xs.append(ax); ys.append(ay); hs.append(ah)
+            else:
+                dd = nd(q[3] - q[2])
+                if abs(dd) >= 0.3:
+                    hh = q[2] + dd * np.linspace(0, 1, int(abs(dd)) + 2)
+                    ax, ay = _pivot_axle(q[1], q[2], hh); xs.append(ax); ys.append(ay); hs.append(hh)
+    for i, (key, e, s) in enumerate(used):
+        add_prims(_USED_PRIMS[(key, e, s)])
+        if i < len(visits):
+            add_prims(visits[i]['prims'])
+    px, py, hh = np.concatenate(xs), np.concatenate(ys), np.concatenate(hs)
+    h = np.radians(hh); c = np.cos(h)[:, None]; sn = np.sin(h)[:, None]
+    dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
+    lx = dx * c + dy * sn; ly = -dx * sn + dy * c
+    ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
+    cf = (np.hypot(np.maximum(np.maximum(-lx, lx - FRONT), 0.0), ey) - POST_R).min(1)
+    cr = (np.hypot(np.maximum(np.maximum(-REAR - lx, lx), 0.0), ey) - POST_R).min(1)
+    ko = sum(1 for i in range(0, len(px), 4) if body_keepout(px[i:i + 1], py[i:i + 1], hh[i:i + 1]))
+    i = int(np.argmin(np.minimum(cf, cr)))
+    return dict(min_front=float(cf.min()), min_rear=float(cr.min()), keepout_hits=ko,
+                worst_pose=[float(px[i]), float(py[i]), float(hh[i])])
+
+
+_USED_PRIMS = {}
 
 
 def main():
@@ -967,19 +1112,26 @@ def main():
                 v[key] = idx[k]
     start_pose = [(START, START_H, 0)]
     goal_pose = [(GOAL, GOAL_H, 0)]
-    T = {('START', 'red'): Table(start_pose, starts['red'], is_start=True),
+    T = {('START', 'red'): Table(start_pose, starts['red'], is_start=True, via_first=True),
          ('red', 'blue'): Table(ends['red'], starts['blue']),
          ('blue', 'yellow'): Table(ends['blue'], starts['yellow']),
          ('yellow', 'red'): Table(ends['yellow'], starts['red']),
-         ('yellow', 'GOAL'): Table(ends['yellow'], goal_pose)}
+         ('yellow', 'GOAL'): Table(ends['yellow'], goal_pose, via_first=True)}
     print('tables', {k: v.C.shape for k, v in T.items()}, f'{time.time() - t0:.1f}s', flush=True)
     seq = ['red', 'blue', 'yellow'] * LAPS
     vs = {c: (np.array([v['s'] for v in cands[c]]), np.array([v['e'] for v in cands[c]]),
               np.array([v['cost'] for v in cands[c]])) for c in cands}
     it = 0
     phase = 1
+    saved = None; t_phase2 = None
     while True:
         it += 1
+        if saved is not None and time.time() - t_phase2 > VIA_BUDGET_SEC:
+            total, used, visits, prims = saved
+            for k in T:
+                T[k].prims = prims[k]
+            print(f'phase 2 over budget ({VIA_BUDGET_SEC:.0f}s): keep phase 1 route', flush=True)
+            break
         prev = np.zeros(1); prev_c = 'START'; back = []
         for color in seq:
             tab = T[(prev_c, color)]
@@ -1001,10 +1153,7 @@ def main():
                 # 2段目: 中継を使えば通れるかもしれない区間を、当たりを無視した時間に戻して解き直す
                 phase = 2
                 for t in T.values():
-                    t.allow_via = True
-                    for (pe, ps) in t.pending:
-                        t.C[pe, ps] = t.approx[pe, ps, 0]; t.done[pe, ps] = False
-                    t.pending = set()
+                    t.open_via()
                 print(f'phase 2 (detours)  {time.time() - t0:.1f}s', flush=True)
                 continue
             print(f'NO ROUTE (stopped at {bad})  checks={sum(t.checks for t in T.values())} {time.time() - t0:.1f}s')
@@ -1024,6 +1173,15 @@ def main():
         for key, e, s in used:
             changed |= T[key].resolve(e, s)
         if not changed:
+            if phase == 1 and VIA_ALWAYS and any(t.pending for t in T.values()):
+                # 遠回りなしで経路が見つかっても、直接つなげなかった区間を遠回りで試し、速くなるなら採る
+                saved = (total, list(used), list(visits), {k: dict(T[k].prims) for k in T})
+                t_phase2 = time.time()
+                phase = 2
+                for t in T.values():
+                    t.open_via()
+                print(f'phase 1 {total:.1f}s -> phase 2 (detours)  {time.time() - t0:.1f}s', flush=True)
+                continue
             break
     print(f'TOTAL hybrid laps={LAPS}: {total:.1f}s (cost)  iterations={it} checks={sum(t.checks for t in T.values())} '
           f'compute {time.time() - t0:.1f}s', flush=True)
@@ -1046,7 +1204,12 @@ def main():
                                prims=[ser(p) for p in v['prims']]))
     for i, v in enumerate(visits[:3]):
         print(f'  lap1 {v["color"]:6s} {v["mode"]:2s} sign={v["sign"]:+d} off={v["off"]:+.1f} angle={v["angle"]:+.0f}/{v["angle_out"]:+.0f} ea={v["ea"]} ee={v["ee"]}')
-    json.dump(dict(total=total, params=PARAMS, blocks=blocks), open(sys.argv[2], 'w'))
+    for key, e, s in used:
+        _USED_PRIMS[(key, e, s)] = T[key].prims[(e, s)]
+    audit = route_audit([p for key, e, s in used for p in T[key].prims[(e, s)]], visits, used)
+    print('audit: min clearance front %.2fcm rear %.2fcm (needed %.1f / %.1f), keepout hits %d' % (
+        audit['min_front'], audit['min_rear'], MARGIN_FRONT, MARGIN_REAR, audit['keepout_hits']), flush=True)
+    json.dump(dict(total=total, params=PARAMS, audit=audit, blocks=blocks), open(sys.argv[2], 'w'))
 
 
 if __name__ == '__main__':
