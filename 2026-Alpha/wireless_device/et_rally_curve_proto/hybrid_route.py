@@ -28,6 +28,9 @@ PARAMS = dict(
     # 斜めの通過: 'split' = 真ん中で向きを変える(斜めに入って垂直に抜ける/垂直に入って斜めに抜ける)、
     # 'straight' = 入りから抜けまで同じ斜め、'both' = 両方。split の向きを変える円弧の半径(cm)は split_radii。
     oblique_mode='split', split_radii=[20.0, 15.0, 10.0],
+    # 斜めの使い方: 'safest' = そのゲートを(その側から・その通り方で)真ん中を垂直に通れないときだけ、
+    # 通過の間の一番近い柱までの距離が最大になる角度と円弧の半径を1つ選ぶ(angle_scan の範囲)。'all' = angles をどこでも使う。
+    oblique_policy='safest', angle_scan=[-30.0, 30.0, 1.0],
     # スタート: 'default' = 今のスタート位置(向き0)、'goal' = 今のゴール地点(向き180、フィールドの方を向く)
     start_at='default',
     allow_reverse=True, allow_pivot=True,
@@ -423,12 +426,12 @@ def _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r):
     return prims
 
 
-def visit_candidates(g):
+def _visit_candidates(g, pairs_override=None, only=None):
     """ゲートの通り方の候補。斜め(angles が0以外)は、車軸の中心がゲートの真ん中を通るときだけ(横のずれは0)。"""
     out = []
     modes = ['F', 'B', 'FB', 'BF'] if ALLOW_REVERSE else ['F']
     pairs = [(0.0, 0.0)]
-    for a in ANGLES:
+    for a in ([] if pairs_override is not None else ANGLES):
         if abs(a) < 1e-9:
             continue
         if OBLIQUE_MODE in ('split', 'both'):
@@ -437,12 +440,14 @@ def visit_candidates(g):
             pairs.append((a, a))
     for sg in (1, -1):
         base_u = g.n * sg
-        for a_in, a_out in pairs:
+        for a_in, a_out, *rr in (pairs_override if pairs_override is not None else pairs):
             oblique = abs(a_in) > 1e-9 or abs(a_out) > 1e-9
-            radii = SPLIT_RADII if abs(a_in - a_out) > 1e-9 else [0.0]
+            radii = (rr if rr else SPLIT_RADII) if abs(a_in - a_out) > 1e-9 else [0.0]
             for off in (OFFSETS if not oblique else [0.0]):
                 C = g.c + g.t * off
                 for mode in (modes if not oblique else [mo for mo in modes if mo in ('F', 'B')]):
+                    if only is not None and (sg, mode) not in only:
+                        continue
                     if mode in ('F', 'FB'):
                         lead, trail, m = FRONT, REAR, 1
                     else:
@@ -481,6 +486,65 @@ def visit_candidates(g):
                                 out.append(dict(color=g.color, mode=mode, sign=sg, off=off, angle=a_in, angle_out=a_out, ea=ea, ee=ee,
                                                 prims=prims, legs=[(q[1], q[2], q[3]) for q in prims if q[0] == 'line'], cost=t,
                                                 start=(S, hS, prims[0][3]), end=(E, hE, last[3])))
+    return out
+
+
+def pass_clearance(prims):
+    """通過の間(プリミティブ列)の、車体と支柱の一番小さいすき間(前と後ろの小さい方、cm)。"""
+    xs, ys, hs = [], [], []
+    for q in prims:
+        if q[0] == 'line':
+            L = prim_len(q)
+            k = np.linspace(0, 1, max(2, int(L / 0.5) + 1))
+            h = math.degrees(math.atan2(*(q[2] - q[1])[::-1])) + (0 if q[3] > 0 else 180)
+            xs.append(q[1][0] + (q[2][0] - q[1][0]) * k); ys.append(q[1][1] + (q[2][1] - q[1][1]) * k)
+            hs.append(np.full(len(k), h))
+        elif q[0] == 'arc':
+            ax, ay, ah = arc_samples(q, 0.5)
+            xs.append(ax); ys.append(ay); hs.append(ah)
+    px, py, hh = np.concatenate(xs), np.concatenate(ys), np.radians(np.concatenate(hs))
+    c = np.cos(hh)[:, None]; sn = np.sin(hh)[:, None]
+    dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
+    lx = dx * c + dy * sn; ly = -dx * sn + dy * c
+    ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
+    cf = np.hypot(np.maximum(np.maximum(-lx, lx - FRONT), 0.0), ey) - POST_R
+    cr = np.hypot(np.maximum(np.maximum(-REAR - lx, lx), 0.0), ey) - POST_R
+    return float(min(cf.min() - MARGIN_FRONT, cr.min() - MARGIN_REAR))
+
+
+OBLIQUE_CHOICE = []   # 記録: (色, 側, 通り方, 入り, 抜け, 半径, すき間)
+
+
+def visit_candidates(g):
+    if OBLIQUE_POLICY != 'safest':
+        return _visit_candidates(g)
+    perp = _visit_candidates(g, pairs_override=[(0.0, 0.0)])
+    have = {(v['sign'], v['mode']) for v in perp}
+    modes = ['F', 'B'] if ALLOW_REVERSE else ['F']
+    missing = [(sg, mo) for sg in (1, -1) for mo in modes if (sg, mo) not in have]
+    out = list(perp)
+    lo, hi, step = ANGLE_SCAN
+    angles = [a for a in np.arange(lo, hi + 1e-9, step) if abs(a) > 1e-9]
+    for sg, mo in missing:
+        base_u = g.n * sg
+        lead, trail, m = (FRONT, REAR, 1) if mo == 'F' else (REAR, FRONT, -1)
+        # 入りを斜め / 抜けを斜め の両方から、通過の間の一番近い柱までの距離が最大のものを1つだけ選ぶ
+        best = None
+        for kind in ('in', 'out'):
+            for a in angles:
+                a_in, a_out = (a, 0.0) if kind == 'in' else (0.0, a)
+                for r in SPLIT_RADII:
+                    prims = _pass_prims(g, g.c, base_u, a_in, a_out, lead, trail, m, 0.0, 0.0, r)
+                    if prims is None:
+                        continue
+                    cl = pass_clearance(prims)
+                    # すき間が1mm以内で同じなら、小さい角度を選ぶ
+                    if best is None or cl > best[0] + 0.1 or (cl > best[0] - 0.1 and abs(a) < abs(best[1] or best[2])):
+                        best = (cl, a_in, a_out, r)
+        if best is None or best[0] < 0:
+            continue
+        OBLIQUE_CHOICE.append((g.color, sg, mo, float(best[1]), float(best[2]), best[3], round(best[0] + MARGIN_FRONT, 2)))
+        out += _visit_candidates(g, pairs_override=[(best[1], best[2], best[3])], only={(sg, mo)})
     return out
 
 
@@ -812,6 +876,8 @@ def main():
     t0 = time.time()
     cands = {c: visit_candidates(g) for c, g in GATES.items()}
     print('candidates', {c: len(v) for c, v in cands.items()}, f'{time.time() - t0:.1f}s', flush=True)
+    for oc in OBLIQUE_CHOICE:
+        print('  oblique', oc, flush=True)
     for c in cands:
         if not cands[c]:
             print(f'NO ROUTE: no way through {c}'); return
