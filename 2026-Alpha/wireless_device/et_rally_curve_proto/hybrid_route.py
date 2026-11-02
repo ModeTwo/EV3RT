@@ -21,7 +21,7 @@ import numpy as np
 PARAMS = dict(
     laps=4,
     # 車体と当たり判定(cm)
-    front=7.5, rear=17.5, half_width=6.85, margin_front=1.5, margin_rear=1.5,   # 11/02: 前後とも1.5cm(以前は後ろ0.4cm)
+    front=7.5, rear=17.5, half_width=6.85, margin_front=2.0, margin_rear=2.0,   # 11/02: 前後とも2.0cm(以前は1.5cm、その前は後ろ0.4cm)。実機で決め直す
     # 経路の形
     radii=[20.0, 15.0, 12.0, 10.0], tail_cm=4.0,
     ext=[0.0, 4.0, 8.0, 14.0, 22.0, 35.0], offsets=[0.0], angles=[0.0],   # 11/02: 横のずらしは使わない(反対側の支柱に近づくため)
