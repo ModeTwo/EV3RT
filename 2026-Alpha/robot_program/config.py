@@ -173,6 +173,9 @@ class RaceConfig:
     et_rally_path_lead_sec: Optional[float] = None
     # 2026-11-01: 同じ計画で、円弧の中だけ使う向きのPIDのI。Noneなら0.6。
     et_rally_path_arc_pid_i: Optional[float] = None
+    # 2026-11-02: 同じ計画で、円弧の速さの倍率。1.0なら外側の車輪が直進の出力を超えない速さ(従来)。
+    # 1.0より大きいと外側の車輪が直進より速く回る(±100で頭打ち)。円弧の速さと滑りの確認用。Noneなら1.0。
+    et_rally_path_arc_speed_scale: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

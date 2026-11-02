@@ -332,7 +332,8 @@ class DeferredStrategySequence(Sequence):
                  start_check_mm=None, straight_pause_sec=None, straight_pause_min_mm=None,
                  gyro_still_sec=None, gyro_still_sweep=None, turn_phase1_model=None,
                  straight_pause_labels=None, turn_wheel_sync_gain=None,
-                 turn_sync_decel=None, move_short_lead_mm=None, path_lead_sec=None, path_arc_pid_i=None):
+                 turn_sync_decel=None, move_short_lead_mm=None, path_lead_sec=None, path_arc_pid_i=None,
+                 path_arc_speed_scale=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -364,6 +365,7 @@ class DeferredStrategySequence(Sequence):
             "move_short_lead_mm": move_short_lead_mm,
             "path_lead_sec": path_lead_sec,
             "path_arc_pid_i": path_arc_pid_i,
+            "path_arc_speed_scale": path_arc_speed_scale,
         }
         self._loaded = False
 
@@ -469,6 +471,7 @@ def build_execute_strategy(context, config, lap_number=None):
             move_short_lead_mm=getattr(config, "et_rally_move_short_lead_mm", None),
             path_lead_sec=getattr(config, "et_rally_path_lead_sec", None),
             path_arc_pid_i=getattr(config, "et_rally_path_arc_pid_i", None),
+            path_arc_speed_scale=getattr(config, "et_rally_path_arc_speed_scale", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -502,6 +505,7 @@ def build_execute_strategy(context, config, lap_number=None):
             move_short_lead_mm=getattr(config, "et_rally_move_short_lead_mm", None),
             path_lead_sec=getattr(config, "et_rally_path_lead_sec", None),
             path_arc_pid_i=getattr(config, "et_rally_path_arc_pid_i", None),
+            path_arc_speed_scale=getattr(config, "et_rally_path_arc_speed_scale", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -660,6 +664,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         path_lead_sec=None,
                         # 2026-11-01: 同じ計画で、円弧の中だけ使う向きのPIDのI。Noneなら0.6。
                         path_arc_pid_i=None,
+                        # 2026-11-02: 同じ計画で、円弧の速さの倍率(外側の車輪が直進の何倍まで回るか)。Noneなら1.0。
+                        path_arc_speed_scale=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -868,6 +874,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 next_profile=step.get("next_profile", ()),
                 lead_sec=0.06 if path_lead_sec is None else path_lead_sec,
                 arc_pid_i=0.6 if path_arc_pid_i is None else path_arc_pid_i,
+                arc_speed_scale=1.0 if path_arc_speed_scale is None else path_arc_speed_scale,
             ))
             if pause_after_move:
                 nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),

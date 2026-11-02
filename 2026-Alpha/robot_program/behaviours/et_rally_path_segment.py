@@ -57,7 +57,8 @@ class EtRallyPathSegment(Behaviour):
                  stop: bool = True, continue_from_prev: bool = False, remaining_after_mm: float = 0.0,
                  stop_lead_mm: float = 0.0, accel_mm: float = 0.0, accel_min_power: int = 40,
                  decel_mm: float = 0.0, decel_min_power: int = 40,
-                 next_profile=(), lead_sec: float = 0.0, arc_pid_i: float = 0.6) -> None:
+                 next_profile=(), lead_sec: float = 0.0, arc_pid_i: float = 0.6,
+                 arc_speed_scale: float = 1.0) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -89,6 +90,9 @@ class EtRallyPathSegment(Behaviour):
         # 2026-11-01: 円弧の中だけ向きのPIDのIを弱くする(直進用の強いI(--rally-move-pid-i 8など)のままだと、
         # 目標の向きが動き続ける円弧で出力が約0.5秒周期で揺れた。run_20261101T061925)。
         self.arc_pid_i = arc_pid_i
+        # 2026-11-02: 円弧の出力の倍率。1.0なら外側の車輪が直進の出力を超えない(従来)。大きくすると円弧が速くなる
+        # (左右の出力は ±100 に収める処理で頭打ちになる)。
+        self.arc_speed_scale = arc_speed_scale
         self.running = False
         self.stopping = False
 
@@ -106,12 +110,12 @@ class EtRallyPathSegment(Behaviour):
                 # 止まった位置が約1cmずれていた。run_20261101T063540のarc2・arc15)。目標の向きは終わりの向き。
                 if kind == "arc" and radius > 0:
                     return (h0 + sweep, math.copysign(HALF_TREAD_MM / radius, sweep),
-                            1.0 / (1.0 + HALF_TREAD_MM / radius))
+                            self.arc_speed_scale / (1.0 + HALF_TREAD_MM / radius))
                 return h0 + sweep, 0.0, 1.0
             if kind == "arc" and radius > 0 and length > 0:
                 ratio = max(0.0, s / length)
                 return (h0 + sweep * ratio, math.copysign(HALF_TREAD_MM / radius, sweep),
-                        1.0 / (1.0 + HALF_TREAD_MM / radius))
+                        self.arc_speed_scale / (1.0 + HALF_TREAD_MM / radius))
             return h0 + sweep, 0.0, 1.0
         return self.end_heading, 0.0, 1.0
 

@@ -1441,6 +1441,10 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument('--rally-path-arc-pid-i', type=float, default=None,
                         help=('During the ET rally, for plans with arcs: the I gain of the heading PID used inside '
                               'arcs only (straights keep --rally-move-pid-i). Default (unset) = 0.6.'))
+    parser.add_argument('--rally-path-arc-speed-scale', type=float, default=None,
+                        help=('During the ET rally, for plans with arcs: multiply the arc speed. 1.0 = the outer '
+                              'wheel does not exceed the straight-line power (default). Larger values make arcs '
+                              'faster (wheel powers are still kept within +-100).'))
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
                               'heading-decreasing direction (left turns). Default (unset) = same as the '
@@ -1652,6 +1656,12 @@ def _run_main(argv, startup_cleanup):
         if not 0.0 <= args.rally_path_arc_pid_i <= 20.0:
             parser.error('--rally-path-arc-pid-i must be between 0 and 20')
         mission_config = dataclasses.replace(mission_config, et_rally_path_arc_pid_i=args.rally_path_arc_pid_i)
+    if args.rally_path_arc_speed_scale is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-arc-speed-scale requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.5 <= args.rally_path_arc_speed_scale <= 2.0:
+            parser.error('--rally-path-arc-speed-scale must be between 0.5 and 2')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_arc_speed_scale=args.rally_path_arc_speed_scale)
     if args.rally_gyro_drift_extra_sec is not None:
         if not 0.5 <= args.rally_gyro_drift_extra_sec <= 10.0:
             parser.error('--rally-gyro-drift-extra-sec must be between 0.5 and 10')

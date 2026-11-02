@@ -1,0 +1,90 @@
+{
+  "note_1102": "後退の円弧のテスト(A4): 半径150mmで、後退のまま8の字を2回、最後に40mm後退して止まる。前進の8の字と比べる。",
+  "expected_end": {
+    "front_mm": -40.0,
+    "right_mm": 0.0,
+    "heading_deg": 0.0
+  },
+  "steps": [
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 150.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 150.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": -180.0,
+      "radius_mm": 150.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": -180.0,
+      "radius_mm": 150.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 150.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 150.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": -180.0,
+      "radius_mm": 150.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": -180.0,
+      "radius_mm": 150.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 40.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    }
+  ]
+}
