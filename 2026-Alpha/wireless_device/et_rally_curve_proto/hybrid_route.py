@@ -25,6 +25,11 @@ PARAMS = dict(
     # 経路の形
     radii=[20.0, 15.0, 12.0, 10.0], tail_cm=4.0,
     ext=[0.0, 4.0, 8.0, 14.0, 22.0, 35.0], offsets=[-2.5, 0.0, 2.5], angles=[0.0],
+    # 斜めの通過: 'split' = 真ん中で向きを変える(斜めに入って垂直に抜ける/垂直に入って斜めに抜ける)、
+    # 'straight' = 入りから抜けまで同じ斜め、'both' = 両方。split の向きを変える円弧の半径(cm)は split_radii。
+    oblique_mode='split', split_radii=[20.0, 15.0, 10.0],
+    # スタート: 'default' = 今のスタート位置(向き0)、'goal' = 今のゴール地点(向き180、フィールドの方を向く)
+    start_at='default',
     allow_reverse=True, allow_pivot=True,
     # 時間: 直進 cm/s、円弧は arc_k*v_line/(1+half_tread/r)、後退は rev_speed_scale 倍の速さ
     v_line=36.0, arc_k=0.77, half_tread=5.85, rev_speed_scale=1.0,
@@ -51,6 +56,8 @@ INF = 1e9
 TAU = 2 * math.pi
 START = np.array([2 * 2 * P - (4 * P + 17.8), 3.5 * P]); START_H = 0.0
 GOAL = np.array([2 * 2 * P - (0 * P - 14.9), 3.5 * P]); GOAL_H = 90.0
+if START_AT == 'goal':
+    START = GOAL.copy(); START_H = 180.0
 _mx = lambda x: 4 * P - x
 KEEPOUT = [(_mx(INF), _mx(-17.0), -INF, -37.0),
            (_mx(INF), _mx(4 * P + 17.8 + 14.0), -INF, INF),
@@ -208,14 +215,14 @@ def arc_end(pr):
 
 def arc_samples(pr, step=1.0):
     _, c, r, theta, s, sweep, m, p0 = pr
-    n = max(2, int(r * sweep / step) + 1)
+    n = max(2, int(r * sweep / step) + 1, int(math.degrees(sweep)) + 1)   # 向き1°ごとにも(後ろの角は車軸より大きく振れる)
     th = theta + s * sweep * np.arange(n + 1) / n
     xs = c[0] + s * r * np.sin(th); ys = c[1] - s * r * np.cos(th)
     hb = np.degrees(th) + (0 if m > 0 else 180)
     return xs, ys, hb
 
 
-def arc_ok(pr):
+def arc_ok(pr, allow=None):
     if pr[5] < 1e-6:
         return True
     xs, ys, hb = arc_samples(pr)
@@ -223,7 +230,7 @@ def arc_ok(pr):
         return False
     if np.any(in_keepout(xs, ys)):
         return False
-    return not crosses_gate(xs, ys)
+    return not crosses_gate(xs, ys, allow)
 
 
 _pivot_cache = {}
@@ -384,44 +391,96 @@ def dubins_one(A, thA, B, thB, r, w, m):
 DIRS = (1, -1) if ALLOW_REVERSE else (1,)
 
 
+def _rot(v, deg):
+    c, sn = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+    return np.array([v[0] * c - v[1] * sn, v[0] * sn + v[1] * c])
+
+
+def _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r):
+    """ゲートの通過のプリミティブ。入りは向き a_in の直進で車軸が C(ゲートの線上)に着くまで、
+    a_in != a_out なら C から半径 r の円弧で a_out に向きを変え、a_out の直進で抜ける。
+    入りの条件: 先の端の角が線の CLR 手前、抜けの条件: 後の端の角が線を PM 越える(線に垂直な距離)。"""
+    u_in, u_out = _rot(base_u, a_in), _rot(base_u, a_out)
+    ci, si = math.cos(math.radians(a_in)), abs(math.sin(math.radians(a_in)))
+    co, so = math.cos(math.radians(a_out)), abs(math.sin(math.radians(a_out)))
+    S = C - u_in * ((lead * ci + HALF_WIDTH * si + CLR) / ci + ea)
+    need = trail * co + HALF_WIDTH * so + PM
+    prims = [('line', S, C, m)]
+    P2 = C
+    if abs(a_out - a_in) > 1e-9:
+        th_in = math.atan2(u_in[1], u_in[0]); th_out = math.atan2(u_out[1], u_out[0])
+        dd = nd(math.degrees(th_out - th_in))
+        sgn = 1 if dd > 0 else -1
+        arc = arc_prim(C, th_in, sgn, math.radians(abs(dd)), r, m)
+        P2, _ = arc_end(arc)
+        prims.append(arc)
+    d2 = float(np.dot(P2 - C, base_u))
+    L = (need - d2) / co
+    if L < 0:
+        return None
+    E = P2 + u_out * (L + ee)
+    prims.append(('line', P2, E, m))
+    return prims
+
+
 def visit_candidates(g):
-    """ゲートの通り方の候補。angles が0以外なら、車軸の中心がゲートの真ん中を通る斜めの通過(横のずれは0だけ)。
-    通過前/後の条件は、車体の角(斜めなら幅の分も)がゲートの線から CLR 手前 / PM 越える所(線に垂直な距離)。"""
+    """ゲートの通り方の候補。斜め(angles が0以外)は、車軸の中心がゲートの真ん中を通るときだけ(横のずれは0)。"""
     out = []
     modes = ['F', 'B', 'FB', 'BF'] if ALLOW_REVERSE else ['F']
+    pairs = [(0.0, 0.0)]
+    for a in ANGLES:
+        if abs(a) < 1e-9:
+            continue
+        if OBLIQUE_MODE in ('split', 'both'):
+            pairs += [(a, 0.0), (0.0, a)]
+        if OBLIQUE_MODE in ('straight', 'both'):
+            pairs.append((a, a))
     for sg in (1, -1):
-        for alpha in ANGLES:
-            ca, sa = math.cos(math.radians(alpha)), abs(math.sin(math.radians(alpha)))
-            base_u = g.n * sg
-            u = np.array([base_u[0] * ca - base_u[1] * math.sin(math.radians(alpha)),
-                          base_u[0] * math.sin(math.radians(alpha)) + base_u[1] * ca])
-            hu = math.degrees(math.atan2(u[1], u[0])); hm = nd(hu + 180)
-            # 線に垂直な距離 → 進む向きの距離
-            reach = lambda end_len, extra: (end_len * ca + HALF_WIDTH * sa + extra) / ca
-            for off in (OFFSETS if abs(alpha) < 1e-9 else [0.0]):
+        base_u = g.n * sg
+        for a_in, a_out in pairs:
+            oblique = abs(a_in) > 1e-9 or abs(a_out) > 1e-9
+            radii = SPLIT_RADII if abs(a_in - a_out) > 1e-9 else [0.0]
+            for off in (OFFSETS if not oblique else [0.0]):
                 C = g.c + g.t * off
-                for mode in modes:
+                for mode in (modes if not oblique else [mo for mo in modes if mo in ('F', 'B')]):
                     if mode in ('F', 'FB'):
-                        base_a, h, d1, tip = reach(FRONT, CLR), hu, 1, reach(REAR, PM)
+                        lead, trail, m = FRONT, REAR, 1
                     else:
-                        base_a, h, d1, tip = reach(REAR, CLR), hm, -1, reach(FRONT, PM)
-                    base_b = reach(FRONT, CLR) if mode == 'FB' else reach(REAR, CLR)
-                    for ea in EXT:
-                        S = C - u * (base_a + ea)
-                        for ee in EXT:
-                            if mode in ('F', 'B'):
-                                E = C + u * (tip + ee); legs = [(S, E, d1)]; dend = d1
-                            else:
-                                T = C + u * tip; E = C - u * (base_b + ee); legs = [(S, T, d1), (T, E, -d1)]; dend = -d1
-                            if not all(line_ok(a, b, d, allow=g.color) for a, b, d in legs):
-                                continue
-                            t = sum(float(np.hypot(*(b - a))) / V_LINE * spd(d) for a, b, d in legs)
-                            rv = sum(float(np.hypot(*(b - a))) for a, b, d in legs if d < 0)
-                            if len(legs) == 2:
-                                t += T_STOP + PEN_STOP
-                            t += PEN_REV_M * rv / 100.0
-                            out.append(dict(color=g.color, mode=mode, sign=sg, off=off, angle=alpha, ea=ea, ee=ee, legs=legs,
-                                            cost=t, start=(S, h, d1), end=(E, h, dend)))
+                        lead, trail, m = REAR, FRONT, -1
+                    for r in radii:
+                        for ea in EXT:
+                            for ee in EXT:
+                                if mode in ('F', 'B'):
+                                    prims = _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r)
+                                    if prims is None:
+                                        continue
+                                else:
+                                    # 往復(垂直だけ): 抜けきったら戻って、元の側へ抜けきる
+                                    u = base_u
+                                    S = C - u * (lead + CLR + ea); T = C + u * (trail + PM)
+                                    E = C - u * ((FRONT if mode == 'FB' else REAR) + CLR + ee)
+                                    prims = [('line', S, T, m), ('line', T, E, -m)]
+                                ok = True
+                                for q in prims:
+                                    if q[0] == 'line' and not line_ok(q[1], q[2], q[3], allow=g.color):
+                                        ok = False; break
+                                    if q[0] == 'arc' and not arc_ok(q, allow=g.color):
+                                        ok = False; break
+                                if not ok:
+                                    continue
+                                t = sum((prim_len(q) / (V_LINE if q[0] == 'line' else v_arc(q[2]))) * spd(prim_m(q)) for q in prims)
+                                rv = sum(prim_len(q) for q in prims if prim_m(q) < 0)
+                                if mode in ('FB', 'BF'):
+                                    t += T_STOP + PEN_STOP
+                                t += PEN_REV_M * rv / 100.0
+                                S = prims[0][1]
+                                last = prims[-1]
+                                E = last[2]
+                                hS = nd(math.degrees(math.atan2(*(prims[0][2] - prims[0][1])[::-1])) + (0 if prims[0][3] > 0 else 180))
+                                hE = nd(math.degrees(math.atan2(*(last[2] - last[1])[::-1])) + (0 if last[3] > 0 else 180))
+                                out.append(dict(color=g.color, mode=mode, sign=sg, off=off, angle=a_in, angle_out=a_out, ea=ea, ee=ee,
+                                                prims=prims, legs=[(q[1], q[2], q[3]) for q in prims if q[0] == 'line'], cost=t,
+                                                start=(S, hS, prims[0][3]), end=(E, hE, last[3])))
     return out
 
 
@@ -842,10 +901,10 @@ def main():
         blocks.append(dict(kind='conn', lap=None, color=None, prims=[ser(p) for p in T[key].prims[(e, s)]]))
         if i < len(visits):
             v = visits[i]
-            blocks.append(dict(kind='visit', lap=i // 3 + 1, color=v['color'], mode=v['mode'], sign=v['sign'], off=v['off'], angle=v['angle'],
-                               prims=[ser(('line', a, b, d)) for a, b, d in v['legs']]))
+            blocks.append(dict(kind='visit', lap=i // 3 + 1, color=v['color'], mode=v['mode'], sign=v['sign'], off=v['off'], angle=v['angle'], angle_out=v['angle_out'],
+                               prims=[ser(p) for p in v['prims']]))
     for i, v in enumerate(visits[:3]):
-        print(f'  lap1 {v["color"]:6s} {v["mode"]:2s} sign={v["sign"]:+d} off={v["off"]:+.1f} angle={v["angle"]:+.0f} ea={v["ea"]} ee={v["ee"]}')
+        print(f'  lap1 {v["color"]:6s} {v["mode"]:2s} sign={v["sign"]:+d} off={v["off"]:+.1f} angle={v["angle"]:+.0f}/{v["angle_out"]:+.0f} ea={v["ea"]} ee={v["ee"]}')
     json.dump(dict(total=total, params=PARAMS, blocks=blocks), open(sys.argv[2], 'w'))
 
 
