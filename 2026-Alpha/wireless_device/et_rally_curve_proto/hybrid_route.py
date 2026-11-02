@@ -31,6 +31,8 @@ PARAMS = dict(
     # 斜めの使い方: 'safest' = そのゲートを(その側から・その通り方で)真ん中を垂直に通れないときだけ、
     # 通過の間の一番近い柱までの距離が最大になる角度と円弧の半径を1つ選ぶ(angle_scan の範囲)。'all' = angles をどこでも使う。
     oblique_policy='safest', angle_scan=[-30.0, 30.0, 1.0],
+    # True: 入りも抜けも斜めの通過も候補にする(入りの側にも抜けの側にもとなりのT字があるゲートのため。11/02 seed758743)
+    oblique_both=True,
     # スタート: 'default' = 今のスタート位置(向き0)、'goal' = 今のゴール地点(向き180、フィールドの方を向く)
     start_at='default',
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
@@ -664,17 +666,21 @@ def visit_candidates(g):
         lead, trail, m = (FRONT, REAR, 1) if mo in ('F', 'FB') else (REAR, FRONT, -1)
         # 入りを斜め / 抜けを斜め の両方から、通過の間の一番近い柱までの距離が最大のものを1つだけ選ぶ
         best = None
-        for kind in ('in', 'out'):
-            for a in angles:
-                a_in, a_out = (a, 0.0) if kind == 'in' else (0.0, a)
-                for r in SPLIT_RADII:
-                    prims = _pass_prims(g, g.c, base_u, a_in, a_out, lead, trail, m, 0.0, 0.0, r)
-                    if prims is None:
-                        continue
-                    cl = pass_clearance(prims)
-                    # すき間が1mm以内で同じなら、小さい角度を選ぶ
-                    if best is None or cl > best[0] + 0.1 or (cl > best[0] - 0.1 and abs(a) < abs(best[1] or best[2])):
-                        best = (cl, a_in, a_out, r)
+        # 候補: 入りだけ斜め / 抜けだけ斜め / (OBLIQUE_BOTH なら)入りも抜けも斜め(同じ角度の1本の線と、4°刻みの違う角度)
+        trials = [(a, 0.0, r) for a in angles for r in SPLIT_RADII] + [(0.0, a, r) for a in angles for r in SPLIT_RADII]
+        if OBLIQUE_BOTH:
+            trials += [(a, a, 0.0) for a in angles]
+            coarse = [a for a in angles if abs(round(a) % 4) < 1e-9]
+            trials += [(a1, a2, 20.0) for a1 in coarse for a2 in coarse if abs(a1 - a2) > 1e-9]
+        for a_in, a_out, r in trials:
+            prims = _pass_prims(g, g.c, base_u, a_in, a_out, lead, trail, m, 0.0, 0.0, r)
+            if prims is None:
+                continue
+            cl = pass_clearance(prims)
+            # すき間が1mm以内で同じなら、斜めが片側だけの方、次に角度が小さい方を選ぶ
+            pref = (int(abs(a_in) > 1e-9) + int(abs(a_out) > 1e-9), max(abs(a_in), abs(a_out)))
+            if best is None or cl > best[0] + 0.1 or (cl > best[0] - 0.1 and pref < best[4]):
+                best = (cl, a_in, a_out, r, pref)
         if best is None or best[0] < 0:
             continue
         OBLIQUE_CHOICE.append((g.color, sg, mo, float(best[1]), float(best[2]), best[3], round(best[0] + MARGIN_FRONT, 2)))
