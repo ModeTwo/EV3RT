@@ -32,14 +32,14 @@ def speed_profile(distance_mm: float, config) -> int:
     curve_sections = [
         (418, 841),
         (1184, 1591),
-        (1749, 2262),
+        (1749, 2490),
         (3740, 4201),
     ]
 
     # どれかのカーブ区間に入っていたら速度を落とす
     for start, end in curve_sections:
         if start <= distance_mm <= end:
-            return 70   # カーブの速度（共通）
+            return 100   # カーブの速度（共通）
 
     return config.start_lap_power            # 直線の速度 75?80?（config.start_lap_power と同じ）
 

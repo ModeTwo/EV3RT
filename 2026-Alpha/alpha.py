@@ -438,8 +438,8 @@ class TraceLine(Behaviour):
         # On a sharp slow curve, |turn| may exceed the reduced base speed, so the
         # inner wheel can go to zero/negative -> a tight pivot. That's desired.
         p = int(round(self.power))
-        left  = max(-100, min(100, p + turn))    # motors cap at +-100
-        right = max(-100, min(100, p - turn))
+        left  = max(-400, min(400, p + turn))    # motors cap at +-100
+        right = max(-400, min(400, p - turn))
         g_right_motor.set_power(right)
         g_left_motor.set_power(left)
 
