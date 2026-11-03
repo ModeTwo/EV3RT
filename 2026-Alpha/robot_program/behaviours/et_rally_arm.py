@@ -82,6 +82,20 @@ class EtRallyArmUpDown(Behaviour):
         return Status.RUNNING
 
 
+class EtRallyArmAlreadyUp(Behaviour):
+    """--rally-arm-up-before-touch のとき、ETラリー開始時のアーム上げの代わりに置く(タッチの前に上げ済み)。
+    2026-11-03: 本番ではETラリーの走行位置へ向かう間にアームを上げ、止まってからはジャイロの測り直しだけをする想定。
+    その時間を測るため、タッチの後はアームを動かさず、すぐ振動待ち・測定に入る。"""
+
+    def update(self) -> Status:
+        self.logger.info("arm already up before touch (position %d)" % runtime.arm_motor.get_count())
+        return Status.SUCCESS
+
+
+def arm_up_before_touch(config):
+    return bool(getattr(config, "et_rally_arm_up_before_touch", None)) if config is not None else False
+
+
 def make_arm_up_down(name, direction, config):
     """--rally-arm-stop-ticks があればこの版、なければ従来の ArmUpDownFull を返す。"""
     stop_ticks = getattr(config, "et_rally_arm_stop_ticks", None) if config is not None else None

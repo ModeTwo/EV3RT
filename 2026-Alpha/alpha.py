@@ -31,7 +31,7 @@ from robot_program.context import RaceContext
 from robot_program.delivery_heading import RegisterDeliveryHeading, initial_delivery_heading
 from robot_program.decryption_key import read_decryption_key
 from robot_program.behaviours.device_control import ArmDirection, ResetDevice
-from robot_program.behaviours.et_rally_arm import make_arm_up_down
+from robot_program.behaviours.et_rally_arm import arm_up_before_touch, make_arm_up_down
 from robot_program.features.sumo_bearing import initial_sumo_bearing
 from robot_program.features.sumo_bearing_motion import RegisterSumoBearing
 from robot_program.runtime import runtime as robot_runtime
@@ -1036,6 +1036,9 @@ def build_behaviour_tree(
             #ReadKey(name="read key"),
         ]
     )
+    if arm_up_before_touch(mission_config):
+        # 2026-11-03: --rally-arm-up-before-touch: タッチの前にアームを上げておく(タッチの後はジャイロの測り直しだけ)。
+        calibration.add_child(make_arm_up_down("arm up before touch", ArmDirection.UP, mission_config))
     start.add_children([IsTouchOn(name="touch start")])
 
     mission_context = RaceContext(
@@ -1472,6 +1475,8 @@ def _run_main(argv, startup_cleanup):
                         help='Stop the arm when it has moved slowly for this many consecutive ticks (about 3; default: old ArmUpDownFull).')
     parser.add_argument('--rally-arm-power', type=float, default=None,
                         help='With --rally-arm-stop-ticks: arm push power (default 35).')
+    parser.add_argument('--rally-arm-up-before-touch', choices=['on', 'off'], default=None,
+                        help='Raise the arm before the touch start; after the touch only re-measure the gyro (default off).')
     parser.add_argument('--rally-arm-slow-deg', type=float, default=None,
                         help='With --rally-arm-stop-ticks: a tick moving less than this many degrees counts as slow (default 2).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
@@ -1563,6 +1568,12 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-lag-compensation-deg requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_lag_compensation_deg=args.rally_turn_lag_compensation_deg)
+    if args.rally_arm_up_before_touch is not None:
+        # bottle-rally / rally-sumo は先の工程でアームを使うため、ETラリーだけを走る rally-drive に限る。
+        if mission_config.mission_mode != 'rally-drive':
+            parser.error('--rally-arm-up-before-touch requires --mission rally-drive')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_arm_up_before_touch=(args.rally_arm_up_before_touch == 'on'))
     if args.rally_turn_lag_compensation_adaptive is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-turn-lag-compensation-adaptive requires --mission rally-drive, bottle-rally or rally-sumo')
