@@ -30,7 +30,8 @@ from robot_program.config import (
 from robot_program.context import RaceContext
 from robot_program.delivery_heading import RegisterDeliveryHeading, initial_delivery_heading
 from robot_program.decryption_key import read_decryption_key
-from robot_program.behaviours.device_control import ArmDirection, ArmUpDownFull, ResetDevice
+from robot_program.behaviours.device_control import ArmDirection, ResetDevice
+from robot_program.behaviours.et_rally_arm import make_arm_up_down
 from robot_program.features.sumo_bearing import initial_sumo_bearing
 from robot_program.features.sumo_bearing_motion import RegisterSumoBearing
 from robot_program.runtime import runtime as robot_runtime
@@ -1026,10 +1027,11 @@ def build_behaviour_tree(
     calibration = Sequence(name="calibration", memory=True)
     start = Parallel(name="start", policy=ParallelPolicy.SuccessOnOne())
 
+    # 2026-11-03: --rally-arm-stop-ticks のときだけETラリー用の止め方(make_arm_up_downの中で切り替え)。
     calibration.add_children(
         [
-            ArmUpDownFull(name="arm up", direction=ArmDirection.UP),
-            ArmUpDownFull(name="arm down", direction=ArmDirection.DOWN),
+            make_arm_up_down("arm up", ArmDirection.UP, mission_config),
+            make_arm_up_down("arm down", ArmDirection.DOWN, mission_config),
             ResetDevice(name="device reset"),
             #ReadKey(name="read key"),
         ]
@@ -1466,6 +1468,10 @@ def _run_main(argv, startup_cleanup):
                         help='Path segments: drive wheels with the hub speed control at (power x this) deg/s (about 9; default 0 = power control).')
     parser.add_argument('--rally-path-ff-scale', type=float, default=None,
                         help='Multiply the arc left/right feedforward (half tread / radius) by this (default 1.0).')
+    parser.add_argument('--rally-arm-stop-ticks', type=float, default=None,
+                        help='Stop the arm when it has moved slowly for this many consecutive ticks (about 3; default: old ArmUpDownFull).')
+    parser.add_argument('--rally-arm-power', type=float, default=None,
+                        help='With --rally-arm-stop-ticks: arm push power (default 35).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
                               'heading-decreasing direction (left turns). Default (unset) = same as the '
@@ -1702,7 +1708,9 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-path-power', 'rally_path_power', 30.0, 100.0),
                               ('--rally-path-wheel-log', 'rally_path_wheel_log', 0.0, 200.0),
                               ('--rally-path-speed-control', 'rally_path_speed_control', 0.0, 20.0),
-                              ('--rally-path-ff-scale', 'rally_path_ff_scale', 0.5, 2.0)):
+                              ('--rally-path-ff-scale', 'rally_path_ff_scale', 0.5, 2.0),
+                              ('--rally-arm-stop-ticks', 'rally_arm_stop_ticks', 1.0, 20.0),
+                              ('--rally-arm-power', 'rally_arm_power', 10.0, 60.0)):
         value = getattr(args, attr)
         if value is None:
             continue

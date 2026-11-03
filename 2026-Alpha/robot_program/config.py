@@ -195,6 +195,9 @@ class RaceConfig:
     et_rally_path_speed_control: Optional[float] = None
     # 2026-11-03: 円弧の左右の差(フィードフォワード)の倍率(Noneなら1.0)。円弧では実際の輪距が計算より大きく効くため。
     et_rally_path_ff_scale: Optional[float] = None
+    # 2026-11-03: アームの止め方(EtRallyArmUpDown)。動きの遅いtickがこの回数連続したら止める(Noneなら従来の ArmUpDownFull)と、押す出力(Noneなら35)。
+    et_rally_arm_stop_ticks: Optional[float] = None
+    et_rally_arm_power: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

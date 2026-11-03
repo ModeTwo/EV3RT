@@ -6,7 +6,8 @@ from py_trees.composites import Sequence
 
 from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, TIRE_DIAMETER, UNCALIBRATED_TIRE_DIAMETER
 
-from ..behaviours.device_control import ArmDirection, ArmUpDownFull
+from ..behaviours.device_control import ArmDirection
+from ..behaviours.et_rally_arm import make_arm_up_down
 from ..features.execute_strategy import build_execute_strategy
 from ..behaviours.motor_control import StopNow
 from ..behaviours.et_rally_drive import set_move_carry_integral, set_move_tuning
@@ -96,7 +97,7 @@ def build_et_rally_phase(context, config):
         children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
     if install_heading:
         children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation, scale_neg))
-    arm_up = ArmUpDownFull(name="et_rally arm up", direction=ArmDirection.UP)
+    arm_up = make_arm_up_down("et_rally arm up", ArmDirection.UP, config)
     # 2026-10-29: ハブのプログラムを書き換えた版(ブレーキ中もハブがジャイロのくせを測り直す)用に、
     # アームを上げ切って振動が収まってから、この秒数だけブレーキをかけて止まる。
     hub_recal_sec = getattr(config, "et_rally_gyro_hub_recal_sec", None)
