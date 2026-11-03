@@ -12,6 +12,13 @@
 - 減速は、止まるまでに続く区間全体の残り距離(remaining_after_mm を足したもの)で決める。
 - stop=True の区間の終わりでは、ブレーキをかけて左右のエンコーダが止まるまで待ってから終える
   (直後に前後が入れ替わっても、惰性のまま逆へ出力をかけないため)。
+- 2026-11-03: 計画の線からの横のずれを、目標の向きに戻す(lat_gain、既定0=従来どおり向きだけを追う)。
+  向きだけを追うと、円弧の入り口・出口で向きが遅れた分の横のずれが戻らずに残り、実機で円弧の終わりに
+  7〜15mm外れていた(11/03のarc8・arc_entryのテスト)。
+  区間の始めの計画上の点を原点・進む向きをxとした座標で、自分の位置を(進んだ距離, ジャイロの向き)から積算し、
+  計画の線(直線/円弧)の一番近い点からの横のずれを出す(向きのずれ×距離の積算だと、円弧が続くと見積もりが
+  狂い、机上で8の字が逆に悪くなった)。止まらずに続く区間へは、次の区間の始めの点から見た位置を引き継ぐ。
+  後退でも「進む向き」で考えれば同じ式になる(進む向きは向きと同じだけ回る)。
 """
 
 import math
@@ -38,12 +45,16 @@ STOP_MAX_TICKS = 25
 # 止まらずに続く区間の受け渡し(次の区間の距離の起点と、引き継ぐPID)。
 _chain_end_dist = None
 _chain_pid = None
+# 次の区間の始め(計画上)から見た自分の位置 (前, 右) mm と、位置を積算した最後の距離・向き
+# (次の区間が動き出すのは1tick後なので、その間の進みを次の区間で積算するため)。
+_chain_lat = None
 
 
 def reset_chain():
-    global _chain_end_dist, _chain_pid
+    global _chain_end_dist, _chain_pid, _chain_lat
     _chain_end_dist = None
     _chain_pid = None
+    _chain_lat = None
 
 
 def _heading():
@@ -58,7 +69,7 @@ class EtRallyPathSegment(Behaviour):
                  stop_lead_mm: float = 0.0, accel_mm: float = 0.0, accel_min_power: int = 40,
                  decel_mm: float = 0.0, decel_min_power: int = 40,
                  next_profile=(), lead_sec: float = 0.0, arc_pid_i: float = 0.6,
-                 arc_speed_scale: float = 1.0) -> None:
+                 arc_speed_scale: float = 1.0, lat_gain: float = 0.0, lat_max_deg: float = 8.0) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -93,6 +104,9 @@ class EtRallyPathSegment(Behaviour):
         # 2026-11-02: 円弧の出力の倍率。1.0なら外側の車輪が直進の出力を超えない(従来)。大きくすると円弧が速くなる
         # (左右の出力は ±100 に収める処理で頭打ちになる)。
         self.arc_speed_scale = arc_speed_scale
+        # 2026-11-03: 横のずれ1mmあたり、目標の向きを何度ずらして戻すか(0なら戻さない)と、その上限(度)。
+        self.lat_gain = lat_gain
+        self.lat_max_deg = lat_max_deg
         self.running = False
         self.stopping = False
 
@@ -119,13 +133,45 @@ class EtRallyPathSegment(Behaviour):
             return h0 + sweep, 0.0, 1.0
         return self.end_heading, 0.0, 1.0
 
+    def _lateral(self):
+        """今の位置から、計画の線の一番近い点までの (その点までの線の長さu, 横のずれ(右が+)) mm。
+        円弧では中心から見た角度を前のtickから連続になるようにつなぐ(180°を超える円弧でも進みが飛ばないように)。"""
+        x, y = self.pos_x, self.pos_y
+        if self.kind != "arc":
+            return x, y
+        r = self.radius_mm
+        if self.sweep >= 0:  # 右へ曲がる: 中心は右 (0, r)
+            a = math.atan2(x, r - y)
+            lat = r - math.hypot(x, y - r)
+        else:                # 左へ曲がる: 中心は左 (0, -r)
+            a = math.atan2(x, y + r)
+            lat = math.hypot(x, y + r) - r
+        prev = getattr(self, "_arc_angle", None)
+        if prev is not None:
+            a += 2.0 * math.pi * round((prev - a) / (2.0 * math.pi))
+        self._arc_angle = a
+        return r * a, lat
+
+    def _pos_from_end(self):
+        """この区間の計画上の終わりの点・終わりの進む向きから見た、今の位置 (前, 右)。"""
+        if self.kind == "arc":
+            d = math.radians(self.sweep)
+            r = self.radius_mm
+            sg = 1.0 if self.sweep >= 0 else -1.0
+            ex, ey = r * math.sin(abs(d)), sg * r * (1.0 - math.cos(d))
+        else:
+            d = 0.0
+            ex, ey = self.length_mm, 0.0
+        dx, dy = self.pos_x - ex, self.pos_y - ey
+        return dx * math.cos(d) + dy * math.sin(d), -dx * math.sin(d) + dy * math.cos(d)
+
     def _target_heading(self, s):
         if self.kind == "line" or self.length_mm <= 0:
             return self.end_heading
         return self.start_heading + self.sweep * max(0.0, min(1.0, s / self.length_mm))
 
     def _start(self):
-        global _chain_pid
+        global _chain_pid, _chain_lat
         ensure_scaled_gyro()
         now = runtime.plotter.get_distance()
         if self.continue_from_prev and _chain_end_dist is not None:
@@ -149,7 +195,17 @@ class EtRallyPathSegment(Behaviour):
         self.err_sum = 0.0
         self.err_n = 0
         self.err_max = 0.0
-        self.lat_mm = 0.0
+        # 自分の位置(この区間の始めの計画上の点が原点、x=始めの進む向き、y=その右)。
+        # 止まらずに続く区間では、前の区間から引き継ぐ(計画の線は区間をまたいでつながっているため)。
+        self.pos_prev_dist = now
+        self.prev_heading = _heading()
+        if self.continue_from_prev and _chain_lat is not None:
+            self.pos_x, self.pos_y, self.pos_prev_dist, self.prev_heading = _chain_lat
+        else:
+            self.pos_x, self.pos_y = 0.0, 0.0
+        _chain_lat = None
+        self._arc_angle = None
+        self.lat_mm = self._lateral()[1]
         self.prev_dist = now
         self.speed_mm_s = 0.0
         self.start_heading_actual = _heading()
@@ -169,7 +225,7 @@ class EtRallyPathSegment(Behaviour):
             runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(), tag))
 
     def update(self) -> Status:
-        global _chain_end_dist, _chain_pid
+        global _chain_end_dist, _chain_pid, _chain_lat
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
         if not self.running:
             self._start()
@@ -187,10 +243,22 @@ class EtRallyPathSegment(Behaviour):
 
         now = runtime.plotter.get_distance()
         s = now - self.orig_dist
+        current = _heading()
+        # 自分の位置を積算する(進む向きの、区間の始めの進む向きからの回り = 向きの回り。右が+)。
+        # 区間の終わりの判定より前に積算する(最後のtickの進みを落とすと、次の区間へ引き継ぐ位置が約7mmずれる)。
+        # 1tickの間の向きは、前のtickと今の向きの平均を使う(円弧では1tickで約4°回る)。
+        turned = math.radians((current + self.prev_heading) / 2.0 - self.start_heading)
+        self.prev_heading = current
+        step = now - self.pos_prev_dist
+        self.pos_prev_dist = now
+        self.pos_x += step * math.cos(turned)
+        self.pos_y += step * math.sin(turned)
+        _, self.lat_mm = self._lateral()
         if s >= self.run_length_mm:
             if self.stop_at_end:
                 _chain_end_dist = None
                 _chain_pid = None
+                _chain_lat = None
                 runtime.right_motor.set_power(0)
                 runtime.right_motor.set_brake(True)
                 runtime.left_motor.set_power(0)
@@ -204,18 +272,21 @@ class EtRallyPathSegment(Behaviour):
             # 続く区間: 次の区間の距離の起点を、計画上の終わりにする。モーターは止めない。
             _chain_end_dist = self.orig_dist + self.length_mm
             _chain_pid = self.pid
+            _chain_lat = self._pos_from_end() + (self.pos_prev_dist, self.prev_heading)
             self._finish_log(now)
             return Status.SUCCESS
 
-        current = _heading()
         self.speed_mm_s += ((now - self.prev_dist) / EXEC_INTERVAL - self.speed_mm_s) * 0.3
         # 目標の向きは今の位置のもの。左右の差(フィードフォワード)と出力の倍率だけを先読みする
         # (車輪の速さが出力に追いつくまでの遅れを打ち消す。目標の向きまで先読みすると曲がり始めが早すぎる)。
         target, _, here_scale = self._profile_at(s)
         _, ff_ratio, look_scale = self._profile_at(s + self.lead_sec * max(self.speed_mm_s, 0.0))
         error = (target - current + 180.0) % 360.0 - 180.0
-        self.pid.setpoint = current + error
-        self.lat_mm += (now - self.prev_dist) * math.sin(math.radians(-error))
+        # 横のずれを戻す: 右にずれていれば目標の向きを左へ(進む向きを線へ向ける)。後退でも同じ向き。
+        correction = 0.0
+        if self.lat_gain > 0.0:
+            correction = max(-self.lat_max_deg, min(self.lat_max_deg, self.lat_gain * self.lat_mm))
+        self.pid.setpoint = current + error - correction
         self.prev_dist = now
         self.err_sum += error
         self.err_n += 1

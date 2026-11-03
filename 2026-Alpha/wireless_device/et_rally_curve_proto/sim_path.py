@@ -90,9 +90,12 @@ class Robot:
         vr, vl = rm.speed, lm.speed
         v = (vr + vl) / 2
         w = (vr - vl) / TREAD
+        # 2026-11-03: 1tickの間の向きは、始めと終わりの平均を使う(終わりの向きだけだと、円弧で1tickに約4°回る分
+        # 位置が内側へずれ、周回の机上の比較で数mm〜1cm以上の差になっていた)。
+        mid = self.phi + w * DT / 2.0
         self.phi += w * DT
-        self.x += v * DT * math.cos(self.phi) / 10.0
-        self.y += v * DT * math.sin(self.phi) / 10.0
+        self.x += v * DT * math.cos(mid) / 10.0
+        self.y += v * DT * math.sin(mid) / 10.0
         plotter.distance += abs(v) * DT
         self.trace.append((self.x, self.y))
 

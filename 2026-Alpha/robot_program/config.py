@@ -176,6 +176,10 @@ class RaceConfig:
     # 2026-11-02: 同じ計画で、円弧の速さの倍率。1.0なら外側の車輪が直進の出力を超えない速さ(従来)。
     # 1.0より大きいと外側の車輪が直進より速く回る(±100で頭打ち)。円弧の速さと滑りの確認用。Noneなら1.0。
     et_rally_path_arc_speed_scale: Optional[float] = None
+    # 2026-11-03: 同じ計画で、計画の線からの横のずれを戻す強さ(横のずれ1mmあたり、目標の向きを何度ずらすか)。
+    # Noneなら0(従来どおり向きだけを追う)。上限(度)はNoneなら8。
+    et_rally_path_lat_gain: Optional[float] = None
+    et_rally_path_lat_max_deg: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、
