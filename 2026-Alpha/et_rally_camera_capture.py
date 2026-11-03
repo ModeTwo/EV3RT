@@ -34,6 +34,7 @@ import numpy as np
 
 BOARD_INNER = (9, 6)       # チェッカーボードの内側の角(横, 縦)。A4・25mm・10x7マス
 WIDTH, HEIGHT, FPS, FOURCC = 640, 480, 30, 'MJPG'
+BOARD_TAGS = ('lens', 'jig', 'check')   # チェッカーボードを撮るときのtag。それ以外(marker など)はボードを探さない
 GRID = 3                   # 画面を3x3に分けて、ボードがまだ写っていない場所を知らせる
 
 
@@ -229,10 +230,14 @@ def main():
             if window:
                 frame, _ = grabber.latest()
                 view = frame.copy()
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                small = cv2.resize(gray, None, fx=0.5, fy=0.5)
-                ok, c = cv2.findChessboardCorners(small, BOARD_INNER, cv2.CALIB_CB_FAST_CHECK)
-                if ok:
+                ok = False
+                if args.tag in BOARD_TAGS:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    small = cv2.resize(gray, None, fx=0.5, fy=0.5)
+                    ok, c = cv2.findChessboardCorners(small, BOARD_INNER, cv2.CALIB_CB_FAST_CHECK)
+                if args.tag not in BOARD_TAGS:
+                    pass
+                elif ok:
                     cv2.drawChessboardCorners(view, BOARD_INNER, c * 2.0, ok)
                     size = board_size(c * 2.0)
                     hint = 'FAR' if size < SIZE_FAR else ('NEAR' if size > SIZE_NEAR else 'OK')
@@ -267,7 +272,8 @@ def main():
             frame, stamp = grabber.latest()
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             sharp = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-            corners = find_board(gray)
+            use_board = args.tag in BOARD_TAGS
+            corners = find_board(gray) if use_board else None
             saved += 1
             name = '%s_%03d.png' % (args.tag, saved)
             cv2.imwrite(os.path.join(out_dir, name), frame)
@@ -278,10 +284,14 @@ def main():
                 rec['bbox'] = [round(float(pts[:, 0].min()), 1), round(float(pts[:, 1].min()), 1),
                                round(float(pts[:, 0].max()), 1), round(float(pts[:, 1].max()), 1)]
                 rec['size'] = round(float(board_size(corners)), 3)
-            rec['advice'] = advice(corners, sharp)
+            rec['advice'] = advice(corners, sharp) if use_board else (
+                ['ぶれ・ぼやけ: 止めて撮る(くっきり度%.0f、%.0f以上に)' % (sharp, SHARP_MIN)] if sharp < SHARP_MIN else [])
             meta.write(json.dumps(rec) + '\n')
             meta.flush()
-            msg = '[%03d] %s  ボード: %s  くっきり度: %.0f' % (saved, name, '見つかった' if corners is not None else '見つからない', sharp)
+            if use_board:
+                msg = '[%03d] %s  ボード: %s  くっきり度: %.0f' % (saved, name, '見つかった' if corners is not None else '見つからない', sharp)
+            else:
+                msg = '[%03d] %s  くっきり度: %.0f' % (saved, name, sharp)
             if corners is not None:
                 b = rec['bbox']
                 msg += '  大きさ: 画面の%.0f%%  位置: 横%.0f〜%.0f 縦%.0f〜%.0f' % (board_size(corners) * 100, b[0], b[2], b[1], b[3])
