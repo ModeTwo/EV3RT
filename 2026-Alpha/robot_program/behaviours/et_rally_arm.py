@@ -63,7 +63,10 @@ class EtRallyArmUpDown(Behaviour):
                 self.slow += 1
             else:
                 self.slow = 0
-        self.peak = max(self.peak, delta)
+        if self.ticks > 1:
+            # 11/03実機: 起動直後の1tick目に、ハブのモーター初期化と重なって74度の飛びが出て、
+            # それを一番速い動きとしたため、ふつうに動いている(5度/tick)のに遅いと判定して止まった。
+            self.peak = max(self.peak, delta)
         timed_out = now - self.start_time > self.TIMEOUT_SEC
         if self.slow >= self.stop_ticks or timed_out:
             runtime.arm_motor.set_power(0)
