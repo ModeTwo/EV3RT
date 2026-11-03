@@ -37,6 +37,10 @@
     11/03の車輪のログで、出力60〜100の速さがほぼ同じ(頭打ち)、出力0〜10でも引きずられて回る、と出力と速さが
     比例しておらず、左右の差(フィードフォワード)とPIDの直しが思った量だけ効いていなかったため。
     係数は直進の出力80で約14.5度/tick(=約725度/秒)から約9。
+  - ff_scale: 円弧の左右の差(フィードフォワード)の倍率(1.0なら従来どおり 半輪距/半径)。
+    11/03の車輪のログで、円弧の中の左右の実際の回りの比から逆算した輪距が約146〜158mm(実測の117mmより大きい。
+    すべり・こすれのため)で、計算どおりの差では曲がり足りず、残りを向きのPIDが常に埋めていた
+    (円弧の中の向きのずれの平均が約3°、入り口の遅れ・出力の急な変化の元)。
   - inner_min_power: 前進のとき、左右どちらの出力もこれより下げない(0なら逆回しをしない)。
     左右の差が足りない分は、全体の出力を下げて差を残す(曲がる量を優先)。
 """
@@ -112,7 +116,7 @@ class EtRallyPathSegment(Behaviour):
                  next_profile=(), lead_sec: float = 0.0, arc_pid_i: float = 0.6,
                  arc_speed_scale: float = 1.0, lat_gain: float = 0.0, lat_max_deg: float = 8.0,
                  arc_pid_p=None, ramp_mm: float = 0.0, inner_min_power=None, ramp_sec: float = 0.0,
-                 wheel_log_ticks: int = 0, speed_dps_per_power: float = 0.0) -> None:
+                 wheel_log_ticks: int = 0, speed_dps_per_power: float = 0.0, ff_scale: float = 1.0) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -156,6 +160,7 @@ class EtRallyPathSegment(Behaviour):
         self.ramp_width = self.ramp_mm
         self.wheel_log_ticks = max(0, int(wheel_log_ticks))
         self.speed_dps_per_power = max(0.0, float(speed_dps_per_power))
+        self.ff_scale = float(ff_scale)
         self.inner_min_power = inner_min_power
         self.prev_shape = None
         self.running = False
@@ -395,7 +400,7 @@ class EtRallyPathSegment(Behaviour):
                 power_now = min(power_now, self.decel_min_power + (self.power - self.decel_min_power) * ratio)
 
         output = self.pid(current)
-        ff = abs(power_now) * ff_ratio
+        ff = abs(power_now) * ff_ratio * self.ff_scale
         turn = max(-power_now, min(power_now, output)) + ff
         base = -power_now if self.reverse else power_now
         # 2026-11-01: 左右の出力を±100に収める。左右の差(曲がる分)を優先して残し、はみ出す分は全体の出力を下げる
