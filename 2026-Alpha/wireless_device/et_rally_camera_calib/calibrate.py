@@ -2,7 +2,7 @@
 
 車体の座標: 原点は車軸(駆動輪の接地点の中点)、X=前、Y=左、Z=上(mm)。
 較正台: 後ろの壁 → 車軸 D2、壁 → ボードの手前の黒いマスの端 D1(左右)、ボードの左右の真ん中のずれ D3(左が+)。
-usage: python calibrate.py <lensフォルダ> <jigフォルダ> [--d1 420,420] [--d2 179] [--d3 0] [--sq 25] [--out calib.json]
+usage: python calibrate.py <lensフォルダ> <jigフォルダ> [--d1 420,420] [--d2 179] [--d3 0] [--sq 25] [--h 0] [--out calib.json]
 """
 import argparse
 import glob
@@ -73,7 +73,7 @@ def order_for_robot(c):
     return g
 
 
-def jig(folder, K, dist, sq, d1l, d1r, d2, d3):
+def jig(folder, K, dist, sq, d1l, d1r, d2, d3, h=0.0):
     near_x = (d1l + d1r) / 2.0 - d2 + sq          # 手前の内側の角の行(黒いマスの端から1マス内側)
     skew = math.atan2(d1l - d1r, (COLS + 1) * sq)  # ボードの斜め(左が遠いと+)
     res = []
@@ -89,7 +89,7 @@ def jig(folder, K, dist, sq, d1l, d1r, d2, d3):
                 by = ((COLS - 1) / 2.0 - k) * sq         # 左が+
                 x = near_x + bx * math.cos(skew) - by * math.sin(skew)
                 y = d3 + bx * math.sin(skew) + by * math.cos(skew)
-                obj.append([x, y, 0.0])
+                obj.append([x, y, h])   # ボードの面は、車輪が接している面より h mm 高い
         obj = np.array(obj, np.float32)
         img = g.reshape(-1, 2).astype(np.float32)
         ok, rv, tv = cv2.solvePnP(obj, img, K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
@@ -134,12 +134,13 @@ def main():
     ap.add_argument('lens'); ap.add_argument('jig')
     ap.add_argument('--d1', default='420,420'); ap.add_argument('--d2', type=float, default=179.0)
     ap.add_argument('--d3', type=float, default=0.0); ap.add_argument('--sq', type=float, default=25.0)
+    ap.add_argument('--h', type=float, default=0.0, help='ボードの面が、車輪が接している面より何mm高いか(板の厚み+じゅうたんへの沈み込みなど)')
     ap.add_argument('--out', default='calib.json')
     a = ap.parse_args()
     d1l, d1r = [float(x) for x in a.d1.split(',')]
     L, K, dist = lens(a.lens, a.sq)
     print('較正台: D1 左%.0f 右%.0f、D2 %.0f、D3 %.0f、マス %.1f mm' % (d1l, d1r, a.d2, a.d3, a.sq))
-    J = jig(a.jig, K, dist, a.sq, d1l, d1r, a.d2, a.d3)
+    J = jig(a.jig, K, dist, a.sq, d1l, d1r, a.d2, a.d3, a.h)
     if J:
         for key in ('pitch_down_deg', 'yaw_left_deg', 'roll_deg'):
             v = [j[key] for j in J]
@@ -149,7 +150,7 @@ def main():
         print('床の位置(画像の行v・列u → 車体の座標 前,左 mm)、%s で計算' % J[0]['file'])
         for v, row in ground_table(K, dist, J[0]['rvec'], J[0]['tvec'], L['size']):
             print('  v=%3d: ' % v + '  '.join('%s' % (r,) for r in row))
-    json.dump({'lens': L, 'jig': J, 'jig_setup': {'d1': [d1l, d1r], 'd2': a.d2, 'd3': a.d3, 'sq': a.sq}},
+    json.dump({'lens': L, 'jig': J, 'jig_setup': {'d1': [d1l, d1r], 'd2': a.d2, 'd3': a.d3, 'sq': a.sq, 'h': a.h}},
               open(a.out, 'w'), indent=1)
     print('保存:', a.out)
 
