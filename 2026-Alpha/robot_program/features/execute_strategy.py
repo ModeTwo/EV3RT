@@ -334,7 +334,8 @@ class DeferredStrategySequence(Sequence):
                  straight_pause_labels=None, turn_wheel_sync_gain=None,
                  turn_sync_decel=None, move_short_lead_mm=None, path_lead_sec=None, path_arc_pid_i=None,
                  path_arc_speed_scale=None, path_lat_gain=None, path_lat_max_deg=None,
-                 path_arc_pid_p=None, path_ramp_mm=None, path_inner_min_power=None):
+                 path_arc_pid_p=None, path_ramp_mm=None, path_inner_min_power=None,
+                 path_ramp_sec=None, path_power=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -372,6 +373,8 @@ class DeferredStrategySequence(Sequence):
             "path_arc_pid_p": path_arc_pid_p,
             "path_ramp_mm": path_ramp_mm,
             "path_inner_min_power": path_inner_min_power,
+            "path_ramp_sec": path_ramp_sec,
+            "path_power": path_power,
         }
         self._loaded = False
 
@@ -483,6 +486,8 @@ def build_execute_strategy(context, config, lap_number=None):
             path_arc_pid_p=getattr(config, "et_rally_path_arc_pid_p", None),
             path_ramp_mm=getattr(config, "et_rally_path_ramp_mm", None),
             path_inner_min_power=getattr(config, "et_rally_path_inner_min_power", None),
+            path_ramp_sec=getattr(config, "et_rally_path_ramp_sec", None),
+            path_power=getattr(config, "et_rally_path_power", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -522,6 +527,8 @@ def build_execute_strategy(context, config, lap_number=None):
             path_arc_pid_p=getattr(config, "et_rally_path_arc_pid_p", None),
             path_ramp_mm=getattr(config, "et_rally_path_ramp_mm", None),
             path_inner_min_power=getattr(config, "et_rally_path_inner_min_power", None),
+            path_ramp_sec=getattr(config, "et_rally_path_ramp_sec", None),
+            path_power=getattr(config, "et_rally_path_power", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -692,6 +699,10 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         path_arc_pid_p=None,
                         path_ramp_mm=None,
                         path_inner_min_power=None,
+                        # 2026-11-03: 速度を上げる準備。平均の幅を時間で決める秒(Noneなら0=使わない)と、
+                        # EtRallyPathSegmentの区間だけの出力(Noneならmove_power=80。従来の直進・旋回には効かない)。
+                        path_ramp_sec=None,
+                        path_power=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -886,7 +897,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 kind="arc" if step["type"] == "arc" else "line",
                 end_heading_deg=heading,
                 length_mm=step["distance_mm"],
-                power=move_power,
+                power=move_power if path_power is None else int(path_power),
                 pid_p=active_move_pid[0], pid_i=active_move_pid[1], pid_d=active_move_pid[2],
                 sweep_deg=step.get("sweep_deg", 0.0),
                 radius_mm=step.get("radius_mm", 0.0),
@@ -906,6 +917,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 arc_pid_p=path_arc_pid_p,
                 ramp_mm=0.0 if path_ramp_mm is None else path_ramp_mm,
                 inner_min_power=path_inner_min_power,
+                ramp_sec=0.0 if path_ramp_sec is None else path_ramp_sec,
             ))
             if pause_after_move:
                 nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),

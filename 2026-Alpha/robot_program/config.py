@@ -186,6 +186,9 @@ class RaceConfig:
     et_rally_path_arc_pid_p: Optional[float] = None
     et_rally_path_ramp_mm: Optional[float] = None
     et_rally_path_inner_min_power: Optional[float] = None
+    # 2026-11-03: 速度を上げる準備。平均の幅を時間で決める秒(幅 = max(ramp_mm, 秒×今の速さ))と、円弧・直進の区間の出力(Noneなら80)。
+    et_rally_path_ramp_sec: Optional[float] = None
+    et_rally_path_power: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

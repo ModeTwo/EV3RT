@@ -1456,6 +1456,10 @@ def _run_main(argv, startup_cleanup):
                         help='Average the target heading / wheel difference over this distance so curvature changes gradually (default 0 = off).')
     parser.add_argument('--rally-path-inner-min-power', type=float, default=None,
                         help='Forward path segments: never drive either wheel below this power (0 = no reverse spin; default: no limit).')
+    parser.add_argument('--rally-path-ramp-sec', type=float, default=None,
+                        help='Like --rally-path-ramp-mm but in seconds x current speed (the larger of the two is used; default 0 = off).')
+    parser.add_argument('--rally-path-power', type=float, default=None,
+                        help='Cruise power for path-plan segments (arcs / chained moves) only (default 80).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
                               'heading-decreasing direction (left turns). Default (unset) = same as the '
@@ -1687,7 +1691,9 @@ def _run_main(argv, startup_cleanup):
         mission_config = dataclasses.replace(mission_config, et_rally_path_lat_max_deg=args.rally_path_lat_max_deg)
     for opt, attr, lo, hi in (('--rally-path-arc-pid-p', 'rally_path_arc_pid_p', 0.0, 20.0),
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
-                              ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0)):
+                              ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),
+                              ('--rally-path-ramp-sec', 'rally_path_ramp_sec', 0.0, 1.0),
+                              ('--rally-path-power', 'rally_path_power', 30.0, 100.0)):
         value = getattr(args, attr)
         if value is None:
             continue
