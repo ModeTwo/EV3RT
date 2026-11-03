@@ -102,6 +102,37 @@ def grid_cells(corners):
     return cells
 
 
+SIZE_FAR = 0.25            # ボードの写る大きさ(画面の幅・高さに対する割合の大きい方)がこれ未満なら「遠い」
+SIZE_NEAR = 0.85           # これを超えたら「近い」(端が切れやすい)
+EDGE_PX = 8                # 角が画面の端からこれ以内なら「はみ出しそう」
+SHARP_MIN = 100.0          # くっきり度がこれ未満なら「ぶれ・ぼやけ」
+
+
+def board_size(corners):
+    pts = corners.reshape(-1, 2)
+    return max((pts[:, 0].max() - pts[:, 0].min()) / WIDTH, (pts[:, 1].max() - pts[:, 1].min()) / HEIGHT)
+
+
+def advice(corners, sharp):
+    """撮った1枚へのひとこと。問題がなければ空のリスト。"""
+    out = []
+    if corners is None:
+        out.append('ボード全体が写っているか、傾けすぎていないか、ぶれていないかを確認')
+    else:
+        size = board_size(corners)
+        pts = corners.reshape(-1, 2)
+        if size < SIZE_FAR:
+            out.append('遠い: もっと近づける(今は画面の%.0f%%、%.0f%%以上に)' % (size * 100, SIZE_FAR * 100))
+        elif size > SIZE_NEAR:
+            out.append('近い: 少し離す(今は画面の%.0f%%)' % (size * 100))
+        if (pts[:, 0].min() < EDGE_PX or pts[:, 1].min() < EDGE_PX or
+                pts[:, 0].max() > WIDTH - EDGE_PX or pts[:, 1].max() > HEIGHT - EDGE_PX):
+            out.append('はみ出しそう: ボードの外側の白い縁まで画面に入れる')
+    if sharp < SHARP_MIN:
+        out.append('ぶれ・ぼやけ: 止めて撮る(くっきり度%.0f、%.0f以上に)' % (sharp, SHARP_MIN))
+    return out
+
+
 def stdin_ready(timeout):
     r, _, _ = select.select([sys.stdin], [], [], timeout)
     return bool(r)
@@ -156,6 +187,12 @@ def main():
                 ok, c = cv2.findChessboardCorners(small, BOARD_INNER, cv2.CALIB_CB_FAST_CHECK)
                 if ok:
                     cv2.drawChessboardCorners(view, BOARD_INNER, c * 2.0, ok)
+                    size = board_size(c * 2.0)
+                    hint = 'FAR' if size < SIZE_FAR else ('NEAR' if size > SIZE_NEAR else 'OK')
+                    cv2.putText(view, '%s %.0f%%' % (hint, size * 100), (8, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                                (0, 200, 0) if hint == 'OK' else (0, 140, 255), 2)
+                else:
+                    cv2.putText(view, 'NO BOARD', (8, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
                 for r_, c_ in covered:
                     x0, y0 = c_ * WIDTH // GRID, r_ * HEIGHT // GRID
                     cv2.rectangle(view, (x0 + 2, y0 + 2), (x0 + WIDTH // GRID - 2, y0 + HEIGHT // GRID - 2), (0, 160, 0), 1)
@@ -193,14 +230,21 @@ def main():
                 rec['corners'] = [[round(float(x), 2), round(float(y), 2)] for x, y in pts]
                 rec['bbox'] = [round(float(pts[:, 0].min()), 1), round(float(pts[:, 1].min()), 1),
                                round(float(pts[:, 0].max()), 1), round(float(pts[:, 1].max()), 1)]
+                rec['size'] = round(float(board_size(corners)), 3)
                 covered |= grid_cells(corners)
+            rec['advice'] = advice(corners, sharp)
             meta.write(json.dumps(rec) + '\n')
             meta.flush()
             msg = '[%03d] %s  ボード: %s  くっきり度: %.0f' % (saved, name, '見つかった' if corners is not None else '見つからない', sharp)
             if corners is not None:
                 b = rec['bbox']
-                msg += '  位置: 横%.0f〜%.0f 縦%.0f〜%.0f' % (b[0], b[2], b[1], b[3])
+                msg += '  大きさ: 画面の%.0f%%  位置: 横%.0f〜%.0f 縦%.0f〜%.0f' % (board_size(corners) * 100, b[0], b[2], b[1], b[3])
             print(msg)
+            notes = rec['advice']
+            for n in notes:
+                print('      → ' + n)
+            if not notes:
+                print('      → OK')
             if args.tag == 'lens':
                 missing = [(r_, c_) for r_ in range(GRID) for c_ in range(GRID) if (r_, c_) not in covered]
                 names = {0: '上', 1: '真ん中', 2: '下'}, {0: '左', 1: '真ん中', 2: '右'}
