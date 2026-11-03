@@ -30,6 +30,8 @@
   - ramp_sec: 平均の幅を時間でも決める(幅 = max(ramp_mm, ramp_sec × 今の速さ))。車輪が追いつくまでの時間は
     速さによらずほぼ同じなので、速度を上げても同じ滑らかさにするため。0なら使わない(従来どおり)。
     使うときは、今の速さの見積もりを区間をまたいで引き継ぐ(区間の始めで0に戻ると幅が一瞬縮むため)。
+  - wheel_log_ticks: 区間の始めからこのtick数だけ、毎tickの出力と実際の車輪の回り(エンコーダの度/tick)・向きのずれを
+    ためて、区間の終わりに1行で出す(0なら出さない=従来どおり)。円弧の入り口で内側の車輪が実際にいつ遅くなるかを見るため。
   - inner_min_power: 前進のとき、左右どちらの出力もこれより下げない(0なら逆回しをしない)。
     左右の差が足りない分は、全体の出力を下げて差を残す(曲がる量を優先)。
 """
@@ -89,7 +91,8 @@ class EtRallyPathSegment(Behaviour):
                  decel_mm: float = 0.0, decel_min_power: int = 40,
                  next_profile=(), lead_sec: float = 0.0, arc_pid_i: float = 0.6,
                  arc_speed_scale: float = 1.0, lat_gain: float = 0.0, lat_max_deg: float = 8.0,
-                 arc_pid_p=None, ramp_mm: float = 0.0, inner_min_power=None, ramp_sec: float = 0.0) -> None:
+                 arc_pid_p=None, ramp_mm: float = 0.0, inner_min_power=None, ramp_sec: float = 0.0,
+                 wheel_log_ticks: int = 0) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -131,6 +134,7 @@ class EtRallyPathSegment(Behaviour):
         self.ramp_mm = max(0.0, float(ramp_mm))
         self.ramp_sec = max(0.0, float(ramp_sec))
         self.ramp_width = self.ramp_mm
+        self.wheel_log_ticks = max(0, int(wheel_log_ticks))
         self.inner_min_power = inner_min_power
         self.prev_shape = None
         self.running = False
@@ -257,6 +261,9 @@ class EtRallyPathSegment(Behaviour):
         _chain_lat = None
         self._arc_angle = None
         self.lat_mm = self._lateral()[1]
+        self.wheel_log = []
+        if self.wheel_log_ticks:
+            self.wheel_prev = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
         self.prev_dist = now
         self.speed_mm_s = 0.0
         if self.ramp_sec > 0.0 and self.continue_from_prev and _chain_speed is not None:
@@ -277,6 +284,10 @@ class EtRallyPathSegment(Behaviour):
             current, self.end_heading, self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm,
             self.saturated_ticks,
             runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(), tag))
+        if self.wheel_log:
+            # 1tickごとに 指示した出力R/L:そのtickに実際に回った度R/L:向きのずれ
+            self.logger.info("WHEELS %s: %s" % (self.kind, " ".join(
+                "%d/%d:%d/%d:%+.1f" % w for w in self.wheel_log)))
 
     def update(self) -> Status:
         global _chain_end_dist, _chain_pid, _chain_lat, _chain_shape, _chain_speed
@@ -389,6 +400,11 @@ class EtRallyPathSegment(Behaviour):
         runtime.right_motor.set_power(right_power)
         runtime.left_motor.set_power(left_power)
         log_power_state(self.__class__.__name__ + "." + self.kind, right_power, left_power)
+        if len(self.wheel_log) < self.wheel_log_ticks:
+            counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
+            self.wheel_log.append((right_power, left_power, counts[0] - self.wheel_prev[0],
+                                   counts[1] - self.wheel_prev[1], error))
+            self.wheel_prev = counts
         return Status.RUNNING
 
     def terminate(self, new_status: Status) -> None:

@@ -1460,6 +1460,8 @@ def _run_main(argv, startup_cleanup):
                         help='Like --rally-path-ramp-mm but in seconds x current speed (the larger of the two is used; default 0 = off).')
     parser.add_argument('--rally-path-power', type=float, default=None,
                         help='Cruise power for path-plan segments (arcs / chained moves) only (default 80).')
+    parser.add_argument('--rally-path-wheel-log', type=float, default=None,
+                        help='Log commanded power and actual wheel rotation for the first N ticks of each path segment (default 0 = off).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
                               'heading-decreasing direction (left turns). Default (unset) = same as the '
@@ -1693,7 +1695,8 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),
                               ('--rally-path-ramp-sec', 'rally_path_ramp_sec', 0.0, 1.0),
-                              ('--rally-path-power', 'rally_path_power', 30.0, 100.0)):
+                              ('--rally-path-power', 'rally_path_power', 30.0, 100.0),
+                              ('--rally-path-wheel-log', 'rally_path_wheel_log', 0.0, 200.0)):
         value = getattr(args, attr)
         if value is None:
             continue
@@ -1701,7 +1704,8 @@ def _run_main(argv, startup_cleanup):
             parser.error('%s requires --mission rally-drive, bottle-rally or rally-sumo' % opt)
         if not lo <= value <= hi:
             parser.error('%s must be between %g and %g' % (opt, lo, hi))
-        mission_config = dataclasses.replace(mission_config, **{'et_' + attr: value})
+        mission_config = dataclasses.replace(
+            mission_config, **{'et_rally_path_wheel_log_ticks' if attr == 'rally_path_wheel_log' else 'et_' + attr: value})
     if args.rally_gyro_drift_extra_sec is not None:
         if not 0.5 <= args.rally_gyro_drift_extra_sec <= 10.0:
             parser.error('--rally-gyro-drift-extra-sec must be between 0.5 and 10')
