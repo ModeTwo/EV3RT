@@ -1,5 +1,6 @@
 """2026-11-03: マーカー(QRコード)を写した画像から、QRの4隅を見つけて、較正(calib_*.json)で床の位置(車体の座標)に直す(PCで動かす)。
 車体の座標: 原点は車軸、X=前、Y=左(mm)。答え合わせ用に、床の上での辺の長さ(本当は約50mm)と角の角度も出す。
+マーカーの探し方は find_qr_ground を参照(11/03: 21枚すべてで見つかった)。
 usage: python marker_ground.py <calib.json> <画像フォルダ> [--debug 出力フォルダ]
 """
 import argparse
@@ -54,17 +55,38 @@ def top_to_mm(pts):
     return np.stack([TOP_X[1] - pts[:, 1] * TOP_S, TOP_Y[1] - pts[:, 0] * TOP_S], 1)
 
 
+QR_SIDE_MM = (44.0, 56.0)       # QRの1辺として受け入れる範囲(実物は50〜51mm)
+
+
 def find_qr_ground(img, mp):
-    """画像を真上から見た形に直してからQRを探す(斜めから見たままだと検出器が見つけられないため)。床の4隅(mm)のリストを返す。"""
-    top = cv2.remap(img, mp[..., 0], mp[..., 1], cv2.INTER_CUBIC, borderValue=(255, 255, 255))
-    gray = cv2.cvtColor(top, cv2.COLOR_BGR2GRAY)
-    ok, pts = cv2.QRCodeDetectorAruco().detectMulti(top)
+    """画像を真上から見た形に直してから、QRを「黒っぽい模様がつまった、1辺約5cmの正方形」として探す。
+    QRの中身は読まない。QRの3つの角の四角が上下左右の縁に接しているので、黒い画素を囲む最小の長方形がQRの外枠になる。
+    (OpenCVのQR検出器は、ぼやけた画像で半分くらいしか見つけられなかったため使わない。)
+    戻り値: 床の4隅(mm、車体の座標)のリスト、真上から見た画像。"""
+    top = cv2.remap(img, mp[..., 0], mp[..., 1], cv2.INTER_LINEAR, borderValue=(255, 255, 255))
+    hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
+    v = hsv[..., 2].astype(np.int16)
+    bg = cv2.medianBlur(hsv[..., 2], 61).astype(np.int16)          # まわりの明るさ(約30mm四方)
+    dark = (((bg - v) > 25) & (hsv[..., 1] < 150)).astype(np.uint8) * 255   # まわりより暗く、色の薄い画素
+    k = int(round(6.0 / TOP_S))                                     # 6mm: QRの模様をつなげて1つの塊にする
+    blob = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)))
+    n, lab, st, _ = cv2.connectedComponentsWithStats(blob)
     out = []
-    if ok and pts is not None:
-        for q in pts:
-            q = q.reshape(4, 2).astype(np.float32).reshape(-1, 1, 2).copy()
-            cv2.cornerSubPix(gray, q, (4, 4), (-1, -1), (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 40, 0.01))
-            out.append(top_to_mm(q.reshape(4, 2)))
+    for i in range(1, n):
+        if not ((35.0 / TOP_S) ** 2 <= st[i, 4] <= (62.0 / TOP_S) ** 2):
+            continue
+        ys, xs = np.nonzero((lab == i) & (dark > 0))
+        rect = cv2.minAreaRect(np.stack([xs, ys], 1).astype(np.float32))
+        (cx, cy), (rw, rh), _ = rect
+        side = (rw + rh) / 2.0
+        if not (QR_SIDE_MM[0] <= side * TOP_S <= QR_SIDE_MM[1]) or max(rw, rh) / max(1e-6, min(rw, rh)) > 1.2:
+            continue
+        fill = len(xs) / (rw * rh)                                  # 黒い画素の割合(QRは半分くらい、ただの黒い四角は1に近い)
+        if not (0.25 < fill < 0.9):
+            continue
+        c = np.array([cx, cy])
+        box = c + (cv2.boxPoints(rect) - c) * ((side + 1.0) / side)  # 画素の中心どうし→外側の縁(半画素ずつ外へ)
+        out.append(top_to_mm(box))
     return out, top
 
 
