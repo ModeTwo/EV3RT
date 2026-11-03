@@ -54,6 +54,10 @@ class Motor:
     def set_brake(self, b):
         self.brake = b
 
+    def et_set_speed(self, dps):
+        # 速度制御(机上): 度/秒 → 出力の単位に直して同じ一次遅れで追う(ハブの速度制御の遅れは未確認)
+        self.set_power(dps * (math.pi * TIRE / 360.0) / MM_PER_POWER)
+
     def get_count(self):
         return int(round(self.count))
 

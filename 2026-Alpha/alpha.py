@@ -1462,6 +1462,8 @@ def _run_main(argv, startup_cleanup):
                         help='Cruise power for path-plan segments (arcs / chained moves) only (default 80).')
     parser.add_argument('--rally-path-wheel-log', type=float, default=None,
                         help='Log commanded power and actual wheel rotation for the first N ticks of each path segment (default 0 = off).')
+    parser.add_argument('--rally-path-speed-control', type=float, default=None,
+                        help='Path segments: drive wheels with the hub speed control at (power x this) deg/s (about 9; default 0 = power control).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
                               'heading-decreasing direction (left turns). Default (unset) = same as the '
@@ -1696,7 +1698,8 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),
                               ('--rally-path-ramp-sec', 'rally_path_ramp_sec', 0.0, 1.0),
                               ('--rally-path-power', 'rally_path_power', 30.0, 100.0),
-                              ('--rally-path-wheel-log', 'rally_path_wheel_log', 0.0, 200.0)):
+                              ('--rally-path-wheel-log', 'rally_path_wheel_log', 0.0, 200.0),
+                              ('--rally-path-speed-control', 'rally_path_speed_control', 0.0, 20.0)):
         value = getattr(args, attr)
         if value is None:
             continue

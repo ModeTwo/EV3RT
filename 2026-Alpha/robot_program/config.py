@@ -191,6 +191,8 @@ class RaceConfig:
     et_rally_path_power: Optional[float] = None
     # 2026-11-03: 円弧・直進の区間の始めから何tick分、毎tickの出力と実際の車輪の回りをログに出すか(Noneなら出さない)。
     et_rally_path_wheel_log_ticks: Optional[float] = None
+    # 2026-11-03: 0より大きければ、円弧・直進の区間で出力×この係数(度/秒)をハブの速度制御で指定する(Noneなら従来どおり)。
+    et_rally_path_speed_control: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、
