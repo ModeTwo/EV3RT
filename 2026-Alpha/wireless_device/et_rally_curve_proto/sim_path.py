@@ -3,7 +3,7 @@
 慣性・すべり・静止摩擦は無い。出力→車輪の速さは比例(出力80で360mm/s)+一次遅れ。
 usage: sim_path.py <2026-Alpha> <plan.json> [kwargs-json] [out.json]
 """
-import sys, json, math, time
+import sys, json, math, time, os
 sys.dont_write_bytecode = True
 from unittest import mock
 
@@ -29,7 +29,11 @@ DT = 0.02
 TIRE = 55.56
 TREAD = 117.0
 MM_PER_POWER = 360.0 / 80.0
-TAU = 0.06
+# 2026-11-03: SIM_TAU(なじむ時間、秒)と SIM_DELAY(出力が効き始めるまでのtick数)。
+# SIM_DELAY=1 SIM_TAU=0.12 で、実機の円弧の出力の揺れ(約0.5秒周期・内側の車輪がマイナスになる割合約5%)とほぼ同じになった
+# (run_20261103T061719のarc19)。既定は従来どおり(0, 0.06)。
+TAU = float(os.environ.get('SIM_TAU', '0.06'))
+PWR_LOG = []
 P = 24.64
 
 
@@ -39,6 +43,13 @@ class Motor:
 
     def set_power(self, p):
         self.power = max(-100, min(100, p))
+        self.q = getattr(self, 'q', []) + [self.power]
+
+    def eff_power(self):
+        q = getattr(self, 'q', [self.power])
+        k = int(os.environ.get('SIM_DELAY', '0'))
+        self.q = q[-(k + 1):]
+        return self.q[0]
 
     def set_brake(self, b):
         self.brake = b
@@ -82,7 +93,7 @@ class Robot:
 
     def step(self, rm, lm, plotter):
         for m in (rm, lm):
-            target = m.power * MM_PER_POWER
+            target = m.eff_power() * MM_PER_POWER
             m.speed += (target - m.speed) * min(1.0, DT / TAU)
             if m.power == 0 and m.brake:
                 m.speed *= 0.5
@@ -153,6 +164,7 @@ for node in nodes:
         for _ in node.tick():
             pass
         robot.step(runtime.right_motor, runtime.left_motor, runtime.plotter)
+        PWR_LOG.append((round(_now[0]-1000.0,2), node.name, runtime.right_motor.power, runtime.left_motor.power))
         _now[0] += DT
         ticks += 1
         if node.status in (Status.SUCCESS, Status.FAILURE) or ticks > 3000:
@@ -168,4 +180,4 @@ for r in results:
         print(f"{r['node']:28s} {r['status']:14s} ticks={r['ticks']:4d} sim={r['sim']} plan={r['plan'][3:]} err={r['err_mm']}mm heading={r['heading']}")
 print('time %.1fs (旋回は0秒として)' % (_now[0] - 1000.0))
 if out_path:
-    json.dump(dict(trace=robot.trace[::5], results=results), open(out_path, 'w'))
+    json.dump(dict(trace=robot.trace[::5], results=results, power=PWR_LOG), open(out_path, 'w'))

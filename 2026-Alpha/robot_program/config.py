@@ -180,6 +180,12 @@ class RaceConfig:
     # Noneなら0(従来どおり向きだけを追う)。上限(度)はNoneなら8。
     et_rally_path_lat_gain: Optional[float] = None
     et_rally_path_lat_max_deg: Optional[float] = None
+    # 2026-11-03: 同じ計画で、走りを滑らかにする(円弧に入ると左右の出力が大きく上下し、内側の車輪が逆回しになっていた)。
+    # 円弧の中だけの向きのPIDのP(Noneなら直進と同じ)、目標の向き・左右の差を前後に平均する幅mm(Noneなら0)、
+    # 前進で左右の出力をこれより下げない下限(Noneなら下限なし)。
+    et_rally_path_arc_pid_p: Optional[float] = None
+    et_rally_path_ramp_mm: Optional[float] = None
+    et_rally_path_inner_min_power: Optional[float] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

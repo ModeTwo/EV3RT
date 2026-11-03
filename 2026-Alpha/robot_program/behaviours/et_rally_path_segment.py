@@ -19,6 +19,16 @@
   計画の線(直線/円弧)の一番近い点からの横のずれを出す(向きのずれ×距離の積算だと、円弧が続くと見積もりが
   狂い、机上で8の字が逆に悪くなった)。止まらずに続く区間へは、次の区間の始めの点から見た位置を引き継ぐ。
   後退でも「進む向き」で考えれば同じ式になる(進む向きは向きと同じだけ回る)。
+- 2026-11-03: 走りを滑らかにするオプション(どれも既定は従来どおり)。実機のログで、円弧に入ると外側の車輪が100近く、
+  内側が0〜マイナス(逆回し)まで振れ、約0.5秒周期で2回ほど上下していた(run_20261103T061719)。
+  計画上は直進→円弧・右回り→左回りの所で左右の速さが一瞬で変わるが、車輪が追いつけずに向きが遅れ、
+  向きのPIDが強く取り返して行き過ぎるため。
+  - arc_pid_p: 円弧の中だけ使う向きのPIDのP(Noneなら直進と同じ)。
+  - ramp_mm: 目標の向き・左右の差・出力の倍率を、この距離の幅で前後に平均する(曲がり具合が一瞬で変わらず、
+    この距離をかけて直線的に変わる)。区間の境目をまたぐので、前の区間の形も引き継ぐ。
+    平均した線は計画の線から少し内側を通る(半径100mm・幅60mmで約1mm)。
+  - inner_min_power: 前進のとき、左右どちらの出力もこれより下げない(0なら逆回しをしない)。
+    左右の差が足りない分は、全体の出力を下げて差を残す(曲がる量を優先)。
 """
 
 import math
@@ -44,6 +54,8 @@ STOP_MAX_TICKS = 25
 
 # 止まらずに続く区間の受け渡し(次の区間の距離の起点と、引き継ぐPID)。
 _chain_end_dist = None
+# 前の区間の形 (kind, 長さ, 始めの向き, 向きの変化, 半径)。ramp_mmで境目の手前を平均するのに使う。
+_chain_shape = None
 _chain_pid = None
 # 次の区間の始め(計画上)から見た自分の位置 (前, 右) mm と、位置を積算した最後の距離・向き
 # (次の区間が動き出すのは1tick後なので、その間の進みを次の区間で積算するため)。
@@ -51,7 +63,8 @@ _chain_lat = None
 
 
 def reset_chain():
-    global _chain_end_dist, _chain_pid, _chain_lat
+    global _chain_end_dist, _chain_pid, _chain_lat, _chain_shape
+    _chain_shape = None
     _chain_end_dist = None
     _chain_pid = None
     _chain_lat = None
@@ -69,7 +82,8 @@ class EtRallyPathSegment(Behaviour):
                  stop_lead_mm: float = 0.0, accel_mm: float = 0.0, accel_min_power: int = 40,
                  decel_mm: float = 0.0, decel_min_power: int = 40,
                  next_profile=(), lead_sec: float = 0.0, arc_pid_i: float = 0.6,
-                 arc_speed_scale: float = 1.0, lat_gain: float = 0.0, lat_max_deg: float = 8.0) -> None:
+                 arc_speed_scale: float = 1.0, lat_gain: float = 0.0, lat_max_deg: float = 8.0,
+                 arc_pid_p=None, ramp_mm: float = 0.0, inner_min_power=None) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -107,12 +121,23 @@ class EtRallyPathSegment(Behaviour):
         # 2026-11-03: 横のずれ1mmあたり、目標の向きを何度ずらして戻すか(0なら戻さない)と、その上限(度)。
         self.lat_gain = lat_gain
         self.lat_max_deg = lat_max_deg
+        self.arc_pid_p = arc_pid_p
+        self.ramp_mm = max(0.0, float(ramp_mm))
+        self.inner_min_power = inner_min_power
+        self.prev_shape = None
         self.running = False
         self.stopping = False
 
     # --- 内部 ---
     def _profile_at(self, s):
         """この区間の始めから距離sの点の(目標の向き, 左右差の比, 出力の倍率)。続く区間へはみ出してもよい。"""
+        if s < 0.0 and self.prev_shape is not None:
+            kind, length, h0, sweep, radius = self.prev_shape
+            if kind == "arc" and radius > 0 and length > 0:
+                ratio = max(0.0, (length + s) / length)
+                return (h0 + sweep * ratio, math.copysign(HALF_TREAD_MM / radius, sweep),
+                        self.arc_speed_scale / (1.0 + HALF_TREAD_MM / radius))
+            return h0 + sweep, 0.0, 1.0
         last = len(self.profile) - 1
         for i, (kind, length, h0, sweep, radius) in enumerate(self.profile):
             if s > length and i < last:
@@ -132,6 +157,21 @@ class EtRallyPathSegment(Behaviour):
                         self.arc_speed_scale / (1.0 + HALF_TREAD_MM / radius))
             return h0 + sweep, 0.0, 1.0
         return self.end_heading, 0.0, 1.0
+
+    def _smooth_at(self, s):
+        """_profile_at を ramp_mm の幅で平均したもの。向きは s の点の向きからの差で平均する
+        (区間ごとに向きの表し方が360°ずれていることがあるため)。"""
+        if self.ramp_mm <= 0.0:
+            return self._profile_at(s)
+        n = 9
+        h_c, _, _ = self._profile_at(s)
+        dh = ff = sc = 0.0
+        for k in range(n):
+            h, f, c = self._profile_at(s + self.ramp_mm * (k / (n - 1) - 0.5))
+            dh += (h - h_c + 180.0) % 360.0 - 180.0
+            ff += f
+            sc += c
+        return h_c + dh / n, ff / n, sc / n
 
     def _lateral(self):
         """今の位置から、計画の線の一番近い点までの (その点までの線の長さu, 横のずれ(右が+)) mm。
@@ -171,7 +211,7 @@ class EtRallyPathSegment(Behaviour):
         return self.start_heading + self.sweep * max(0.0, min(1.0, s / self.length_mm))
 
     def _start(self):
-        global _chain_pid, _chain_lat
+        global _chain_pid, _chain_lat, _chain_shape
         ensure_scaled_gyro()
         now = runtime.plotter.get_distance()
         if self.continue_from_prev and _chain_end_dist is not None:
@@ -189,6 +229,9 @@ class EtRallyPathSegment(Behaviour):
         # 区間をまたいで引き継いだPIDでも、Iの係数はこの区間の種類に合わせる(たまっているIの値はそのまま)。
         line_i = self.pid_gains[1] if et_rally_drive._move_pid_i_override is None else et_rally_drive._move_pid_i_override
         self.pid.Ki = self.arc_pid_i if self.kind == "arc" else line_i
+        self.pid.Kp = self.arc_pid_p if (self.kind == "arc" and self.arc_pid_p is not None) else self.pid_gains[0]
+        self.prev_shape = _chain_shape if self.continue_from_prev else None
+        _chain_shape = None
         self.saturated_ticks = 0
         self.right_residual = 0.0
         self.left_residual = 0.0
@@ -225,7 +268,7 @@ class EtRallyPathSegment(Behaviour):
             runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(), tag))
 
     def update(self) -> Status:
-        global _chain_end_dist, _chain_pid, _chain_lat
+        global _chain_end_dist, _chain_pid, _chain_lat, _chain_shape
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
         if not self.running:
             self._start()
@@ -259,6 +302,7 @@ class EtRallyPathSegment(Behaviour):
                 _chain_end_dist = None
                 _chain_pid = None
                 _chain_lat = None
+                _chain_shape = None
                 runtime.right_motor.set_power(0)
                 runtime.right_motor.set_brake(True)
                 runtime.left_motor.set_power(0)
@@ -273,14 +317,15 @@ class EtRallyPathSegment(Behaviour):
             _chain_end_dist = self.orig_dist + self.length_mm
             _chain_pid = self.pid
             _chain_lat = self._pos_from_end() + (self.pos_prev_dist, self.prev_heading)
+            _chain_shape = self.profile[0]
             self._finish_log(now)
             return Status.SUCCESS
 
         self.speed_mm_s += ((now - self.prev_dist) / EXEC_INTERVAL - self.speed_mm_s) * 0.3
         # 目標の向きは今の位置のもの。左右の差(フィードフォワード)と出力の倍率だけを先読みする
         # (車輪の速さが出力に追いつくまでの遅れを打ち消す。目標の向きまで先読みすると曲がり始めが早すぎる)。
-        target, _, here_scale = self._profile_at(s)
-        _, ff_ratio, look_scale = self._profile_at(s + self.lead_sec * max(self.speed_mm_s, 0.0))
+        target, _, here_scale = self._smooth_at(s)
+        _, ff_ratio, look_scale = self._smooth_at(s + self.lead_sec * max(self.speed_mm_s, 0.0))
         error = (target - current + 180.0) % 360.0 - 180.0
         # 横のずれを戻す: 右にずれていれば目標の向きを左へ(進む向きを線へ向ける)。後退でも同じ向き。
         correction = 0.0
@@ -315,6 +360,12 @@ class EtRallyPathSegment(Behaviour):
         if abs(base) > headroom:
             base = math.copysign(headroom, base)
             self.saturated_ticks += 1
+        if self.inner_min_power is not None and not self.reverse and base > 0.0:
+            # 内側の車輪(base - |turn|)を inner_min_power より下げない。まず左右の差を base - 下限 までに抑える。
+            # ただし計画の曲がり(ff)の分は残し、足りなければ全体を上げずに差を優先する(外側は100まで)。
+            limit = max(base - self.inner_min_power, abs(ff))
+            if abs(turn) > limit:
+                turn = math.copysign(limit, turn)
         self.right_residual += base + runtime.course * turn
         self.left_residual += base - runtime.course * turn
         right_power = int(round(self.right_residual))

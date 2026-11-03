@@ -333,7 +333,8 @@ class DeferredStrategySequence(Sequence):
                  gyro_still_sec=None, gyro_still_sweep=None, turn_phase1_model=None,
                  straight_pause_labels=None, turn_wheel_sync_gain=None,
                  turn_sync_decel=None, move_short_lead_mm=None, path_lead_sec=None, path_arc_pid_i=None,
-                 path_arc_speed_scale=None, path_lat_gain=None, path_lat_max_deg=None):
+                 path_arc_speed_scale=None, path_lat_gain=None, path_lat_max_deg=None,
+                 path_arc_pid_p=None, path_ramp_mm=None, path_inner_min_power=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -368,6 +369,9 @@ class DeferredStrategySequence(Sequence):
             "path_arc_speed_scale": path_arc_speed_scale,
             "path_lat_gain": path_lat_gain,
             "path_lat_max_deg": path_lat_max_deg,
+            "path_arc_pid_p": path_arc_pid_p,
+            "path_ramp_mm": path_ramp_mm,
+            "path_inner_min_power": path_inner_min_power,
         }
         self._loaded = False
 
@@ -476,6 +480,9 @@ def build_execute_strategy(context, config, lap_number=None):
             path_arc_speed_scale=getattr(config, "et_rally_path_arc_speed_scale", None),
             path_lat_gain=getattr(config, "et_rally_path_lat_gain", None),
             path_lat_max_deg=getattr(config, "et_rally_path_lat_max_deg", None),
+            path_arc_pid_p=getattr(config, "et_rally_path_arc_pid_p", None),
+            path_ramp_mm=getattr(config, "et_rally_path_ramp_mm", None),
+            path_inner_min_power=getattr(config, "et_rally_path_inner_min_power", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -512,6 +519,9 @@ def build_execute_strategy(context, config, lap_number=None):
             path_arc_speed_scale=getattr(config, "et_rally_path_arc_speed_scale", None),
             path_lat_gain=getattr(config, "et_rally_path_lat_gain", None),
             path_lat_max_deg=getattr(config, "et_rally_path_lat_max_deg", None),
+            path_arc_pid_p=getattr(config, "et_rally_path_arc_pid_p", None),
+            path_ramp_mm=getattr(config, "et_rally_path_ramp_mm", None),
+            path_inner_min_power=getattr(config, "et_rally_path_inner_min_power", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -676,6 +686,12 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # Noneなら0(従来どおり向きだけを追う)と8度。
                         path_lat_gain=None,
                         path_lat_max_deg=None,
+                        # 2026-11-03: 同じ計画で、走りを滑らかにする。円弧の中だけの向きのPIDのP(Noneなら直進と同じ)、
+                        # 目標の向き・左右の差を前後に平均する幅mm(Noneなら0=従来どおり)、
+                        # 前進で左右の出力をこれより下げない下限(Noneなら下限なし。0なら逆回ししない)。
+                        path_arc_pid_p=None,
+                        path_ramp_mm=None,
+                        path_inner_min_power=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -887,6 +903,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 arc_speed_scale=1.0 if path_arc_speed_scale is None else path_arc_speed_scale,
                 lat_gain=0.0 if path_lat_gain is None else path_lat_gain,
                 lat_max_deg=8.0 if path_lat_max_deg is None else path_lat_max_deg,
+                arc_pid_p=path_arc_pid_p,
+                ramp_mm=0.0 if path_ramp_mm is None else path_ramp_mm,
+                inner_min_power=path_inner_min_power,
             ))
             if pause_after_move:
                 nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),
