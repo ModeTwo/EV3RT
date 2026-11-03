@@ -1472,6 +1472,8 @@ def _run_main(argv, startup_cleanup):
                         help='Stop the arm when it has moved slowly for this many consecutive ticks (about 3; default: old ArmUpDownFull).')
     parser.add_argument('--rally-arm-power', type=float, default=None,
                         help='With --rally-arm-stop-ticks: arm push power (default 35).')
+    parser.add_argument('--rally-arm-slow-deg', type=float, default=None,
+                        help='With --rally-arm-stop-ticks: a tick moving less than this many degrees counts as slow (default 2).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
                               'heading-decreasing direction (left turns). Default (unset) = same as the '
@@ -1710,7 +1712,8 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-path-speed-control', 'rally_path_speed_control', 0.0, 20.0),
                               ('--rally-path-ff-scale', 'rally_path_ff_scale', 0.5, 2.0),
                               ('--rally-arm-stop-ticks', 'rally_arm_stop_ticks', 1.0, 20.0),
-                              ('--rally-arm-power', 'rally_arm_power', 10.0, 60.0)):
+                              ('--rally-arm-power', 'rally_arm_power', 10.0, 60.0),
+                              ('--rally-arm-slow-deg', 'rally_arm_slow_deg', 0.5, 10.0)):
         value = getattr(args, attr)
         if value is None:
             continue

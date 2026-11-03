@@ -30,11 +30,13 @@ class EtRallyArmUpDown(Behaviour):
     TIMEOUT_SEC = 4.0
     TRAIL_TICKS = 12   # ログに出す、止める直前の1tickごとの動き
 
-    def __init__(self, name: str, direction, stop_ticks: int = 3, power: float = 35.0) -> None:
+    def __init__(self, name: str, direction, stop_ticks: int = 3, power: float = 35.0, slow_deg=None) -> None:
         super().__init__(name)
         self.direction = direction
         self.stop_ticks = max(1, int(stop_ticks))
         self.power = abs(float(power))
+        # 11/03実機: 出力20ではふつうの動きが1〜3度/tickで、遅いの下限2度だと動いている途中で止まった(上げで45度だけ)。
+        self.min_slow_deg = self.MIN_SLOW_DEG if slow_deg is None else float(slow_deg)
         self.running = False
 
     def update(self) -> Status:
@@ -59,7 +61,7 @@ class EtRallyArmUpDown(Behaviour):
         self.ticks += 1
         self.trail = (self.trail + [delta])[-self.TRAIL_TICKS:]
         if self.ticks > self.GRACE_TICKS:
-            if delta < max(self.MIN_SLOW_DEG, self.SLOW_RATIO * self.peak):
+            if delta < max(self.min_slow_deg, self.SLOW_RATIO * self.peak):
                 self.slow += 1
             else:
                 self.slow = 0
@@ -87,4 +89,5 @@ def make_arm_up_down(name, direction, config):
         return ArmUpDownFull(name=name, direction=direction)
     power = getattr(config, "et_rally_arm_power", None)
     return EtRallyArmUpDown(name, direction, stop_ticks=stop_ticks,
-                            power=ArmUpDownFull.ARM_SHIFT_PWM if power is None else power)
+                            power=ArmUpDownFull.ARM_SHIFT_PWM if power is None else power,
+                            slow_deg=getattr(config, "et_rally_arm_slow_deg", None))
