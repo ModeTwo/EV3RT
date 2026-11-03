@@ -133,6 +133,52 @@ def advice(corners, sharp):
     return out
 
 
+# レンズの較正で「十分」とみなす条件(OKの画像だけで数える)
+NEED_GOOD = 15             # OKの枚数
+NEED_TILT = 3              # 左右に傾けた枚数、上下に傾けた枚数(それぞれ)
+TILT_MIN = 0.12            # 向かい合う辺の長さが12%以上違えば「傾けた」とみなす
+NEED_SIZE_SPAN = 0.20      # 大きさの最大と最小の差(近くと遠くの両方で撮れているか)
+
+
+def tilts(corners):
+    """左右の傾き(左の列と右の列の長さの差)、上下の傾き(上の行と下の行の長さの差)を割合で返す。"""
+    g = corners.reshape(BOARD_INNER[1], BOARD_INNER[0], 2)
+    col_l = np.linalg.norm(g[-1, 0] - g[0, 0])
+    col_r = np.linalg.norm(g[-1, -1] - g[0, -1])
+    row_t = np.linalg.norm(g[0, -1] - g[0, 0])
+    row_b = np.linalg.norm(g[-1, -1] - g[-1, 0])
+    return abs(col_l - col_r) / max(1e-6, (col_l + col_r) / 2), abs(row_t - row_b) / max(1e-6, (row_t + row_b) / 2)
+
+
+class Progress:
+    def __init__(self):
+        self.good = 0
+        self.cells = set()
+        self.tilt_a = 0
+        self.tilt_b = 0
+        self.sizes = []
+
+    def add(self, corners):
+        self.good += 1
+        self.cells |= grid_cells(corners)
+        ta, tb = tilts(corners)
+        # 画面の中で縦横どちらに傾いて見えるかは、ボードの置き方で入れ替わるので、2種類を別に数える
+        self.tilt_a += ta >= TILT_MIN
+        self.tilt_b += tb >= TILT_MIN
+        self.sizes.append(board_size(corners))
+
+    def lines(self):
+        span = (max(self.sizes) - min(self.sizes)) if self.sizes else 0.0
+        items = [
+            ('OKの枚数', '%d/%d' % (self.good, NEED_GOOD), self.good >= NEED_GOOD),
+            ('写した場所', '%d/9' % len(self.cells), len(self.cells) >= GRID * GRID),
+            ('傾き(片方の向き)', '%d/%d' % (self.tilt_a, NEED_TILT), self.tilt_a >= NEED_TILT),
+            ('傾き(もう片方の向き)', '%d/%d' % (self.tilt_b, NEED_TILT), self.tilt_b >= NEED_TILT),
+            ('近くと遠く', '差%.0f%%/%.0f%%' % (span * 100, NEED_SIZE_SPAN * 100), span >= NEED_SIZE_SPAN),
+        ]
+        return items, all(ok for _, _, ok in items)
+
+
 def stdin_ready(timeout):
     r, _, _ = select.select([sys.stdin], [], [], timeout)
     return bool(r)
@@ -171,7 +217,8 @@ def main():
     else:
         print('Enter で1枚撮る。q と Enter で終わる' + ('(映像の画面では s で撮る、q で終わる)' if window else ''))
 
-    covered = set()
+    progress = Progress()
+    announced = False
     saved = 0
     next_auto = time.time() + args.interval
     meta = open(os.path.join(out_dir, 'meta.jsonl'), 'a')
@@ -193,7 +240,7 @@ def main():
                                 (0, 200, 0) if hint == 'OK' else (0, 140, 255), 2)
                 else:
                     cv2.putText(view, 'NO BOARD', (8, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                for r_, c_ in covered:
+                for r_, c_ in progress.cells:
                     x0, y0 = c_ * WIDTH // GRID, r_ * HEIGHT // GRID
                     cv2.rectangle(view, (x0 + 2, y0 + 2), (x0 + WIDTH // GRID - 2, y0 + HEIGHT // GRID - 2), (0, 160, 0), 1)
                 cv2.putText(view, 'saved %d' % saved, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
@@ -231,7 +278,6 @@ def main():
                 rec['bbox'] = [round(float(pts[:, 0].min()), 1), round(float(pts[:, 1].min()), 1),
                                round(float(pts[:, 0].max()), 1), round(float(pts[:, 1].max()), 1)]
                 rec['size'] = round(float(board_size(corners)), 3)
-                covered |= grid_cells(corners)
             rec['advice'] = advice(corners, sharp)
             meta.write(json.dumps(rec) + '\n')
             meta.flush()
@@ -246,10 +292,19 @@ def main():
             if not notes:
                 print('      → OK')
             if args.tag == 'lens':
-                missing = [(r_, c_) for r_ in range(GRID) for c_ in range(GRID) if (r_, c_) not in covered]
+                if corners is not None and not notes:
+                    progress.add(corners)
+                missing = [(r_, c_) for r_ in range(GRID) for c_ in range(GRID) if (r_, c_) not in progress.cells]
                 names = {0: '上', 1: '真ん中', 2: '下'}, {0: '左', 1: '真ん中', 2: '右'}
                 if missing:
                     print('      まだボードが写っていない場所: ' + ', '.join(names[0][r_] + names[1][c_] for r_, c_ in missing))
+                items, done = progress.lines()
+                print('      集まり具合: ' + '  '.join('%s %s%s' % (k, v, '' if ok else '(足りない)') for k, v, ok in items))
+                if done and not announced:
+                    announced = True
+                    print('')
+                    print('==== 十分集まりました。q と Enter で終わってください(続けて撮っても大丈夫です) ====')
+                    print('')
             if args.count and saved >= args.count:
                 break
     finally:
