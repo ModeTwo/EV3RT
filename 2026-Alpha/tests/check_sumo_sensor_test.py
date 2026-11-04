@@ -7,8 +7,8 @@ import numpy as np
 p=argparse.ArgumentParser(add_help=False);p.add_argument('--repository',type=Path,default=Path(__file__).resolve().parents[1])
 options,_=p.parse_known_args();sys.path.insert(0,str(options.repository/'tests'))
 import check_sumo_align as boot
-from robot_program.features import sumo_sensor_test as target
-from robot_program.features.sumo_sensor_settings import SumoSensorSettings
+from robot_program.diagnostics import sumo_sensor_test as target
+from robot_program.diagnostics.sumo_sensor_settings import SumoSensorSettings
 from robot_program.features.sumo_sensor_data import decode_distance
 from robot_program.features.sumo_align_recording import SumoAlignRecording
 from robot_program.config import config_for_mission,mission_requires_camera,mission_requires_qr

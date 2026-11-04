@@ -26,11 +26,11 @@ def build_mission_children(context, config):
 
         return [EnableGyroScale(), build_sumo_push_tree(context, config)]
     if config.mission_mode == "sumo-sensor-test":
-        from .features.sumo_sensor_test import build_sumo_sensor_test
+        from .diagnostics.sumo_sensor_test import build_sumo_sensor_test
 
         return [EnableGyroScale(), build_sumo_sensor_test(context, config)]
     if config.mission_mode == "sumo-turn-test":
-        from .features.sumo_turn_test import build_sumo_turn_test
+        from .diagnostics.sumo_turn_test import build_sumo_turn_test
 
         return [EnableGyroScale(), build_sumo_turn_test(context, config)]
     if config.mission_mode == "sumo-catch-test":

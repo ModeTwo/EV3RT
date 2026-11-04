@@ -24,8 +24,8 @@ from py_trees.common import Status
 from robot_program.config import config_for_mission,mission_requires_camera,mission_requires_qr
 from robot_program.context import RaceContext
 from robot_program.runtime import runtime
-from robot_program.features import sumo_turn_test as target
-from robot_program.features.sumo_turn_test_settings import SumoTurnTestSettings
+from robot_program.diagnostics import sumo_turn_test as target
+from robot_program.diagnostics.sumo_turn_test_settings import SumoTurnTestSettings
 from robot_program.features.sumo_bearing import initial_sumo_bearing
 from robot_program.features.sumo_align_recording import SumoAlignRecording
 

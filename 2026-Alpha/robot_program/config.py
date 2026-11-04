@@ -8,8 +8,8 @@ from .features.sumo_align_settings import SumoAlignSettings
 from .features.sumo_stage_test_settings import SumoStageTestSettings
 from .features.sumo_catch_settings import SumoCatchSettings
 from .features.sumo_relative_push_settings import RelativePushSettings
-from .features.sumo_sensor_settings import SumoSensorSettings
-from .features.sumo_turn_test_settings import SumoTurnTestSettings
+from .diagnostics.sumo_sensor_settings import SumoSensorSettings
+from .diagnostics.sumo_turn_test_settings import SumoTurnTestSettings
 from .integration_settings import IntegrationSettings
 
 

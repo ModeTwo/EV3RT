@@ -34,7 +34,7 @@ class Test(unittest.TestCase):
    c=Config(mode,settings(push_distance_mm=300));c=env['configured_sumo_test'](c);self.assertEqual(env['build_sumo_stage_test'](None,c),expected);self.assertEqual(c.sumo_relative_push.push_distance_mm,300);self.assertEqual(c.sumo_align.distance_mm,1000);self.assertTrue(c.sumo_push_execute)
  def test_missing_distance(self):
   for mode in ('sumo-stage-all','sumo-stage-push'):
-   with self.assertRaises(ValueError):env['configured_sumo_test'](Config(mode,settings()))
+   with self.assertRaises(ValueError):env['configured_sumo_test'](Config(mode,settings(push_distance_mm=None)))
   for mode in ('sumo-stage-entry','sumo-stage-exit'):env['configured_sumo_test'](Config(mode,settings()))
  def test_validation(self):
   with self.assertRaises(ValueError):settings(initial_bearing_left_deg=float('nan'))

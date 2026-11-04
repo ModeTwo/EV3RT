@@ -9,8 +9,8 @@ from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 
 from ..runtime import runtime
-from .sumo_bearing import bearing_delta
-from .sumo_bearing_motion import current_bearing, EncoderSpinToBearing
+from ..features.sumo_bearing import bearing_delta
+from ..features.sumo_bearing_motion import current_bearing, EncoderSpinToBearing
 
 
 def sensor_stability(samples):

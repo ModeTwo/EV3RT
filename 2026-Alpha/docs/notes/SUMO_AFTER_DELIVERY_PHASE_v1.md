@@ -16,7 +16,7 @@
 
 ## ①②③の単体・連続試験（全体ミッションへの接続は保留）
 
-`robot_program/features/sumo_stage_test_settings.py` の `SumoStageTestSettings` に試験条件を記入する。`push_distance_mm` は捕捉後に追加で押す距離で、初期値None。②単体と①→②→③の試験は実測値を指定しないと起動しない。`approach_distance_mm`・出力・捕捉上限・押し出し出力・旋回出力も同じ設定にまとめる。①③は担当者が経路と開始・終了位置の数値を対応するfeaturesへ実装する。
+`robot_program/features/sumo_stage_test_settings.py` の `SumoStageTestSettings` に試験条件を記入する。`push_distance_mm` は捕捉後に追加で押す距離で、初期値300mm。②単体と①→②→③の試験で使用する。`approach_distance_mm`・出力・捕捉上限・押し出し出力・旋回出力も同じ設定にまとめる。①③は担当者が経路と開始・終了位置の数値を対応するfeaturesへ実装する。
 
 タッチ開始時の車体の床面方位はleft=270°、right=90°、ジャイロをリセットした向きからの②初回直進目標差は両コース0°が初期値。いずれも同設定ファイルの `initial_bearing_*_deg` と `approach_offset_*_deg` で変更できる。テスト時には開始位置・向きを各工程の入口に合わせて配置する。①→②→③試験では①の到達向きもこの初回目標に合う必要がある。通しの全体スタート基準とは異なるため、結合時に整合確認が必要。
 
@@ -28,4 +28,7 @@ pypy3 alpha.py left --mission sumo-stage-exit --no-preview
 pypy3 alpha.py left --mission sumo-stage-all --no-preview
 ```
 
-leftはrightに変更可能。各コマンドの`--no-preview`を`--check-tree`に変えるとツリーを表示する。押し距離未設定では②を含むツリーは構築されない。①③は未実装ならStopNow後にFAILUREで停止し、次へ進まない。configの距離・出力はこの4モードだけに適用し、既存のsumo-push-route-testや本来の全体ミッションの設定は変わらない。現在の変更はPCの模擬検証のみで、Pi上での実行や実走は別途確認が必要。
+leftはrightに変更可能。各コマンドの`--no-preview`を`--check-tree`に変えるとツリーを表示する。押し距離をNoneに変更した場合は②を含むツリーは構築されない。①③は未実装ならStopNow後にFAILUREで停止し、次へ進まない。configの距離・出力はこの4モードだけに適用し、既存のsumo-push-route-testや本来の全体ミッションの設定は変わらない。現在の変更はPCの模擬検証のみで、Pi上での実行や実走は別途確認が必要。
+
+
+2026-11-04: 試験用設定の押し出し距離初期値を300mmに変更。測距・旋回の診断プログラムは `robot_program/diagnostics/` に整理した。

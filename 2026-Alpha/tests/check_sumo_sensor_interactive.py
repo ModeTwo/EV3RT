@@ -7,9 +7,9 @@ from unittest.mock import Mock,patch
 p=argparse.ArgumentParser(add_help=False);p.add_argument('--repository',type=Path,default=Path(__file__).resolve().parents[1])
 options,_=p.parse_known_args();sys.path.insert(0,str(options.repository/'tests'))
 import check_sumo_sensor_test as base
-from robot_program.features import sumo_sensor_interactive as target
-from robot_program.features import sumo_sensor_keys as keys_module
-from robot_program.features.sumo_sensor_test import build_sumo_sensor_test
+from robot_program.diagnostics import sumo_sensor_interactive as target
+from robot_program.diagnostics import sumo_sensor_keys as keys_module
+from robot_program.diagnostics.sumo_sensor_test import build_sumo_sensor_test
 
 
 class FakeKeys:

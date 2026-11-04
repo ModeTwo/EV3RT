@@ -9,7 +9,7 @@ import time
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 from ..runtime import runtime
-from .sumo_sensor_data import decode_distance, numeric_stats
+from ..features.sumo_sensor_data import decode_distance, numeric_stats
 
 
 class SumoSensorTest(Behaviour):
