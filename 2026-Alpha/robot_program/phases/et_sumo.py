@@ -1,6 +1,7 @@
 """ET sumo phase composition."""
 
 from py_trees.composites import Sequence
+from ..features.new_et_sumo import NewEtSumo
 
 from ..features.capture_sumo_bottle_camera import build_capture_sumo_bottle_camera
 from ..features.move_to_sumo_exit import build_move_to_sumo_exit
@@ -9,6 +10,9 @@ from ..features.move_to_sumo_start import build_move_to_sumo_start
 
 def build_et_sumo_phase(context, config):
     # このファイルはET相撲の処理順だけを管理する。
+    # 新方式のみ実行。従来工程は下記に残し、いつでも切り戻せるようにする。
+    return NewEtSumo(context, config)
+
     root = Sequence(name="et_sumo", memory=True)
     root.add_children(
         [
