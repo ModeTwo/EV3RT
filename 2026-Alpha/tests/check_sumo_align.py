@@ -66,6 +66,17 @@ class FakeVideo:
         self.session = 0
         self.observation = None
         self.ends = []
+        self.record_status = dict(ready=True, finished=True, error=None)
+        self.record_ends = []
+
+    def begin_sumo_alignment_recording(self, telemetry_reader):
+        self.telemetry_reader = telemetry_reader
+
+    def get_sumo_alignment_recording_status(self):
+        return self.record_status
+
+    def end_sumo_alignment_recording(self, result, reason, **kwargs):
+        self.record_ends.append((result, reason))
 
     def begin_sumo_alignment_read(self, **readers):
         self.session += 1
@@ -80,6 +91,21 @@ class FakeVideo:
 
 
 class AlignTests(unittest.TestCase):
+    def test_selected_observation_and_brake_command_are_separate_telemetry(self):
+        self.start_observing()
+        self.now.return_value = .6
+        self.observation(10, cx=210, age=.1)
+        self.node.tick_once()
+        row = self.node._record_snapshot()
+        self.assertEqual(row['selected_frame_id'], 10)
+        self.assertAlmostEqual(row['selected_observation_age_ms'], 100)
+        self.assertEqual(row['brake_command_monotonic_sec'], .1)
+        self.assertAlmostEqual(row['requested_turn_step_deg'], (210-160)/self.settings.visual_px_per_degree)
+        self.assertEqual(row['camera_error_px'], 50)
+        self.now.return_value = .8
+        self.gyro = 5
+        self.assertAlmostEqual(self.node._record_snapshot()['sampled_angular_velocity_deg_s'], 25)
+
     def setUp(self):
         self.clock = patch.object(target.time, 'monotonic', return_value=0)
         self.now = self.clock.start()
@@ -113,7 +139,7 @@ class AlignTests(unittest.TestCase):
     def observation(self, frame_id, cx=160, confirmed=True, age=0, gyro=None):
         t = self.now.return_value - age
         self.video.observation = dict(session=self.video.session, frame_id=frame_id,
-            candidate=dict(cx=cx), confirmed=confirmed, t=t,
+            candidate=dict(cx=cx), confirmed=confirmed, t=t, track_id=1, mask_source='value',
             gyro_deg=self.gyro if gyro is None else gyro, d=self.d)
 
     def assert_stopped(self):
@@ -178,7 +204,7 @@ class AlignTests(unittest.TestCase):
                 self.observation(20, cx=210)
                 self.node.tick_once()
                 self.assertEqual(self.node.phase, 'TURN')
-                self.assertAlmostEqual(self.node.turn.bearing, pixel_bearing(210))
+                self.assertAlmostEqual(self.node.turn.bearing, (210-160)/self.settings.visual_px_per_degree)
                 self.node.stop(Status.INVALID)
                 self.assert_stopped()
 
@@ -244,7 +270,7 @@ class AlignTests(unittest.TestCase):
         self.now.return_value = .6
         self.observation(10, cx=210)
         previous_session = self.video.session
-        with patch.object(target, 'EncoderSpinToBearing', FakeTurn):
+        with patch.object(target, 'VisualBottleTurn', FakeTurn):
             self.node.tick_once()
         self.assertEqual(self.node.phase, 'TURN')
         self.now.return_value = .7
@@ -264,6 +290,50 @@ class AlignTests(unittest.TestCase):
         self.assertEqual(self.node.status, Status.SUCCESS)
         self.assert_stopped()
 
+    def test_no_motion_until_recording_is_ready(self):
+        self.video.record_status['ready'] = False
+        self.node.tick_once()
+        self.assertEqual(self.node.phase, 'RECORD_START')
+        self.assert_stopped()
+        self.d = 50
+        self.now.return_value = .5
+        self.video.record_status['ready'] = True
+        self.node.tick_once()
+        self.assertEqual(self.node.distance.orig_dist, 50)
+        self.assertGreater(runtime.left_motor.power, 0)
+
+    def test_recording_error_stops_and_finishes_recording(self):
+        self.node.tick_once()
+        self.video.record_status['error'] = 'disk full'
+        self.now.return_value = .1
+        self.node.tick_once()
+        self.assertEqual(self.node.status, Status.FAILURE)
+        self.assert_stopped()
+        self.assertEqual(self.video.record_ends[-1][0], 'FAILURE')
+        self.assertIn('disk full', self.video.record_ends[-1][1])
+
+    def test_failed_mission_waits_for_recording_to_close_with_motors_stopped(self):
+        self.start_observing()
+        self.video.record_status['finished'] = False
+        self.now.return_value = 4
+        self.node.tick_once()
+        self.assertEqual(self.node.phase, 'FINALIZING')
+        self.assertEqual(self.node.status, Status.RUNNING)
+        self.assert_stopped()
+        self.video.record_status['finished'] = True
+        self.now.return_value = 4.2
+        self.node.tick_once()
+        self.assertEqual(self.node.status, Status.FAILURE)
+        self.assert_stopped()
+
+    def test_recording_start_timeout_does_not_drive(self):
+        self.video.record_status['ready'] = False
+        self.node.tick_once()
+        self.now.return_value = 5.1
+        self.node.tick_once()
+        self.assertEqual(self.node.status, Status.FAILURE)
+        self.assert_stopped()
+
     def test_turn_timeout_stops(self):
         self.start_observing()
         self.now.return_value = .6
@@ -277,6 +347,115 @@ class AlignTests(unittest.TestCase):
 
 
 class DetectionTests(unittest.TestCase):
+    @staticmethod
+    def bottle_image(x=150):
+        image = np.full((180, 320, 3), 240, np.uint8)
+        image[65:105, x:x+24] = 0
+        return image
+
+    def test_shape_rejected_background_does_not_veto_bottle(self):
+        image = self.bottle_image()
+        image[10:28, 5:145] = 0
+        c = SumoBlackDetector().step(image, 0, 1, 1)['candidate']
+        self.assertIsNotNone(c)
+        self.assertGreater(c['cy'], 60)
+
+    def test_horizontal_edge_fragment_cannot_seed_but_can_be_tracked(self):
+        detector = SumoBlackDetector()
+        self.assertIsNone(detector.step(self.bottle_image(306), 0, 1, 1)['candidate'])
+        detector.step(self.bottle_image(280), 0, 1.1, 2)
+        self.assertTrue(detector.step(self.bottle_image(296), 0, 1.2, 3)['confirmed'])
+
+    def test_larger_unrelated_blob_cannot_steal_recent_identity(self):
+        detector = SumoBlackDetector()
+        image = self.bottle_image()
+        first = detector.step(image, 0, 1, 1)
+        detector.step(image, 0, 1.1, 2)
+        image[60:120, 250:295] = 0
+        result = detector.step(image, 0, 1.2, 3)
+        self.assertEqual(result['track_id'], first['track_id'])
+        self.assertLess(result['candidate']['cx'], 200)
+
+    def test_inherited_history_requires_two_new_images(self):
+        detector = SumoBlackDetector()
+        image = self.bottle_image()
+        detector.step(image, 0, 1, 1)
+        old = detector.step(image, 0, 1.1, 2)
+        detector.new_observation_session()
+        one = detector.step(image, 0, 1.2, 3)
+        self.assertEqual(old['track_id'], one['track_id'])
+        self.assertFalse(one['confirmed'])
+        self.assertTrue(detector.step(image, 0, 1.3, 4)['confirmed'])
+
+    def test_missing_image_never_publishes_predicted_box(self):
+        detector = SumoBlackDetector()
+        image = self.bottle_image()
+        detector.step(image, 0, 1, 1)
+        detector.step(image, 0, 1.1, 2)
+        blank = np.full_like(image, 240)
+        missing = detector.step(blank, 0, 1.2, 3)
+        self.assertIsNone(missing['candidate'])
+        self.assertFalse(missing['confirmed'])
+        self.assertEqual(missing['track_status'], 'missing')
+        self.assertFalse(detector.step(image, 0, 1.3, 4)['confirmed'])
+
+    def test_expired_identity_reacquires_with_new_id(self):
+        detector = SumoBlackDetector()
+        image = self.bottle_image()
+        first = detector.step(image, 0, 1, 1)
+        result = detector.step(image, 0, 2, 2)
+        self.assertGreater(result['track_id'], first['track_id'])
+        self.assertTrue(result['history_expired'])
+        self.assertFalse(result['confirmed'])
+
+    def test_dual_mask_can_see_saturated_near_black(self):
+        image = np.full((180, 320, 3), 240, np.uint8)
+        image[65:105, 150:174] = (1, 4, 1)
+        self.assertIsNone(SumoBlackDetector('hsv').step(image, 0, 1, 1)['candidate'])
+        self.assertEqual(SumoBlackDetector('dual').step(image, 0, 1, 1)['mask_source'], 'value')
+
+    def test_patch_can_promote_to_containing_full_dark_tape(self):
+        image = np.full((180, 320, 3), 240, np.uint8)
+        image[60:125, 140:185] = (1, 4, 1)
+        image[78:103, 152:168] = (3, 3, 3)
+        detector = SumoBlackDetector()
+        first = detector.step(image, 0, 1, 1)
+        second = detector.step(image, 0, 1.1, 2)
+        self.assertEqual(first['mask_source'], 'hsv')
+        self.assertEqual(second['mask_source'], 'value')
+        self.assertEqual(first['track_id'], second['track_id'])
+
+    def test_gyro_compensation_associates_rotation_without_reset(self):
+        detector = SumoBlackDetector()
+        detector.step(self.bottle_image(190), 0, 1, 1, gyro_deg=0)
+        result = detector.step(self.bottle_image(115), 0, 1.1, 2, gyro_deg=15)
+        self.assertTrue(result['confirmed'])
+        self.assertLess(result['candidate']['cx'], 160)
+
+    def test_video_preserves_identity_but_not_confirmation_between_reads(self):
+        with patch.object(Video, '_open_cap'):
+            video = Video(preview_enabled=False)
+        self.addCleanup(video.close)
+        image = self.bottle_image()
+        session = video.begin_sumo_alignment_read(gyro_reader=lambda: 0, distance_reader=lambda: 0)
+        for frame in (1, 2):
+            video.frame_id = frame
+            video._process_sumo_alignment(image.copy(), session, (frame*.1, 0, 0))
+        old = video.get_sumo_alignment_observation(session)
+        self.assertTrue(old['confirmed'])
+        new = video.begin_sumo_alignment_read(gyro_reader=lambda: 0, distance_reader=lambda: 0,
+                                              preserve_history=True)
+        self.assertIsNone(video.get_sumo_alignment_observation(new))
+        video.frame_id = 3
+        video._process_sumo_alignment(image.copy(), new, (.3, 0, 0))
+        result = video.get_sumo_alignment_observation(new)
+        self.assertEqual(old['track_id'], result['track_id'])
+        self.assertFalse(result['confirmed'])
+        self.assertGreaterEqual(result['detector_duration_ms'], 0)
+        video.frame_id = 4
+        video._process_sumo_alignment(image.copy(), new, (.4, 0, 0))
+        self.assertTrue(video.get_sumo_alignment_observation(new)['confirmed'])
+
     def test_video_capture_process_publishes_metadata_and_confirmed_detection(self):
         with patch.object(Video, '_open_cap'):
             video = Video(preview_enabled=False)
@@ -356,6 +535,8 @@ class DetectionTests(unittest.TestCase):
         import contextlib
         import io
         script = (OPTIONS.overlay or REPO) / 'alpha.py'
+        if not script.is_file():
+            script = REPO / 'alpha.py'
         spec = importlib.util.spec_from_file_location('alpha_sumo_align_check', script)
         alpha = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(alpha)

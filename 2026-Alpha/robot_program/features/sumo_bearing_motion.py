@@ -1,4 +1,6 @@
-"""ET sumo bearing adapters for the unchanged shared gyro behaviors."""
+"""ET sumo bearing adapters for the unchanged shared gyro behaviors.
+
+相撲方位を既存直進・旋回クラスの角度定義へ変換する。共有走行クラス自体は変更しない。"""
 
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
@@ -19,8 +21,10 @@ def current_bearing(context):
 
 def search_bearing(context, settings):
     return choose_search_bearing(
-        current_bearing(context), settings.garage_search_offset_deg,
-        settings.garage_bearing_deg, prefer_clockwise=runtime.course < 0,
+        current_bearing(context),
+        settings.garage_search_offset_deg,
+        settings.garage_bearing_deg,
+        prefer_clockwise=runtime.course < 0,
     )
 
 
@@ -35,19 +39,29 @@ class RegisterSumoBearing(Behaviour):
         runtime.require("gyro_sensor")
         raw = runtime.gyro_sensor.get_angle()
         self.context.sumo.bearing_reference.register(self.initial_bearing, raw)
-        self.logger.info("sumo bearing reference: bearing=%.1f gyro=%.1f" % (self.initial_bearing, raw))
+        self.logger.info(
+            "sumo bearing reference: bearing=%.1f gyro=%.1f"
+            % (self.initial_bearing, raw)
+        )
         return Status.SUCCESS
 
 
 class _BearingTarget:
     def _configure_bearing(self):
         # 動的な方位はBehavior開始時に一度だけ評価する。走行中に目標を追従更新しない。
-        requested = self.bearing() if callable(self.bearing) else self.bearing
+        if callable(self.bearing):
+            requested = self.bearing()
+        else:
+            requested = self.bearing
         self.target_bearing = normalize_bearing(requested)
         raw = runtime.gyro_sensor.get_angle()
-        self.target = self.context.sumo.bearing_reference.legacy_target(self.target_bearing, raw, runtime.course)
-        self.logger.info("bearing target=%.1f current=%.1f legacy_target=%.1f gyro=%.1f" % (
-            self.target_bearing, current_bearing(self.context), self.target, raw))
+        self.target = self.context.sumo.bearing_reference.legacy_target(
+            self.target_bearing, raw, runtime.course
+        )
+        self.logger.info(
+            "bearing target=%.1f current=%.1f legacy_target=%.1f gyro=%.1f"
+            % (self.target_bearing, current_bearing(self.context), self.target, raw)
+        )
 
 
 class SpinToBearing(_BearingTarget, SpinAround):
@@ -55,14 +69,18 @@ class SpinToBearing(_BearingTarget, SpinAround):
     def __init__(self, name, context, bearing, **kwargs):
         self.context = context
         self.bearing = bearing
-        super().__init__(name=name, target=0, target_type=HeadingType.ABSOLUTE, **kwargs)
+        super().__init__(
+            name=name, target=0, target_type=HeadingType.ABSOLUTE, **kwargs
+        )
 
     def update(self):
         if not self.running:
             self._configure_bearing()
         result = super().update()
         if result == Status.SUCCESS:
-            self.logger.info("sumo turn complete bearing=%.1f" % current_bearing(self.context))
+            self.logger.info(
+                "sumo turn complete bearing=%.1f" % current_bearing(self.context)
+            )
         return result
 
 
@@ -71,7 +89,9 @@ class EncoderSpinToBearing(_BearingTarget, EncoderSpin):
     def __init__(self, name, context, bearing, **kwargs):
         self.context = context
         self.bearing = bearing
-        super().__init__(name=name, target=0, target_type=HeadingType.ABSOLUTE, **kwargs)
+        super().__init__(
+            name=name, target=0, target_type=HeadingType.ABSOLUTE, **kwargs
+        )
 
     def update(self):
         if not self.running:
@@ -79,7 +99,9 @@ class EncoderSpinToBearing(_BearingTarget, EncoderSpin):
             self._configure_bearing()
         result = super().update()
         if result == Status.SUCCESS:
-            self.logger.info("sumo turn complete bearing=%.1f" % current_bearing(self.context))
+            self.logger.info(
+                "sumo turn complete bearing=%.1f" % current_bearing(self.context)
+            )
         return result
 
 
@@ -88,7 +110,9 @@ class RunAtBearing(_BearingTarget, EtRun):
     def __init__(self, name, context, bearing, **kwargs):
         self.context = context
         self.bearing = bearing
-        super().__init__(name=name, target=0, target_type=HeadingType.ABSOLUTE, **kwargs)
+        super().__init__(
+            name=name, target=0, target_type=HeadingType.ABSOLUTE, **kwargs
+        )
 
     def update(self):
         if not self.running:

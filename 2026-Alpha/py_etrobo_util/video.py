@@ -187,6 +187,8 @@ class Video(object):
         self._sumo_alignment_observation = None
         self._sumo_alignment_detector_session = None
         self._sumo_alignment_detector = None
+        self._sumo_recording = None
+        self._sumo_recording_telemetry = None
         # (insight, color, cx, theta, bottom_row, area, in_blindspot)
         self._bottle_stamped = (False, BottleColor.NONE, int(FRAME_WIDTH/2), 0.0, 0, 0, False)
 
@@ -763,6 +765,9 @@ class Video(object):
             #        x, y, w, h, self.range_of_edges, self.theta,
             #        int(self.target_insight), (time.time() - t_cap) * 1000))
 
+        # Disk encoding runs in its own bounded worker, also without a preview.
+        self._record_sumo_alignment_frame(frame, img_orig, capture_session,
+                                          capture_mode, sumo_capture_time, sumo_metadata)
         # Recognition and observations above remain active without a display.
         if not self.preview_enabled:
             return
@@ -830,27 +835,129 @@ class Video(object):
             mask[:int(FRAME_HEIGHT * 0.30), :] = 0
         return mask
 
-    def begin_sumo_alignment_read(self, *, gyro_reader, distance_reader):
+    def begin_sumo_alignment_recording(self, telemetry_reader, *, output_dir=None):
+        from robot_program.features.sumo_align_recording import SumoAlignRecording
+
+        previous = self._sumo_recording
+        if previous is not None and not previous.finished.is_set():
+            raise RuntimeError("Previous sumo recording is still finishing")
+        recording = SumoAlignRecording(output_dir=output_dir)
+        with self._bottle_lock:
+            self._sumo_recording = recording
+            self._sumo_recording_telemetry = telemetry_reader
+        paths = recording.status()["paths"]
+        print(
+            "SUMO_ALIGN RECORD raw=%s detected=%s csv=%s summary=%s"
+            % (paths["raw"], paths["detected"], paths["csv"], paths["summary"]),
+            flush=True,
+        )
+
+    def get_sumo_alignment_recording_status(self):
+        recording = self._sumo_recording
+        return recording.status() if recording is not None else None
+
+    def end_sumo_alignment_recording(self, result, reason, *, details=None):
+        recording = self._sumo_recording
+        if recording is not None:
+            recording.request_stop(result, reason, details=details)
+
+    def _record_sumo_alignment_frame(self, raw, detected, session, mode, t, pose):
+        with self._bottle_lock:
+            recording = self._sumo_recording
+            telemetry_reader = self._sumo_recording_telemetry
+            observation = self._sumo_alignment_observation
+        if recording is None or recording.stopping.is_set():
+            return
+        row = dict(telemetry_reader())
+        row.update(
+            frame_id=self.frame_id,
+            capture_session=session,
+            capture_mode=mode,
+            capture_monotonic_sec=t,
+            observation_available=0,
+            candidate=0,
+            confirmed=0,
+        )
+        row["pose_source"] = "capture" if pose is not None else "record-submit"
+        if pose is not None:
+            row.update(gyro_deg=pose[1], odo_mm=pose[2])
+        if (
+            observation is not None
+            and observation["frame_id"] == self.frame_id
+            and observation["session"] == session
+        ):
+            c = observation["candidate"]
+            row.update(
+                observation_available=1,
+                observation_session=observation["session"],
+                confirmed=int(observation["confirmed"]),
+                candidate=int(c is not None),
+                roi_top=observation["roi"][0],
+                roi_bottom=observation["roi"][1],
+                detector_mode=observation["mode"],
+            )
+            for key in (
+                "track_id",
+                "track_status",
+                "mask_policy",
+                "mask_source",
+                "hsv_candidate_count",
+                "value_candidate_count",
+                "history_length",
+                "association_dx",
+                "association_dy",
+                "history_expired",
+                "detector_started_monotonic_sec",
+                "observation_ready_monotonic_sec",
+                "detector_duration_ms",
+            ):
+                row[key] = observation.get(key)
+            row["capture_to_ready_ms"] = (
+                observation["observation_ready_monotonic_sec"] - observation["t"]
+            ) * 1000
+            if c:
+                row.update(
+                    {key: c[key] for key in ("x", "y", "w", "h", "cx", "cy", "area")}
+                )
+        recording.submit(raw, detected, row)
+
+    def begin_sumo_alignment_read(
+        self, *, gyro_reader, distance_reader, preserve_history=False
+    ):
         self.set_bottle_color(BottleColor.BLACK)
-        self.set_target_interested(TargetInterested.BOTTLE, observation_mode='sumo_align')
+        self.set_target_interested(
+            TargetInterested.BOTTLE, observation_mode="sumo_align"
+        )
         session = self._vision_sessions.capture_token()[0]
         with self._bottle_lock:
-            self._sumo_alignment_request = (session, gyro_reader, distance_reader)
+            self._sumo_alignment_request = (
+                session,
+                gyro_reader,
+                distance_reader,
+                preserve_history,
+            )
             self._sumo_alignment_observation = None
         return session
 
     def get_sumo_alignment_observation(self, session):
-        if self._vision_sessions.capture_token() != (session, 'sumo_align'):
+        if self._vision_sessions.capture_token() != (session, "sumo_align"):
             return None
         with self._bottle_lock:
             observation = self._sumo_alignment_observation
-            return observation if observation and observation['session'] == session else None
+            return (
+                observation
+                if observation and observation["session"] == session
+                else None
+            )
 
     def end_sumo_alignment_read(self, session):
-        if self._vision_sessions.capture_token() == (session, 'sumo_align'):
+        if self._vision_sessions.capture_token() == (session, "sumo_align"):
             self.set_target_interested(TargetInterested.LINE)
         with self._bottle_lock:
-            if self._sumo_alignment_request and self._sumo_alignment_request[0] == session:
+            if (
+                self._sumo_alignment_request
+                and self._sumo_alignment_request[0] == session
+            ):
                 self._sumo_alignment_request = None
                 self._sumo_alignment_observation = None
 
@@ -858,28 +965,58 @@ class Video(object):
         # Only the existing capture thread mutates this tracker.
         if metadata is None:
             return
-        from robot_program.features.sumo_black_detector import SumoBlackDetector, pixel_bearing
+        with self._bottle_lock:
+            request = self._sumo_alignment_request
+        if request is None or request[0] != session:
+            return  # An old read must not mutate or publish tracking state.
+        from robot_program.features.sumo_black_detector import (
+            SumoBlackDetector,
+            pixel_bearing,
+        )
+
         if self._sumo_alignment_detector_session != session:
-            self._sumo_alignment_detector = SumoBlackDetector()
+            if self._sumo_alignment_detector is None or not request[3]:
+                self._sumo_alignment_detector = SumoBlackDetector()
+            else:
+                self._sumo_alignment_detector.new_observation_session()
             self._sumo_alignment_detector_session = session
         t, gyro_deg, d = metadata
-        result = self._sumo_alignment_detector.step(image, d, t, self.frame_id)
+        processing_started_at = time.monotonic()
+        result = self._sumo_alignment_detector.step(
+            image, d, t, self.frame_id, gyro_deg=gyro_deg
+        )
+        observation_ready_at = time.monotonic()
         if result is None:
             return
-        observation = dict(result, session=session, frame_id=self.frame_id,
-                           t=t, gyro_deg=gyro_deg, d=d)
-        c = result['candidate']
-        self.target_insight = bool(c and result['confirmed'])
+        observation = dict(
+            result,
+            session=session,
+            frame_id=self.frame_id,
+            t=t,
+            gyro_deg=gyro_deg,
+            d=d,
+            detector_started_monotonic_sec=processing_started_at,
+            observation_ready_monotonic_sec=observation_ready_at,
+            detector_duration_ms=(observation_ready_at - processing_started_at) * 1000,
+        )
+        c = result["candidate"]
+        self.target_insight = bool(c and result["confirmed"])
         self.bottle_color = BottleColor.BLACK if c else BottleColor.NONE
-        self.bottle_area = int(c['area']) if c else 0
-        self.bottle_bottom_row = c['y'] + c['h'] if c else 0
-        self.bottle_cx = c['cx'] if c else FRAME_WIDTH // 2
+        self.bottle_area = int(c["area"]) if c else 0
+        self.bottle_bottom_row = c["y"] + c["h"] if c else 0
+        self.bottle_cx = c["cx"] if c else FRAME_WIDTH // 2
         self.bottle_theta = pixel_bearing(self.bottle_cx)
-        self.cx, self.cy, self.theta = self.bottle_cx, self.bottle_bottom_row, self.bottle_theta
+        self.cx, self.cy, self.theta = (
+            self.bottle_cx,
+            self.bottle_bottom_row,
+            self.bottle_theta,
+        )
         if c:
-            color = (255, 0, 255) if result['confirmed'] else (0, 180, 255)
-            cv2.rectangle(image, (c['x'], c['y']), (c['x'] + c['w'], c['y'] + c['h']), color, 1)
-        top, bottom = result['roi']
+            color = (255, 0, 255) if result["confirmed"] else (0, 180, 255)
+            cv2.rectangle(
+                image, (c["x"], c["y"]), (c["x"] + c["w"], c["y"] + c["h"]), color, 1
+            )
+        top, bottom = result["roi"]
         cv2.rectangle(image, (0, top), (319, bottom - 1), (255, 255, 0), 1)
         with self._bottle_lock:
             # A read session may have changed while this frame was processed.
@@ -970,6 +1107,15 @@ class Video(object):
         self._closed = True
         self._vision_sessions.start('closed')
         self._worker_stop.set()
+        recording = self._sumo_recording
+        if recording is not None:
+            try:
+                recording.close(timeout=2.0)
+            except Exception as error:
+                print('SUMO_ALIGN RECORD close error: %s' % error, file=sys.stderr, flush=True)
+            status = recording.status()
+            print('SUMO_ALIGN RECORD finished=%s frames=%s dropped=%s error=%s' % (
+                status['finished'], status['written'], status['dropped'], status['error']), flush=True)
         worker = getattr(self, '_detection_thread', None)
         if worker is not None:
             worker.join(timeout=2.0)
