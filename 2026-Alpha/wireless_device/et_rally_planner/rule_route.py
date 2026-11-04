@@ -2789,7 +2789,9 @@ def _try_diagonal_to_entry_axis(a, b, all_gates, all_posts, target_gate):
     e = (math.cos(math.radians(heading)), math.sin(math.radians(heading)))
     # aがentry軸上(bからeの逆向きの直線上)にあれば、直線で足りる
     ab = geo.sub(b, a)
-    if abs(ab[0] * e[1] - ab[1] * e[0]) < 1e-6:
+    if abs(ab[0] * e[1] - ab[1] * e[0]) < 1e-6 and ab[0] * e[0] + ab[1] * e[1] > 0:
+        # 2026-09-22: 軸上にあっても、aがentryの「先(ゲートを通り過ぎた側)」にあるときは、直線では入れない
+        # (ゲートの反対側から来ているため)。その場合は、下の候補の探索へ進む(seed=3689058)。
         return []
     results = []
     direct = geo.distance(a, b)
@@ -2823,15 +2825,65 @@ def _try_diagonal_to_entry_axis(a, b, all_gates, all_posts, target_gate):
                     if ok_segments(pts):
                         results.append([(a, None), (p1, None), (c, None), (b, None)])
                 t += config.DIAGONAL_BYPASS_T_STEP_CM
+    # 3つ目の形(上の2つの形が作れない、または遠回りしかないときだけ): 斜めに進んで、entry軸と平行な
+    # 通路(ゲートの脇、軸から t だけ離れた線)に乗り、その線に沿って進み、軸に垂直に軸上の点cへ戻り、
+    # 軸に沿ってentryへ入る(a -> w1 -> w2 -> c -> b)。2026-09-22: 赤ゲートを南から入る組み合わせで、
+    # 北側(黄のexit)から南側へ回り込む配置(seed=3689058)で、上の形では、長さの上限を超えて作れず、
+    # 別のゲートを通り抜ける大回りが選ばれていた。長さの短い順に、最大CORRIDOR_MAX_CANDIDATES個だけ返す。
+    if not results or min(_segment_result_length(r) for r in results) > 1.6 * direct:
+        corridor = []
+        tangent = (-e[1], e[0])
+        for D in config.DIAGONAL_BYPASS_D_LIST_CM:
+            c = geo.sub(b, geo.scale(e, D))
+            for sign in (1.0, -1.0):
+                for t in config.CORRIDOR_T_LIST_CM:
+                    w2 = geo.add(c, geo.scale(tangent, sign * t))
+                    foot = (a[0] - w2[0]) * e[0] + (a[1] - w2[1]) * e[1]
+                    for shift in config.CORRIDOR_SHIFT_LIST_CM:
+                        w1 = geo.add(w2, geo.scale(e, foot + shift))
+                        if geo.distance(a, w1) < 1e-6 or geo.distance(w1, w2) < 1e-6:
+                            continue
+                        length = geo.distance(a, w1) + geo.distance(w1, w2) + t + D
+                        corridor.append((length, [a, w1, w2, c, b]))
+        corridor.sort(key=lambda item: item[0])
+        taken = 0
+        for length, pts in corridor:
+            if taken >= config.CORRIDOR_MAX_CANDIDATES:
+                break
+            if ok_segments(pts):
+                results.append([(p, None) for p in pts])
+                taken += 1
     return results
 
 
 def _resolve_goal_segment(current, all_gates, all_posts, prev_gate, gate_signs):
+    """ゴールへの最終区間を作る。まず、直進の余裕を config.GOAL_STRAIGHT_EXTRA_MARGIN_CM だけ増やした条件で
+    試し(全ての安全条件を満たす候補だけ)、作れなければ、従来の条件で作る。
+    (STRAIGHT_CLEARANCE_CMは、この区間の探索の間だけ一時的に増やして、必ず元に戻す。)
+    """
+    global STRAIGHT_CLEARANCE_CM
+    extra = config.GOAL_STRAIGHT_EXTRA_MARGIN_CM
+    if extra > 0:
+        base = STRAIGHT_CLEARANCE_CM
+        STRAIGHT_CLEARANCE_CM = base + extra
+        try:
+            return _resolve_goal_segment_core(current, all_gates, all_posts, prev_gate, gate_signs, strict_only=True)
+        except RuntimeError:
+            pass
+        finally:
+            STRAIGHT_CLEARANCE_CM = base
+    return _resolve_goal_segment_core(current, all_gates, all_posts, prev_gate, gate_signs)
+
+
+def _resolve_goal_segment_core(current, all_gates, all_posts, prev_gate, gate_signs, strict_only=False):
     """最後のゲートの退出点からゴールへの区間を作る。
 
-    通常の候補が進入禁止エリアに入らなければ、それをそのまま使う。入る(または作れない)ときは、
-    中継点C(config.KEEP_OUT_GOAL_LANE_POINT_CM)まで通常の探索で進み、Cからゴールへ直進する
-    (Cから先はゴール側の制限のない範囲で、支柱もない)。
+    ゴールへ直接向かう通常の候補(進入禁止エリアに入らないもの)と、中継点C
+    (config.KEEP_OUT_GOAL_LANE_POINT_CM)まで通常の探索で進み、Cからゴールへ直進する候補
+    (Cから先はゴール側の制限のない範囲で、支柱もない)を、両方作り、短いほうを使う。
+    2026-09-22: 従来は、直接の候補が進入禁止エリアに入らなければ、Cを経由する候補と比べず、
+    そのまま使っていた。そのため、直接の候補が大回り(例: 他のゲートを通って、遠い場所から長い
+    斜めでゴールへ向かう)になる配置でも、それが選ばれていた。
     """
     goal = config.GOAL_POS_CM
     direct = None
@@ -2841,11 +2893,29 @@ def _resolve_goal_segment(current, all_gates, all_posts, prev_gate, gate_signs):
             strict_safe=True)
     except RuntimeError:
         direct = None
-    if direct is not None and _candidate_keepout_safe(direct):
-        return direct
+    if direct is not None and not _candidate_keepout_safe(direct):
+        direct = None
     lane = config.KEEP_OUT_GOAL_LANE_POINT_CM
+    if direct is not None:
+        # Cを経由する候補は、どうやっても「現在地→C→ゴール」の直線距離より短くならない。
+        # それが、直接の候補以上なら、比べる必要がない(計算時間を増やさないため)。
+        if (geo.distance(current, lane) + geo.distance(lane, goal) >= _segment_result_length(direct) - 1e-6):
+            return direct
+        # Cを経由する候補は、安全な候補が作れたときだけ比べる(作れなければ、直接の候補を使う)。
+        try:
+            to_lane = _resolve_top_level_segment(
+                current, lane, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs,
+                strict_safe=True)
+        except RuntimeError:
+            return direct
+        via_lane = list(to_lane) + [(goal, None)]
+        if _segment_result_length(via_lane) + 1e-6 < _segment_result_length(direct):
+            return via_lane
+        return direct
+    # strict_only: 安全な候補が作れないときは、作れないこと(RuntimeError)を、そのまま返す。
     to_lane = _resolve_top_level_segment(
-        current, lane, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs)
+        current, lane, all_gates, all_posts, None, prev_gate, gate_signs=gate_signs,
+        strict_safe=strict_only)
     return list(to_lane) + [(goal, None)]
 
 
@@ -3049,6 +3119,28 @@ def _route_turn_sum_deg(waypoints, start_heading_deg=config.START_HEADING_DEG,
     )
 
 
+def _route_min_arm_body_clearance(waypoints, labels, all_posts):
+    """各ゲートのentryへ向かう区間(直前のexit、またはスタートから、そのentryまで)の全ての直進について、
+    そのゲート自身のT字パーツと車体との最短クリアランスを返す(_segment_body_clearance、最小値)。
+    経路が、entryへの最後の直線だけでなく、その手前の直線も、自分のゲートのT字パーツに近づいていないかを見る。
+    """
+    worst = float("inf")
+    stage_start = 0
+    for i, label in enumerate(labels):
+        if not label:
+            continue
+        if label.endswith("-entry"):
+            color = label.split("-")[1]
+            arm_posts = [p for p in all_posts
+                         if getattr(p, "color", None) == color and (p.arm_dir[0] or p.arm_dir[1])]
+            for k in range(stage_start, i):
+                for p in arm_posts:
+                    worst = min(worst, _segment_body_clearance(waypoints[k], waypoints[k + 1], p))
+        elif label.endswith("-exit"):
+            stage_start = i
+    return worst
+
+
 def plan_route_with_anchors(gates_by_color, laps=None):
     """plan_route()と同じ経路構築を行うが、各waypointのアンカー情報も返す
     (テスト・検証コードがverify_straight_clearanceにanchorsを渡して、
@@ -3101,6 +3193,7 @@ def plan_route_with_anchors(gates_by_color, laps=None):
     all_gates = list(gates_by_color.values())
 
     best = None  # (is_valid, violation_count, score, waypoints, anchors, labels, true_points)
+    all_candidates = []
     _ARM_SEARCH_CACHE.clear()
     for combo in itertools.product((1.0, -1.0), repeat=len(colors)):
         color_signs = dict(zip(colors, combo))
@@ -3141,9 +3234,23 @@ def plan_route_with_anchors(gates_by_color, laps=None):
         candidate = (is_valid, -violation_count, completed_laps, -score, waypoints, anchors, labels, true_points)
         if best is None or candidate[:4] > best[:4]:
             best = candidate
+        arm_ok = _route_min_arm_body_clearance(waypoints, labels, all_posts) >= config.ARM_BODY_CLEARANCE_MIN_CM - 1e-9
+        all_candidates.append(candidate + (arm_ok, dist))
 
     if best is None:
         raise RuntimeError("どの侵入側の組み合わせでも経路を構築できませんでした")
+
+    # 2026-09-22: 最良の組み合わせが、どこかのゲートで、自分のT字パーツへの余裕(3cm)を満たしていないとき、
+    # 同じ安全性・周回数の組み合わせのうち、全てのゲートで余裕を満たすものが、
+    # 増える長さ(スコアの差)ARM_SIGN_PREFERENCE_BUDGET_CM以内にあれば、そちらを使う。
+    if config.ARM_SIGN_PREFERENCE_BUDGET_CM > 0:
+        best_entry = next(c for c in all_candidates if c[:8] == best)
+        if not best_entry[8]:
+            # 増える長さは、スコア(旋回のコストを含む)ではなく、実際の距離で比べる。
+            same_safety = [c for c in all_candidates
+                           if c[8] and c[:3] == best[:3] and c[9] <= best_entry[9] + config.ARM_SIGN_PREFERENCE_BUDGET_CM]
+            if same_safety:
+                best = max(same_safety, key=lambda c: c[3])[:8]
 
     _, _, _, _, waypoints, anchors, labels, true_points = best
 

@@ -4,6 +4,12 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 from .sumo_types import SumoSettings
+from .features.sumo_align_settings import SumoAlignSettings
+from .features.sumo_stage_test_settings import SumoStageTestSettings
+from .features.sumo_catch_settings import SumoCatchSettings
+from .features.sumo_relative_push_settings import RelativePushSettings
+from .diagnostics.sumo_sensor_settings import SumoSensorSettings
+from .diagnostics.sumo_turn_test_settings import SumoTurnTestSettings
 from .integration_settings import IntegrationSettings
 
 
@@ -19,7 +25,7 @@ class RaceConfig:
     start_lap_mode: str = 'profile'
     #start_lap_mode: str = 'legacy'
     #start_lap_mode: str = 'alltrace'
-    start_lap_power: int = 85
+    start_lap_power: int = 100
     # 車軸中心から最初のカーブまで。アーム先端から500mm＋前方100mm。
     start_lap_first_straight_mm: float = 600.0
     # 最初のカーブ以降の距離倍率。別途実測するまでは旧表の長さを維持。
@@ -75,7 +81,8 @@ class RaceConfig:
     enable_et_rally: bool = True
     et_rally_laps: int = 3
     # received: PCから受信したSEQ、file: 従来の固定plan JSONを実行する。
-    et_rally_strategy_source: str = "received"
+    # et_rally_strategy_source: str = "received"
+    et_rally_strategy_source: str = "file"
     # ETラリー開始時にエラー(経路の受信失敗、Hint不足、経路の変換失敗)が出たとき、ミッションを失敗にせず、
     # 固定ルートでゴール(ガレージ)へ向かう(et_rally_fallback.py)。Falseなら、従来どおり失敗で止まる。
     et_rally_fallback_enabled: bool = True
@@ -92,7 +99,15 @@ class RaceConfig:
     strategy_host: str = "0.0.0.0"
     strategy_port: int = 50000
     strategy_timeout_s: float = 20.0
+    sumo_stage_test: SumoStageTestSettings = SumoStageTestSettings()
+    sumo_push_calibration: Optional[str] = None
+    sumo_push_execute: bool = False
+    sumo_relative_push: RelativePushSettings = RelativePushSettings()
     sumo: SumoSettings = SumoSettings()
+    sumo_align: SumoAlignSettings = SumoAlignSettings()
+    sumo_catch: SumoCatchSettings = SumoCatchSettings()
+    sumo_sensor: SumoSensorSettings = SumoSensorSettings()
+    sumo_turn_test: SumoTurnTestSettings = SumoTurnTestSettings()
     integration: IntegrationSettings = IntegrationSettings()
 
 
@@ -112,10 +127,20 @@ MISSION_CHOICES = (
     'rally',
     'rally-drive',
     'sumo',
+    'sumo-align',
+    'sumo-push-route-test',
+    'sumo-stage-all',
+    'sumo-stage-entry',
+    'sumo-stage-push',
+    'sumo-stage-exit',
+    'sumo-catch-test',
+    'sumo-sensor-test',
+    'sumo-turn-test',
     'finish',
     'full',
     'hint2',
     'hint2-return',
+    'et-rally-lqi-calibration',
 )
 
 
@@ -137,6 +162,9 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         enable_et_sumo=False,
         enable_finish=False,
     )
+    if mission in ('sumo-stage-all', 'sumo-stage-entry', 'sumo-stage-push', 'sumo-stage-exit', 'sumo-align','sumo-catch-test','sumo-sensor-test','sumo-turn-test','sumo-push-route-test'):
+        disabled['enable_et_sumo'] = True
+        return replace(config, mission_mode=mission, **disabled)
     if mission in INTEGRATION_MISSIONS:
         if mission in ('bottle-rally', 'rally-sumo'):
             disabled['enable_et_rally'] = True
@@ -150,6 +178,9 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'bottle-final':
         # Hint2後移動の終了位置から、Bottle Delivery後半だけを単体実行する。
+        return replace(config, mission_mode=mission, **disabled)
+    if mission == 'et-rally-lqi-calibration':
+        # ETラリー旋回のLQI設計に使う実測データ収集専用。準備工程・PC通信は一切実行しない。
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'rally-drive':
         # 復号済みHintを外部入力し、準備工程なしでPC受信と周回走行だけを試す。

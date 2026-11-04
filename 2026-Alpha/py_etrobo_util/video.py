@@ -183,6 +183,12 @@ class Video(object):
         self.bottle_bottom_row = 0
         self.bottle_area   = 0
         self._bottle_lock  = threading.Lock()
+        self._sumo_alignment_request = None
+        self._sumo_alignment_observation = None
+        self._sumo_alignment_detector_session = None
+        self._sumo_alignment_detector = None
+        self._sumo_recording = None
+        self._sumo_recording_telemetry = None
         # (insight, color, cx, theta, bottom_row, area, in_blindspot)
         self._bottle_stamped = (False, BottleColor.NONE, int(FRAME_WIDTH/2), 0.0, 0, 0, False)
 
@@ -371,6 +377,14 @@ class Video(object):
             return
         t_cap = time.time()          # capture time for this frame
         self.frame_id += 1
+        # Host read-completion time, not hardware exposure time.
+        sumo_capture_time = time.monotonic()
+        sumo_metadata = None
+        if capture_mode == "sumo_align":
+            with self._bottle_lock:
+                request = self._sumo_alignment_request
+            if request is not None and request[0] == capture_session:
+                sumo_metadata = (sumo_capture_time, float(request[1]()), float(request[2]()))
 
         if self.target_interested == TargetInterested.QRCODE:
             # ---- QR needs the original full-resolution image ----
@@ -414,103 +428,108 @@ class Video(object):
             crop_h = int(fw * 9 / 16)             # 360 for a 640-wide frame
             y0 = (fh - crop_h) // 2               # center band
             frame_169 = frame[y0:y0 + crop_h, :]
-            img_orig = cv2.resize(frame_169, (FRAME_WIDTH, FRAME_HEIGHT))
-            img_hsv  = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HSV)
-
-            # Track the locked colour once identified, else scan all four.
-            if self._bottle_lock_color is not None:
-                candidates = [self._bottle_lock_color]
+            img_orig = cv2.resize(frame_169, (FRAME_WIDTH, FRAME_HEIGHT),
+                                 interpolation=cv2.INTER_AREA if capture_mode == 'sumo_align' else cv2.INTER_LINEAR)
+            if capture_mode == "sumo_align":
+                self._process_sumo_alignment(img_orig, capture_session, sumo_metadata)
             else:
-            # ボトルの色は赤・青・黄の3色のみなので、
-            # BLACKは認識候補から除外する
-                candidates = [BottleColor.RED,
-                              BottleColor.BLUE,
-                              BottleColor.YELLOW]
+                img_hsv  = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HSV)
 
-            best = None   # (area, color, cx, bottom_row, (x,y,w,h), cnt)
-            for color in candidates:
-                mask = self._bottle_mask(img_hsv, color)
-                # 青ボトルのHSV値をログ出力
-                if color == BottleColor.BLUE:
-                    pixels = img_hsv[mask > 0]
+                # Track the locked colour once identified, else scan all four.
+                if self._bottle_lock_color is not None:
+                    candidates = [self._bottle_lock_color]
+                else:
+                # ボトルの色は赤・青・黄の3色のみなので、
+                # BLACKは認識候補から除外する
+                    candidates = [BottleColor.RED,
+                                  BottleColor.BLUE,
+                                  BottleColor.YELLOW]
 
-                    if len(pixels) > 0:
-                        h_mean = int(np.mean(pixels[:, 0]))
-                        s_mean = int(np.mean(pixels[:, 1]))
-                        v_mean = int(np.mean(pixels[:, 2]))
+                best = None   # (area, color, cx, bottom_row, (x,y,w,h), cnt)
+                for color in candidates:
+                    mask = self._bottle_mask(img_hsv, color)
+                    # 青ボトルのHSV値をログ出力
+                    if color == BottleColor.BLUE:
+                        pixels = img_hsv[mask > 0]
 
-                        h_min = int(np.min(pixels[:, 0]))
-                        h_max = int(np.max(pixels[:, 0]))
-                        s_min = int(np.min(pixels[:, 1]))
-                        s_max = int(np.max(pixels[:, 1]))
-                        v_min = int(np.min(pixels[:, 2]))
-                        v_max = int(np.max(pixels[:, 2]))
+                        if len(pixels) > 0:
+                            h_mean = int(np.mean(pixels[:, 0]))
+                            s_mean = int(np.mean(pixels[:, 1]))
+                            v_mean = int(np.mean(pixels[:, 2]))
 
-                        print(
-                            "BLUE HSV "
-                            f"mean=({h_mean},{s_mean},{v_mean}) "
-                            f"H[{h_min}-{h_max}] "
-                            f"S[{s_min}-{s_max}] "
-                            f"V[{v_min}-{v_max}] "
-                            f"pixels={len(pixels)}"
-                        )
+                            h_min = int(np.min(pixels[:, 0]))
+                            h_max = int(np.max(pixels[:, 0]))
+                            s_min = int(np.min(pixels[:, 1]))
+                            s_max = int(np.max(pixels[:, 1]))
+                            v_min = int(np.min(pixels[:, 2]))
+                            v_max = int(np.max(pixels[:, 2]))
 
-                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self.kernel)
-                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self.kernel)
-                mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
-                cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                for cnt in cnts:
-                    area = cv2.contourArea(cnt)
-                    if area < BOTTLE_MIN_AREA:
-                        continue
-                    x, y, w, h = cv2.boundingRect(cnt)
-                    extent = area / float(w * h)
-                    aspect = w / float(h) if h > 0 else 999.0
-                    # A BLACK band must be told apart from the course line: the
-                    # line is long, thin and spans much of the width; the band is
-                    # a compact, fairly solid blob.
-                    if color == BottleColor.BLACK:
-                        if w > BOTTLE_BLACK_MAX_W:           continue
-                        if aspect > BOTTLE_BLACK_MAX_ASPECT: continue
-                        if extent < BOTTLE_MIN_EXTENT:       continue
-                    if best is None or area > best[0]:
-                        best = (area, color, x + w // 2, y + h, (x, y, w, h), cnt)
+                            print(
+                                "BLUE HSV "
+                                f"mean=({h_mean},{s_mean},{v_mean}) "
+                                f"H[{h_min}-{h_max}] "
+                                f"S[{s_min}-{s_max}] "
+                                f"V[{v_min}-{v_max}] "
+                                f"pixels={len(pixels)}"
+                            )
 
-            if best is not None:
-                area, color, bcx, bbottom, (bx, by, bw, bh), cnt = best
-                self.target_insight    = True
-                self.bottle_color      = color
-                self.bottle_cx         = bcx
-                self.bottle_area       = int(area)
-                self.bottle_bottom_row = bbottom
-                # bearing to the band, reusing the LINE pixel->angle conversion
-                vxp = bcx - int(FRAME_WIDTH / 2)
-                vxm = vxp * HORIZON_DISTANCE / FRAME_WIDTH
-                self.bottle_theta = 180 * math.atan(vxm / AXLE_TO_HORIZON_DISTANCE) / math.pi
-                in_blind = bbottom >= BOTTLE_BLIND_ROW
-                # feed the shared text/overlay block below
-                self.cx, self.cy, self.theta = bcx, bbottom, self.bottle_theta
-                col = {BottleColor.RED:(0,0,255), BottleColor.BLUE:(255,0,0),
-                       BottleColor.YELLOW:(0,255,255), BottleColor.BLACK:(60,60,60)}[color]
-                cv2.rectangle(img_orig, (bx,by), (bx+bw, by+bh), col, LINE_THICKNESS)
-                cv2.drawContours(img_orig, [cnt], 0, (0,255,0), 1)
-                if in_blind:
-                    cv2.line(img_orig, (0, BOTTLE_BLIND_ROW),
-                             (FRAME_WIDTH, BOTTLE_BLIND_ROW), (0,0,255), 1)
-            else:
-                self.target_insight    = False
-                self.bottle_area       = 0
-                self.bottle_bottom_row = 0
-                in_blind = False
+                    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self.kernel)
+                    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self.kernel)
+                    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
+                    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    for cnt in cnts:
+                        area = cv2.contourArea(cnt)
+                        if area < BOTTLE_MIN_AREA:
+                            continue
+                        x, y, w, h = cv2.boundingRect(cnt)
+                        extent = area / float(w * h)
+                        aspect = w / float(h) if h > 0 else 999.0
+                        # A BLACK band must be told apart from the course line: the
+                        # line is long, thin and spans much of the width; the band is
+                        # a compact, fairly solid blob.
+                        if color == BottleColor.BLACK:
+                            if w > BOTTLE_BLACK_MAX_W:           continue
+                            if aspect > BOTTLE_BLACK_MAX_ASPECT: continue
+                            if extent < BOTTLE_MIN_EXTENT:       continue
+                        if best is None or area > best[0]:
+                            best = (area, color, x + w // 2, y + h, (x, y, w, h), cnt)
 
-            with self._bottle_lock:
-                self._bottle_stamped = (self.target_insight, self.bottle_color,
-                                        self.bottle_cx, self.bottle_theta,
-                                        self.bottle_bottom_row, self.bottle_area, in_blind)
-                if capture_mode == 'bottle':
-                    self._vision_sessions.publish_bottle(capture_session, self.frame_id, self._bottle_stamped)
+                if best is not None:
+                    area, color, bcx, bbottom, (bx, by, bw, bh), cnt = best
+                    self.target_insight    = True
+                    self.bottle_color      = color
+                    self.bottle_cx         = bcx
+                    self.bottle_area       = int(area)
+                    self.bottle_bottom_row = bbottom
+                    # bearing to the band, reusing the LINE pixel->angle conversion
+                    vxp = bcx - int(FRAME_WIDTH / 2)
+                    vxm = vxp * HORIZON_DISTANCE / FRAME_WIDTH
+                    self.bottle_theta = 180 * math.atan(vxm / AXLE_TO_HORIZON_DISTANCE) / math.pi
+                    in_blind = bbottom >= BOTTLE_BLIND_ROW
+                    # feed the shared text/overlay block below
+                    self.cx, self.cy, self.theta = bcx, bbottom, self.bottle_theta
+                    col = {BottleColor.RED:(0,0,255), BottleColor.BLUE:(255,0,0),
+                           BottleColor.YELLOW:(0,255,255), BottleColor.BLACK:(60,60,60)}[color]
+                    cv2.rectangle(img_orig, (bx,by), (bx+bw, by+bh), col, LINE_THICKNESS)
+                    cv2.drawContours(img_orig, [cnt], 0, (0,255,0), 1)
+                    if in_blind:
+                        cv2.line(img_orig, (0, BOTTLE_BLIND_ROW),
+                                 (FRAME_WIDTH, BOTTLE_BLIND_ROW), (0,0,255), 1)
+                else:
+                    self.target_insight    = False
+                    self.bottle_area       = 0
+                    self.bottle_bottom_row = 0
+                    in_blind = False
+
+                with self._bottle_lock:
+                    self._bottle_stamped = (self.target_insight, self.bottle_color,
+                                            self.bottle_cx, self.bottle_theta,
+                                            self.bottle_bottom_row, self.bottle_area, in_blind)
+                    if capture_mode == 'bottle':
+                        self._vision_sessions.publish_bottle(capture_session, self.frame_id, self._bottle_stamped)
 
         else: # TargetInterested.LINE
+            merge_geometry = None
             # ---- LINE runs on the downsized frame ----
             # 640x480 (4:3) capture -> center-crop to 16:9 -> 320x180.
             # Cropping (not squashing) preserves the pixel->angle/mm geometry
@@ -650,6 +669,9 @@ class Video(object):
 
                     bias = 0
                     sep = near_row - far_row
+                    if sep >= CURV_MIN_ROWS_SEP and 0 < self.range_of_edges <= ROE_DEGEN:
+                        merge_geometry = ((int(cx_raw), int(near_row)),
+                                          (int(cx_far), int(far_row)))
                     self.band_sep = sep          # publish for the feed-forward gate
 
                     # Line tilt across the band (px/row): how far the line drifts
@@ -735,12 +757,17 @@ class Video(object):
             dist = plotter.get_distance() if plotter is not None else 0
             with self._theta_lock:
                 self._theta_stamped = (self.theta, self.frame_id, t_cap, dist)
+                self._line_geometry_stamped = (
+                    (self.frame_id, t_cap, *merge_geometry) if merge_geometry is not None else None)
             #print(
             #    "%+06d VID fid=%06d cap=%.3f cx=%d mx=%d roi=(%d,%d,%d,%d) roe=%03d theta=%+06.1f insight=%d lat=%.1f" % (
             #        dist, self.frame_id, t_cap, self.cx, self.mx,
             #        x, y, w, h, self.range_of_edges, self.theta,
             #        int(self.target_insight), (time.time() - t_cap) * 1000))
 
+        # Disk encoding runs in its own bounded worker, also without a preview.
+        self._record_sumo_alignment_frame(frame, img_orig, capture_session,
+                                          capture_mode, sumo_capture_time, sumo_metadata)
         # Recognition and observations above remain active without a display.
         if not self.preview_enabled:
             return
@@ -780,6 +807,11 @@ class Video(object):
     def get_theta(self) -> float:
         return self.theta
 
+    def get_line_geometry_stamped(self):
+        """同一LINEフレームの未補正の近点/遠点。320x180画像座標。"""
+        with self._theta_lock:
+            return getattr(self, '_line_geometry_stamped', None)
+
     def get_theta_stamped(self):
         with self._theta_lock:
             return self._theta_stamped   # (theta, frame_id, capture_time, odo_mm)
@@ -802,6 +834,195 @@ class Video(object):
         if color == BottleColor.BLACK:
             mask[:int(FRAME_HEIGHT * 0.30), :] = 0
         return mask
+
+    def begin_sumo_alignment_recording(self, telemetry_reader, *, output_dir=None):
+        from robot_program.features.sumo_align_recording import SumoAlignRecording
+
+        previous = self._sumo_recording
+        if previous is not None and not previous.finished.is_set():
+            raise RuntimeError("Previous sumo recording is still finishing")
+        recording = SumoAlignRecording(output_dir=output_dir)
+        with self._bottle_lock:
+            self._sumo_recording = recording
+            self._sumo_recording_telemetry = telemetry_reader
+        paths = recording.status()["paths"]
+        print(
+            "SUMO_ALIGN RECORD raw=%s detected=%s csv=%s summary=%s"
+            % (paths["raw"], paths["detected"], paths["csv"], paths["summary"]),
+            flush=True,
+        )
+
+    def get_sumo_alignment_recording_status(self):
+        recording = self._sumo_recording
+        return recording.status() if recording is not None else None
+
+    def end_sumo_alignment_recording(self, result, reason, *, details=None):
+        recording = self._sumo_recording
+        if recording is not None:
+            recording.request_stop(result, reason, details=details)
+
+    def _record_sumo_alignment_frame(self, raw, detected, session, mode, t, pose):
+        with self._bottle_lock:
+            recording = self._sumo_recording
+            telemetry_reader = self._sumo_recording_telemetry
+            observation = self._sumo_alignment_observation
+        if recording is None or recording.stopping.is_set():
+            return
+        row = dict(telemetry_reader())
+        row.update(
+            frame_id=self.frame_id,
+            capture_session=session,
+            capture_mode=mode,
+            capture_monotonic_sec=t,
+            observation_available=0,
+            candidate=0,
+            confirmed=0,
+        )
+        row["pose_source"] = "capture" if pose is not None else "record-submit"
+        if pose is not None:
+            row.update(gyro_deg=pose[1], odo_mm=pose[2])
+        if (
+            observation is not None
+            and observation["frame_id"] == self.frame_id
+            and observation["session"] == session
+        ):
+            c = observation["candidate"]
+            row.update(
+                observation_available=1,
+                observation_session=observation["session"],
+                confirmed=int(observation["confirmed"]),
+                candidate=int(c is not None),
+                roi_top=observation["roi"][0],
+                roi_bottom=observation["roi"][1],
+                detector_mode=observation["mode"],
+            )
+            for key in (
+                "track_id",
+                "track_status",
+                "mask_policy",
+                "mask_source",
+                "hsv_candidate_count",
+                "value_candidate_count",
+                "history_length",
+                "association_dx",
+                "association_dy",
+                "history_expired",
+                "detector_started_monotonic_sec",
+                "observation_ready_monotonic_sec",
+                "detector_duration_ms",
+            ):
+                row[key] = observation.get(key)
+            row["capture_to_ready_ms"] = (
+                observation["observation_ready_monotonic_sec"] - observation["t"]
+            ) * 1000
+            if c:
+                row.update(
+                    {key: c[key] for key in ("x", "y", "w", "h", "cx", "cy", "area")}
+                )
+        recording.submit(raw, detected, row)
+
+    def begin_sumo_alignment_read(
+        self, *, gyro_reader, distance_reader, preserve_history=False
+    ):
+        self.set_bottle_color(BottleColor.BLACK)
+        self.set_target_interested(
+            TargetInterested.BOTTLE, observation_mode="sumo_align"
+        )
+        session = self._vision_sessions.capture_token()[0]
+        with self._bottle_lock:
+            self._sumo_alignment_request = (
+                session,
+                gyro_reader,
+                distance_reader,
+                preserve_history,
+            )
+            self._sumo_alignment_observation = None
+        return session
+
+    def get_sumo_alignment_observation(self, session):
+        if self._vision_sessions.capture_token() != (session, "sumo_align"):
+            return None
+        with self._bottle_lock:
+            observation = self._sumo_alignment_observation
+            return (
+                observation
+                if observation and observation["session"] == session
+                else None
+            )
+
+    def end_sumo_alignment_read(self, session):
+        if self._vision_sessions.capture_token() == (session, "sumo_align"):
+            self.set_target_interested(TargetInterested.LINE)
+        with self._bottle_lock:
+            if (
+                self._sumo_alignment_request
+                and self._sumo_alignment_request[0] == session
+            ):
+                self._sumo_alignment_request = None
+                self._sumo_alignment_observation = None
+
+    def _process_sumo_alignment(self, image, session, metadata):
+        # Only the existing capture thread mutates this tracker.
+        if metadata is None:
+            return
+        with self._bottle_lock:
+            request = self._sumo_alignment_request
+        if request is None or request[0] != session:
+            return  # An old read must not mutate or publish tracking state.
+        from robot_program.features.sumo_black_detector import (
+            SumoBlackDetector,
+            pixel_bearing,
+        )
+
+        if self._sumo_alignment_detector_session != session:
+            if self._sumo_alignment_detector is None or not request[3]:
+                self._sumo_alignment_detector = SumoBlackDetector()
+            else:
+                self._sumo_alignment_detector.new_observation_session()
+            self._sumo_alignment_detector_session = session
+        t, gyro_deg, d = metadata
+        processing_started_at = time.monotonic()
+        result = self._sumo_alignment_detector.step(
+            image, d, t, self.frame_id, gyro_deg=gyro_deg
+        )
+        observation_ready_at = time.monotonic()
+        if result is None:
+            return
+        observation = dict(
+            result,
+            session=session,
+            frame_id=self.frame_id,
+            t=t,
+            gyro_deg=gyro_deg,
+            d=d,
+            detector_started_monotonic_sec=processing_started_at,
+            observation_ready_monotonic_sec=observation_ready_at,
+            detector_duration_ms=(observation_ready_at - processing_started_at) * 1000,
+        )
+        c = result["candidate"]
+        self.target_insight = bool(c and result["confirmed"])
+        self.bottle_color = BottleColor.BLACK if c else BottleColor.NONE
+        self.bottle_area = int(c["area"]) if c else 0
+        self.bottle_bottom_row = c["y"] + c["h"] if c else 0
+        self.bottle_cx = c["cx"] if c else FRAME_WIDTH // 2
+        self.bottle_theta = pixel_bearing(self.bottle_cx)
+        self.cx, self.cy, self.theta = (
+            self.bottle_cx,
+            self.bottle_bottom_row,
+            self.bottle_theta,
+        )
+        if c:
+            color = (255, 0, 255) if result["confirmed"] else (0, 180, 255)
+            cv2.rectangle(
+                image, (c["x"], c["y"]), (c["x"] + c["w"], c["y"] + c["h"]), color, 1
+            )
+        top, bottom = result["roi"]
+        cv2.rectangle(image, (0, top), (319, bottom - 1), (255, 255, 0), 1)
+        with self._bottle_lock:
+            # A read session may have changed while this frame was processed.
+            request = self._sumo_alignment_request
+            if request and request[0] == session:
+                self._sumo_alignment_observation = observation
 
     def get_bottle_stamped(self):
         with self._bottle_lock:
@@ -886,6 +1107,15 @@ class Video(object):
         self._closed = True
         self._vision_sessions.start('closed')
         self._worker_stop.set()
+        recording = self._sumo_recording
+        if recording is not None:
+            try:
+                recording.close(timeout=2.0)
+            except Exception as error:
+                print('SUMO_ALIGN RECORD close error: %s' % error, file=sys.stderr, flush=True)
+            status = recording.status()
+            print('SUMO_ALIGN RECORD finished=%s frames=%s dropped=%s error=%s' % (
+                status['finished'], status['written'], status['dropped'], status['error']), flush=True)
         worker = getattr(self, '_detection_thread', None)
         if worker is not None:
             worker.join(timeout=2.0)

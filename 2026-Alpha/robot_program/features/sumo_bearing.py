@@ -1,4 +1,6 @@
-"""Course bearings for ET sumo only: up=0, right=90, clockwise positive."""
+"""Course bearings for ET sumo only: up=0, right=90, clockwise positive.
+
+上0度・時計回り正の相撲方位。生ジャイロと床面方位の対応、角度差の計算を一か所にまとめる。"""
 
 import math
 from dataclasses import dataclass
@@ -15,7 +17,9 @@ def normalize_bearing(value):
 
 def bearing_delta(target, current):
     # 旋回量は方位角と区別し、最短方向の符号付き角度差として扱う。
-    return (normalize_bearing(target) - normalize_bearing(current) + 180.0) % 360.0 - 180.0
+    return (
+        normalize_bearing(target) - normalize_bearing(current) + 180.0
+    ) % 360.0 - 180.0
 
 
 @dataclass
@@ -32,9 +36,13 @@ class SumoBearingReference:
 
     def bearing(self, gyro):
         if self.reset_bearing_deg is None or self.reset_gyro_deg is None:
-            raise RuntimeError("Sumo bearing reference is not registered after device reset")
+            raise RuntimeError(
+                "Sumo bearing reference is not registered after device reset"
+            )
         # 既存SPIKE制御と同じ取付前提：生ジャイロの増加は物理的な時計回り。
-        return normalize_bearing(self.reset_bearing_deg + float(gyro) - self.reset_gyro_deg)
+        return normalize_bearing(
+            self.reset_bearing_deg + float(gyro) - self.reset_gyro_deg
+        )
 
     def legacy_target(self, bearing, gyro, course):
         if course not in (-1, 1):
@@ -51,18 +59,49 @@ def choose_search_bearing(current, offset=50.0, garage=180.0, prefer_clockwise=F
     plus_gap = abs(bearing_delta(plus, garage))
     minus_gap = abs(bearing_delta(minus, garage))
     if math.isclose(plus_gap, minus_gap, abs_tol=1e-9):
-        return plus if prefer_clockwise else minus
-    return plus if plus_gap > minus_gap else minus
+        if prefer_clockwise:
+            return plus
+        else:
+            return minus
+    if plus_gap > minus_gap:
+        return plus
+    else:
+        return minus
 
 
 def initial_sumo_bearing(mission, override=None, course=1):
     # 単体だけ配置方向を指定できる。通し走行は全体スタートの下向き180度を登録する。
-    if override is not None and mission not in ('sumo', 'sumo-garage'):
-        raise ValueError('--sumo-initial-bearing requires sumo or sumo-garage')
+    if override is not None and mission not in (
+        "sumo",
+        "sumo-garage",
+        "sumo-align",
+        "sumo-catch-test",
+        "sumo-sensor-test",
+        "sumo-turn-test",
+        "sumo-push-route-test",
+        "sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit",
+    ):
+        raise ValueError("--sumo-initial-bearing requires a sumo mission")
     if course not in (-1, 1):
-        raise ValueError('Course must be +1 or -1')
-    if mission == 'rally-sumo':
+        raise ValueError("Course must be +1 or -1")
+    if mission == "rally-sumo":
         # Full-start bearing 180 + physical rotation to rally entrance (-90 course degrees).
         return normalize_bearing(180.0 + course * 90.0)
-    return normalize_bearing(override if override is not None else
-                             (0.0 if mission in ('sumo', 'sumo-garage') else 180.0))
+    return normalize_bearing(
+        override
+        if override is not None
+        else (
+            0.0
+            if mission
+            in (
+                "sumo",
+                "sumo-garage",
+                "sumo-align",
+                "sumo-catch-test",
+                "sumo-sensor-test",
+                "sumo-turn-test",
+                "sumo-push-route-test",
+            )
+            else 180.0
+        )
+    )
