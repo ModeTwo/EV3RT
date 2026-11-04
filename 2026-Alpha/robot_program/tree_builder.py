@@ -18,6 +18,29 @@ from .gyro_scale import EnableGyroScale
 def build_mission_children(context, config):
     # この関数は統合担当者だけが変更し、各機能担当者はfeatures配下だけを変更する。
     from .config import INTEGRATION_MISSIONS
+    if config.mission_mode in ("sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit"):
+        from .features.sumo_stage_test import build_sumo_stage_test
+        return [EnableGyroScale(), build_sumo_stage_test(context, config)]
+    if config.mission_mode == "sumo-push-route-test":
+        from .features.sumo_push_tree import build_sumo_push_tree
+
+        return [EnableGyroScale(), build_sumo_push_tree(context, config)]
+    if config.mission_mode == "sumo-sensor-test":
+        from .diagnostics.sumo_sensor_test import build_sumo_sensor_test
+
+        return [EnableGyroScale(), build_sumo_sensor_test(context, config)]
+    if config.mission_mode == "sumo-turn-test":
+        from .diagnostics.sumo_turn_test import build_sumo_turn_test
+
+        return [EnableGyroScale(), build_sumo_turn_test(context, config)]
+    if config.mission_mode == "sumo-catch-test":
+        from .features.catch_sumo_bottle_test import build_sumo_catch_test
+
+        return [EnableGyroScale(), build_sumo_catch_test(context, config)]
+    if config.mission_mode == "sumo-align":
+        from .features.align_sumo_bottle import build_align_sumo_bottle
+
+        return [EnableGyroScale(), build_align_sumo_bottle(context, config)]
     if config.mission_mode in INTEGRATION_MISSIONS:
         from .integration_runs import build_integration_children
         # ラップゲートを通らない試験ミッションは、先頭からジャイロの倍率補正を有効にする。

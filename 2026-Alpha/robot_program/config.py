@@ -4,6 +4,12 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 from .sumo_types import SumoSettings
+from .features.sumo_align_settings import SumoAlignSettings
+from .features.sumo_stage_test_settings import SumoStageTestSettings
+from .features.sumo_catch_settings import SumoCatchSettings
+from .features.sumo_relative_push_settings import RelativePushSettings
+from .diagnostics.sumo_sensor_settings import SumoSensorSettings
+from .diagnostics.sumo_turn_test_settings import SumoTurnTestSettings
 from .integration_settings import IntegrationSettings
 
 
@@ -93,7 +99,15 @@ class RaceConfig:
     strategy_host: str = "0.0.0.0"
     strategy_port: int = 50000
     strategy_timeout_s: float = 20.0
+    sumo_stage_test: SumoStageTestSettings = SumoStageTestSettings()
+    sumo_push_calibration: Optional[str] = None
+    sumo_push_execute: bool = False
+    sumo_relative_push: RelativePushSettings = RelativePushSettings()
     sumo: SumoSettings = SumoSettings()
+    sumo_align: SumoAlignSettings = SumoAlignSettings()
+    sumo_catch: SumoCatchSettings = SumoCatchSettings()
+    sumo_sensor: SumoSensorSettings = SumoSensorSettings()
+    sumo_turn_test: SumoTurnTestSettings = SumoTurnTestSettings()
     integration: IntegrationSettings = IntegrationSettings()
 
 
@@ -113,6 +127,15 @@ MISSION_CHOICES = (
     'rally',
     'rally-drive',
     'sumo',
+    'sumo-align',
+    'sumo-push-route-test',
+    'sumo-stage-all',
+    'sumo-stage-entry',
+    'sumo-stage-push',
+    'sumo-stage-exit',
+    'sumo-catch-test',
+    'sumo-sensor-test',
+    'sumo-turn-test',
     'finish',
     'full',
     'hint2',
@@ -139,6 +162,9 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         enable_et_sumo=False,
         enable_finish=False,
     )
+    if mission in ('sumo-stage-all', 'sumo-stage-entry', 'sumo-stage-push', 'sumo-stage-exit', 'sumo-align','sumo-catch-test','sumo-sensor-test','sumo-turn-test','sumo-push-route-test'):
+        disabled['enable_et_sumo'] = True
+        return replace(config, mission_mode=mission, **disabled)
     if mission in INTEGRATION_MISSIONS:
         if mission in ('bottle-rally', 'rally-sumo'):
             disabled['enable_et_rally'] = True
