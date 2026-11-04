@@ -18,6 +18,9 @@ from .gyro_scale import EnableGyroScale
 def build_mission_children(context, config):
     # この関数は統合担当者だけが変更し、各機能担当者はfeatures配下だけを変更する。
     from .config import INTEGRATION_MISSIONS
+    if config.mission_mode in ("sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit"):
+        from .features.sumo_stage_test import build_sumo_stage_test
+        return [EnableGyroScale(), build_sumo_stage_test(context, config)]
     if config.mission_mode == "sumo-push-route-test":
         from .features.sumo_push_tree import build_sumo_push_tree
 

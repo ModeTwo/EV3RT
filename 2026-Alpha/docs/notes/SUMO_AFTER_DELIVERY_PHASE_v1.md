@@ -13,3 +13,19 @@
 ②を構築する `config` は、`mission_mode` を単体の `sumo-push-route-test` 以外とし、`sumo_push_calibration=None`、`sumo_push_execute=True`、`sumo_relative_push.push_distance_mm` に明示値を設定する。未指定ならツリー構築時にエラーとする。押し出し距離に仮値を自動設定しない。機器初期化、gyro倍率、ResetDevice後の相撲方位登録、タッチ開始、制御周期は既存のalpha・全体ツリーが所有する。全体開始基準の初回直進目標はLEFT -90°、RIGHT +90°の実装だが、物理コースとの整合は実機確認が必要。
 
 元の `build_et_sumo_phase` はラリー出口から相撲へ進む従来経路であり、この新phaseとは別物。単体 `sumo-push-route-test` は従来どおり使える。①③の配置・経路・左右差、②③の受渡し精度、結合走行は未検証。
+
+## ①②③の単体・連続試験（全体ミッションへの接続は保留）
+
+`robot_program/features/sumo_stage_test_settings.py` の `SumoStageTestSettings` に試験条件を記入する。`push_distance_mm` は捕捉後に追加で押す距離で、初期値None。②単体と①→②→③の試験は実測値を指定しないと起動しない。`approach_distance_mm`・出力・捕捉上限・押し出し出力・旋回出力も同じ設定にまとめる。①③は担当者が経路と開始・終了位置の数値を対応するfeaturesへ実装する。
+
+タッチ開始時の車体の床面方位はleft=270°、right=90°、ジャイロをリセットした向きからの②初回直進目標差は両コース0°が初期値。いずれも同設定ファイルの `initial_bearing_*_deg` と `approach_offset_*_deg` で変更できる。テスト時には開始位置・向きを各工程の入口に合わせて配置する。①→②→③試験では①の到達向きもこの初回目標に合う必要がある。通しの全体スタート基準とは異なるため、結合時に整合確認が必要。
+
+```bash
+cd /home/pi/EV3RT/2026-Alpha
+pypy3 alpha.py left --mission sumo-stage-entry --no-preview
+pypy3 alpha.py left --mission sumo-stage-push --no-preview
+pypy3 alpha.py left --mission sumo-stage-exit --no-preview
+pypy3 alpha.py left --mission sumo-stage-all --no-preview
+```
+
+leftはrightに変更可能。各コマンドの`--no-preview`を`--check-tree`に変えるとツリーを表示する。押し距離未設定では②を含むツリーは構築されない。①③は未実装ならStopNow後にFAILUREで停止し、次へ進まない。configの距離・出力はこの4モードだけに適用し、既存のsumo-push-route-testや本来の全体ミッションの設定は変わらない。現在の変更はPCの模擬検証のみで、Pi上での実行や実走は別途確認が必要。

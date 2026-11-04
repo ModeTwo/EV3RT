@@ -79,6 +79,7 @@ def initial_sumo_bearing(mission, override=None, course=1):
         "sumo-sensor-test",
         "sumo-turn-test",
         "sumo-push-route-test",
+        "sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit",
     ):
         raise ValueError("--sumo-initial-bearing requires a sumo mission")
     if course not in (-1, 1):

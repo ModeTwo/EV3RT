@@ -2653,6 +2653,11 @@ def _run_main(argv, startup_cleanup):
 
         parser.error('--delivery-initial-heading is available only with --mission to-bottle')
 
+    if args.mission in ("sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit") and args.sumo_initial_bearing is None:
+        test_settings = config_for_mission(args.mission).sumo_stage_test
+        args.sumo_initial_bearing = (test_settings.initial_bearing_left_deg
+                                     if args.course == "left"
+                                     else test_settings.initial_bearing_right_deg)
     try:
 
         sumo_initial_bearing = initial_sumo_bearing(
@@ -2677,6 +2682,12 @@ def _run_main(argv, startup_cleanup):
         sumo_push_calibration=args.sumo_push_calibration,
         sumo_push_execute=args.sumo_push_execute,
     )
+    if args.mission in ("sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit"):
+        from robot_program.features.sumo_stage_test import configured_sumo_test
+        try:
+            mission_config = configured_sumo_test(mission_config)
+        except ValueError as error:
+            parser.error(str(error))
     if args.mission == "sumo-push-route-test" and not args.sumo_push_calibration:
         mission_config = dataclasses.replace(
             mission_config,

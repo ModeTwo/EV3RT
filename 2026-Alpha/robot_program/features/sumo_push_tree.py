@@ -116,8 +116,15 @@ def build_sumo_push_tree(context, config):
     engine = build_sumo_push_route(context, config)
     # 単体は開始向きを0°、結合で利用するときはスタート基準で
     # LEFT=-90° / RIGHT=+90°。相撲の床面方位登録とは別の値。
-    engine.approach_offset_from_reset_deg = (
-        0.0 if config.mission_mode == "sumo-push-route-test"
-        else -90.0 * runtime.course
-    )
+    if config.mission_mode in ("sumo-stage-all", "sumo-stage-push"):
+        test = config.sumo_stage_test
+        engine.approach_offset_from_reset_deg = (
+            test.approach_offset_left_deg if runtime.course == 1
+            else test.approach_offset_right_deg
+        )
+    else:
+        engine.approach_offset_from_reset_deg = (
+            0.0 if config.mission_mode == "sumo-push-route-test"
+            else -90.0 * runtime.course
+        )
     return SumoPushSequence(engine)
