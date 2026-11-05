@@ -320,23 +320,14 @@ class LogLapBoundary(Behaviour):
 
 
 class DeferredStrategySequence(Sequence):
-    """Build motor behaviours only when this subtree starts running."""
+    """Build motor behaviours only when this subtree starts running.
+
+    2026-11-05: steps_from_strategy に渡す追加の設定(旋回・円弧・直進など)は、個別の引数に並べず
+    strategy_kwargs にまとめて受け取る(値が None のものは渡さない = steps_from_strategy の既定値)。
+    以前は設定を1つ増やすたびに、ここと呼び出し側の何か所も直す作りだった。"""
 
     def __init__(self, name, loader, initial_heading_deg=0.0, fallback_loader=None,
-                 turn_method='spin_encoder', compensation_enabled=False,
-                 turn_fine_tolerance_deg=None, turn_decel_deg=None,
-                 turn_backlash_preload_deg=None, turn_fine_trim=None,
-                 turn_main_power=None, turn_lag_compensation_deg=None,
-                 turn_adaptive_lag_compensation=None, turn_left_target_scale=None,
-                 turn_phase1_scale=None, turn_pre_stop=None, turn_forward_compensation=None,
-                 start_check_mm=None, straight_pause_sec=None, straight_pause_min_mm=None,
-                 gyro_still_sec=None, gyro_still_sweep=None, turn_phase1_model=None,
-                 straight_pause_labels=None, turn_wheel_sync_gain=None,
-                 turn_sync_decel=None, move_short_lead_mm=None, path_lead_sec=None, path_arc_pid_i=None,
-                 path_arc_speed_scale=None, path_lat_gain=None, path_lat_max_deg=None,
-                 path_arc_pid_p=None, path_ramp_mm=None, path_inner_min_power=None,
-                 path_ramp_sec=None, path_power=None, path_wheel_log_ticks=None, path_speed_control=None,
-                 path_ff_scale=None, path_floor_drift=None, path_stop_lead_mm=None):
+                 turn_method='spin_encoder', compensation_enabled=False, **strategy_kwargs):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -344,44 +335,7 @@ class DeferredStrategySequence(Sequence):
         self._initial_heading_deg = initial_heading_deg
         self._turn_method = turn_method
         self._compensation_enabled = compensation_enabled
-        self._turn_fine_tolerance_deg = turn_fine_tolerance_deg
-        self._turn_decel_deg = turn_decel_deg
-        self._turn_backlash_preload_deg = turn_backlash_preload_deg
-        self._turn_fine_trim = turn_fine_trim
-        self._turn_main_power = turn_main_power
-        self._turn_lag_compensation_deg = turn_lag_compensation_deg
-        self._turn_adaptive_lag_compensation = turn_adaptive_lag_compensation
-        self._turn_left_target_scale = turn_left_target_scale
-        self._turn_phase1_scale = turn_phase1_scale
-        self._turn_pre_stop = turn_pre_stop
-        self._turn_forward_compensation = turn_forward_compensation
-        self._start_check_mm = start_check_mm
-        self._optional_kwargs = {
-            "straight_pause_sec": straight_pause_sec,
-            "straight_pause_min_mm": straight_pause_min_mm,
-            "gyro_still_sec": gyro_still_sec,
-            "gyro_still_sweep": gyro_still_sweep,
-            "turn_phase1_model": turn_phase1_model,
-            "straight_pause_labels": straight_pause_labels,
-            "turn_wheel_sync_gain": turn_wheel_sync_gain,
-            "turn_sync_decel": turn_sync_decel,
-            "move_short_lead_mm": move_short_lead_mm,
-            "path_lead_sec": path_lead_sec,
-            "path_arc_pid_i": path_arc_pid_i,
-            "path_arc_speed_scale": path_arc_speed_scale,
-            "path_lat_gain": path_lat_gain,
-            "path_lat_max_deg": path_lat_max_deg,
-            "path_arc_pid_p": path_arc_pid_p,
-            "path_ramp_mm": path_ramp_mm,
-            "path_inner_min_power": path_inner_min_power,
-            "path_ramp_sec": path_ramp_sec,
-            "path_power": path_power,
-            "path_wheel_log_ticks": path_wheel_log_ticks,
-            "path_speed_control": path_speed_control,
-            "path_ff_scale": path_ff_scale,
-            "path_floor_drift": path_floor_drift,
-            "path_stop_lead_mm": path_stop_lead_mm,
-        }
+        self._strategy_kwargs = {k: v for k, v in strategy_kwargs.items() if v is not None}
         self._loaded = False
 
     def _load_children(self):
@@ -390,34 +344,7 @@ class DeferredStrategySequence(Sequence):
         # 食い違い「unknown / invalid state」になる。
         if self._loaded:
             return
-        extra_kwargs = {}
-        if self._turn_fine_tolerance_deg is not None:
-            extra_kwargs["turn_fine_tolerance_deg"] = self._turn_fine_tolerance_deg
-        if self._turn_decel_deg is not None:
-            extra_kwargs["turn_decel_deg"] = self._turn_decel_deg
-        if self._turn_backlash_preload_deg is not None:
-            extra_kwargs["turn_backlash_preload_deg"] = self._turn_backlash_preload_deg
-        if self._turn_fine_trim is not None:
-            extra_kwargs["turn_fine_trim"] = self._turn_fine_trim
-        if self._turn_main_power is not None:
-            extra_kwargs["turn_main_power"] = self._turn_main_power
-        if self._turn_lag_compensation_deg is not None:
-            extra_kwargs["turn_lag_compensation_deg"] = self._turn_lag_compensation_deg
-        if self._turn_adaptive_lag_compensation is not None:
-            extra_kwargs["turn_adaptive_lag_compensation"] = self._turn_adaptive_lag_compensation
-        if self._turn_left_target_scale is not None:
-            extra_kwargs["turn_left_target_scale"] = self._turn_left_target_scale
-        if self._turn_phase1_scale is not None:
-            extra_kwargs["turn_phase1_scale"] = self._turn_phase1_scale
-        if self._turn_pre_stop is not None:
-            extra_kwargs["turn_pre_stop"] = self._turn_pre_stop
-        if self._turn_forward_compensation is not None:
-            extra_kwargs["turn_forward_compensation"] = self._turn_forward_compensation
-        if self._start_check_mm is not None:
-            extra_kwargs["start_check_mm"] = self._start_check_mm
-        for key, value in self._optional_kwargs.items():
-            if value is not None:
-                extra_kwargs[key] = value
+        extra_kwargs = dict(self._strategy_kwargs)
         try:
             nodes = steps_from_strategy(
                 self._loader(), initial_heading_deg=self._initial_heading_deg,
@@ -444,6 +371,52 @@ class DeferredStrategySequence(Sequence):
         yield from super().tick()
 
 
+# 2026-11-05: 設定(config の項目名) → steps_from_strategy の引数名。設定を1つ増やすときは、ここに1行足す。
+_STRATEGY_KWARGS_FROM_CONFIG = (
+    ("turn_fine_tolerance_deg", "et_rally_turn_fine_tolerance_deg"),
+    ("turn_decel_deg", "et_rally_turn_decel_deg"),
+    ("turn_backlash_preload_deg", "et_rally_turn_backlash_preload_deg"),
+    ("turn_fine_trim", "et_rally_turn_fine_trim_enabled"),
+    ("turn_main_power", "et_rally_turn_main_power"),
+    ("turn_lag_compensation_deg", "et_rally_turn_lag_compensation_deg"),
+    ("turn_adaptive_lag_compensation", "et_rally_turn_adaptive_lag_compensation"),
+    ("turn_left_target_scale", "et_rally_turn_left_target_scale"),
+    ("turn_phase1_scale", "et_rally_turn_phase1_scale"),
+    ("turn_pre_stop", "et_rally_turn_pre_stop"),
+    ("turn_forward_compensation", "et_rally_turn_forward_compensation"),
+    ("start_check_mm", "et_rally_start_check_mm"),
+    ("straight_pause_sec", "et_rally_straight_pause_sec"),
+    ("straight_pause_min_mm", "et_rally_straight_pause_min_mm"),
+    ("gyro_still_sec", "et_rally_gyro_still_sec"),
+    ("gyro_still_sweep", "et_rally_gyro_still_sweep"),
+    ("turn_phase1_model", "et_rally_turn_phase1_model"),
+    ("turn_wheel_sync_gain", "et_rally_turn_wheel_sync_gain"),
+    ("turn_sync_decel", "et_rally_turn_sync_decel"),
+    ("straight_pause_labels", "et_rally_straight_pause_labels"),
+    ("move_short_lead_mm", "et_rally_move_short_lead_mm"),
+    ("path_lead_sec", "et_rally_path_lead_sec"),
+    ("path_arc_pid_i", "et_rally_path_arc_pid_i"),
+    ("path_arc_speed_scale", "et_rally_path_arc_speed_scale"),
+    ("path_lat_gain", "et_rally_path_lat_gain"),
+    ("path_lat_max_deg", "et_rally_path_lat_max_deg"),
+    ("path_arc_pid_p", "et_rally_path_arc_pid_p"),
+    ("path_ramp_mm", "et_rally_path_ramp_mm"),
+    ("path_inner_min_power", "et_rally_path_inner_min_power"),
+    ("path_ramp_sec", "et_rally_path_ramp_sec"),
+    ("path_power", "et_rally_path_power"),
+    ("path_wheel_log_ticks", "et_rally_path_wheel_log_ticks"),
+    ("path_speed_control", "et_rally_path_speed_control"),
+    ("path_ff_scale", "et_rally_path_ff_scale"),
+    ("path_floor_drift", "et_rally_path_floor_drift"),
+    ("path_stop_lead_mm", "et_rally_path_stop_lead"),
+)
+
+
+def strategy_kwargs_from_config(config):
+    """config から steps_from_strategy への追加の引数(設定されていない項目は None)。"""
+    return {arg: getattr(config, field, None) for arg, field in _STRATEGY_KWARGS_FROM_CONFIG}
+
+
 def build_execute_strategy(context, config, lap_number=None):
     # No.12は、PCが作成した全周回分のSEQを一度だけ実行する。
     source = config.et_rally_strategy_source
@@ -463,42 +436,7 @@ def build_execute_strategy(context, config, lap_number=None):
                 if getattr(config, "et_rally_fallback_enabled", False) else None),
             turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
             compensation_enabled=getattr(config, "et_rally_compensation_enabled", False),
-            turn_fine_tolerance_deg=getattr(config, "et_rally_turn_fine_tolerance_deg", None),
-            turn_decel_deg=getattr(config, "et_rally_turn_decel_deg", None),
-            turn_backlash_preload_deg=getattr(config, "et_rally_turn_backlash_preload_deg", None),
-            turn_fine_trim=getattr(config, "et_rally_turn_fine_trim_enabled", None),
-            turn_main_power=getattr(config, "et_rally_turn_main_power", None),
-            turn_lag_compensation_deg=getattr(config, "et_rally_turn_lag_compensation_deg", None),
-            turn_adaptive_lag_compensation=getattr(config, "et_rally_turn_adaptive_lag_compensation", None),
-            turn_left_target_scale=getattr(config, "et_rally_turn_left_target_scale", None),
-            turn_phase1_scale=getattr(config, "et_rally_turn_phase1_scale", None),
-            turn_pre_stop=getattr(config, "et_rally_turn_pre_stop", None),
-            turn_forward_compensation=getattr(config, "et_rally_turn_forward_compensation", None),
-            start_check_mm=getattr(config, "et_rally_start_check_mm", None),
-            straight_pause_sec=getattr(config, "et_rally_straight_pause_sec", None),
-            straight_pause_min_mm=getattr(config, "et_rally_straight_pause_min_mm", None),
-            gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
-            gyro_still_sweep=getattr(config, "et_rally_gyro_still_sweep", None),
-            turn_phase1_model=getattr(config, "et_rally_turn_phase1_model", None),
-            turn_wheel_sync_gain=getattr(config, "et_rally_turn_wheel_sync_gain", None),
-            turn_sync_decel=getattr(config, "et_rally_turn_sync_decel", None),
-            straight_pause_labels=getattr(config, "et_rally_straight_pause_labels", None),
-            move_short_lead_mm=getattr(config, "et_rally_move_short_lead_mm", None),
-            path_lead_sec=getattr(config, "et_rally_path_lead_sec", None),
-            path_arc_pid_i=getattr(config, "et_rally_path_arc_pid_i", None),
-            path_arc_speed_scale=getattr(config, "et_rally_path_arc_speed_scale", None),
-            path_lat_gain=getattr(config, "et_rally_path_lat_gain", None),
-            path_lat_max_deg=getattr(config, "et_rally_path_lat_max_deg", None),
-            path_arc_pid_p=getattr(config, "et_rally_path_arc_pid_p", None),
-            path_ramp_mm=getattr(config, "et_rally_path_ramp_mm", None),
-            path_inner_min_power=getattr(config, "et_rally_path_inner_min_power", None),
-            path_ramp_sec=getattr(config, "et_rally_path_ramp_sec", None),
-            path_power=getattr(config, "et_rally_path_power", None),
-            path_wheel_log_ticks=getattr(config, "et_rally_path_wheel_log_ticks", None),
-            path_speed_control=getattr(config, "et_rally_path_speed_control", None),
-            path_ff_scale=getattr(config, "et_rally_path_ff_scale", None),
-            path_floor_drift=getattr(config, "et_rally_path_floor_drift", None),
-            path_stop_lead_mm=getattr(config, "et_rally_path_stop_lead", None),
+            **strategy_kwargs_from_config(config),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -509,42 +447,7 @@ def build_execute_strategy(context, config, lap_number=None):
                              if getattr(config, "et_rally_fallback_enabled", False) else None),
             turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
             compensation_enabled=getattr(config, "et_rally_compensation_enabled", False),
-            turn_fine_tolerance_deg=getattr(config, "et_rally_turn_fine_tolerance_deg", None),
-            turn_decel_deg=getattr(config, "et_rally_turn_decel_deg", None),
-            turn_backlash_preload_deg=getattr(config, "et_rally_turn_backlash_preload_deg", None),
-            turn_fine_trim=getattr(config, "et_rally_turn_fine_trim_enabled", None),
-            turn_main_power=getattr(config, "et_rally_turn_main_power", None),
-            turn_lag_compensation_deg=getattr(config, "et_rally_turn_lag_compensation_deg", None),
-            turn_adaptive_lag_compensation=getattr(config, "et_rally_turn_adaptive_lag_compensation", None),
-            turn_left_target_scale=getattr(config, "et_rally_turn_left_target_scale", None),
-            turn_phase1_scale=getattr(config, "et_rally_turn_phase1_scale", None),
-            turn_pre_stop=getattr(config, "et_rally_turn_pre_stop", None),
-            turn_forward_compensation=getattr(config, "et_rally_turn_forward_compensation", None),
-            start_check_mm=getattr(config, "et_rally_start_check_mm", None),
-            straight_pause_sec=getattr(config, "et_rally_straight_pause_sec", None),
-            straight_pause_min_mm=getattr(config, "et_rally_straight_pause_min_mm", None),
-            gyro_still_sec=getattr(config, "et_rally_gyro_still_sec", None),
-            gyro_still_sweep=getattr(config, "et_rally_gyro_still_sweep", None),
-            turn_phase1_model=getattr(config, "et_rally_turn_phase1_model", None),
-            turn_wheel_sync_gain=getattr(config, "et_rally_turn_wheel_sync_gain", None),
-            turn_sync_decel=getattr(config, "et_rally_turn_sync_decel", None),
-            straight_pause_labels=getattr(config, "et_rally_straight_pause_labels", None),
-            move_short_lead_mm=getattr(config, "et_rally_move_short_lead_mm", None),
-            path_lead_sec=getattr(config, "et_rally_path_lead_sec", None),
-            path_arc_pid_i=getattr(config, "et_rally_path_arc_pid_i", None),
-            path_arc_speed_scale=getattr(config, "et_rally_path_arc_speed_scale", None),
-            path_lat_gain=getattr(config, "et_rally_path_lat_gain", None),
-            path_lat_max_deg=getattr(config, "et_rally_path_lat_max_deg", None),
-            path_arc_pid_p=getattr(config, "et_rally_path_arc_pid_p", None),
-            path_ramp_mm=getattr(config, "et_rally_path_ramp_mm", None),
-            path_inner_min_power=getattr(config, "et_rally_path_inner_min_power", None),
-            path_ramp_sec=getattr(config, "et_rally_path_ramp_sec", None),
-            path_power=getattr(config, "et_rally_path_power", None),
-            path_wheel_log_ticks=getattr(config, "et_rally_path_wheel_log_ticks", None),
-            path_speed_control=getattr(config, "et_rally_path_speed_control", None),
-            path_ff_scale=getattr(config, "et_rally_path_ff_scale", None),
-            path_floor_drift=getattr(config, "et_rally_path_floor_drift", None),
-            path_stop_lead_mm=getattr(config, "et_rally_path_stop_lead", None),
+            **strategy_kwargs_from_config(config),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
