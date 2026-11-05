@@ -241,6 +241,71 @@ class RestoreEtRallyHeading(Behaviour):
         return Status.SUCCESS
 
 
+class EtRallyPostStopGyroMeasure(Behaviour):
+    """2026-11-05: ETラリーの最後に止まったあと、measure_sec秒ブレーキで止まったまま、z軸の回転の速さと
+    向き(heading)の変化を記録する。測るだけで補正はしない。
+    同じ設定でもログに出ない位置のずれが回ごとに2〜3cm違い、走る前の測定(angv_z_mean)とは合わなかったため、
+    走っている間のくせが走る前と違っていないかを、止まった直後から見る。書き換えたハブはブレーキ中に
+    くせを測り直すので、0.5秒ごとの平均・止まっている判定・向きの変化を並べて、測り直しの前後を分けて見る。"""
+
+    WINDOW_SEC = 0.5
+
+    def __init__(self, name, measure_sec):
+        super().__init__(name)
+        self.measure_sec = measure_sec
+        self.started = False
+
+    def update(self):
+        now = time.monotonic()
+        if not self.started:
+            self.started = True
+            for motor in (runtime.right_motor, runtime.left_motor):
+                motor.set_power(0)
+                motor.set_brake(True)
+            self.start_time = now
+            self.start_heading = runtime.gyro_sensor.get_angle()
+            self.windows = []
+            self._new_window(now)
+        if now - self.window["t0"] >= self.WINDOW_SEC:
+            self._close_window(now)
+            self._new_window(now)
+        if runtime.hub is not None:
+            try:
+                self.window["sum"] += float(runtime.hub.hub_imu_get_angular_velocity()[2])
+                self.window["n"] += 1
+                if runtime.hub.hub_imu_is_stationary():
+                    self.window["still"] += 1
+            except Exception:
+                pass
+        if now - self.start_time < self.measure_sec:
+            return Status.RUNNING
+        self._close_window(now)
+        end_heading = runtime.gyro_sensor.get_angle()
+        total_n = sum(w["n"] for w in self.windows)
+        total_mean = sum(w["sum"] for w in self.windows) / total_n if total_n else 0.0
+        elapsed = now - self.start_time
+        self.logger.info(
+            "post-stop gyro: %.2fs heading %.3f -> %.3f (change %+.3f deg, %+.4f deg/s) angv_z_mean=%+.4f "
+            "imu_stationary=%d/%d" % (
+                elapsed, self.start_heading, end_heading, end_heading - self.start_heading,
+                (end_heading - self.start_heading) / elapsed if elapsed > 0 else 0.0, total_mean,
+                sum(w["still"] for w in self.windows), total_n))
+        self.logger.info("post-stop gyro windows(%.1fs: angv_z_mean/stationary/heading): %s" % (
+            self.WINDOW_SEC, " ".join("%+.3f/%d of %d/%.3f" % (
+                w["sum"] / w["n"] if w["n"] else 0.0, w["still"], w["n"], w["heading"]) for w in self.windows)))
+        return Status.SUCCESS
+
+    def _new_window(self, now):
+        self.window = dict(t0=now, sum=0.0, n=0, still=0, heading=0.0)
+
+    def _close_window(self, now):
+        self.window["heading"] = runtime.gyro_sensor.get_angle()
+        self.windows.append(self.window)
+
+    def terminate(self, new_status):
+        self.started = False
+
+
 class EtRallyArmUpWithDriftMeasure(Behaviour):
     """ETラリー開始時にアームを上げ、上げ切ったあとsettle_sec秒待って振動を収めてから、measure_sec秒
     止まったままz軸の回転の速さを平均して、ずれの速さを決める。車輪には走行中と同じくブレーキをかける

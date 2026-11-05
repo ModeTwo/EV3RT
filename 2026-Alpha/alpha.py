@@ -1417,6 +1417,9 @@ def _run_main(argv, startup_cleanup):
                         help=('For the modified hub firmware: after raising the arm and waiting for it to '
                               'settle, stand still with brakes this many seconds so the hub recalibrates '
                               'the gyro bias. Default (unset) = none.'))
+    parser.add_argument('--rally-gyro-post-measure-sec', type=float, default=None,
+                        help=('After the last ET rally segment stops, stand still with brakes this many seconds and '
+                              'log the gyro rate and heading change (measure only). Default (unset) = none.'))
     parser.add_argument(
         '--rally-move-carry-i',
         choices=['on', 'off'],
@@ -1746,6 +1749,13 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-gyro-hub-recal-sec must be between 1 and 30')
         mission_config = dataclasses.replace(
             mission_config, et_rally_gyro_hub_recal_sec=args.rally_gyro_hub_recal_sec)
+    if args.rally_gyro_post_measure_sec is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-gyro-post-measure-sec requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 1.0 <= args.rally_gyro_post_measure_sec <= 30.0:
+            parser.error('--rally-gyro-post-measure-sec must be between 1 and 30')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_gyro_post_measure_sec=args.rally_gyro_post_measure_sec)
     if args.rally_gyro_scale_neg is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-gyro-scale-neg requires --mission rally-drive, bottle-rally or rally-sumo')
