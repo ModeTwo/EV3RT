@@ -313,7 +313,7 @@ class EtRallyPostStopGyroMeasure(Behaviour):
         elapsed = now - self.start_time
         self.logger.info(
             "post-stop gyro: %.2fs heading %.3f -> %.3f (change %+.3f deg, %+.4f deg/s) angv_z_mean=%+.4f "
-            "imu_stationary=%d/%d %s(after 1s)" % (
+            "imu_stationary=%d/%d %s (after 1s)" % (
                 elapsed, self.start_heading, end_heading, end_heading - self.start_heading,
                 (end_heading - self.start_heading) / elapsed if elapsed > 0 else 0.0, total_mean,
                 sum(w["still"] for w in self.windows), total_n, _format_tilt(self.acc_sum, self.acc_n)))
