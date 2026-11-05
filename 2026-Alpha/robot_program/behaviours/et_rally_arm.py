@@ -103,5 +103,4 @@ def make_arm_up_down(name, direction, config):
         return ArmUpDownFull(name=name, direction=direction)
     power = getattr(config, "et_rally_arm_power", None)
     return EtRallyArmUpDown(name, direction, stop_ticks=stop_ticks,
-                            power=ArmUpDownFull.ARM_SHIFT_PWM if power is None else power,
-                            slow_deg=getattr(config, "et_rally_arm_slow_deg", None))
+                            power=ArmUpDownFull.ARM_SHIFT_PWM if power is None else power)

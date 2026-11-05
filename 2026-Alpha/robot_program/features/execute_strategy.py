@@ -378,12 +378,9 @@ _STRATEGY_KWARGS_FROM_CONFIG = (
     ("turn_backlash_preload_deg", "et_rally_turn_backlash_preload_deg"),
     ("turn_fine_trim", "et_rally_turn_fine_trim_enabled"),
     ("turn_main_power", "et_rally_turn_main_power"),
-    ("turn_lag_compensation_deg", "et_rally_turn_lag_compensation_deg"),
     ("turn_adaptive_lag_compensation", "et_rally_turn_adaptive_lag_compensation"),
     ("turn_left_target_scale", "et_rally_turn_left_target_scale"),
-    ("turn_phase1_scale", "et_rally_turn_phase1_scale"),
     ("turn_pre_stop", "et_rally_turn_pre_stop"),
-    ("turn_forward_compensation", "et_rally_turn_forward_compensation"),
     ("start_check_mm", "et_rally_start_check_mm"),
     ("straight_pause_sec", "et_rally_straight_pause_sec"),
     ("straight_pause_min_mm", "et_rally_straight_pause_min_mm"),
@@ -405,9 +402,7 @@ _STRATEGY_KWARGS_FROM_CONFIG = (
     ("path_ramp_sec", "et_rally_path_ramp_sec"),
     ("path_power", "et_rally_path_power"),
     ("path_wheel_log_ticks", "et_rally_path_wheel_log_ticks"),
-    ("path_speed_control", "et_rally_path_speed_control"),
     ("path_ff_scale", "et_rally_path_ff_scale"),
-    ("path_floor_drift", "et_rally_path_floor_drift"),
     ("path_stop_lead_mm", "et_rally_path_stop_lead"),
 )
 
@@ -624,12 +619,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         path_power=None,
                         # 2026-11-03: 区間の始めから何tick分、毎tickの出力と実際の車輪の回りをログに出すか(Noneなら0=出さない)。
                         path_wheel_log_ticks=None,
-                        # 2026-11-03: 0より大きければ、出力×この係数(度/秒)をハブの速度制御で指定する(Noneなら従来どおり出力)。
-                        path_speed_control=None,
                         # 2026-11-03: 円弧の左右の差(フィードフォワード)の倍率(Noneなら1.0)。
                         path_ff_scale=None,
-                        # 2026-11-05: 床で流れる量 (右, 前) mm/m を自分の位置に足す、このコースだけの暫定の補正(Noneなら足さない)。
-                        path_floor_drift=None,
                         # 2026-11-05: 円弧・直進の区間で止まるとき、計画の距離のこの距離(mm)手前で止め始める(Noneなら move_stop_lead_mm)。
                         # 今日までのログ54回で、止め始めてから惰性で進む距離は速さによらず長い直進で平均約17.5mm(16〜20)。
                         path_stop_lead_mm=None,
@@ -849,9 +840,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 inner_min_power=path_inner_min_power,
                 ramp_sec=0.0 if path_ramp_sec is None else path_ramp_sec,
                 wheel_log_ticks=0 if path_wheel_log_ticks is None else int(path_wheel_log_ticks),
-                speed_dps_per_power=0.0 if path_speed_control is None else path_speed_control,
                 ff_scale=1.0 if path_ff_scale is None else path_ff_scale,
-                floor_drift=path_floor_drift,
             ))
             if pause_after_move:
                 nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),

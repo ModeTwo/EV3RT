@@ -107,11 +107,6 @@ class RaceConfig:
     # DD-22較正用: spin_encoderのフェーズ1の駆動パワーを上書きする。片輪エンコーダ
     # テスト(power=50既定)と同じ出力で比較するために使う。Noneなら素の既定値(70)。
     et_rally_turn_main_power: Optional[int] = 50
-    # DD-22較正用: spin_encoderのフェーズ1で、先に目標へ到達して止まる側(その旋回で
-    # マイナス出力になる側)の目標値を、この分だけ低くする。まだ回っているもう片方の
-    # 反力で「止まった後も同じ方向へ引き込まれて動いてしまう」分(実測5〜9度)を
-    # 見越す補正。既定0.0=無効。
-    et_rally_turn_lag_compensation_deg: Optional[float] = None
     # DD-22較正用: Trueなら上の固定値の代わりに、実測の引き込まれ量から毎回
     # 更新していく推定値(指数移動平均)を使う。固定値では追従できない旋回ごとの
     # ばらつき・power依存を、実行中に自動で合わせ込む狙い。既定False。
@@ -121,9 +116,6 @@ class RaceConfig:
     # 定常的な左右差)分を補正する。lag_compensationとは別の、物理的な車輪特性による
     # 差で、どちらが先に止まるかとは無関係。既定1.0=無効。
     et_rally_turn_left_target_scale: Optional[float] = 1.009
-    # 2026-10-28: one_shotのphase1の目標エンコーダ角度に掛ける係数
-    # (headingが増える向きの旋回, 減る向きの旋回)。既定None=(1.0, 1.0)で無効。
-    et_rally_turn_phase1_scale: Optional[tuple] = None
     # 2026-10-31: one_shotのphase1を「実際の角度 = 係数×指令 + 一定の流れ」で計算する
     # ((増える向きの係数, 流れ), (減る向きの係数, 流れ))。指定時はphase1_scaleを使わない(lag補正はかける)。既定None=従来どおり。
     et_rally_turn_phase1_model: Optional[tuple] = ((0.961, 6.9), (0.913, 8.9))
@@ -135,8 +127,6 @@ class RaceConfig:
     et_rally_turn_sync_decel: Optional[tuple] = (40.0, 40)
     # 2026-10-28: one_shotで、旋回の前に車体が止まるまで待つ。既定None=False(待たない)。
     et_rally_turn_pre_stop: Optional[bool] = True
-    # 2026-10-29: one_shot旋回で車体が前へ出た量を、次の直進から差し引く。既定None=False。
-    et_rally_turn_forward_compensation: Optional[bool] = None
     # 2026-10-29: 経路の前に、スタートの向きへこの距離(mm)だけ前進→後退して、置いた向きを確かめる。既定None=しない。
     et_rally_start_check_mm: Optional[float] = None
     # 2026-10-29: 長い直進(et_rally_straight_pause_min_mm以上、既定400mm)の前後で、この秒数だけ止まる。既定None=止まらない。
@@ -197,20 +187,13 @@ class RaceConfig:
     et_rally_path_power: Optional[float] = None
     # 2026-11-03: 円弧・直進の区間の始めから何tick分、毎tickの出力と実際の車輪の回りをログに出すか(Noneなら出さない)。
     et_rally_path_wheel_log_ticks: Optional[float] = None
-    # 2026-11-03: 0より大きければ、円弧・直進の区間で出力×この係数(度/秒)をハブの速度制御で指定する(Noneなら従来どおり)。
-    et_rally_path_speed_control: Optional[float] = None
     # 2026-11-03: 円弧の左右の差(フィードフォワード)の倍率(Noneなら1.0)。円弧では実際の輪距が計算より大きく効くため。
     et_rally_path_ff_scale: Optional[float] = 1.2
-    # 2026-11-05: 床の傾き・凹凸で流れる量 (右, 前) mm/m(スタートの向きが前)。自分の位置に足して横のずれの直しで打ち消す、
-    # このコースだけの暫定の補正。Noneなら足さない。
-    et_rally_path_floor_drift: Optional[tuple] = None
     # 2026-11-05: 円弧・直進の区間で止まるとき、計画の距離の何mm手前で止め始めるか(Noneなら従来の16mm)。50mm未満は --rally-move-short-lead。
     et_rally_path_stop_lead: Optional[float] = None
     # 2026-11-03: アームの止め方(EtRallyArmUpDown)。動きの遅いtickがこの回数連続したら止める(Noneなら従来の ArmUpDownFull)と、押す出力(Noneなら35)。
     et_rally_arm_stop_ticks: Optional[float] = 3.0
     et_rally_arm_power: Optional[float] = 20.0
-    # 2026-11-03: 1tickの動きがこの度数未満なら遅いとみなす(Noneなら2)。
-    et_rally_arm_slow_deg: Optional[float] = None
     # 2026-11-03: Trueなら、アームをタッチの前(起動時の較正の最後)に上げ、タッチの後はジャイロの測り直しだけをして走り出す。
     et_rally_arm_up_before_touch: Optional[bool] = None
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する

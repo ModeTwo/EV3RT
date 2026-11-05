@@ -32,19 +32,10 @@
     使うときは、今の速さの見積もりを区間をまたいで引き継ぐ(区間の始めで0に戻ると幅が一瞬縮むため)。
   - wheel_log_ticks: 区間の始めからこのtick数だけ、毎tickの出力と実際の車輪の回り(エンコーダの度/tick)・向きのずれを
     ためて、区間の終わりに1行で出す(0なら出さない=従来どおり)。円弧の入り口で内側の車輪が実際にいつ遅くなるかを見るため。
-  - speed_dps_per_power: 0より大きければ、計算した左右の出力(同じ単位のまま)にこの係数を掛けた速さ(度/秒)を、
-    ハブの速度制御(pup_motor_set_speed)で指定する(0なら従来どおり出力をそのまま指定)。
-    11/03の車輪のログで、出力60〜100の速さがほぼ同じ(頭打ち)、出力0〜10でも引きずられて回る、と出力と速さが
-    比例しておらず、左右の差(フィードフォワード)とPIDの直しが思った量だけ効いていなかったため。
-    係数は直進の出力80で約14.5度/tick(=約725度/秒)から約9。
   - ff_scale: 円弧の左右の差(フィードフォワード)の倍率(1.0なら従来どおり 半輪距/半径)。
     11/03の車輪のログで、円弧の中の左右の実際の回りの比から逆算した輪距が約146〜158mm(実測の117mmより大きい。
     すべり・こすれのため)で、計算どおりの差では曲がり足りず、残りを向きのPIDが常に埋めていた
     (円弧の中の向きのずれの平均が約3°、入り口の遅れ・出力の急な変化の元)。
-  - floor_drift: このコースだけの暫定の補正(2026-11-05)。走った1mごとに、床の傾き・凹凸で実際の位置が
-    部屋に対して決まった向きへ (右mm, 前mm) 流れるとみなし(右・前はスタートの向き=向き0°が前)、自分の位置に足す。
-    ログに出ない位置のずれが1周(約3m)ごとに同じ向きへ約1cmたまり、ロボット側の誤差では説明できなかったため。
-    位置に足した分は横のずれとして lat_gain で戻す(進む向きの成分は、次に曲がった先で横のずれになって戻る)。
   - inner_min_power: 前進のとき、左右どちらの出力もこれより下げない(0なら逆回しをしない)。
     左右の差が足りない分は、全体の出力を下げて差を残す(曲がる量を優先)。
 """
@@ -80,8 +71,6 @@ _chain_pid = None
 # 次の区間の始め(計画上)から見た自分の位置 (前, 右) mm と、位置を積算した最後の距離・向き
 # (次の区間が動き出すのは1tick後なので、その間の進みを次の区間で積算するため)。
 _chain_lat = None
-# floor_drift で自分の位置に足した量の合計 (右, 前) mm(ログ用、走行の最初から)。
-_floor_drift_total = [0.0, 0.0]
 
 
 # 2026-11-05: 円弧・直進の区間の直進の向きのPIDのI(--rally-move-pid-i を付けないとき)。
@@ -105,21 +94,6 @@ def reset_chain():
     _chain_lat = None
 
 
-def _set_wheel_speed(motor, dps):
-    """ハブの速度制御で、車輪の速さ(度/秒)を指定する。モーターの向きの設定(反転)はハブ側で済んでいる。
-    机上の仮のモーターは et_set_speed を持つ。どちらも無ければ False(呼び出し側で出力の指定に戻す)。"""
-    fn = getattr(motor, "et_set_speed", None)
-    if fn is not None:
-        fn(dps)
-        return True
-    if not hasattr(motor, "setup_device"):
-        return False
-    import libraspike_art_python as lib
-    motor.setup_device()
-    lib.pup_motor_set_speed(motor.device, int(round(dps)))
-    return True
-
-
 def _heading():
     return (-1) * runtime.course * runtime.gyro_sensor.get_angle()
 
@@ -134,8 +108,7 @@ class EtRallyPathSegment(Behaviour):
                  next_profile=(), lead_sec: float = 0.0, arc_pid_i: float = 0.6,
                  arc_speed_scale: float = 1.0, lat_gain: float = 0.0, lat_max_deg: float = 8.0,
                  arc_pid_p=None, ramp_mm: float = 0.0, inner_min_power=None, ramp_sec: float = 0.0,
-                 wheel_log_ticks: int = 0, speed_dps_per_power: float = 0.0, ff_scale: float = 1.0,
-                 floor_drift=None) -> None:
+                 wheel_log_ticks: int = 0, ff_scale: float = 1.0) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -178,9 +151,7 @@ class EtRallyPathSegment(Behaviour):
         self.ramp_sec = max(0.0, float(ramp_sec))
         self.ramp_width = self.ramp_mm
         self.wheel_log_ticks = max(0, int(wheel_log_ticks))
-        self.speed_dps_per_power = max(0.0, float(speed_dps_per_power))
         self.ff_scale = float(ff_scale)
-        self.floor_drift = None if floor_drift is None else (float(floor_drift[0]) / 1000.0, float(floor_drift[1]) / 1000.0)
         self.inner_min_power = inner_min_power
         self.prev_shape = None
         self.running = False
@@ -333,12 +304,11 @@ class EtRallyPathSegment(Behaviour):
             end_front += now - getattr(self, "reached_dist", now)
         # along: 自分の位置で測った進み − 走った距離での進み(前後のずれのたまり。1tickの越えを含まない)。
         tag = " end_err=(%+.1f,%+.1f) along=%+.1f%s" % (end_front, end_right, getattr(self, "along_mm", 0.0), tag)
-        self.logger.info("%+06d %s.%s summary: dist=%d planned=%d end_heading=%.1f target=%.1f err_mean=%+.2f err_max=%.2f lat=%+.0fmm sat=%d loc=(%d,%d)%s%s%s" % (
+        self.logger.info("%+06d %s.%s summary: dist=%d planned=%d end_heading=%.1f target=%.1f err_mean=%+.2f err_max=%.2f lat=%+.0fmm sat=%d loc=(%d,%d)%s%s" % (
             now, self.__class__.__name__, self.kind, now - self.orig_dist, self.run_length_mm,
             current, self.end_heading, self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm,
             self.saturated_ticks,
-            runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(),
-            "" if self.floor_drift is None else " floor_drift_total=(%+.1f,%+.1f)" % tuple(_floor_drift_total), tag))
+            runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(), tag))
         if self.wheel_log:
             # 1tickごとに 指示した出力R/L:そのtickに実際に回った度R/L:向きのずれ
             self.logger.info("WHEELS %s: %s" % (self.kind, " ".join(
@@ -373,14 +343,6 @@ class EtRallyPathSegment(Behaviour):
         self.pos_prev_dist = now
         self.pos_x += step * math.cos(turned)
         self.pos_y += step * math.sin(turned)
-        if self.floor_drift is not None and step > 0.0:
-            # 部屋に固定の (右, 前) の流れを、この区間の座標(x=始めの進む向き、y=その右)に直して足す。
-            dr, df = step * self.floor_drift[0], step * self.floor_drift[1]
-            h0 = math.radians(self.start_heading)
-            self.pos_x += dr * math.sin(h0) + df * math.cos(h0)
-            self.pos_y += dr * math.cos(h0) - df * math.sin(h0)
-            _floor_drift_total[0] += dr
-            _floor_drift_total[1] += df
         u, self.lat_mm = self._lateral()
         # 2026-11-05: 区間の終わりを位置で決める案を机上シミュで試したが、走った距離で区切っても前後のずれはたまらず
         # (4周で along 平均-0.3mm・範囲-2.8〜+1.6mm)、効果がなかったため入れていない。実機で同じかを along で見る。
@@ -459,31 +421,12 @@ class EtRallyPathSegment(Behaviour):
                 turn = math.copysign(limit, turn)
         self.right_residual += base + runtime.course * turn
         self.left_residual += base - runtime.course * turn
-        if self.speed_dps_per_power > 0.0:
-            # 速度制御: 端数をためずに、そのままの値を速さにする(ハブが速さを保つので出力の丸めは要らない)。
-            right_power = base + runtime.course * turn
-            left_power = base - runtime.course * turn
-            self.right_residual = 0.0
-            self.left_residual = 0.0
-            k = self.speed_dps_per_power
-            if (_set_wheel_speed(runtime.right_motor, right_power * k)
-                    and _set_wheel_speed(runtime.left_motor, left_power * k)):
-                right_power = int(round(right_power))
-                left_power = int(round(left_power))
-            else:
-                self.logger.warning("speed control unavailable; falling back to power")
-                self.speed_dps_per_power = 0.0
-                right_power = int(round(right_power))
-                left_power = int(round(left_power))
-                runtime.right_motor.set_power(right_power)
-                runtime.left_motor.set_power(left_power)
-        else:
-            right_power = int(round(self.right_residual))
-            left_power = int(round(self.left_residual))
-            self.right_residual -= right_power
-            self.left_residual -= left_power
-            runtime.right_motor.set_power(right_power)
-            runtime.left_motor.set_power(left_power)
+        right_power = int(round(self.right_residual))
+        left_power = int(round(self.left_residual))
+        self.right_residual -= right_power
+        self.left_residual -= left_power
+        runtime.right_motor.set_power(right_power)
+        runtime.left_motor.set_power(left_power)
         log_power_state(self.__class__.__name__ + "." + self.kind, right_power, left_power)
         if len(self.wheel_log) < self.wheel_log_ticks:
             counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())

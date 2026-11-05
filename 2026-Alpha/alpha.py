@@ -1233,7 +1233,7 @@ def _run_main(argv, startup_cleanup):
               'spin_pid is the uncalibrated baseline (gyro_drive.SpinAround, pre-DD-13). '
               'spin_encoder_dir_test is test-only: honors a per-step "direction" (+1/-1) in the '
               'plan JSON to force turn rotation direction instead of auto shortest-path. '
-              'Default (unset) keeps the mission config value (spin_encoder).'),
+              'Default: one_shot (2026-11-05).'),
     )
     parser.add_argument(
         '--rally-compensation',
@@ -1292,21 +1292,11 @@ def _run_main(argv, startup_cleanup):
               'Used to match the single-wheel encoder diagnostic\'s power for a fair comparison.'),
     )
     parser.add_argument(
-        '--rally-turn-lag-compensation-deg',
-        type=float,
-        default=None,
-        help=('DD-22 calibration: for spin_encoder, lower the stopping target by this many degrees '
-              'for whichever wheel finishes phase1 first (the negative-power side), to pre-cancel '
-              'the drift it picks up while dragged by the still-turning other wheel (measured '
-              '5-9deg). Default (unset/0) keeps both wheels at the same target.'),
-    )
-    parser.add_argument(
         '--rally-turn-lag-compensation-adaptive',
         choices=['on', 'off'],
         default=None,
         help=('DD-22 calibration: for spin_encoder, use a running estimate (updated from each '
-              'turn\'s measured drag) instead of the fixed --rally-turn-lag-compensation-deg value. '
-              'Default (unset) keeps the fixed value.'),
+              'turn\'s measured drag). Default: on (2026-11-05).'),
     )
     parser.add_argument(
         '--rally-turn-left-target-scale',
@@ -1315,14 +1305,7 @@ def _run_main(argv, startup_cleanup):
         help=('DD-22 calibration: for spin_encoder, multiply the left wheel\'s target encoder angle '
               'by this factor, to correct the steady-state right/left effective-rotation difference '
               '(measured ~0.9%%, right wheel turns the robot slightly more per encoder degree). '
-              'Default (unset/1.0) keeps both wheels equal.'),
-    )
-    parser.add_argument(
-        '--rally-turn-phase1-scale',
-        default=None,
-        help=('one_shot only: "POS,NEG" factors multiplied into the phase1 target encoder angle '
-              'for turns that increase / decrease the heading (computed by '
-              'wireless_device/et_rally_lqi/phase1_scale_from_log.py). Default (unset) = 1.0,1.0.'),
+              'Default: 1.009 (2026-11-05).'),
     )
     parser.add_argument(
         '--rally-turn-phase1-model',
@@ -1330,7 +1313,7 @@ def _run_main(argv, startup_cleanup):
         help=('one_shot only: "POS_GAIN,POS_FLOW,NEG_GAIN,NEG_FLOW". phase1 is commanded so that '
               'GAIN x command + FLOW (deg, the rotation that continues after braking, scaled down '
               'for turns under 40 deg) equals the target. COMMAND is the base wheel rotation before the '
-              'lag compensation, which still applies. Replaces --rally-turn-phase1-scale. Default (unset) = off.'),
+              'lag compensation, which still applies. Default: 0.961,6.9,0.913,8.9 (2026-11-05).'),
     )
     parser.add_argument(
         '--rally-turn-wheel-sync',
@@ -1352,14 +1335,7 @@ def _run_main(argv, startup_cleanup):
         choices=['on', 'off'],
         default=None,
         help=('one_shot only: on waits (brake) until both wheel encoders stop before phase1, '
-              'so a turn right after a straight starts from rest. Default (unset) = off.'),
-    )
-    parser.add_argument(
-        '--rally-turn-forward-comp',
-        choices=['on', 'off'],
-        default=None,
-        help=('one_shot only: on shortens each straight by how far the preceding turn moved the '
-              'robot forward (wheel encoders). Default (unset) = off.'),
+              'so a turn right after a straight starts from rest. Default: on (2026-11-05).'),
     )
     parser.add_argument(
         '--rally-start-check-mm',
@@ -1402,7 +1378,7 @@ def _run_main(argv, startup_cleanup):
         choices=['on', 'off'],
         default=None,
         help=('During the ET rally, read the heading as the hub float value instead of the rounded '
-              'integer. Default (unset) = off.'),
+              'integer. Default: on (2026-11-05).'),
     )
     parser.add_argument(
         '--rally-gyro-drift-comp',
@@ -1426,7 +1402,7 @@ def _run_main(argv, startup_cleanup):
         choices=['on', 'off'],
         default=None,
         help=('During the ET rally, start each straight with the heading PID integral left by the '
-              'previous straight (the left/right motor difference). Default (unset) = off.'),
+              'previous straight (the left/right motor difference). Default: on (2026-11-05).'),
     )
     parser.add_argument(
         '--rally-move-fine-power',
@@ -1434,11 +1410,11 @@ def _run_main(argv, startup_cleanup):
         default=None,
         help=('During the ET rally, drive the straight with fractional left/right power (the rounding '
               'remainder is carried to the next tick) instead of truncating the heading PID output to '
-              'an integer. Default (unset) = off.'),
+              'an integer. Default: on (2026-11-05).'),
     )
     parser.add_argument('--rally-move-pid-i', type=float, default=None,
                         help=('During the ET rally, the I gain of the straight heading PID. '
-                              'Default (unset) = 0.6.'))
+                              'Default: 2 for straights of arc/line plans, 8 for straights of stop-and-turn plans (2026-11-05).'))
     parser.add_argument('--rally-move-short-lead', type=float, default=None,
                         help=('During the ET rally, end straights shorter than 50mm this many mm early '
                               '(the robot coasts on after the stop). Default (unset) = run the planned '
@@ -1446,7 +1422,7 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument('--rally-path-lead-sec', type=float, default=None,
                         help=('During the ET rally, for plans with reverse/arc/non-stop segments only: look ahead '
                               'this many seconds (x current speed) along the path for the heading target and the '
-                              'arc feed-forward, to make up for the wheel-speed lag. Default (unset) = 0.06.'))
+                              'arc feed-forward, to make up for the wheel-speed lag. Default: 0.12 (2026-11-05).'))
     parser.add_argument('--rally-path-arc-pid-i', type=float, default=None,
                         help=('During the ET rally, for plans with arcs: the I gain of the heading PID used inside '
                               'arcs only (straights keep --rally-move-pid-i). Default (unset) = 0.6.'))
@@ -1471,12 +1447,6 @@ def _run_main(argv, startup_cleanup):
                         help='Cruise power for path-plan segments (arcs / chained moves) only (default 80).')
     parser.add_argument('--rally-path-wheel-log', type=float, default=None,
                         help='Log commanded power and actual wheel rotation for the first N ticks of each path segment (default 0 = off).')
-    parser.add_argument('--rally-path-speed-control', type=float, default=None,
-                        help='Path segments: drive wheels with the hub speed control at (power x this) deg/s (about 9; default 0 = power control).')
-    parser.add_argument('--rally-path-floor-drift', default=None, metavar='RIGHT,FORWARD',
-                        help=('Path segments, provisional for one course: assume the floor makes the robot drift '
-                              'RIGHT,FORWARD mm per metre driven (right/forward of the start heading) and add it to '
-                              'the own-position estimate so the lateral correction steers it back (default: none).'))
     parser.add_argument('--rally-path-stop-lead', type=float, default=None,
                         help=('Path segments: start stopping this many mm before the planned end of a stopping move of '
                               '50 mm or longer (default 16; shorter ones use --rally-move-short-lead).'))
@@ -1488,12 +1458,10 @@ def _run_main(argv, startup_cleanup):
                         help='With --rally-arm-stop-ticks: arm push power (default 35).')
     parser.add_argument('--rally-arm-up-before-touch', choices=['on', 'off'], default=None,
                         help='Raise the arm before the touch start; after the touch only re-measure the gyro (default off).')
-    parser.add_argument('--rally-arm-slow-deg', type=float, default=None,
-                        help='With --rally-arm-stop-ticks: a tick moving less than this many degrees counts as slow (default 2).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
-                              'heading-decreasing direction (left turns). Default (unset) = same as the '
-                              'common factor (1.00579).'))
+                              'heading-decreasing direction (left turns). Default: 1.0068 (2026-11-05; '
+                              'the common factor 1.00579 is used for right turns).'))
     parser.add_argument('--rally-gyro-drift-settle-sec', type=float, default=None,
                         help=('With --rally-gyro-drift-comp on: seconds to wait after raising the arm before '
                               'measuring (the arm vibrates). Default (unset) = 1.'))
@@ -1574,11 +1542,6 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-power requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_main_power=args.rally_turn_power)
-    if args.rally_turn_lag_compensation_deg is not None:
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-            parser.error('--rally-turn-lag-compensation-deg requires --mission rally-drive, bottle-rally or rally-sumo')
-        mission_config = dataclasses.replace(
-            mission_config, et_rally_turn_lag_compensation_deg=args.rally_turn_lag_compensation_deg)
     if args.rally_arm_up_before_touch is not None:
         # bottle-rally / rally-sumo は先の工程でアームを使うため、ETラリーだけを走る rally-drive に限る。
         if mission_config.mission_mode != 'rally-drive':
@@ -1596,17 +1559,6 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-left-target-scale requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_left_target_scale=args.rally_turn_left_target_scale)
-    if args.rally_turn_phase1_scale is not None:
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-            parser.error('--rally-turn-phase1-scale requires --mission rally-drive, bottle-rally or rally-sumo')
-        try:
-            pos_scale, neg_scale = (float(v) for v in args.rally_turn_phase1_scale.split(','))
-        except ValueError:
-            parser.error('--rally-turn-phase1-scale must be "POS,NEG" (e.g. 0.98,0.95)')
-        if not (0.5 <= pos_scale <= 1.5 and 0.5 <= neg_scale <= 1.5):
-            parser.error('--rally-turn-phase1-scale values must be within 0.5..1.5')
-        mission_config = dataclasses.replace(
-            mission_config, et_rally_turn_phase1_scale=(pos_scale, neg_scale))
     if args.rally_turn_phase1_model is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-turn-phase1-model requires --mission rally-drive, bottle-rally or rally-sumo')
@@ -1642,11 +1594,6 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-turn-pre-stop requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config, et_rally_turn_pre_stop=(args.rally_turn_pre_stop == 'on'))
-    if args.rally_turn_forward_comp is not None:
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-            parser.error('--rally-turn-forward-comp requires --mission rally-drive, bottle-rally or rally-sumo')
-        mission_config = dataclasses.replace(
-            mission_config, et_rally_turn_forward_compensation=(args.rally_turn_forward_comp == 'on'))
     if args.rally_start_check_mm is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-start-check-mm requires --mission rally-drive, bottle-rally or rally-sumo')
@@ -1725,28 +1672,16 @@ def _run_main(argv, startup_cleanup):
         if not 0.0 <= args.rally_path_lat_max_deg <= 30.0:
             parser.error('--rally-path-lat-max-deg must be between 0 and 30')
         mission_config = dataclasses.replace(mission_config, et_rally_path_lat_max_deg=args.rally_path_lat_max_deg)
-    if args.rally_path_floor_drift is not None:
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-            parser.error('--rally-path-floor-drift requires --mission rally-drive, bottle-rally or rally-sumo')
-        try:
-            drift = tuple(float(v) for v in args.rally_path_floor_drift.split(','))
-        except ValueError:
-            drift = ()
-        if len(drift) != 2 or not all(-20.0 <= v <= 20.0 for v in drift):
-            parser.error('--rally-path-floor-drift must be RIGHT,FORWARD in mm per metre, each between -20 and 20')
-        mission_config = dataclasses.replace(mission_config, et_rally_path_floor_drift=drift)
     for opt, attr, lo, hi in (('--rally-path-arc-pid-p', 'rally_path_arc_pid_p', 0.0, 20.0),
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),
                               ('--rally-path-ramp-sec', 'rally_path_ramp_sec', 0.0, 1.0),
                               ('--rally-path-power', 'rally_path_power', 30.0, 100.0),
                               ('--rally-path-wheel-log', 'rally_path_wheel_log', 0.0, 200.0),
-                              ('--rally-path-speed-control', 'rally_path_speed_control', 0.0, 20.0),
                               ('--rally-path-ff-scale', 'rally_path_ff_scale', 0.5, 2.0),
                               ('--rally-path-stop-lead', 'rally_path_stop_lead', 0.0, 40.0),
                               ('--rally-arm-stop-ticks', 'rally_arm_stop_ticks', 1.0, 20.0),
-                              ('--rally-arm-power', 'rally_arm_power', 10.0, 60.0),
-                              ('--rally-arm-slow-deg', 'rally_arm_slow_deg', 0.5, 10.0)):
+                              ('--rally-arm-power', 'rally_arm_power', 10.0, 60.0)):
         value = getattr(args, attr)
         if value is None:
             continue
