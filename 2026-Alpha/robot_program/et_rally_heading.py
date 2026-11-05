@@ -241,6 +241,27 @@ class RestoreEtRallyHeading(Behaviour):
         return Status.SUCCESS
 
 
+def _read_acceleration():
+    """ハブの加速度(x,y,z、mm/s^2、ハブの軸)。読めなければNone。"""
+    if runtime.hub is None:
+        return None
+    try:
+        return tuple(float(v) for v in runtime.hub.hub_imu_get_acceleration())
+    except Exception:
+        return None
+
+
+def _format_tilt(acc_sum, n):
+    """2026-11-05: 止まっている間の加速度の平均から、ハブのx・y軸の傾き(度)を出す(測るだけ)。
+    家のコースで、ゴール側が0.3〜0.5°低く(スマホで測定)、ログに出ない位置のずれが1周ごとに同じ向きに
+    約1cmたまっていたため。ハブの取り付けの傾きも含むので、床の傾きは同じ場所で向きを180°変えた2回の差の半分で見る。"""
+    if not n:
+        return "acc=none"
+    ax, ay, az = (v / n for v in acc_sum)
+    return "acc_mean=(%.0f,%.0f,%.0f) tilt_x=%+.2f tilt_y=%+.2f deg" % (
+        ax, ay, az, math.degrees(math.atan2(ax, az)), math.degrees(math.atan2(ay, az)))
+
+
 class EtRallyPostStopGyroMeasure(Behaviour):
     """2026-11-05: ETラリーの最後に止まったあと、measure_sec秒ブレーキで止まったまま、z軸の回転の速さと
     向き(heading)の変化を記録する。測るだけで補正はしない。
@@ -265,6 +286,8 @@ class EtRallyPostStopGyroMeasure(Behaviour):
             self.start_time = now
             self.start_heading = runtime.gyro_sensor.get_angle()
             self.windows = []
+            self.acc_sum = [0.0, 0.0, 0.0]
+            self.acc_n = 0
             self._new_window(now)
         if now - self.window["t0"] >= self.WINDOW_SEC:
             self._close_window(now)
@@ -277,6 +300,10 @@ class EtRallyPostStopGyroMeasure(Behaviour):
                     self.window["still"] += 1
             except Exception:
                 pass
+        acc = _read_acceleration() if now - self.start_time >= 1.0 else None
+        if acc is not None:
+            self.acc_sum = [a + b for a, b in zip(self.acc_sum, acc)]
+            self.acc_n += 1
         if now - self.start_time < self.measure_sec:
             return Status.RUNNING
         self._close_window(now)
@@ -286,10 +313,10 @@ class EtRallyPostStopGyroMeasure(Behaviour):
         elapsed = now - self.start_time
         self.logger.info(
             "post-stop gyro: %.2fs heading %.3f -> %.3f (change %+.3f deg, %+.4f deg/s) angv_z_mean=%+.4f "
-            "imu_stationary=%d/%d" % (
+            "imu_stationary=%d/%d %s(after 1s)" % (
                 elapsed, self.start_heading, end_heading, end_heading - self.start_heading,
                 (end_heading - self.start_heading) / elapsed if elapsed > 0 else 0.0, total_mean,
-                sum(w["still"] for w in self.windows), total_n))
+                sum(w["still"] for w in self.windows), total_n, _format_tilt(self.acc_sum, self.acc_n)))
         self.logger.info("post-stop gyro windows(%.1fs: angv_z_mean/stationary/heading): %s" % (
             self.WINDOW_SEC, " ".join("%+.3f/%d of %d/%.3f" % (
                 w["sum"] / w["n"] if w["n"] else 0.0, w["still"], w["n"], w["heading"]) for w in self.windows)))
@@ -333,6 +360,8 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
             self.settle_max = None
             self.stationary_true = 0
             self.stationary_n = 0
+            self.acc_sum = [0.0, 0.0, 0.0]
+            self.acc_n = 0
         if self.arm_done_time is None:
             if self.arm_up.update() != Status.SUCCESS:
                 return Status.RUNNING
@@ -354,6 +383,10 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
                     self.stationary_true += 1
             except Exception:
                 pass
+        acc = _read_acceleration()
+        if acc is not None:
+            self.acc_sum = [a + b for a, b in zip(self.acc_sum, acc)]
+            self.acc_n += 1
         if angv_z is not None:
             if abs(angv_z) > MEASURE_MAX_ANGV_DEG_S:
                 self.rejected += 1
@@ -383,10 +416,10 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
         settle_range = (self.settle_max - self.settle_min) if self.settle_min is not None else -1.0
         self.logger.info(
             "drift measure: %.2fs (arm %.2fs, settle %.1fs range=%.2f, measure %.1fs) samples=%d rejected=%d "
-            "angv_z_mean=%+.4f std=%.3f imu_stationary=%d/%d -> drift_rate=%+.4f deg/s (%s)" % (
+            "angv_z_mean=%+.4f std=%.3f imu_stationary=%d/%d -> drift_rate=%+.4f deg/s (%s) %s" % (
                 now - self.start_time, self.arm_done_time - self.start_time, self.settle_sec, settle_range,
                 self.measure_sec, n, self.rejected, mean, std, self.stationary_true, self.stationary_n,
-                -mean if used else 0.0, "used" if used else "not used"))
+                -mean if used else 0.0, "used" if used else "not used", _format_tilt(self.acc_sum, self.acc_n)))
 
     def terminate(self, new_status):
         self.started = False
