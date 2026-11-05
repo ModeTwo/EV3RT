@@ -1,0 +1,35 @@
+{
+  "note_1105": "左右の円弧の差のテスト: plan_test_arc_entry_r100_180.json(右回り)の左回り版。直進300mm→半径100mmで左に180°の円弧→直進300mmで止まる。止まった位置の横の距離(見込み200mm)を右回り版と比べ、円弧のすべり方の左右差(周回でたまるずれの候補)を見る。",
+  "expected_end": {
+    "front_mm": 0.0,
+    "right_mm": -200.0,
+    "heading_deg": 180.0
+  },
+  "steps": [
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": -180.0,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -180.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    }
+  ]
+}
