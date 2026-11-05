@@ -84,6 +84,18 @@ _chain_lat = None
 _floor_drift_total = [0.0, 0.0]
 
 
+# 2026-11-05: 円弧・直進の区間の直進の向きのPIDのI(--rally-move-pid-i を付けないとき)。
+# 11/05 実機で、I=8 では608mmの直進で出力が40↔100を約0.5秒周期で振れ(頭打ち43回)、I=2 で消えた。
+PATH_LINE_PID_I = 2.0
+
+
+def _line_pid_i(base_i):
+    override = et_rally_drive._move_pid_i_override
+    if override is not None:
+        return override
+    return PATH_LINE_PID_I if et_rally_drive._fine_power_enabled else base_i
+
+
 def reset_chain():
     global _chain_end_dist, _chain_pid, _chain_lat, _chain_shape, _chain_speed
     _chain_shape = None
@@ -268,12 +280,12 @@ class EtRallyPathSegment(Behaviour):
             self.pid = _chain_pid
             self.pid.output_limits = (-self.power, self.power)
         else:
-            pid_i = self.pid_gains[1] if et_rally_drive._move_pid_i_override is None else et_rally_drive._move_pid_i_override
+            pid_i = _line_pid_i(self.pid_gains[1])
             self.pid = PID(self.pid_gains[0], pid_i, self.pid_gains[2], setpoint=self._target_heading(0.0),
                            sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
         _chain_pid = None
         # 区間をまたいで引き継いだPIDでも、Iの係数はこの区間の種類に合わせる(たまっているIの値はそのまま)。
-        line_i = self.pid_gains[1] if et_rally_drive._move_pid_i_override is None else et_rally_drive._move_pid_i_override
+        line_i = _line_pid_i(self.pid_gains[1])
         self.pid.Ki = self.arc_pid_i if self.kind == "arc" else line_i
         self.pid.Kp = self.arc_pid_p if (self.kind == "arc" and self.arc_pid_p is not None) else self.pid_gains[0]
         self.prev_shape = _chain_shape if self.continue_from_prev else None

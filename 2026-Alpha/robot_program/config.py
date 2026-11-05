@@ -71,6 +71,9 @@ class RaceConfig:
     start_lap_blue_timeout_sec: float = 10.0
     enable_bottle_delivery: bool = True
     enable_et_rally: bool = True
+    # 2026-11-05: 実機で確定したETラリーの設定(旋回・ジャイロ・直進・円弧の走り方・アーム)は、引数でなく既定値にした
+    # (以前は既定が古い値のままで、毎回30個以上の引数で指定していた。通しの工程(full)も古い値で走っていた)。
+    # まだ決めていないもの(静止の測定の秒数、止まるときの手前の量など)と、テスト用のものは引数のまま。
     et_rally_laps: int = 3
     # received: PCから受信したSEQ、file: 従来の固定plan JSONを実行する。
     et_rally_strategy_source: str = "received"
@@ -83,11 +86,11 @@ class RaceConfig:
     # spin_encoder: エンコーダ主導+ジャイロ仕上げ(現行既定、DD-13)、one_shot: 一発パルス仕上げ、
     # lqi: LQI(積分付き状態フィードバック)仕上げ。直進側はspin_*でも常にEtRallyRunByGyroを使う
     # (直進の実現方式はDD-13の対象外のため切替なし)。
-    et_rally_turn_method: str = "spin_encoder"
+    et_rally_turn_method: str = "one_shot"
     # DD-19較正用: spin_encoder/one_shot/lqiのフェーズ2(仕上げ)許容誤差を上書きする。
     # Noneなら各方式の素の既定値(0.5度)を使う。spin_pidとの純粋な方式比較時、
     # spin_pid側の許容誤差(2.0度固定)に揃えるために使う。
-    et_rally_turn_fine_tolerance_deg: Optional[float] = None
+    et_rally_turn_fine_tolerance_deg: Optional[float] = 0.6
     # DD-22〜23較正用: spin_encoderのフェーズ1で、残りの旋回角度がこの値未満になったら
     # decel_power(既定50)まで落として勢いを削ってから止める(既定0.0=無効)。
     # フェーズ1の慣性による行き過ぎ→フェーズ2(揺れ・バックラッシュの発生源)での
@@ -95,7 +98,7 @@ class RaceConfig:
     et_rally_turn_decel_deg: Optional[float] = None
     # DD-22較正用: spin_encoderで、前の旋回と逆方向に切り替わる旋回だけ、フェーズ1の
     # 目標エンコーダ角度にこの分を上乗せする(機構内バックラッシュの先詰め)。既定0.0=無効。
-    et_rally_turn_backlash_preload_deg: Optional[float] = None
+    et_rally_turn_backlash_preload_deg: Optional[float] = 4.2
     # DD-22較正用: spin_encoderで、フェーズ2(ジャイロ仕上げ)を無効化し、フェーズ1
     # (エンコーダのみ)だけで旋回を終える。フェーズ2自体が追加の方向反転(行き過ぎの
     # 戻し)を起こし、ズレの一因になっていないかを切り分けるための診断用。
@@ -103,7 +106,7 @@ class RaceConfig:
     et_rally_turn_fine_trim_enabled: Optional[bool] = None
     # DD-22較正用: spin_encoderのフェーズ1の駆動パワーを上書きする。片輪エンコーダ
     # テスト(power=50既定)と同じ出力で比較するために使う。Noneなら素の既定値(70)。
-    et_rally_turn_main_power: Optional[int] = None
+    et_rally_turn_main_power: Optional[int] = 50
     # DD-22較正用: spin_encoderのフェーズ1で、先に目標へ到達して止まる側(その旋回で
     # マイナス出力になる側)の目標値を、この分だけ低くする。まだ回っているもう片方の
     # 反力で「止まった後も同じ方向へ引き込まれて動いてしまう」分(実測5〜9度)を
@@ -112,26 +115,26 @@ class RaceConfig:
     # DD-22較正用: Trueなら上の固定値の代わりに、実測の引き込まれ量から毎回
     # 更新していく推定値(指数移動平均)を使う。固定値では追従できない旋回ごとの
     # ばらつき・power依存を、実行中に自動で合わせ込む狙い。既定False。
-    et_rally_turn_adaptive_lag_compensation: Optional[bool] = None
+    et_rally_turn_adaptive_lag_compensation: Optional[bool] = True
     # DD-22較正用: 左輪の目標エンコーダ角度に掛ける係数。片輪エンコーダテストで実測した、
     # 右輪の方が同じ回転量に対して約0.9%多く実際の方位を変える(実効径・グリップの
     # 定常的な左右差)分を補正する。lag_compensationとは別の、物理的な車輪特性による
     # 差で、どちらが先に止まるかとは無関係。既定1.0=無効。
-    et_rally_turn_left_target_scale: Optional[float] = None
+    et_rally_turn_left_target_scale: Optional[float] = 1.009
     # 2026-10-28: one_shotのphase1の目標エンコーダ角度に掛ける係数
     # (headingが増える向きの旋回, 減る向きの旋回)。既定None=(1.0, 1.0)で無効。
     et_rally_turn_phase1_scale: Optional[tuple] = None
     # 2026-10-31: one_shotのphase1を「実際の角度 = 係数×指令 + 一定の流れ」で計算する
     # ((増える向きの係数, 流れ), (減る向きの係数, 流れ))。指定時はphase1_scaleを使わない(lag補正はかける)。既定None=従来どおり。
-    et_rally_turn_phase1_model: Optional[tuple] = None
+    et_rally_turn_phase1_model: Optional[tuple] = ((0.961, 6.9), (0.913, 8.9))
     # 2026-10-31: one_shotのphase1で、左右の車輪の回転量の差(エンコーダ度)×この係数だけ、進んでいる側の
     # 出力を下げ・遅れている側を上げて、左右を同時に同じだけ回す(lag補正はかけない)。既定None/0=無効。
-    et_rally_turn_wheel_sync_gain: Optional[float] = None
+    et_rally_turn_wheel_sync_gain: Optional[float] = 2.0
     # 2026-10-31: wheel_sync有効時だけ、phase1の最後の(エンコーダ度, 出力)で左右そろって減速する。
     # 既定None=通常の(15度, 50)。同期ありでは止めた後の流れが約12度に増えて行き過ぎていたため。
-    et_rally_turn_sync_decel: Optional[tuple] = None
+    et_rally_turn_sync_decel: Optional[tuple] = (40.0, 40)
     # 2026-10-28: one_shotで、旋回の前に車体が止まるまで待つ。既定None=False(待たない)。
-    et_rally_turn_pre_stop: Optional[bool] = None
+    et_rally_turn_pre_stop: Optional[bool] = True
     # 2026-10-29: one_shot旋回で車体が前へ出た量を、次の直進から差し引く。既定None=False。
     et_rally_turn_forward_compensation: Optional[bool] = None
     # 2026-10-29: 経路の前に、スタートの向きへこの距離(mm)だけ前進→後退して、置いた向きを確かめる。既定None=しない。
@@ -148,7 +151,7 @@ class RaceConfig:
     et_rally_gyro_still_sweep: Optional[bool] = None
     # 2026-10-29: ETラリー工程の間だけ、四捨五入前の向きを使う/止まっている間のずれを差し引く
     # (robot_program/et_rally_heading.py)。既定None=どちらもしない。
-    et_rally_gyro_float_heading: Optional[bool] = None
+    et_rally_gyro_float_heading: Optional[bool] = True
     et_rally_gyro_drift_compensation: Optional[bool] = None
     # 2026-10-29: ずれの速さを測る時間(秒)と、その前にアームの振動が収まるのを待つ時間(秒)。
     # 既定None=測定2秒・振動待ち1秒。
@@ -163,17 +166,17 @@ class RaceConfig:
     # 2026-10-30: headingが減る向き(左回り)の回転にだけ使う倍率(et_rally_heading.py)。
     # 30回旋回テストで、右回りは1.00579で合い、左回りは2回とも実際が多く回った(平均1.35度/2700度)。
     # 既定None=左右とも1.00579。
-    et_rally_gyro_scale_neg: Optional[float] = None
+    et_rally_gyro_scale_neg: Optional[float] = 1.0068
     # 2026-10-30: 直進の向きのPIDのI成分を、前の直進から引き継ぐ(et_rally_drive.py)。既定None=引き継がない。
-    et_rally_move_carry_integral: Optional[bool] = None
+    et_rally_move_carry_integral: Optional[bool] = True
     # 2026-10-31: 直進の左右の出力を小数のまま出す(端数を次のtickへ持ち越す、et_rally_drive.py)。既定None=従来の切り捨て。
-    et_rally_move_fine_power: Optional[bool] = None
+    et_rally_move_fine_power: Optional[bool] = True
     # 2026-10-31: 直進の向きのPIDのI(既定None=0.6のまま)。
     et_rally_move_pid_i: Optional[float] = None
     # 2026-10-31: 50mmより短い直進を、この距離(mm)だけ手前で終える(既定None=計画どおりの距離を走る)。
     et_rally_move_short_lead_mm: Optional[float] = None
     # 2026-11-01: 後退・円弧・止まらずに続く区間を含む計画で、目標の向きと曲がり具合を先読みする時間(秒)。Noneなら0.06。
-    et_rally_path_lead_sec: Optional[float] = None
+    et_rally_path_lead_sec: Optional[float] = 0.12
     # 2026-11-01: 同じ計画で、円弧の中だけ使う向きのPIDのI。Noneなら0.6。
     et_rally_path_arc_pid_i: Optional[float] = None
     # 2026-11-02: 同じ計画で、円弧の速さの倍率。1.0なら外側の車輪が直進の出力を超えない速さ(従来)。
@@ -181,31 +184,31 @@ class RaceConfig:
     et_rally_path_arc_speed_scale: Optional[float] = None
     # 2026-11-03: 同じ計画で、計画の線からの横のずれを戻す強さ(横のずれ1mmあたり、目標の向きを何度ずらすか)。
     # Noneなら0(従来どおり向きだけを追う)。上限(度)はNoneなら8。
-    et_rally_path_lat_gain: Optional[float] = None
+    et_rally_path_lat_gain: Optional[float] = 0.3
     et_rally_path_lat_max_deg: Optional[float] = None
     # 2026-11-03: 同じ計画で、走りを滑らかにする(円弧に入ると左右の出力が大きく上下し、内側の車輪が逆回しになっていた)。
     # 円弧の中だけの向きのPIDのP(Noneなら直進と同じ)、目標の向き・左右の差を前後に平均する幅mm(Noneなら0)、
     # 前進で左右の出力をこれより下げない下限(Noneなら下限なし)。
-    et_rally_path_arc_pid_p: Optional[float] = None
-    et_rally_path_ramp_mm: Optional[float] = None
-    et_rally_path_inner_min_power: Optional[float] = None
+    et_rally_path_arc_pid_p: Optional[float] = 3.0
+    et_rally_path_ramp_mm: Optional[float] = 40.0
+    et_rally_path_inner_min_power: Optional[float] = 0.0
     # 2026-11-03: 速度を上げる準備。平均の幅を時間で決める秒(幅 = max(ramp_mm, 秒×今の速さ))と、円弧・直進の区間の出力(Noneなら80)。
-    et_rally_path_ramp_sec: Optional[float] = None
+    et_rally_path_ramp_sec: Optional[float] = 0.12
     et_rally_path_power: Optional[float] = None
     # 2026-11-03: 円弧・直進の区間の始めから何tick分、毎tickの出力と実際の車輪の回りをログに出すか(Noneなら出さない)。
     et_rally_path_wheel_log_ticks: Optional[float] = None
     # 2026-11-03: 0より大きければ、円弧・直進の区間で出力×この係数(度/秒)をハブの速度制御で指定する(Noneなら従来どおり)。
     et_rally_path_speed_control: Optional[float] = None
     # 2026-11-03: 円弧の左右の差(フィードフォワード)の倍率(Noneなら1.0)。円弧では実際の輪距が計算より大きく効くため。
-    et_rally_path_ff_scale: Optional[float] = None
+    et_rally_path_ff_scale: Optional[float] = 1.2
     # 2026-11-05: 床の傾き・凹凸で流れる量 (右, 前) mm/m(スタートの向きが前)。自分の位置に足して横のずれの直しで打ち消す、
     # このコースだけの暫定の補正。Noneなら足さない。
     et_rally_path_floor_drift: Optional[tuple] = None
     # 2026-11-05: 円弧・直進の区間で止まるとき、計画の距離の何mm手前で止め始めるか(Noneなら従来の16mm)。50mm未満は --rally-move-short-lead。
     et_rally_path_stop_lead: Optional[float] = None
     # 2026-11-03: アームの止め方(EtRallyArmUpDown)。動きの遅いtickがこの回数連続したら止める(Noneなら従来の ArmUpDownFull)と、押す出力(Noneなら35)。
-    et_rally_arm_stop_ticks: Optional[float] = None
-    et_rally_arm_power: Optional[float] = None
+    et_rally_arm_stop_ticks: Optional[float] = 3.0
+    et_rally_arm_power: Optional[float] = 20.0
     # 2026-11-03: 1tickの動きがこの度数未満なら遅いとみなす(Noneなら2)。
     et_rally_arm_slow_deg: Optional[float] = None
     # 2026-11-03: Trueなら、アームをタッチの前(起動時の較正の最後)に上げ、タッチの後はジャイロの測り直しだけをして走り出す。

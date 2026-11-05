@@ -1161,7 +1161,7 @@ def read_bottle_color_for_final_mission(mission, color_argument, check_tree):
     return BOTTLE_COLOR_VALUE_BY_NAME[color_name]
 
 
-def read_rally_drive_hints(mission, hint1, hint2_gate_info, check_tree):
+def read_rally_drive_hints(mission, hint1, hint2_gate_info, check_tree, plan_given=False):
     # QR工程を省く単体・結合モードだけ手入力Hintを受け付ける。
     if mission not in MANUAL_RALLY_MISSIONS:
         if hint1 is not None or hint2_gate_info is not None:
@@ -1172,7 +1172,8 @@ def read_rally_drive_hints(mission, hint1, hint2_gate_info, check_tree):
         return None, None
 
     # ツリー確認では通信を開始しないため、形式だけ満たす固定値を使用する。
-    if check_tree:
+    # 2026-11-05: --rally-plan-path を指定したとき(計画ファイルで走る)もHintは使わないので、同じ固定値で補う。
+    if check_tree or plan_given:
         return hint1 or '25,35', hint2_gate_info or '53,54/12,22'
     if not hint1 or not hint2_gate_info:
         raise ValueError(
@@ -1805,6 +1806,7 @@ def _run_main(argv, startup_cleanup):
             hint1=args.rally_hint1,
             hint2_gate_info=args.rally_hint2_gate_info,
             check_tree=args.check_tree,
+            plan_given=args.rally_plan_path is not None,
         )
     except ValueError as error:
         parser.error(str(error))

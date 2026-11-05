@@ -104,6 +104,8 @@ def set_move_carry_integral(enabled):
 #   約0.5度の向きのずれを残したまま走っていた(10/30周回ログ、赤ゲートへの直進で横7mm)。
 _fine_power_enabled = False
 _move_pid_i_override = None
+# 止まってから曲がる形の直進の向きのPIDのI(fine_power のとき、--rally-move-pid-i を付けない場合)。10/31 に 8 に決めた。
+OLD_STRAIGHT_PID_I = 8.0
 
 
 def set_move_tuning(fine_power, pid_i):
@@ -505,7 +507,9 @@ class EtRallyRunByGyro(Behaviour):
                     runtime.plotter.get_distance(), self.__class__.__name__, turn_forward_mm,
                     self.base_distance_mm, self.distance_mm))
             # 算出した旋回量が直進パワーを超えて暴走しないよう、output_limitsでしっかりキャップをかける
-            pid_i = self.pid_i if _move_pid_i_override is None else _move_pid_i_override
+            # 2026-11-05: --rally-move-pid-i を付けないときは、fine_power なら 10/31 に決めた 8(止まってから曲がる形の直進)。
+            pid_i = (_move_pid_i_override if _move_pid_i_override is not None
+                     else (OLD_STRAIGHT_PID_I if _fine_power_enabled else self.pid_i))
             self.pid = PID(self.pid_p, pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
             # fine_power用の、左右それぞれの整数にしきれなかった端数。
             self.right_residual = 0.0
