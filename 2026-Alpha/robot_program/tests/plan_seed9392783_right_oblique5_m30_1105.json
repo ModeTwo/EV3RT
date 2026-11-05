@@ -1,5 +1,5 @@
 {
-  "note_1105": "2026-11-05 作成: oblique6_m30_1105 と同じ設定(前進だけ・斜めをどこでも許す・すき間の下限3.0cm)で周回数だけ5。すき間の最小 前3.10・後ろ3.02cm。近似式の見積もりで走行部分 58.5 秒。",
+  "note_1105": "2026-11-05 作成(ゲートの脚の当たり判定を実物の形にした版): hybrid_route.py で前進だけ・斜めの通過をどこでも許す、柱とのすき間の下限 3.0cm で作った5周+ゴール。脚は床に寝たT字の管(長さ7.5cm・直径2.5cm)、ゲートの幅は内側22.7〜外側29.5cmのどちらでも当たらないように脚が来うる範囲全体(3.4×7.5cm)で判定。すき間の最小 前3.19・後ろ3.37cm。近似式の見積もりで走行部分 58.6 秒。",
   "gates": {
     "mode": "random",
     "seed": 9392783,
@@ -37,7 +37,7 @@
   },
   "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution (gyro = -planner angle), same as plan_seed9392783_right_1031b.json. arc: target_heading_deg is the end heading, sweep_deg the signed heading change in the same frame (start = end - sweep), radius_mm the radius of the robot-centre path.",
   "laps": 5,
-  "total_distance_mm": 15219.8,
+  "total_distance_mm": 15150.9,
   "move_count": 47,
   "arc_count": 34,
   "turn_count": 1,
@@ -137,17 +137,17 @@
     },
     {
       "type": "arc",
-      "target_heading_deg": -107.99,
-      "sweep_deg": -97.99,
-      "radius_mm": 100.0,
+      "target_heading_deg": -108.39,
+      "sweep_deg": -98.39,
+      "radius_mm": 120.0,
       "reverse": false,
       "stop": false,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -107.99,
-      "distance_mm": 624.3,
+      "target_heading_deg": -108.39,
+      "distance_mm": 559.8,
       "reverse": false,
       "stop": false,
       "label": null
@@ -155,8 +155,8 @@
     {
       "type": "arc",
       "target_heading_deg": 100.0,
-      "sweep_deg": -152.01,
-      "radius_mm": 100.0,
+      "sweep_deg": -151.61,
+      "radius_mm": 120.0,
       "reverse": false,
       "stop": false,
       "label": null
@@ -164,7 +164,7 @@
     {
       "type": "move",
       "target_heading_deg": 100.0,
-      "distance_mm": 132.4,
+      "distance_mm": 92.4,
       "reverse": false,
       "stop": false,
       "label": "lap1-yellow"
@@ -263,17 +263,17 @@
     },
     {
       "type": "arc",
-      "target_heading_deg": -107.99,
-      "sweep_deg": -97.99,
-      "radius_mm": 100.0,
+      "target_heading_deg": -108.39,
+      "sweep_deg": -98.39,
+      "radius_mm": 120.0,
       "reverse": false,
       "stop": false,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -107.99,
-      "distance_mm": 624.3,
+      "target_heading_deg": -108.39,
+      "distance_mm": 559.8,
       "reverse": false,
       "stop": false,
       "label": null
@@ -281,8 +281,8 @@
     {
       "type": "arc",
       "target_heading_deg": 100.0,
-      "sweep_deg": -152.01,
-      "radius_mm": 100.0,
+      "sweep_deg": -151.61,
+      "radius_mm": 120.0,
       "reverse": false,
       "stop": false,
       "label": null
@@ -290,7 +290,7 @@
     {
       "type": "move",
       "target_heading_deg": 100.0,
-      "distance_mm": 132.4,
+      "distance_mm": 92.4,
       "reverse": false,
       "stop": false,
       "label": "lap2-yellow"
@@ -389,17 +389,17 @@
     },
     {
       "type": "arc",
-      "target_heading_deg": -107.99,
-      "sweep_deg": -97.99,
-      "radius_mm": 100.0,
+      "target_heading_deg": -108.39,
+      "sweep_deg": -98.39,
+      "radius_mm": 120.0,
       "reverse": false,
       "stop": false,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -107.99,
-      "distance_mm": 624.3,
+      "target_heading_deg": -108.39,
+      "distance_mm": 559.8,
       "reverse": false,
       "stop": false,
       "label": null
@@ -407,8 +407,8 @@
     {
       "type": "arc",
       "target_heading_deg": 100.0,
-      "sweep_deg": -152.01,
-      "radius_mm": 100.0,
+      "sweep_deg": -151.61,
+      "radius_mm": 120.0,
       "reverse": false,
       "stop": false,
       "label": null
@@ -416,7 +416,7 @@
     {
       "type": "move",
       "target_heading_deg": 100.0,
-      "distance_mm": 132.4,
+      "distance_mm": 92.4,
       "reverse": false,
       "stop": false,
       "label": "lap3-yellow"
@@ -515,17 +515,17 @@
     },
     {
       "type": "arc",
-      "target_heading_deg": -107.99,
-      "sweep_deg": -97.99,
-      "radius_mm": 100.0,
+      "target_heading_deg": -108.39,
+      "sweep_deg": -98.39,
+      "radius_mm": 120.0,
       "reverse": false,
       "stop": false,
       "label": null
     },
     {
       "type": "move",
-      "target_heading_deg": -107.99,
-      "distance_mm": 624.3,
+      "target_heading_deg": -108.39,
+      "distance_mm": 559.8,
       "reverse": false,
       "stop": false,
       "label": null
@@ -533,8 +533,8 @@
     {
       "type": "arc",
       "target_heading_deg": 100.0,
-      "sweep_deg": -152.01,
-      "radius_mm": 100.0,
+      "sweep_deg": -151.61,
+      "radius_mm": 120.0,
       "reverse": false,
       "stop": false,
       "label": null
@@ -542,7 +542,7 @@
     {
       "type": "move",
       "target_heading_deg": 100.0,
-      "distance_mm": 132.4,
+      "distance_mm": 92.4,
       "reverse": false,
       "stop": false,
       "label": "lap4-yellow"

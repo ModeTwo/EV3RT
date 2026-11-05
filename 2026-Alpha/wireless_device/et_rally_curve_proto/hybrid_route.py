@@ -41,6 +41,11 @@ PARAMS = dict(
     # 暫定(ユーザー11/02: 測り直す予定、今より狭くなる)。11/02からは、測り直すまで判定しない([])。今の3つを使うときは 'planner'。
     keepout=[],
     allow_reverse=True, allow_pivot=True,
+    # ゲートの脚の当たり判定(2026-11-05、ユーザーの実測): 'rect' = 床に寝たT字の管(長さ leg_len・直径 leg_dia、
+    # ゲートの線と直角)を長方形として扱う。ゲートは組み方で幅が変わる(外側の幅 最大 gate_outer_max、内側の幅 最小
+    # gate_inner_min)ので、2つの格子の点の真ん中に左右対称に置いたとき、脚が来うる範囲全体を1つの長方形にする
+    # (狭くても広くても当たらないように)。'cap' = 以前の形(格子の点を中心に ±4cm の線 + 半径1cm)。
+    gate_model='rect', leg_len=7.5, leg_dia=2.5, gate_inner_min=22.7, gate_outer_max=29.5,
     # 時間: 直進 cm/s、円弧は arc_k*v_line/(1+half_tread/r)、後退は rev_speed_scale 倍の速さ
     v_line=36.0, arc_k=0.77, half_tread=5.85, rev_speed_scale=1.0,
     t_stop=0.67, t_turn0=0.7, t_turn_deg=0.012,
@@ -110,12 +115,55 @@ class Gate:
 GJ = json.load(open(sys.argv[1], encoding='utf-8'))['gates']
 GATES = {c: Gate(c, GJ[c]['a'], GJ[c]['b']) for c in ('red', 'blue', 'yellow')}
 CAP = np.array([p + g.n * ARM * (2 * t - 1) for g in GATES.values() for p in (g.pa, g.pb) for t in np.linspace(0, 1, 9)])
+
+
+def _make_legs():
+    """脚の長方形: (中心, ゲートの線の向き u, 直角の向き v, u方向の半分, v方向の半分) のリスト。"""
+    legs = []
+    gap = np.linalg.norm(next(iter(GATES.values())).pb - next(iter(GATES.values())).pa)
+    off_min = (GATE_INNER_MIN + LEG_DIA - gap) / 2      # 脚の中心が格子の点から外へずれる量(一番狭いとき)
+    off_max = (GATE_OUTER_MAX - LEG_DIA - gap) / 2      # 同(一番広いとき)
+    s0, s1 = off_min - LEG_DIA / 2, off_max + LEG_DIA / 2   # 外向きの座標で、脚が来うる範囲
+    for g in GATES.values():
+        for p, out in ((g.pa, -g.t), (g.pb, g.t)):
+            legs.append((p + out * (s0 + s1) / 2, out, g.n, (s1 - s0) / 2, LEG_LEN / 2))
+    return legs
+
+
+LEGS = _make_legs()
+LEG_C = np.array([l[0] for l in LEGS]); LEG_U = np.array([l[1] for l in LEGS]); LEG_V = np.array([l[2] for l in LEGS])
+LEG_HU = np.array([l[3] for l in LEGS]); LEG_HV = np.array([l[4] for l in LEGS])
+LEG_CORNERS = np.array([c + u * a * hu + v * b * hv for c, u, v, hu, hv in LEGS for a in (-1, 1) for b in (-1, 1)])
+if GATE_MODEL == 'rect':
+    POST_R = 0.0   # 長方形そのものとの距離なので、点の太さは使わない
 GSEG = [(g.pa, g.pb, g.color) for g in GATES.values()]
 
 
 # ---------------- 当たり判定 ----------------
+def _rect_clear(px, py, h_rad, x0, x1):
+    """gate_model='rect': 車体の箱 x∈[x0,x1], |y|<=HW と、脚の長方形の最小のすき間(配列)。
+    凸な長方形どうしの距離 = 片方の角からもう片方までの距離の最小(脚の角→車体、車体の角→脚の両方を見る)。"""
+    n = len(px)
+    c = np.cos(h_rad); s = np.sin(h_rad)
+    # 脚の角 → 車体の箱
+    dx = LEG_CORNERS[None, :, 0] - px[:, None]; dy = LEG_CORNERS[None, :, 1] - py[:, None]
+    lx = dx * c[:, None] + dy * s[:, None]; ly = -dx * s[:, None] + dy * c[:, None]
+    x0a = np.broadcast_to(np.asarray(x0, float), (n,))[:, None]; x1a = np.broadcast_to(np.asarray(x1, float), (n,))[:, None]
+    d1 = np.hypot(np.maximum(np.maximum(x0a - lx, lx - x1a), 0.0), np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)).min(1)
+    # 車体の箱の角 → 脚の長方形
+    cx = np.stack([x0a[:, 0], x0a[:, 0], x1a[:, 0], x1a[:, 0]], 1); cy = np.array([-HALF_WIDTH, HALF_WIDTH, -HALF_WIDTH, HALF_WIDTH])[None, :]
+    wx = px[:, None] + cx * c[:, None] - cy * s[:, None]; wy = py[:, None] + cx * s[:, None] + cy * c[:, None]
+    rx = wx[:, :, None] - LEG_C[None, None, :, 0]; ry = wy[:, :, None] - LEG_C[None, None, :, 1]
+    du = np.abs(rx * LEG_U[None, None, :, 0] + ry * LEG_U[None, None, :, 1]) - LEG_HU[None, None, :]
+    dv = np.abs(rx * LEG_V[None, None, :, 0] + ry * LEG_V[None, None, :, 1]) - LEG_HV[None, None, :]
+    d2 = np.hypot(np.maximum(du, 0.0), np.maximum(dv, 0.0)).min(axis=(1, 2))
+    return np.minimum(d1, d2)
+
+
 def box_clear(px, py, h_rad, x0, x1):
     """姿勢(配列)の車体の箱 x∈[x0,x1], |y|<=HW と支柱の最小すき間(配列)。x0,x1 はスカラーか配列。"""
+    if GATE_MODEL == 'rect':
+        return _rect_clear(np.asarray(px, float), np.asarray(py, float), np.asarray(h_rad, float), x0, x1)
     c = np.cos(h_rad)[:, None]; s = np.sin(h_rad)[:, None]
     dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
     lx = dx * c + dy * s; ly = -dx * s + dy * c
@@ -131,6 +179,9 @@ _BODY_REACH = math.hypot(max(FRONT, REAR), HALF_WIDTH) + POST_R + max(MARGIN_FRO
 
 def poses_clear(px, py, h_deg):
     """姿勢ごとに、前の部分と後ろの部分のすき間が足りているか(bool配列)。"""
+    if GATE_MODEL == 'rect':
+        h = np.radians(np.asarray(h_deg, float)); px = np.asarray(px, float); py = np.asarray(py, float)
+        return (_rect_clear(px, py, h, 0.0, FRONT) >= MARGIN_FRONT) & (_rect_clear(px, py, h, -REAR, 0.0) >= MARGIN_REAR)
     # 車体の近く(車軸から車体の一番遠い角+支柱+すき間)にある支柱の点だけで判定する
     rr = _BODY_REACH
     sel = CAP[(CAP[:, 0] > px.min() - rr) & (CAP[:, 0] < px.max() + rr) & (CAP[:, 1] > py.min() - rr) & (CAP[:, 1] < py.max() + rr)]
@@ -629,6 +680,9 @@ def pass_clearance(prims):
             ax, ay, ah = arc_samples(q, 0.5)
             xs.append(ax); ys.append(ay); hs.append(ah)
     px, py, hh = np.concatenate(xs), np.concatenate(ys), np.radians(np.concatenate(hs))
+    if GATE_MODEL == 'rect':
+        cf = _rect_clear(px, py, hh, 0.0, FRONT); cr = _rect_clear(px, py, hh, -REAR, 0.0)
+        return float(min(cf.min() - MARGIN_FRONT, cr.min() - MARGIN_REAR))
     c = np.cos(hh)[:, None]; sn = np.sin(hh)[:, None]
     dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
     lx = dx * c + dy * sn; ly = -dx * sn + dy * c
@@ -1083,12 +1137,16 @@ def route_audit(conn_prims, visits, used):
         if i < len(visits):
             add_prims(visits[i]['prims'])
     px, py, hh = np.concatenate(xs), np.concatenate(ys), np.concatenate(hs)
-    h = np.radians(hh); c = np.cos(h)[:, None]; sn = np.sin(h)[:, None]
-    dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
-    lx = dx * c + dy * sn; ly = -dx * sn + dy * c
-    ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
-    cf = (np.hypot(np.maximum(np.maximum(-lx, lx - FRONT), 0.0), ey) - POST_R).min(1)
-    cr = (np.hypot(np.maximum(np.maximum(-REAR - lx, lx), 0.0), ey) - POST_R).min(1)
+    h = np.radians(hh)
+    if GATE_MODEL == 'rect':
+        cf = _rect_clear(px, py, h, 0.0, FRONT); cr = _rect_clear(px, py, h, -REAR, 0.0)
+    else:
+        c = np.cos(h)[:, None]; sn = np.sin(h)[:, None]
+        dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
+        lx = dx * c + dy * sn; ly = -dx * sn + dy * c
+        ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
+        cf = (np.hypot(np.maximum(np.maximum(-lx, lx - FRONT), 0.0), ey) - POST_R).min(1)
+        cr = (np.hypot(np.maximum(np.maximum(-REAR - lx, lx), 0.0), ey) - POST_R).min(1)
     ko = sum(1 for i in range(0, len(px), 4) if body_keepout(px[i:i + 1], py[i:i + 1], hh[i:i + 1]))
     i = int(np.argmin(np.minimum(cf, cr)))
     return dict(min_front=float(cf.min()), min_rear=float(cr.min()), keepout_hits=ko,
