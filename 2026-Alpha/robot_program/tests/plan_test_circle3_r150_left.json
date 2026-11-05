@@ -1,0 +1,134 @@
+{
+  "note_1105": "ログに出ない1周ごとのずれの切り分け: 直進200mm→半径150mmで左回りに3周(90°の円弧12本、止まらない)→直進200mmで止まる。一様な距離・横すべり・ジャイロのくせの誤差は閉じた周回で打ち消すので、止まった位置のずれは床の傾きなど部屋に固定の原因か、それ以外の原因を示す。右回りと左回りでずれの向きが部屋に対して同じなら床側、左右反転するなら車体側。",
+  "expected_end": {
+    "front_mm": 400.0,
+    "right_mm": 0.0,
+    "heading_deg": 0.0
+  },
+  "steps": [
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 200.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -90.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -90.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -90.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": -90.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 200.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    }
+  ]
+}
