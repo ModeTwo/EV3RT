@@ -319,7 +319,8 @@ class EtRallyPathSegment(Behaviour):
         end_front, end_right = self._pos_from_end()
         if self.stopping:
             end_front += now - getattr(self, "reached_dist", now)
-        tag = " end_err=(%+.1f,%+.1f)%s" % (end_front, end_right, tag)
+        # along: 自分の位置で測った進み − 走った距離での進み(前後のずれのたまり。1tickの越えを含まない)。
+        tag = " end_err=(%+.1f,%+.1f) along=%+.1f%s" % (end_front, end_right, getattr(self, "along_mm", 0.0), tag)
         self.logger.info("%+06d %s.%s summary: dist=%d planned=%d end_heading=%.1f target=%.1f err_mean=%+.2f err_max=%.2f lat=%+.0fmm sat=%d loc=(%d,%d)%s%s%s" % (
             now, self.__class__.__name__, self.kind, now - self.orig_dist, self.run_length_mm,
             current, self.end_heading, self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm,
@@ -368,7 +369,10 @@ class EtRallyPathSegment(Behaviour):
             self.pos_y += dr * math.cos(h0) - df * math.sin(h0)
             _floor_drift_total[0] += dr
             _floor_drift_total[1] += df
-        _, self.lat_mm = self._lateral()
+        u, self.lat_mm = self._lateral()
+        # 2026-11-05: 区間の終わりを位置で決める案を机上シミュで試したが、走った距離で区切っても前後のずれはたまらず
+        # (4周で along 平均-0.3mm・範囲-2.8〜+1.6mm)、効果がなかったため入れていない。実機で同じかを along で見る。
+        self.along_mm = u - s
         if s >= self.run_length_mm:
             if self.stop_at_end:
                 _chain_end_dist = None
