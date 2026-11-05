@@ -41,6 +41,10 @@
     11/03の車輪のログで、円弧の中の左右の実際の回りの比から逆算した輪距が約146〜158mm(実測の117mmより大きい。
     すべり・こすれのため)で、計算どおりの差では曲がり足りず、残りを向きのPIDが常に埋めていた
     (円弧の中の向きのずれの平均が約3°、入り口の遅れ・出力の急な変化の元)。
+  - floor_drift: このコースだけの暫定の補正(2026-11-05)。走った1mごとに、床の傾き・凹凸で実際の位置が
+    部屋に対して決まった向きへ (右mm, 前mm) 流れるとみなし(右・前はスタートの向き=向き0°が前)、自分の位置に足す。
+    ログに出ない位置のずれが1周(約3m)ごとに同じ向きへ約1cmたまり、ロボット側の誤差では説明できなかったため。
+    位置に足した分は横のずれとして lat_gain で戻す(進む向きの成分は、次に曲がった先で横のずれになって戻る)。
   - inner_min_power: 前進のとき、左右どちらの出力もこれより下げない(0なら逆回しをしない)。
     左右の差が足りない分は、全体の出力を下げて差を残す(曲がる量を優先)。
 """
@@ -76,6 +80,8 @@ _chain_pid = None
 # 次の区間の始め(計画上)から見た自分の位置 (前, 右) mm と、位置を積算した最後の距離・向き
 # (次の区間が動き出すのは1tick後なので、その間の進みを次の区間で積算するため)。
 _chain_lat = None
+# floor_drift で自分の位置に足した量の合計 (右, 前) mm(ログ用、走行の最初から)。
+_floor_drift_total = [0.0, 0.0]
 
 
 def reset_chain():
@@ -116,7 +122,8 @@ class EtRallyPathSegment(Behaviour):
                  next_profile=(), lead_sec: float = 0.0, arc_pid_i: float = 0.6,
                  arc_speed_scale: float = 1.0, lat_gain: float = 0.0, lat_max_deg: float = 8.0,
                  arc_pid_p=None, ramp_mm: float = 0.0, inner_min_power=None, ramp_sec: float = 0.0,
-                 wheel_log_ticks: int = 0, speed_dps_per_power: float = 0.0, ff_scale: float = 1.0) -> None:
+                 wheel_log_ticks: int = 0, speed_dps_per_power: float = 0.0, ff_scale: float = 1.0,
+                 floor_drift=None) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -161,6 +168,7 @@ class EtRallyPathSegment(Behaviour):
         self.wheel_log_ticks = max(0, int(wheel_log_ticks))
         self.speed_dps_per_power = max(0.0, float(speed_dps_per_power))
         self.ff_scale = float(ff_scale)
+        self.floor_drift = None if floor_drift is None else (float(floor_drift[0]) / 1000.0, float(floor_drift[1]) / 1000.0)
         self.inner_min_power = inner_min_power
         self.prev_shape = None
         self.running = False
@@ -305,11 +313,12 @@ class EtRallyPathSegment(Behaviour):
 
     def _finish_log(self, now, tag=""):
         current = _heading()
-        self.logger.info("%+06d %s.%s summary: dist=%d planned=%d end_heading=%.1f target=%.1f err_mean=%+.2f err_max=%.2f lat=%+.0fmm sat=%d loc=(%d,%d)%s%s" % (
+        self.logger.info("%+06d %s.%s summary: dist=%d planned=%d end_heading=%.1f target=%.1f err_mean=%+.2f err_max=%.2f lat=%+.0fmm sat=%d loc=(%d,%d)%s%s%s" % (
             now, self.__class__.__name__, self.kind, now - self.orig_dist, self.run_length_mm,
             current, self.end_heading, self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm,
             self.saturated_ticks,
-            runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(), tag))
+            runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(),
+            "" if self.floor_drift is None else " floor_drift_total=(%+.1f,%+.1f)" % tuple(_floor_drift_total), tag))
         if self.wheel_log:
             # 1tickごとに 指示した出力R/L:そのtickに実際に回った度R/L:向きのずれ
             self.logger.info("WHEELS %s: %s" % (self.kind, " ".join(
@@ -344,6 +353,14 @@ class EtRallyPathSegment(Behaviour):
         self.pos_prev_dist = now
         self.pos_x += step * math.cos(turned)
         self.pos_y += step * math.sin(turned)
+        if self.floor_drift is not None and step > 0.0:
+            # 部屋に固定の (右, 前) の流れを、この区間の座標(x=始めの進む向き、y=その右)に直して足す。
+            dr, df = step * self.floor_drift[0], step * self.floor_drift[1]
+            h0 = math.radians(self.start_heading)
+            self.pos_x += dr * math.sin(h0) + df * math.cos(h0)
+            self.pos_y += dr * math.cos(h0) - df * math.sin(h0)
+            _floor_drift_total[0] += dr
+            _floor_drift_total[1] += df
         _, self.lat_mm = self._lateral()
         if s >= self.run_length_mm:
             if self.stop_at_end:

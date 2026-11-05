@@ -336,7 +336,7 @@ class DeferredStrategySequence(Sequence):
                  path_arc_speed_scale=None, path_lat_gain=None, path_lat_max_deg=None,
                  path_arc_pid_p=None, path_ramp_mm=None, path_inner_min_power=None,
                  path_ramp_sec=None, path_power=None, path_wheel_log_ticks=None, path_speed_control=None,
-                 path_ff_scale=None):
+                 path_ff_scale=None, path_floor_drift=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -379,6 +379,7 @@ class DeferredStrategySequence(Sequence):
             "path_wheel_log_ticks": path_wheel_log_ticks,
             "path_speed_control": path_speed_control,
             "path_ff_scale": path_ff_scale,
+            "path_floor_drift": path_floor_drift,
         }
         self._loaded = False
 
@@ -495,6 +496,7 @@ def build_execute_strategy(context, config, lap_number=None):
             path_wheel_log_ticks=getattr(config, "et_rally_path_wheel_log_ticks", None),
             path_speed_control=getattr(config, "et_rally_path_speed_control", None),
             path_ff_scale=getattr(config, "et_rally_path_ff_scale", None),
+            path_floor_drift=getattr(config, "et_rally_path_floor_drift", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -539,6 +541,7 @@ def build_execute_strategy(context, config, lap_number=None):
             path_wheel_log_ticks=getattr(config, "et_rally_path_wheel_log_ticks", None),
             path_speed_control=getattr(config, "et_rally_path_speed_control", None),
             path_ff_scale=getattr(config, "et_rally_path_ff_scale", None),
+            path_floor_drift=getattr(config, "et_rally_path_floor_drift", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -719,6 +722,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         path_speed_control=None,
                         # 2026-11-03: 円弧の左右の差(フィードフォワード)の倍率(Noneなら1.0)。
                         path_ff_scale=None,
+                        # 2026-11-05: 床で流れる量 (右, 前) mm/m を自分の位置に足す、このコースだけの暫定の補正(Noneなら足さない)。
+                        path_floor_drift=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -937,6 +942,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 wheel_log_ticks=0 if path_wheel_log_ticks is None else int(path_wheel_log_ticks),
                 speed_dps_per_power=0.0 if path_speed_control is None else path_speed_control,
                 ff_scale=1.0 if path_ff_scale is None else path_ff_scale,
+                floor_drift=path_floor_drift,
             ))
             if pause_after_move:
                 nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),

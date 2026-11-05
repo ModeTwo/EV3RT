@@ -1472,6 +1472,10 @@ def _run_main(argv, startup_cleanup):
                         help='Log commanded power and actual wheel rotation for the first N ticks of each path segment (default 0 = off).')
     parser.add_argument('--rally-path-speed-control', type=float, default=None,
                         help='Path segments: drive wheels with the hub speed control at (power x this) deg/s (about 9; default 0 = power control).')
+    parser.add_argument('--rally-path-floor-drift', default=None, metavar='RIGHT,FORWARD',
+                        help=('Path segments, provisional for one course: assume the floor makes the robot drift '
+                              'RIGHT,FORWARD mm per metre driven (right/forward of the start heading) and add it to '
+                              'the own-position estimate so the lateral correction steers it back (default: none).'))
     parser.add_argument('--rally-path-ff-scale', type=float, default=None,
                         help='Multiply the arc left/right feedforward (half tread / radius) by this (default 1.0).')
     parser.add_argument('--rally-arm-stop-ticks', type=float, default=None,
@@ -1717,6 +1721,16 @@ def _run_main(argv, startup_cleanup):
         if not 0.0 <= args.rally_path_lat_max_deg <= 30.0:
             parser.error('--rally-path-lat-max-deg must be between 0 and 30')
         mission_config = dataclasses.replace(mission_config, et_rally_path_lat_max_deg=args.rally_path_lat_max_deg)
+    if args.rally_path_floor_drift is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-floor-drift requires --mission rally-drive, bottle-rally or rally-sumo')
+        try:
+            drift = tuple(float(v) for v in args.rally_path_floor_drift.split(','))
+        except ValueError:
+            drift = ()
+        if len(drift) != 2 or not all(-20.0 <= v <= 20.0 for v in drift):
+            parser.error('--rally-path-floor-drift must be RIGHT,FORWARD in mm per metre, each between -20 and 20')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_floor_drift=drift)
     for opt, attr, lo, hi in (('--rally-path-arc-pid-p', 'rally_path_arc_pid_p', 0.0, 20.0),
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),
