@@ -136,6 +136,8 @@ def _make_legs():
 LEGS = _make_legs()
 LEG_C = np.array([l[0] for l in LEGS]); LEG_U = np.array([l[1] for l in LEGS]); LEG_V = np.array([l[2] for l in LEGS])
 LEG_HU = np.array([l[3] for l in LEGS]); LEG_HV = np.array([l[4] for l in LEGS])
+# 車軸から車体の一番遠い角 + 脚の中心から角まで + すき間の下限(poses_clear で遠い脚を外すのに使う。少し余裕を足す)
+_RECT_REACH = math.hypot(max(FRONT, REAR), HALF_WIDTH) + float(np.hypot(LEG_HU, LEG_HV).max()) + max(MARGIN_FRONT, MARGIN_REAR) + 1.0
 LEG_CORNERS = np.array([c + u * a * hu + v * b * hv for c, u, v, hu, hv in LEGS for a in (-1, 1) for b in (-1, 1)])
 if GATE_MODEL == 'rect':
     POST_R = 0.0   # 長方形そのものとの距離なので、点の太さは使わない
@@ -143,24 +145,51 @@ GSEG = [(g.pa, g.pb, g.color) for g in GATES.values()]
 
 
 # ---------------- 当たり判定 ----------------
-def _rect_clear(px, py, h_rad, x0, x1):
+def _rect_clear(px, py, h_rad, x0, x1, keep=None):
     """gate_model='rect': 車体の箱 x∈[x0,x1], |y|<=HW と、脚の長方形の最小のすき間(配列)。
-    凸な長方形どうしの距離 = 片方の角からもう片方までの距離の最小(脚の角→車体、車体の角→脚の両方を見る)。"""
+    凸な長方形どうしの距離 = 片方の角からもう片方までの距離の最小(脚の角→車体、車体の角→脚の両方を見る)。
+    keep: 見る脚の番号の配列(None なら全部)。"""
     n = len(px)
     c = np.cos(h_rad); s = np.sin(h_rad)
+    if keep is None:
+        corners, lc, lu, lv, lhu, lhv = LEG_CORNERS, LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV
+    else:
+        corners = LEG_CORNERS.reshape(-1, 4, 2)[keep].reshape(-1, 2)
+        lc, lu, lv, lhu, lhv = LEG_C[keep], LEG_U[keep], LEG_V[keep], LEG_HU[keep], LEG_HV[keep]
     # 脚の角 → 車体の箱
-    dx = LEG_CORNERS[None, :, 0] - px[:, None]; dy = LEG_CORNERS[None, :, 1] - py[:, None]
+    dx = corners[None, :, 0] - px[:, None]; dy = corners[None, :, 1] - py[:, None]
     lx = dx * c[:, None] + dy * s[:, None]; ly = -dx * s[:, None] + dy * c[:, None]
     x0a = np.broadcast_to(np.asarray(x0, float), (n,))[:, None]; x1a = np.broadcast_to(np.asarray(x1, float), (n,))[:, None]
     d1 = np.hypot(np.maximum(np.maximum(x0a - lx, lx - x1a), 0.0), np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)).min(1)
     # 車体の箱の角 → 脚の長方形
     cx = np.stack([x0a[:, 0], x0a[:, 0], x1a[:, 0], x1a[:, 0]], 1); cy = np.array([-HALF_WIDTH, HALF_WIDTH, -HALF_WIDTH, HALF_WIDTH])[None, :]
     wx = px[:, None] + cx * c[:, None] - cy * s[:, None]; wy = py[:, None] + cx * s[:, None] + cy * c[:, None]
-    rx = wx[:, :, None] - LEG_C[None, None, :, 0]; ry = wy[:, :, None] - LEG_C[None, None, :, 1]
-    du = np.abs(rx * LEG_U[None, None, :, 0] + ry * LEG_U[None, None, :, 1]) - LEG_HU[None, None, :]
-    dv = np.abs(rx * LEG_V[None, None, :, 0] + ry * LEG_V[None, None, :, 1]) - LEG_HV[None, None, :]
+    rx = wx[:, :, None] - lc[None, None, :, 0]; ry = wy[:, :, None] - lc[None, None, :, 1]
+    du = np.abs(rx * lu[None, None, :, 0] + ry * lu[None, None, :, 1]) - lhu[None, None, :]
+    dv = np.abs(rx * lv[None, None, :, 0] + ry * lv[None, None, :, 1]) - lhv[None, None, :]
     d2 = np.hypot(np.maximum(du, 0.0), np.maximum(dv, 0.0)).min(axis=(1, 2))
     return np.minimum(d1, d2)
+
+
+def _rect_clear_front_rear(px, py, h_rad, keep):
+    """_rect_clear(…, 0, FRONT, keep) と _rect_clear(…, -REAR, 0, keep) を1回で(脚の角の座標の変換を共有して速くする。値は同じ)。"""
+    c = np.cos(h_rad); s = np.sin(h_rad)
+    corners = LEG_CORNERS.reshape(-1, 4, 2)[keep].reshape(-1, 2)
+    lc, lu, lv, lhu, lhv = LEG_C[keep], LEG_U[keep], LEG_V[keep], LEG_HU[keep], LEG_HV[keep]
+    dx = corners[None, :, 0] - px[:, None]; dy = corners[None, :, 1] - py[:, None]
+    lx = dx * c[:, None] + dy * s[:, None]; ly = -dx * s[:, None] + dy * c[:, None]
+    ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
+    d1f = np.hypot(np.maximum(np.maximum(0.0 - lx, lx - FRONT), 0.0), ey).min(1)
+    d1r = np.hypot(np.maximum(np.maximum(-REAR - lx, lx - 0.0), 0.0), ey).min(1)
+    # 車体の箱の角: 前の箱 (0,-HW),(0,HW),(FRONT,-HW),(FRONT,HW)、後ろの箱 (-REAR,-HW),(-REAR,HW),(0,-HW),(0,HW)
+    cx = np.array([0.0, 0.0, FRONT, FRONT, -REAR, -REAR])[None, :]; cy = np.array([-HALF_WIDTH, HALF_WIDTH] * 3)[None, :]
+    wx = px[:, None] + cx * c[:, None] - cy * s[:, None]; wy = py[:, None] + cx * s[:, None] + cy * c[:, None]
+    rx = wx[:, :, None] - lc[None, None, :, 0]; ry = wy[:, :, None] - lc[None, None, :, 1]
+    du = np.abs(rx * lu[None, None, :, 0] + ry * lu[None, None, :, 1]) - lhu[None, None, :]
+    dv = np.abs(rx * lv[None, None, :, 0] + ry * lv[None, None, :, 1]) - lhv[None, None, :]
+    dd = np.hypot(np.maximum(du, 0.0), np.maximum(dv, 0.0)).min(2)
+    d2f = dd[:, 0:4].min(1); d2r = dd[:, [4, 5, 0, 1]].min(1)
+    return np.minimum(d1f, d2f), np.minimum(d1r, d2r)
 
 
 def box_clear(px, py, h_rad, x0, x1):
@@ -184,7 +213,13 @@ def poses_clear(px, py, h_deg):
     """姿勢ごとに、前の部分と後ろの部分のすき間が足りているか(bool配列)。"""
     if GATE_MODEL == 'rect':
         h = np.radians(np.asarray(h_deg, float)); px = np.asarray(px, float); py = np.asarray(py, float)
-        return (_rect_clear(px, py, h, 0.0, FRONT) >= MARGIN_FRONT) & (_rect_clear(px, py, h, -REAR, 0.0) >= MARGIN_REAR)
+        # どの姿勢でも、車軸から車体の一番遠い角 + 脚の半対角線 + すき間の下限 より遠い脚は、足りないすき間の原因になりえないので見ない
+        d = np.hypot(px[:, None] - LEG_C[None, :, 0], py[:, None] - LEG_C[None, :, 1]).min(0)
+        keep = np.flatnonzero(d <= _RECT_REACH)
+        if len(keep) == 0:
+            return np.ones(len(px), bool)
+        cf, cr = _rect_clear_front_rear(px, py, h, keep)
+        return (cf >= MARGIN_FRONT) & (cr >= MARGIN_REAR)
     # 車体の近く(車軸から車体の一番遠い角+支柱+すき間)にある支柱の点だけで判定する
     rr = _BODY_REACH
     sel = CAP[(CAP[:, 0] > px.min() - rr) & (CAP[:, 0] < px.max() + rr) & (CAP[:, 1] > py.min() - rr) & (CAP[:, 1] < py.max() + rr)]
@@ -241,19 +276,33 @@ _EXEMPT_ON = False   # スタートから最初のゲートへのつなぎ区間
 
 def body_keepout(px, py, hdeg):
     """姿勢(配列)のどれかで、車体の箱が進入禁止の長方形にかかるか。"""
-    global _KO_CORNERS, _START_EXEMPT
     if not KEEPOUT:
         return False
+    return bool(np.any(body_keepout_mask(px, py, hdeg)))
+
+
+_BODY_OUTLINE = None   # 車体の箱の輪郭の点(車体の座標、cm)
+
+
+def body_keepout_mask(px, py, hdeg):
+    """姿勢ごとに、車体の箱が進入禁止の長方形にかかるか(bool配列)。1つずつ呼ぶより速いように、まとめて計算する。"""
+    global _KO_CORNERS, _START_EXEMPT, _BODY_OUTLINE
+    px = np.asarray(px, float); py = np.asarray(py, float)
+    if not KEEPOUT:
+        return np.zeros(len(px), bool)
     if not KEEPOUT_BODY:
-        return bool(np.any(in_keepout(px, py)))
-    px = np.asarray(px, float); py = np.asarray(py, float); h = np.radians(np.asarray(hdeg, float))
+        return in_keepout(px, py)
+    h = np.radians(np.asarray(hdeg, float))
     if _KO_CORNERS is None:
         _KO_CORNERS = [[(x, y) for x in (x0, x1) for y in (y0, y1) if abs(x) < INF / 2 and abs(y) < INF / 2]
                        for x0, x1, y0, y1 in KEEPOUT]
-    xs = np.concatenate([np.linspace(-REAR, FRONT, 14), np.full(8, FRONT), np.linspace(FRONT, -REAR, 14), np.full(8, -REAR)])
-    ys = np.concatenate([np.full(14, HALF_WIDTH), np.linspace(HALF_WIDTH, -HALF_WIDTH, 8), np.full(14, -HALF_WIDTH),
-                         np.linspace(-HALF_WIDTH, HALF_WIDTH, 8)])
-    c = np.cos(h)[:, None]; sn = np.sin(h)[:, None]
+    if _BODY_OUTLINE is None:
+        _BODY_OUTLINE = (np.concatenate([np.linspace(-REAR, FRONT, 14), np.full(8, FRONT), np.linspace(FRONT, -REAR, 14), np.full(8, -REAR)]),
+                         np.concatenate([np.full(14, HALF_WIDTH), np.linspace(HALF_WIDTH, -HALF_WIDTH, 8), np.full(14, -HALF_WIDTH),
+                                         np.linspace(-HALF_WIDTH, HALF_WIDTH, 8)]))
+    xs, ys = _BODY_OUTLINE
+    ch = np.cos(h); sh = np.sin(h)
+    c = ch[:, None]; sn = sh[:, None]
     bx = px[:, None] + xs * c - ys * sn; by = py[:, None] + xs * sn + ys * c
     if _START_EXEMPT is None:
         sb = [(START[0] + a * math.cos(math.radians(START_H)) - b * math.sin(math.radians(START_H)),
@@ -261,16 +310,19 @@ def body_keepout(px, py, hdeg):
               for a, b in zip(xs, ys)]
         _START_EXEMPT = {k for k, (x0, x1, y0, y1) in enumerate(KEEPOUT) if any(x0 < x < x1 and y0 < y < y1 for x, y in sb)}
     near_start = np.hypot(px - START[0], py - START[1]) <= START_EXEMPT_CM
+    out = np.zeros(len(px), bool)
+    reach = math.hypot(max(FRONT, REAR), HALF_WIDTH) + 1.0   # 車軸から車体の一番遠い点(少し余裕)
     for k, (x0, x1, y0, y1) in enumerate(KEEPOUT):
+        if px.max() + reach < x0 or px.min() - reach > x1 or py.max() + reach < y0 or py.min() - reach > y1:
+            continue   # どの姿勢でも車体が届かない
         hit = np.any((bx > x0) & (bx < x1) & (by > y0) & (by < y1), axis=1)
         for cx, cy in _KO_CORNERS[k]:   # 長方形の角が車体の中に入る場合
-            lx = (cx - px) * np.cos(h) + (cy - py) * np.sin(h); ly = -(cx - px) * np.sin(h) + (cy - py) * np.cos(h)
+            lx = (cx - px) * ch + (cy - py) * sh; ly = -(cx - px) * sh + (cy - py) * ch
             hit |= (lx > -REAR) & (lx < FRONT) & (np.abs(ly) < HALF_WIDTH)
         if k in _START_EXEMPT and _EXEMPT_ON:
             hit &= ~near_start
-        if np.any(hit):
-            return True
-    return False
+        out |= hit
+    return out
 
 
 def in_keepout(px, py):
@@ -297,7 +349,18 @@ def crosses_gate(xs, ys, allow=None):
     return False
 
 
+_line_memo = {}   # (始点, 終点, 前後, allow, スタートの除外中か) -> 当たらないか。同じ直線を何度も調べるので覚えて使い回す
+
+
 def line_ok(a, b, m, allow=None):
+    key = (float(a[0]), float(a[1]), float(b[0]), float(b[1]), m, allow, _EXEMPT_ON)
+    ok = _line_memo.get(key)
+    if ok is None:
+        ok = _line_memo[key] = _line_check(a, b, m, allow)
+    return ok
+
+
+def _line_check(a, b, m, allow=None):
     v = b - a; L = float(np.hypot(*v))
     if L < 1e-6:
         return True
@@ -384,7 +447,7 @@ def _arc_check(pr, allow=None):
     n = len(xs) - 1
     okp = poses_clear(xs, ys, hb)
     if KEEPOUT:
-        okp &= ~np.array([body_keepout(xs[i:i + 1], ys[i:i + 1], hb[i:i + 1]) for i in range(len(xs))])             if not np.all(okp) or body_keepout(xs, ys, hb) else okp
+        okp &= ~body_keepout_mask(xs, ys, hb)
     bad = np.flatnonzero(~okp)
     if len(bad):
         return False, sweep * max(bad[0] - 1, 0) / n
@@ -1206,9 +1269,12 @@ def main():
             bs = M.min(0); be = M.argmin(0)
             s_arr, e_arr, c_arr = vs[color]
             tot = bs[s_arr] + c_arr
+            # 抜けの姿勢ごとに、時間が一番短い通り方を選ぶ(同じ時間なら argsort で先に来る方。1つずつ上書きしていた以前と同じ結果)
             cur = np.full(len(ends[color]), INF); arg = np.full(len(ends[color]), -1)
-            for i in np.argsort(tot)[::-1]:
-                cur[e_arr[i]] = tot[i]; arg[e_arr[i]] = i
+            order = np.argsort(tot)
+            ue, first = np.unique(e_arr[order], return_index=True)
+            win = order[first]
+            cur[ue] = tot[win]; arg[ue] = win
             back.append((prev_c, color, be, arg))
             prev, prev_c = cur, color
         tab = T[(prev_c, 'GOAL')]
