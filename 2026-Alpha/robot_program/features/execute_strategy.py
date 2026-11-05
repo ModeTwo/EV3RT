@@ -336,7 +336,7 @@ class DeferredStrategySequence(Sequence):
                  path_arc_speed_scale=None, path_lat_gain=None, path_lat_max_deg=None,
                  path_arc_pid_p=None, path_ramp_mm=None, path_inner_min_power=None,
                  path_ramp_sec=None, path_power=None, path_wheel_log_ticks=None, path_speed_control=None,
-                 path_ff_scale=None, path_floor_drift=None):
+                 path_ff_scale=None, path_floor_drift=None, path_stop_lead_mm=None):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
@@ -380,6 +380,7 @@ class DeferredStrategySequence(Sequence):
             "path_speed_control": path_speed_control,
             "path_ff_scale": path_ff_scale,
             "path_floor_drift": path_floor_drift,
+            "path_stop_lead_mm": path_stop_lead_mm,
         }
         self._loaded = False
 
@@ -497,6 +498,7 @@ def build_execute_strategy(context, config, lap_number=None):
             path_speed_control=getattr(config, "et_rally_path_speed_control", None),
             path_ff_scale=getattr(config, "et_rally_path_ff_scale", None),
             path_floor_drift=getattr(config, "et_rally_path_floor_drift", None),
+            path_stop_lead_mm=getattr(config, "et_rally_path_stop_lead", None),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -542,6 +544,7 @@ def build_execute_strategy(context, config, lap_number=None):
             path_speed_control=getattr(config, "et_rally_path_speed_control", None),
             path_ff_scale=getattr(config, "et_rally_path_ff_scale", None),
             path_floor_drift=getattr(config, "et_rally_path_floor_drift", None),
+            path_stop_lead_mm=getattr(config, "et_rally_path_stop_lead", None),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -724,6 +727,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         path_ff_scale=None,
                         # 2026-11-05: 床で流れる量 (右, 前) mm/m を自分の位置に足す、このコースだけの暫定の補正(Noneなら足さない)。
                         path_floor_drift=None,
+                        # 2026-11-05: 円弧・直進の区間で止まるとき、計画の距離のこの距離(mm)手前で止め始める(Noneなら move_stop_lead_mm)。
+                        # 今日までのログ54回で、止め始めてから惰性で進む距離は速さによらず長い直進で平均約17.5mm(16〜20)。
+                        path_stop_lead_mm=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -911,7 +917,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             elif chain_mm < SHORT_MOVE_NO_LEAD_MM:
                 stop_lead_mm = move_short_lead_mm or 0.0
             else:
-                stop_lead_mm = move_stop_lead_mm
+                stop_lead_mm = move_stop_lead_mm if path_stop_lead_mm is None else path_stop_lead_mm
             active_move_pid = (1.1, 0.1, 0.03) if turn_method == 'spin_pid' else move_pid
             nodes.append(EtRallyPathSegment(
                 name="et_rally %s%d%s" % (step["type"], index, label_text),

@@ -1476,6 +1476,9 @@ def _run_main(argv, startup_cleanup):
                         help=('Path segments, provisional for one course: assume the floor makes the robot drift '
                               'RIGHT,FORWARD mm per metre driven (right/forward of the start heading) and add it to '
                               'the own-position estimate so the lateral correction steers it back (default: none).'))
+    parser.add_argument('--rally-path-stop-lead', type=float, default=None,
+                        help=('Path segments: start stopping this many mm before the planned end of a stopping move of '
+                              '50 mm or longer (default 16; shorter ones use --rally-move-short-lead).'))
     parser.add_argument('--rally-path-ff-scale', type=float, default=None,
                         help='Multiply the arc left/right feedforward (half tread / radius) by this (default 1.0).')
     parser.add_argument('--rally-arm-stop-ticks', type=float, default=None,
@@ -1739,6 +1742,7 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-path-wheel-log', 'rally_path_wheel_log', 0.0, 200.0),
                               ('--rally-path-speed-control', 'rally_path_speed_control', 0.0, 20.0),
                               ('--rally-path-ff-scale', 'rally_path_ff_scale', 0.5, 2.0),
+                              ('--rally-path-stop-lead', 'rally_path_stop_lead', 0.0, 40.0),
                               ('--rally-arm-stop-ticks', 'rally_arm_stop_ticks', 1.0, 20.0),
                               ('--rally-arm-power', 'rally_arm_power', 10.0, 60.0),
                               ('--rally-arm-slow-deg', 'rally_arm_slow_deg', 0.5, 10.0)):
