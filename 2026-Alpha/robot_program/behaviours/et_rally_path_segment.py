@@ -313,6 +313,13 @@ class EtRallyPathSegment(Behaviour):
 
     def _finish_log(self, now, tag=""):
         current = _heading()
+        # 2026-11-05: 区間の終わりで、自分の位置(ログ上)が計画の終わりの点から (前, 右) に何mmずれているか。
+        # 区間は走った距離で区切るため、前後のずれは直していない。それがどれだけたまるかを測る。
+        # 止まる区間は、止め始めてからの惰性の分(位置を積算していない)を前に足す。
+        end_front, end_right = self._pos_from_end()
+        if self.stopping:
+            end_front += now - getattr(self, "reached_dist", now)
+        tag = " end_err=(%+.1f,%+.1f)%s" % (end_front, end_right, tag)
         self.logger.info("%+06d %s.%s summary: dist=%d planned=%d end_heading=%.1f target=%.1f err_mean=%+.2f err_max=%.2f lat=%+.0fmm sat=%d loc=(%d,%d)%s%s%s" % (
             now, self.__class__.__name__, self.kind, now - self.orig_dist, self.run_length_mm,
             current, self.end_heading, self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm,
