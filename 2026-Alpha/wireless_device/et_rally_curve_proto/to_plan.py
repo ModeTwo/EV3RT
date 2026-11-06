@@ -79,6 +79,16 @@ plan = {
     'turn_count': sum(1 for s in steps if s['type'] == 'turn'),
     'steps': steps,
 }
+# 2026-11-06: アームを下げたままだと脚に当たる最初の点(hybrid_route.py の arm、なければ書かない)。
+# ロボットは、ここまでに上げ終わる見込みなら走りながら上げ、間に合わなければスタートで止まっている間に上げる。
+if c.get('arm') is not None or 'arm' in c:
+    arm = c.get('arm')
+    plan['et_rally_arm'] = {
+        'must_be_up_mm': None if arm is None else round(arm['cm'] * 10, 1),
+        'must_be_up_sec': None if arm is None else arm['sec'],
+        'arm_front_cm': c['params'].get('arm_front_cm'), 'arm_half_width_cm': c['params'].get('arm_half_width_cm'),
+        'note': 'must_be_up_* が null なら最後まで当たらない。時間は経路を作る道具の近似式(止まる時間を入れない短めの見込み)。',
+    }
 json.dump(plan, open(sys.argv[3], 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
 print('steps', len(steps), 'moves', plan['move_count'], 'arcs', plan['arc_count'], 'turns', plan['turn_count'],
       'dist', plan['total_distance_mm'], 'max heading gap', round(max_gap, 3))

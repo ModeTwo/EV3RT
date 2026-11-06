@@ -80,6 +80,14 @@ class EtRallyHeading(ScaledGyro):
         # エンコーダからは前50.7mm・右21.2mm動いた計算になったが、実測は前7mm・左1.5mm
         # (1旋回あたり約0.2mm)だった。旋回中の左右の回転量の差は滑りで、車体の移動にはなっていない。
         self.turning = False
+        # 2026-11-06: スタートでカメラから測った向きのずれ(ジャイロの向きの単位、度)。get_angle に足す
+        # (et_rally_start_pose.py)。計画の向きと実際の向きを合わせるため。
+        self.heading_offset = 0.0
+
+    def set_heading_offset(self, offset_deg):
+        self.get_angle()   # ここまでの位置を、今までの向きで確定させる
+        self.heading_offset = float(offset_deg)
+        self.get_angle()   # 位置の積算の向きも新しい向きにそろえる(止まっている間なので位置は動かない)
 
     def set_turning(self, turning):
         # 切り替える前に、ここまでの位置を今の状態で確定させる(旋回前の惰性は数え、旋回中の分は数えない)。
@@ -151,6 +159,7 @@ class EtRallyHeading(ScaledGyro):
         if self.scale_neg is not None:
             self._update_neg(raw)
             heading -= self.neg_total * (self.scale_neg - self._scale)
+        heading += self.heading_offset
         if self.float_heading:
             self._update_pose(heading)
         return heading
@@ -167,6 +176,8 @@ class EtRallyHeading(ScaledGyro):
         if self.scale_neg is not None:
             text += " scale_neg=%.5f neg_total=%.1f deg neg_adjust=%+.3f deg" % (
                 self.scale_neg, self.neg_total, -self.neg_total * (self.scale_neg - self._scale))
+        if self.heading_offset:
+            text += " heading_offset=%+.2f deg" % self.heading_offset
         return text
 
 

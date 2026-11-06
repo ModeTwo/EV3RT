@@ -855,5 +855,12 @@
       "target_heading_deg": -90.0,
       "label": "goal"
     }
-  ]
+  ],
+  "et_rally_arm": {
+    "must_be_up_mm": 585.0,
+    "must_be_up_sec": 1.91,
+    "arm_front_cm": 5.0,
+    "arm_half_width_cm": 7.0,
+    "note": "must_be_up_* が null なら最後まで当たらない。時間は経路を作る道具の近似式(止まる時間を入れない短めの見込み)。"
+  }
 }

@@ -196,6 +196,18 @@ class RaceConfig:
     et_rally_arm_power: Optional[float] = 20.0
     # 2026-11-03: Trueなら、アームをタッチの前(起動時の較正の最後)に上げ、タッチの後はジャイロの測り直しだけをして走り出す。
     et_rally_arm_up_before_touch: Optional[bool] = None
+    # 2026-11-06: スタートで止まっている間にカメラで位置と向きを測り、走り出しに取り込む(et_rally_start_pose.py)。
+    # 既定None=しない。測る秒数(Noneなら2秒)、位置のずれがこのmm以上なら最初のつなぎを引き直す(Noneなら5mm、
+    # それより小さければ最初の区間の自分の位置に入れる)、カメラの較正ファイル(Noneなら calib_1103_h8.json)。
+    et_rally_start_pose: Optional[bool] = None
+    et_rally_start_pose_sec: Optional[float] = None
+    et_rally_start_pose_rejoin_min_mm: Optional[float] = None
+    et_rally_camera_calib_path: Optional[str] = None
+    # 2026-11-06: 計画から見て間に合うなら、アームを走りながら上げる(behaviours/et_rally_arm.py arm_while_driving)。
+    # 既定None=しない。アームを上げるのにかかる秒(仮、TODO実測)と、余裕の秒。
+    et_rally_arm_while_driving: Optional[bool] = None
+    et_rally_arm_up_sec: Optional[float] = 3.0
+    et_rally_arm_margin_sec: Optional[float] = 0.5
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
     # もとづく補正で、現在の旋回(one_shot/spin_encoder)では効果を確認できないため、

@@ -1458,6 +1458,16 @@ def _run_main(argv, startup_cleanup):
                         help='With --rally-arm-stop-ticks: arm push power (default 35).')
     parser.add_argument('--rally-arm-up-before-touch', choices=['on', 'off'], default=None,
                         help='Raise the arm before the touch start; after the touch only re-measure the gyro (default off).')
+    parser.add_argument('--rally-start-pose', choices=['on', 'off'], default=None,
+                        help=('While standing still at the ET rally start, measure the position and heading with the camera '
+                              '(markers and gray dots) and use them for the first segment: the heading offset goes into the gyro, '
+                              'a position offset re-plans the first connection (default off).'))
+    parser.add_argument('--rally-arm-while-driving', choices=['on', 'off'], default=None,
+                        help=('Raise the arm while driving when the plan file says the arm can be up before the legs are '
+                              'reached (et_rally_arm.must_be_up_sec >= --rally-arm-up-sec + 0.5); otherwise raise it at the '
+                              'start as before (default off).'))
+    parser.add_argument('--rally-arm-up-sec', type=float, default=None,
+                        help='Seconds the arm needs to go up, for --rally-arm-while-driving (default 3.0, provisional).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
                               'heading-decreasing direction (left turns). Default: 1.0068 (2026-11-05; '
@@ -1548,6 +1558,18 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-arm-up-before-touch requires --mission rally-drive')
         mission_config = dataclasses.replace(
             mission_config, et_rally_arm_up_before_touch=(args.rally_arm_up_before_touch == 'on'))
+    if args.rally_start_pose is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-start-pose requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_start_pose=(args.rally_start_pose == 'on'))
+    if args.rally_arm_while_driving is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-arm-while-driving requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_arm_while_driving=(args.rally_arm_while_driving == 'on'))
+    if args.rally_arm_up_sec is not None:
+        if not 0.5 <= args.rally_arm_up_sec <= 10.0:
+            parser.error('--rally-arm-up-sec must be between 0.5 and 10')
+        mission_config = dataclasses.replace(mission_config, et_rally_arm_up_sec=args.rally_arm_up_sec)
     if args.rally_turn_lag_compensation_adaptive is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-turn-lag-compensation-adaptive requires --mission rally-drive, bottle-rally or rally-sumo')

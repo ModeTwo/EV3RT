@@ -49,6 +49,10 @@ PARAMS = dict(
     # gate_inner_min)ので、2つの格子の点の真ん中に左右対称に置いたとき、脚が来うる範囲全体を1つの長方形にする
     # (狭くても広くても当たらないように)。'cap' = 以前の形(格子の点を中心に ±4cm の線 + 半径1cm)。
     gate_model='rect', leg_len=7.5, leg_dia=2.5, gate_inner_min=22.7, gate_outer_max=29.5,
+    # アームを下げたままの車体(2026-11-06): 車体の前の端からアームが前に出る長さと、その部分の横幅の半分(cm)。
+    # 計画に「アームが上がっていないと脚に当たる最初の点」までの距離と時間を書くのに使う(経路そのものは変えない)。
+    # 仮の値(TODO: 実機で測る)。
+    arm_front_cm=5.0, arm_half_width_cm=7.0,
     # 時間: 直進 cm/s、円弧は arc_k*v_line/(1+half_tread/r)、後退は rev_speed_scale 倍の速さ
     v_line=36.0, arc_k=0.77, half_tread=5.85, rev_speed_scale=1.0,
     t_stop=0.67, t_turn0=0.7, t_turn_deg=0.012,
@@ -145,10 +149,11 @@ GSEG = [(g.pa, g.pb, g.color) for g in GATES.values()]
 
 
 # ---------------- 当たり判定 ----------------
-def _rect_clear(px, py, h_rad, x0, x1, keep=None):
+def _rect_clear(px, py, h_rad, x0, x1, keep=None, hw=None):
     """gate_model='rect': 車体の箱 x∈[x0,x1], |y|<=HW と、脚の長方形の最小のすき間(配列)。
     凸な長方形どうしの距離 = 片方の角からもう片方までの距離の最小(脚の角→車体、車体の角→脚の両方を見る)。
-    keep: 見る脚の番号の配列(None なら全部)。"""
+    keep: 見る脚の番号の配列(None なら全部)。hw: 箱の横幅の半分(None なら車体の HALF_WIDTH)。"""
+    hw = HALF_WIDTH if hw is None else hw
     n = len(px)
     c = np.cos(h_rad); s = np.sin(h_rad)
     if keep is None:
@@ -160,9 +165,9 @@ def _rect_clear(px, py, h_rad, x0, x1, keep=None):
     dx = corners[None, :, 0] - px[:, None]; dy = corners[None, :, 1] - py[:, None]
     lx = dx * c[:, None] + dy * s[:, None]; ly = -dx * s[:, None] + dy * c[:, None]
     x0a = np.broadcast_to(np.asarray(x0, float), (n,))[:, None]; x1a = np.broadcast_to(np.asarray(x1, float), (n,))[:, None]
-    d1 = np.hypot(np.maximum(np.maximum(x0a - lx, lx - x1a), 0.0), np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)).min(1)
+    d1 = np.hypot(np.maximum(np.maximum(x0a - lx, lx - x1a), 0.0), np.maximum(np.abs(ly) - hw, 0.0)).min(1)
     # 車体の箱の角 → 脚の長方形
-    cx = np.stack([x0a[:, 0], x0a[:, 0], x1a[:, 0], x1a[:, 0]], 1); cy = np.array([-HALF_WIDTH, HALF_WIDTH, -HALF_WIDTH, HALF_WIDTH])[None, :]
+    cx = np.stack([x0a[:, 0], x0a[:, 0], x1a[:, 0], x1a[:, 0]], 1); cy = np.array([-hw, hw, -hw, hw])[None, :]
     wx = px[:, None] + cx * c[:, None] - cy * s[:, None]; wy = py[:, None] + cx * s[:, None] + cy * c[:, None]
     rx = wx[:, :, None] - lc[None, None, :, 0]; ry = wy[:, :, None] - lc[None, None, :, 1]
     du = np.abs(rx * lu[None, None, :, 0] + ry * lu[None, None, :, 1]) - lhu[None, None, :]
@@ -1177,6 +1182,39 @@ class Table:
         return True
 
 
+def arm_must_be_up(prims):
+    """走り出しから順に prims(つなぎ・通過の順)をたどり、アームを下げたままの部分(車体の前の端から ARM_FRONT_CM、
+    横幅 ±ARM_HALF_WIDTH_CM)と脚のすき間が下限(MARGIN_FRONT)を切る最初の点を探す。
+    戻り値: dict(cm=そこまでの走った距離, sec=そこまでの見込みの時間) か、最後まで当たらなければ None。
+    時間は直進・円弧の速さとその場旋回の時間だけで数える(止まる時間を入れないので、実際より短め=安全側)。"""
+    dist = 0.0; tsec = 0.0
+    x0, x1 = FRONT, FRONT + ARM_FRONT_CM
+    for q in prims:
+        if q[0] == 'line':
+            L = prim_len(q); n = max(2, int(L / 0.5) + 1); k = np.linspace(0, 1, n)
+            h = math.atan2(*(q[2] - q[1])[::-1]) + (0 if q[3] > 0 else math.pi)
+            px = q[1][0] + (q[2][0] - q[1][0]) * k; py = q[1][1] + (q[2][1] - q[1][1]) * k; hh = np.full(n, h)
+            ds = L * k; dt = L / V_LINE * spd(q[3]) * k; seg_d, seg_t = L, L / V_LINE * spd(q[3])
+        elif q[0] == 'arc':
+            px, py, hd = arc_samples(q, 0.5); hh = np.radians(hd)
+            L = prim_len(q); k = np.linspace(0, 1, len(px))
+            ds = L * k; dt = L / v_arc(q[2]) * spd(q[6]) * k; seg_d, seg_t = L, L / v_arc(q[2]) * spd(q[6])
+        else:
+            dd = nd(q[3] - q[2])
+            if abs(dd) < 0.3:
+                continue
+            hd = q[2] + dd * np.linspace(0, 1, int(abs(dd)) + 2)
+            px, py = _pivot_axle(q[1], q[2], hd); hh = np.radians(hd)
+            ds = np.zeros(len(px)); dt = turn_cost(abs(dd)) * np.linspace(0, 1, len(px)); seg_d, seg_t = 0.0, turn_cost(abs(dd))
+        c = _rect_clear(np.asarray(px, float), np.asarray(py, float), np.asarray(hh, float), x0, x1, hw=ARM_HALF_WIDTH_CM)
+        bad = np.flatnonzero(c < MARGIN_FRONT)
+        if len(bad):
+            i = int(bad[0])
+            return dict(cm=round(float(dist + ds[i]), 1), sec=round(float(tsec + dt[i]), 2))
+        dist += seg_d; tsec += seg_t
+    return None
+
+
 def route_audit(conn_prims, visits, used):
     """できた経路全体を細かく(直進0.5cm・円弧と旋回1°)調べ、柱までの一番小さいすき間と、進入禁止へのはみ出しを出す。"""
     allp = []
@@ -1342,7 +1380,15 @@ def main():
     audit = route_audit([p for key, e, s in used for p in T[key].prims[(e, s)]], visits, used)
     print('audit: min clearance front %.2fcm rear %.2fcm (needed %.1f / %.1f), keepout hits %d' % (
         audit['min_front'], audit['min_rear'], MARGIN_FRONT, MARGIN_REAR, audit['keepout_hits']), flush=True)
-    json.dump(dict(total=total, params=PARAMS, audit=audit, blocks=blocks), open(sys.argv[2], 'w'))
+    seq = []
+    for i, (key, e, s) in enumerate(used):
+        seq += list(T[key].prims[(e, s)])
+        if i < len(visits):
+            seq += list(visits[i]['prims'])
+    arm = arm_must_be_up(seq)
+    print('arm: must be up by %s (arm front %.1fcm, half width %.1fcm)' % (
+        'never' if arm is None else '%.1fcm / %.2fs' % (arm['cm'], arm['sec']), ARM_FRONT_CM, ARM_HALF_WIDTH_CM), flush=True)
+    json.dump(dict(total=total, params=PARAMS, audit=audit, arm=arm, blocks=blocks), open(sys.argv[2], 'w'))
 
 
 if __name__ == '__main__':

@@ -14,6 +14,7 @@
 --rally-arm-stop-ticks を指定したときだけ、ETラリーの各所(起動時の上げ下げ・走行前の上げ)でこちらを使う。
 """
 
+import json
 import time
 
 from py_trees.behaviour import Behaviour
@@ -90,6 +91,50 @@ class EtRallyArmAlreadyUp(Behaviour):
     def update(self) -> Status:
         self.logger.info("arm already up before touch (position %d)" % runtime.arm_motor.get_count())
         return Status.SUCCESS
+
+
+class EtRallyArmUpLater(Behaviour):
+    """2026-11-06: 走りながらアームを上げると決めたとき、スタートでのアーム上げの代わりに置く(判断の理由をログに残す)。"""
+
+    def __init__(self, name, reason):
+        super().__init__(name)
+        self.reason = reason
+
+    def update(self) -> Status:
+        self.logger.info("arm will be raised while driving (%s, position %d)" % (self.reason, runtime.arm_motor.get_count()))
+        return Status.SUCCESS
+
+
+def arm_while_driving(config):
+    """2026-11-06: 走りながらアームを上げるか (True/False, 理由)。
+    アームを下げたままだと車体の前に出て脚に当たるので、計画に書かれた「アームが上がっていないと脚に当たる最初の点」
+    (et_rally_arm.must_be_up_sec、経路を作る道具の見込みの時間)までに、上げ終わる見込み
+    (et_rally_arm_up_sec + et_rally_arm_margin_sec)があるときだけ走りながら上げる。
+    なければ従来どおりスタートで止まっている間に上げる(走行中に止まって待つことはしない)。
+    計画ファイル(--rally-plan-path)にこの情報がないとき・受信した計画のときは、スタートで上げる。"""
+    if config is None or not getattr(config, "et_rally_arm_while_driving", None):
+        return False, "off"
+    if arm_up_before_touch(config):
+        return False, "arm already up before touch"
+    if getattr(config, "et_rally_strategy_source", None) != "file":
+        return False, "plan is not a file"
+    try:
+        from ..features.execute_strategy import _resolve_plan_path
+        plan = json.load(open(_resolve_plan_path(config.et_rally_plan_path), encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return False, "plan not readable (%s)" % error
+    meta = plan.get("et_rally_arm")
+    if not isinstance(meta, dict):
+        return False, "plan has no et_rally_arm"
+    up_sec = getattr(config, "et_rally_arm_up_sec", None)
+    margin = getattr(config, "et_rally_arm_margin_sec", None)
+    need = (3.0 if up_sec is None else float(up_sec)) + (0.5 if margin is None else float(margin))
+    sec = meta.get("must_be_up_sec")
+    if sec is None:
+        return True, "legs never reached with the arm down"
+    if float(sec) >= need:
+        return True, "must be up by %.2fs (%.0f mm), arm needs %.2fs" % (float(sec), float(meta.get("must_be_up_mm") or 0), need)
+    return False, "must be up by %.2fs (%.0f mm) < arm needs %.2fs" % (float(sec), float(meta.get("must_be_up_mm") or 0), need)
 
 
 def arm_up_before_touch(config):

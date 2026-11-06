@@ -2,12 +2,14 @@
 
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
-from py_trees.composites import Sequence
+from py_trees.common import ParallelPolicy
+from py_trees.composites import Parallel, Sequence
 
 from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, TIRE_DIAMETER, UNCALIBRATED_TIRE_DIAMETER
 
 from ..behaviours.device_control import ArmDirection
-from ..behaviours.et_rally_arm import EtRallyArmAlreadyUp, arm_up_before_touch, make_arm_up_down
+from ..behaviours.et_rally_arm import (EtRallyArmAlreadyUp, EtRallyArmUpLater, arm_up_before_touch, arm_while_driving,
+                                      make_arm_up_down)
 from ..features.execute_strategy import build_execute_strategy
 from ..behaviours.motor_control import StopNow
 from ..behaviours.et_rally_drive import set_move_carry_integral, set_move_tuning
@@ -17,6 +19,7 @@ from ..gyro_scale import EnableGyroScale
 from ..et_rally_heading import (EtRallyArmUpWithDriftMeasure, EtRallyPostStopGyroMeasure, InstallEtRallyHeading,
                                 RestoreEtRallyHeading)
 from ..runtime import runtime
+from ..et_rally_start_pose import EtRallyApplyStartPose, EtRallyStartPoseCapture
 
 
 class SetGyroScaleDisabled(Behaviour):
@@ -98,8 +101,12 @@ def build_et_rally_phase(context, config):
         children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
     if install_heading:
         children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation, scale_neg))
+    # 2026-11-06: 計画から見て間に合うなら、アームは走りながら上げる(et_rally_arm.arm_while_driving)。
+    drive_arm, drive_arm_reason = arm_while_driving(config)
     if arm_up_before_touch(config):
         arm_up = EtRallyArmAlreadyUp("et_rally arm up")
+    elif drive_arm:
+        arm_up = EtRallyArmUpLater("et_rally arm up later", drive_arm_reason)
     else:
         arm_up = make_arm_up_down("et_rally arm up", ArmDirection.UP, config)
     # 2026-10-29: ハブのプログラムを書き換えた版(ブレーキ中もハブがジャイロのくせを測り直す)用に、
@@ -120,7 +127,27 @@ def build_et_rally_phase(context, config):
             "et_rally arm up", arm_up,
             settle_sec=1.0 if settle_sec is None else settle_sec,
             measure_sec=2.0 if measure_sec is None else measure_sec)
-    children.append(arm_up)
+    if getattr(config, "et_rally_start_pose", None):
+        # 2026-11-06: 止まっている間にカメラで位置と向きを測り、走り出しに取り込む(et_rally_start_pose.py)。
+        # アームを上げてジャイロを測る間に並べて撮る(アームが動いている間の画像は使わない)。
+        pose_sec = getattr(config, "et_rally_start_pose_sec", None)
+        ready = None
+        if isinstance(arm_up, EtRallyArmUpWithDriftMeasure):
+            ready = lambda node=arm_up: getattr(node, "arm_done_time", None) is not None
+        capture = EtRallyStartPoseCapture("et_rally start pose", duration_sec=2.0 if pose_sec is None else pose_sec,
+                                          calib_path=getattr(config, "et_rally_camera_calib_path", None), ready=ready)
+        if ready is not None:
+            both = Parallel(name="et_rally arm/gyro + start pose", policy=ParallelPolicy.SuccessOnAll(synchronise=True))
+            both.add_children([arm_up, capture])
+            children.append(both)
+        else:
+            children.extend([arm_up, capture])
+        rejoin_min = getattr(config, "et_rally_start_pose_rejoin_min_mm", None)
+        children.append(EtRallyApplyStartPose(
+            "et_rally apply start pose", rejoin_min_mm=5.0 if rejoin_min is None else rejoin_min,
+            plan_frame_known=(config.et_rally_strategy_source == "file")))
+    else:
+        children.append(arm_up)
     carry_integral = bool(getattr(config, "et_rally_move_carry_integral", None))
     if carry_integral:
         children.append(SetMoveCarryIntegral("et_rally move carry integral", True))
@@ -135,7 +162,14 @@ def build_et_rally_phase(context, config):
         raise ValueError(
             "Unknown ET rally strategy source: " + str(config.et_rally_strategy_source)
         )
-    children.append(build_execute_strategy(context, config))
+    execute = build_execute_strategy(context, config)
+    if drive_arm:
+        # 走りながらアームを上げる(走りとアームを同じtickで進める)。両方終わったら次へ。
+        driving = Parallel(name="et_rally drive + arm up", policy=ParallelPolicy.SuccessOnAll(synchronise=True))
+        driving.add_children([execute, make_arm_up_down("et_rally arm up while driving", ArmDirection.UP, config)])
+        children.append(driving)
+    else:
+        children.append(execute)
     # ET用の直進は、区間が連続するゲート通過中に止まらないよう終了時のブレーキを持たない。
     # 最後の区間の後は、ここで明示的に停止する(単体テストでは、この後は何も動かさないため必須)。
     children.append(StopNow(name="et_rally final stop"))

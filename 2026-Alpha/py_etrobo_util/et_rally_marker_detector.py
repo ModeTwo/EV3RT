@@ -92,7 +92,25 @@ def _count_corners(gray_roi):
     return len(corners)
 
 
+# 2026-11-06: ETラリーのスタートで位置を出すとき(robot_program/et_rally_start_pose.py)だけ、検出の中身を差し替える。
+# video.py の裏のスレッドはこのモジュールの detect() を呼ぶので、video.py を変えずに差し替えられるようにする。
+# None なら従来どおり(下の detect の本体)。
+_override = None
+
+
+def set_detector(fn):
+    """detect(frame) の代わりに fn(frame) を使う(None で元に戻す)。"""
+    global _override
+    _override = fn
+
+
 def detect(frame, *, want_debug_image=False):
+    if _override is not None and not want_debug_image:
+        return _override(frame)
+    return _detect(frame, want_debug_image=want_debug_image)
+
+
+def _detect(frame, *, want_debug_image=False):
     """フレームから、QR風の四角マーカー候補を検出する(内容はデコードしない)。
 
     戻り値: マーカー候補のlist(面積の大きい順)。各要素は

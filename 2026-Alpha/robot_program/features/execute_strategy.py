@@ -23,6 +23,7 @@ from ..runtime import runtime
 from ..et_rally_heading import et_pose_text
 from ..et_rally_compensation import apply_caster_drag_compensation, apply_lateral_drift_compensation
 from ..et_rally_fallback import fallback_planner_steps, fallback_strategy
+from .. import et_rally_start_pose
 
 
 # DD-19較正: --rally-turn-method で選べる旋回方式。spin_pidだけ構成要素(name,target,
@@ -346,8 +347,11 @@ class DeferredStrategySequence(Sequence):
             return
         extra_kwargs = dict(self._strategy_kwargs)
         try:
+            # 2026-11-06: スタートでカメラから測った位置がずれていれば、最初のつなぎを引き直す(et_rally_start_pose.py)。
+            # 予定がなければ計画のまま。
             nodes = steps_from_strategy(
-                self._loader(), initial_heading_deg=self._initial_heading_deg,
+                et_rally_start_pose.apply_pending_rejoin(self._loader(), self.logger),
+                initial_heading_deg=self._initial_heading_deg,
                 turn_method=self._turn_method, compensation_enabled=self._compensation_enabled,
                 **extra_kwargs)
         except (KeyError, OSError, TypeError, ValueError) as error:

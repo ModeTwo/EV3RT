@@ -85,6 +85,16 @@ def _line_pid_i(base_i):
     return PATH_LINE_PID_I if et_rally_drive._fine_power_enabled else base_i
 
 
+# 2026-11-06: スタートで測った位置のずれ (前, 右) mm(et_rally_start_pose.py)。最初の区間(前から続かない区間)の
+# 自分の位置の初期値にして、横のずれを戻すしくみで走りながら直す。使ったら None に戻す。
+_start_position = None
+
+
+def set_start_position(front_mm, right_mm):
+    global _start_position
+    _start_position = (float(front_mm), float(right_mm))
+
+
 def reset_chain():
     global _chain_end_dist, _chain_pid, _chain_lat, _chain_shape, _chain_speed
     _chain_shape = None
@@ -240,7 +250,7 @@ class EtRallyPathSegment(Behaviour):
         return self.start_heading + self.sweep * max(0.0, min(1.0, s / self.length_mm))
 
     def _start(self):
-        global _chain_pid, _chain_lat, _chain_shape, _chain_speed
+        global _chain_pid, _chain_lat, _chain_shape, _chain_speed, _start_position
         ensure_scaled_gyro()
         now = runtime.plotter.get_distance()
         if self.continue_from_prev and _chain_end_dist is not None:
@@ -273,8 +283,12 @@ class EtRallyPathSegment(Behaviour):
         self.prev_heading = _heading()
         if self.continue_from_prev and _chain_lat is not None:
             self.pos_x, self.pos_y, self.pos_prev_dist, self.prev_heading = _chain_lat
+        elif _start_position is not None:
+            self.pos_x, self.pos_y = _start_position
+            self.logger.info("start position from camera: front %+.1f right %+.1f mm" % _start_position)
         else:
             self.pos_x, self.pos_y = 0.0, 0.0
+        _start_position = None
         _chain_lat = None
         self._arc_angle = None
         self.lat_mm = self._lateral()[1]
