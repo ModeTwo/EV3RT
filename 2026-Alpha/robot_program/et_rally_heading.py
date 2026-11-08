@@ -30,6 +30,11 @@ runtime.gyro_sensor.get_angle()を読むだけなので、クラス側は変え�
    時間とともにずれる成分なら右回りにも同じだけ出るので、回る向きで倍率が違うとみなす。
    向きが減った量だけを数え(NEG_DEADBAND_DEGの遊びを持たせ、止まっている間や直進中の細かい
    揺れは数えない)、その量に (scale_neg - 共通の倍率) を掛けて差し引く。
+
+4. 右回り(headingが増える向き)にも別の倍率を使えるようにする(scale_pos、2026-11-08)
+   11/08の90度×30回(右回り、旋回は同期・減速・出力50の今の設定)で、実機は3回とも1.00579で
+   ジャイロより約2.6〜6.6度多く回った(車輪の位置で測定)。10/30は目視で合っていたため、倍率を比べて決める。
+   増えた量だけを scale_neg と同じやり方で数え、(scale_pos - 共通の倍率) を掛けて足す。既定は使わない。
 """
 
 import math
@@ -54,7 +59,7 @@ NEG_DEADBAND_DEG = 0.2
 class EtRallyHeading(ScaledGyro):
     """ScaledGyroと同じ倍率補正に、四捨五入前の向きと、ずれの差し引きを加える。"""
 
-    def __init__(self, base, float_heading, drift_compensation, scale_neg=None):
+    def __init__(self, base, float_heading, drift_compensation, scale_neg=None, scale_pos=None):
         super().__init__(base._sensor, base._scale, base._origin)
         self.base = base
         self.float_heading = float_heading
@@ -63,6 +68,10 @@ class EtRallyHeading(ScaledGyro):
         self.scale_neg = scale_neg
         self.neg_track = None
         self.neg_total = 0.0
+        # 右回りだけの倍率(11/08)。pos_trackは遊び付きで追いかける値、pos_totalはそれが増えた量の合計。
+        self.scale_pos = scale_pos
+        self.pos_track = None
+        self.pos_total = 0.0
         # ずれの速さ(ハブの向きの単位、度/秒)と、これまでに差し引いた量(度)。
         # ずれの速さはset_drift_rate()で決まるまで0。決まったら、差し替えた時点から差し引く。
         self.drift_rate = 0.0
@@ -152,6 +161,25 @@ class EtRallyHeading(ScaledGyro):
         elif raw > self.neg_track + NEG_DEADBAND_DEG:
             self.neg_track = raw - NEG_DEADBAND_DEG
 
+    def _update_pos(self, raw):
+        # _update_negの逆向き。追いかける値が増えた分だけを右回りの量として足す。
+        if self.pos_track is None:
+            self.pos_track = raw
+        elif raw > self.pos_track + NEG_DEADBAND_DEG:
+            self.pos_total += raw - (self.pos_track + NEG_DEADBAND_DEG)
+            self.pos_track = raw - NEG_DEADBAND_DEG
+        elif raw < self.pos_track - NEG_DEADBAND_DEG:
+            self.pos_track = raw + NEG_DEADBAND_DEG
+
+    def _scale_adjust(self):
+        """左右の向きだけの倍率で、共通の倍率から足し引きする量(度)。"""
+        adj = 0.0
+        if self.scale_neg is not None:
+            adj -= self.neg_total * (self.scale_neg - self._scale)
+        if self.scale_pos is not None:
+            adj += self.pos_total * (self.scale_pos - self._scale)
+        return adj
+
     def get_angle(self):
         raw = self._raw_heading()
         if self.drift_compensation:
@@ -160,7 +188,9 @@ class EtRallyHeading(ScaledGyro):
         heading = self._origin + (raw - self._origin) * self._scale
         if self.scale_neg is not None:
             self._update_neg(raw)
-            heading -= self.neg_total * (self.scale_neg - self._scale)
+        if self.scale_pos is not None:
+            self._update_pos(raw)
+        heading += self._scale_adjust()
         heading += self.heading_offset
         if self.float_heading:
             self._update_pose(heading)
@@ -173,6 +203,8 @@ class EtRallyHeading(ScaledGyro):
         self.drift_total = 0.0
         self.neg_track = None
         self.neg_total = 0.0
+        self.pos_track = None
+        self.pos_total = 0.0
 
     def summary(self):
         text = "float_heading=%s drift_compensation=%s drift_rate=%+.4f deg/s drift_total=%+.3f deg samples=%d" % (
@@ -180,6 +212,9 @@ class EtRallyHeading(ScaledGyro):
         if self.scale_neg is not None:
             text += " scale_neg=%.5f neg_total=%.1f deg neg_adjust=%+.3f deg" % (
                 self.scale_neg, self.neg_total, -self.neg_total * (self.scale_neg - self._scale))
+        if self.scale_pos is not None:
+            text += " scale_pos=%.5f pos_total=%.1f deg pos_adjust=%+.3f deg" % (
+                self.scale_pos, self.pos_total, self.pos_total * (self.scale_pos - self._scale))
         if self.heading_offset:
             text += " heading_offset=%+.2f deg" % self.heading_offset
         return text
@@ -203,11 +238,12 @@ def set_et_turning(turning):
 class InstallEtRallyHeading(Behaviour):
     """ETラリー工程の開始時に、runtime.gyro_sensorをEtRallyHeadingに差し替える。"""
 
-    def __init__(self, name, float_heading, drift_compensation, scale_neg=None):
+    def __init__(self, name, float_heading, drift_compensation, scale_neg=None, scale_pos=None):
         super().__init__(name)
         self.float_heading = float_heading
         self.drift_compensation = drift_compensation
         self.scale_neg = scale_neg
+        self.scale_pos = scale_pos
 
     def update(self):
         ensure_scaled_gyro()
@@ -219,7 +255,8 @@ class InstallEtRallyHeading(Behaviour):
         if isinstance(current, EtRallyHeading):
             return Status.SUCCESS
         before = current.get_angle()
-        runtime.gyro_sensor = EtRallyHeading(current, self.float_heading, self.drift_compensation, self.scale_neg)
+        runtime.gyro_sensor = EtRallyHeading(current, self.float_heading, self.drift_compensation, self.scale_neg,
+                                            self.scale_pos)
         self.logger.info("et_rally heading installed: heading %.3f -> %.3f %s" % (
             before, runtime.gyro_sensor.get_angle(), runtime.gyro_sensor.summary()))
         return Status.SUCCESS
@@ -247,8 +284,8 @@ class RestoreEtRallyHeading(Behaviour):
             self.logger.info("et_rally heading restored: %s" % current.summary())
             current.base._origin = current._origin
             scale = current.base._scale
-            if current.scale_neg is not None and abs(1.0 - scale) > 1e-9:
-                # 左回りだけの倍率で差し引いた分(neg_adjust)を、元のScaledGyroの起点に織り込み、
+            if (current.scale_neg is not None or current.scale_pos is not None) and abs(1.0 - scale) > 1e-9:
+                # 左右の向きだけの倍率で足し引きした分(neg_adjust・pos_adjust)を、元のScaledGyroの起点に織り込み、
                 # 戻した瞬間の向きを変えない(この後に相撲・フィニッシュの工程が続く場合がある)。
                 # 元の式 origin + (生値 - origin) * scale が、今の向きと一致するoriginを求める。
                 heading = current.get_angle()

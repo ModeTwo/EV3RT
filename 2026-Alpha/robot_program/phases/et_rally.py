@@ -87,7 +87,9 @@ def build_et_rally_phase(context, config):
     drift_compensation = bool(getattr(config, "et_rally_gyro_drift_compensation", None))
     # 2026-10-30: 左回り(headingが減る向き)だけの倍率。
     scale_neg = getattr(config, "et_rally_gyro_scale_neg", None)
-    install_heading = gyro_tire_calibration and (float_heading or drift_compensation or scale_neg is not None)
+    scale_pos = getattr(config, "et_rally_gyro_scale_pos", None)
+    install_heading = gyro_tire_calibration and (float_heading or drift_compensation or scale_neg is not None
+                                                 or scale_pos is not None)
     if gyro_tire_calibration:
         children.extend([
             # 通しの実行ではラップゲート後に有効済み(何もしない)。ETラリーだけ単独で走らせる場合の保険。
@@ -102,7 +104,8 @@ def build_et_rally_phase(context, config):
         # 窓口自体を無効化してジャイロ倍率補正を確実に無しにする。
         children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
     if install_heading:
-        children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation, scale_neg))
+        children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation, scale_neg,
+                                              scale_pos))
     # 2026-11-06: 計画から見て間に合うなら、アームは走りながら上げる(et_rally_arm.arm_while_driving)。
     drive_arm, drive_arm_reason = arm_while_driving(config)
     if arm_up_before_touch(config):

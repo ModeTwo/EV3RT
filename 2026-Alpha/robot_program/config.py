@@ -157,6 +157,9 @@ class RaceConfig:
     # 30回旋回テストで、右回りは1.00579で合い、左回りは2回とも実際が多く回った(平均1.35度/2700度)。
     # 既定None=左右とも1.00579。
     et_rally_gyro_scale_neg: Optional[float] = 1.0068
+    # 2026-11-08: headingが増える向き(右回り)の回転にだけ使う倍率(et_rally_heading.py)。
+    # 90度×30回で、実機が1.00579よりジャイロ比0.1〜0.24%多く回ったため、比べるために追加。既定None=1.00579。
+    et_rally_gyro_scale_pos: Optional[float] = None
     # 2026-10-30: 直進の向きのPIDのI成分を、前の直進から引き継ぐ(et_rally_drive.py)。既定None=引き継がない。
     et_rally_move_carry_integral: Optional[bool] = True
     # 2026-10-31: 直進の左右の出力を小数のまま出す(端数を次のtickへ持ち越す、et_rally_drive.py)。既定None=従来の切り捨て。
