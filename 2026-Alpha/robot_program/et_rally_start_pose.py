@@ -49,6 +49,12 @@ DOT_DIAM_MM = (34.0, 54.0)       # 灰色の点の直径として受け入れる
 
 ASSOC_MARKER_MM = 80.0           # 見えたマーカーと、計画のスタートから見て予想したマスの中心が、これより離れていたら使わない
 ASSOC_DOT_MM = 60.0
+# 縮尺の当てはめ(fit_pose の fit_scale): 較正のずれで床の距離が全体に k 倍に見えると、位置が (1-k)×距離 だけずれる
+# (11/03の較正で約2.5%短く、机上で約14mm)。縮む中心はカメラの真下(車軸の11mm前、calib_1103)とする。
+CAM_NADIR_MM = (11.0, 0.0)
+SCALE_MIN_POINTS = 3
+SCALE_MIN_SPREAD_MM = 80.0       # 点の広がり(重心からの距離の平均)がこれより小さいと縮尺は当てない
+SCALE_LIMIT = (0.94, 1.06)
 
 
 # ---------------- カメラの較正と、真上から見た画像 ----------------
@@ -160,13 +166,14 @@ def _nd(a):
     return (a + 180.0) % 360.0 - 180.0
 
 
-def fit_pose(dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror=False):
+def fit_pose(dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror=False, fit_scale=True):
     """見えたもの(detect_ground の戻り値)から、コース上の位置と向き (x, y, 向き度) を出す。
     nominal: 予想の位置(計画のスタート)。見えたものを予想の位置で床に置き、近いマス・点に結びつける。
     mirror: 左コースなら True(カメラで見た左右を逆にする)。
     2点以上結びつけば、点どうしの並びから位置と向きを出す(重みはマーカー2・点1)。
     マーカー1個だけなら、向きはマーカーの辺(90°ごと、予想に近いもの)、位置はマスの中心から逆算する。
-    戻り値: dict(pose=(x, y, h), n_markers, n_dots, resid_mm) か None。"""
+    fit_scale: 3点以上で広がりが十分なら、縮尺も一緒に当てはめる(カメラの真下を中心に)。
+    戻り値: dict(pose=(x, y, h), n_markers, n_dots, resid_mm, scale) か None。"""
     sgn = -1.0 if mirror else 1.0
     marks = [({"xy": (m["xy"][0], sgn * m["xy"][1]), "rot": sgn * m["rot"]}) for m in dets.get("markers", [])]
     dots = [(d[0], sgn * d[1]) for d in dets.get("dots", [])]
@@ -194,8 +201,18 @@ def fit_pose(dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror
             sxy = sum(p[2] * ((p[0][0] - ax) * (p[1][1] - by) - (p[0][1] - ay) * (p[1][0] - bx)) for p in pairs)
             h = math.degrees(math.atan2(sxy, sxx))
             a = math.radians(h)
-            x = bx - (ax * math.cos(a) - ay * math.sin(a)); y = by - (ax * math.sin(a) + ay * math.cos(a))
+            saa = sum(p[2] * ((p[0][0] - ax) ** 2 + (p[0][1] - ay) ** 2) for p in pairs)
+            spread = sum(p[2] * math.hypot(p[0][0] - ax, p[0][1] - ay) for p in pairs) / W
+            scale = 1.0
+            if fit_scale and len(pairs) >= SCALE_MIN_POINTS and spread >= SCALE_MIN_SPREAD_MM and saa > 0:
+                scale = min(max(math.hypot(sxx, sxy) / saa, SCALE_LIMIT[0]), SCALE_LIMIT[1])
+            # コース = t + scale × R × 車体。t = 本当の位置 + (1 - scale) × R × カメラの真下
+            tx = bx - scale * (ax * math.cos(a) - ay * math.sin(a)); ty = by - scale * (ax * math.sin(a) + ay * math.cos(a))
+            cx, cy = CAM_NADIR_MM
+            x = tx - (1.0 - scale) * (cx * math.cos(a) - cy * math.sin(a))
+            y = ty - (1.0 - scale) * (cx * math.sin(a) + cy * math.cos(a))
         else:
+            scale = 1.0
             body, c, _, m = pairs[0]
             if m is None:
                 return None   # 点1つだけでは向きが決まらない
@@ -204,9 +221,11 @@ def fit_pose(dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror
             a = math.radians(h)
             x = c[0] - (body[0] * math.cos(a) - body[1] * math.sin(a)); y = c[1] - (body[0] * math.sin(a) + body[1] * math.cos(a))
         pose = (x, y, h)
-        resid = [math.hypot(*(lambda w: (w[0] - p[1][0], w[1] - p[1][1]))(_to_world(pose, p[0]))) for p in pairs]
+        cx, cy = CAM_NADIR_MM
+        resid = [math.hypot(*(lambda w: (w[0] - p[1][0], w[1] - p[1][1]))(
+            _to_world(pose, (cx + (p[0][0] - cx) * scale, cy + (p[0][1] - cy) * scale)))) for p in pairs]
         result = dict(pose=pose, n_markers=sum(1 for p in pairs if p[3] is not None),
-                      n_dots=sum(1 for p in pairs if p[3] is None), resid_mm=max(resid))
+                      n_dots=sum(1 for p in pairs if p[3] is None), resid_mm=max(resid), scale=scale)
     return result
 
 
@@ -389,6 +408,7 @@ class EtRallyStartPoseCapture(Behaviour):
             self.started = True
             self.start_time = now
             self.results = []
+            self.results_noscale = []
             self.last_frame = None
             self.frames = 0
             _measured = None
@@ -419,6 +439,10 @@ class EtRallyStartPoseCapture(Behaviour):
                 r = fit_pose(dets, mirror=self.mirror)
                 if r is not None:
                     self.results.append(r)
+                    # 縮尺を当てはめない場合も残す(実機で定規と比べて、どちらが合うか決めるため。11/08)
+                    r0 = fit_pose(dets, mirror=self.mirror, fit_scale=False)
+                    if r0 is not None:
+                        self.results_noscale.append(r0)
         if now - self.counting_since < self.duration_sec:
             return Status.RUNNING
         return self._finish()
@@ -438,12 +462,18 @@ class EtRallyStartPoseCapture(Behaviour):
         _measured = dict(pose=pose, frames=self.frames, poses=len(self.results),
                          n_markers=max(r["n_markers"] for r in self.results), n_dots=max(r["n_dots"] for r in self.results),
                          spread_mm=max(math.hypot(r["pose"][0] - pose[0], r["pose"][1] - pose[1]) for r in self.results),
-                         spread_deg=max(abs(_nd(r["pose"][2] - pose[2])) for r in self.results))
+                         spread_deg=max(abs(_nd(r["pose"][2] - pose[2])) for r in self.results),
+                         scale=sorted(r.get("scale", 1.0) for r in self.results)[len(self.results) // 2])
         self.logger.info("start pose: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f) poses=%d/%d frames "
-                         "markers=%d dots=%d spread=%.1fmm/%.2fdeg" % (
+                         "markers=%d dots=%d spread=%.1fmm/%.2fdeg scale=%.4f" % (
                              pose[0], pose[1], pose[2], pose[0] - START_MM[0], pose[1] - START_MM[1],
                              _nd(pose[2] - START_HEADING_DEG), len(self.results), self.frames,
-                             _measured["n_markers"], _measured["n_dots"], _measured["spread_mm"], _measured["spread_deg"]))
+                             _measured["n_markers"], _measured["n_dots"], _measured["spread_mm"], _measured["spread_deg"],
+                             _measured["scale"]))
+        p0 = median_pose(self.results_noscale)
+        if p0 is not None:
+            self.logger.info("start pose without scale fit: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f)" % (
+                p0[0], p0[1], p0[2], p0[0] - START_MM[0], p0[1] - START_MM[1], _nd(p0[2] - START_HEADING_DEG)))
         return Status.SUCCESS
 
 
