@@ -1,0 +1,628 @@
+{
+  "note_1108": "2026-11-08 作成: hybrid_route.py で、後退・その場旋回・斜めの通過を許し、柱とのすき間の下限を前後とも3.0cmにした4周+ゴール(スタートはこれまでと同じ、ゴールは今のゴール地点)。設定は11/05の比較(p_n_rpobl_m3.0_4)と同じ。すき間の最小は前3.18・後ろ3.32cm。近似式の見積もり 44.9 秒、机上シミュ 37.9 秒。左コースは同じファイルを alpha.py left で走らせる(ロボット側が向きと左右の車輪を鏡に映す)。",
+  "gates": {
+    "mode": "random",
+    "seed": 9392783,
+    "course": "right",
+    "red": {
+      "a": [
+        2,
+        2
+      ],
+      "b": [
+        1,
+        2
+      ]
+    },
+    "blue": {
+      "a": [
+        3,
+        1
+      ],
+      "b": [
+        3,
+        2
+      ]
+    },
+    "yellow": {
+      "a": [
+        3,
+        4
+      ],
+      "b": [
+        2,
+        4
+      ]
+    }
+  },
+  "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution (gyro = -planner angle), same as plan_seed9392783_right_1031b.json. arc: target_heading_deg is the end heading, sweep_deg the signed heading change in the same frame (start = end - sweep), radius_mm the radius of the robot-centre path.",
+  "laps": 4,
+  "total_distance_mm": 11128.2,
+  "move_count": 38,
+  "arc_count": 29,
+  "turn_count": 2,
+  "steps": [
+    {
+      "type": "arc",
+      "target_heading_deg": 22.96,
+      "sweep_deg": 22.96,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 22.96,
+      "distance_mm": 486.1,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": 67.04,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 80.0,
+      "reverse": false,
+      "stop": false,
+      "label": "lap1-red"
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 100.0,
+      "sweep_deg": 10.0,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 100.0,
+      "distance_mm": 334.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 145.09,
+      "sweep_deg": 45.09,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 145.09,
+      "distance_mm": 188.5,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 170.0,
+      "sweep_deg": 24.91,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 170.0,
+      "distance_mm": 196.4,
+      "reverse": true,
+      "stop": false,
+      "label": "lap1-blue"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 170.0,
+      "distance_mm": 107.7,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 39.2,
+      "sweep_deg": -130.8,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 39.2,
+      "distance_mm": 265.4,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 80.0,
+      "sweep_deg": 40.8,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 80.0,
+      "distance_mm": 196.4,
+      "reverse": true,
+      "stop": false,
+      "label": "lap1-yellow"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 80.0,
+      "distance_mm": 107.7,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -56.21,
+      "sweep_deg": -136.21,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -56.21,
+      "distance_mm": 185.3,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -100.0,
+      "sweep_deg": -43.79,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -100.0,
+      "distance_mm": 416.4,
+      "reverse": true,
+      "stop": false,
+      "label": "lap2-red"
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -90.0,
+      "sweep_deg": 10.0,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 117.6,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -132.07,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -132.07,
+      "distance_mm": 6.4,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 170.0,
+      "sweep_deg": -57.93,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 170.0,
+      "distance_mm": 276.4,
+      "reverse": true,
+      "stop": false,
+      "label": "lap2-blue"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 170.0,
+      "distance_mm": 107.7,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 39.2,
+      "sweep_deg": -130.8,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 39.2,
+      "distance_mm": 265.4,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 80.0,
+      "sweep_deg": 40.8,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 80.0,
+      "distance_mm": 196.4,
+      "reverse": true,
+      "stop": false,
+      "label": "lap2-yellow"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 80.0,
+      "distance_mm": 107.7,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -91.53,
+      "sweep_deg": -171.53,
+      "radius_mm": 120.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -91.53,
+      "distance_mm": 387.7,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -90.0,
+      "sweep_deg": 1.53,
+      "radius_mm": 120.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 184.0,
+      "reverse": true,
+      "stop": false,
+      "label": "lap3-red"
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -80.0,
+      "sweep_deg": 10.0,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -80.0,
+      "distance_mm": 230.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -5.47,
+      "sweep_deg": 74.53,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -5.47,
+      "distance_mm": 224.3,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -10.0,
+      "sweep_deg": -4.53,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -10.0,
+      "distance_mm": 92.4,
+      "reverse": false,
+      "stop": false,
+      "label": "lap3-blue"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -10.0,
+      "distance_mm": 211.7,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -108.39,
+      "sweep_deg": -98.39,
+      "radius_mm": 120.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -108.39,
+      "distance_mm": 559.8,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 100.0,
+      "sweep_deg": -151.61,
+      "radius_mm": 120.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 100.0,
+      "distance_mm": 92.4,
+      "reverse": false,
+      "stop": false,
+      "label": "lap3-yellow"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 100.0,
+      "distance_mm": 211.7,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 150.41,
+      "sweep_deg": 50.41,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 150.41,
+      "distance_mm": 109.7,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 100.0,
+      "sweep_deg": -50.41,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 100.0,
+      "distance_mm": 92.4,
+      "reverse": false,
+      "stop": false,
+      "label": "lap4-red"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 100.0,
+      "distance_mm": 351.7,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 145.35,
+      "sweep_deg": 45.35,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 145.35,
+      "distance_mm": 189.8,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 170.0,
+      "sweep_deg": 24.65,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 170.0,
+      "distance_mm": 196.4,
+      "reverse": true,
+      "stop": false,
+      "label": "lap4-blue"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 170.0,
+      "distance_mm": 107.7,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 39.2,
+      "sweep_deg": -130.8,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 39.2,
+      "distance_mm": 265.4,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 80.0,
+      "sweep_deg": 40.8,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 80.0,
+      "distance_mm": 196.4,
+      "reverse": true,
+      "stop": false,
+      "label": "lap4-yellow"
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": 10.0,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 77.6,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -150.9,
+      "sweep_deg": 119.1,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -150.9,
+      "distance_mm": 366.4,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -90.0,
+      "sweep_deg": 60.9,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 40.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": "goal"
+    }
+  ],
+  "et_rally_arm": {
+    "must_be_up_mm": 585.0,
+    "must_be_up_sec": 1.91,
+    "arm_front_cm": 5.0,
+    "arm_half_width_cm": 7.0,
+    "note": "must_be_up_* が null なら最後まで当たらない。時間は経路を作る道具の近似式(止まる時間を入れない短めの見込み)。"
+  }
+}

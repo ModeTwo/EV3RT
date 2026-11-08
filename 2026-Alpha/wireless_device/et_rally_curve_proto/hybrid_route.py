@@ -33,8 +33,12 @@ PARAMS = dict(
     oblique_policy='safest', angle_scan=[-30.0, 30.0, 1.0],
     # True: 入りも抜けも斜めの通過も候補にする(入りの側にも抜けの側にもとなりのT字があるゲートのため。11/02 seed758743)
     oblique_both=True,
-    # スタート: 'default' = 今のスタート位置(向き0)、'goal' = 今のゴール地点(向き180、フィールドの方を向く)
+    # スタート: 'default' = 今のスタート位置(向き0)、'goal' = 今のゴール地点(向き180、フィールドの方を向く)、
+    # 'goal_mid' = 今のゴール地点のXで、Yはユーザーの呼び方のY4とY3の列の中点(y = 2.5P、向き180)。2026-11-08 検討用
     start_at='default',
+    # ゴール: 'default' = 今のゴール地点(向き90)、'garage' = ガレージ(以前の planner config の GOAL_SHIFT_CM=(-61,-115) の位置を
+    # 右コースにしたもの、向き goal_heading)。2026-11-08 検討用(ガレージの正確な範囲は未確認)
+    goal_at='default', goal_heading=0.0,
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
     keepout_body=True, start_exempt_cm=20.0,
     # 進入禁止の長方形(右コースのplanner座標cm、[xmin, xmax, ymin, ymax]、±1e9で無限)。None なら plannerの設定(左コース)を左右反転した今の3つ。
@@ -84,6 +88,10 @@ START = np.array([2 * 2 * P - (4 * P + 17.8), 3.5 * P]); START_H = 0.0
 GOAL = np.array([2 * 2 * P - (0 * P - 14.9), 3.5 * P]); GOAL_H = 90.0
 if START_AT == 'goal':
     START = GOAL.copy(); START_H = 180.0
+elif START_AT == 'goal_mid':
+    START = np.array([GOAL[0], 2.5 * P]); START_H = 180.0
+if GOAL_AT == 'garage':
+    GOAL = np.array([2 * 2 * P - (0 * P - 14.9) + 61.0, 3.5 * P - 115.0]); GOAL_H = float(GOAL_HEADING)
 _mx = lambda x: 4 * P - x
 KEEPOUT = [(_mx(INF), _mx(-17.0), -INF, -37.0),
            (_mx(INF), _mx(4 * P + 17.8 + 14.0), -INF, INF),
@@ -91,6 +99,8 @@ KEEPOUT = [(_mx(INF), _mx(-17.0), -INF, -37.0),
 if PARAMS['keepout'] != 'planner':
     KEEPOUT = [tuple(float(v) for v in r) for r in PARAMS['keepout']]
 BOUNDS = (-31.0, 126.0, -36.0, 4 * P + 40)
+if GOAL_AT == 'garage':
+    BOUNDS = (-31.0, 180.0, -45.0, 4 * P + 40)   # ガレージまでの中継の点も置けるように
 
 
 def nd(a):
