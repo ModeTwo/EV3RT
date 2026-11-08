@@ -1473,12 +1473,12 @@ def _run_main(argv, startup_cleanup):
                         help='Seconds the arm needs to go up, for --rally-arm-while-driving (default 3.0, provisional).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
-                              'heading-decreasing direction (left turns). Default: 1.0068 (2026-11-05; '
-                              'the common factor 1.00579 is used for right turns).'))
+                              'heading-decreasing direction (left turns). Default: 1.0082 (2026-11-08, '
+                              'measured with 90 deg x 30 turns).'))
     parser.add_argument('--rally-gyro-scale-pos', type=float, default=None,
                         help=('During the ET rally, gyro scale factor applied only to rotation in the '
-                              'heading-increasing direction (right turns). Default: none (the common factor 1.00579). '
-                              'Added 2026-11-08 to compare factors.'))
+                              'heading-increasing direction (right turns). Default: 1.0073 (2026-11-08, '
+                              'measured with 90 deg x 30 turns).'))
     parser.add_argument('--rally-gyro-drift-settle-sec', type=float, default=None,
                         help=('With --rally-gyro-drift-comp on: seconds to wait after raising the arm before '
                               'measuring (the arm vibrates). Default (unset) = 1.'))
