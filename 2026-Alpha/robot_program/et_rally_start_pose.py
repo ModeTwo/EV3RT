@@ -38,7 +38,7 @@ DOTS = [(i * P_MM, j * P_MM) for i in range(5) for j in range(5)]               
 START_MM = (-178.0, 3.5 * P_MM)
 START_HEADING_DEG = 0.0
 
-DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_1103_h8.json"
+DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_1108.json"
 
 # 真上から見た画像の範囲(車体の座標、mm)と1画素の大きさ。スタートでは止まっているので、少し広めに細かく見る。
 TOP_S = 0.5
@@ -50,7 +50,9 @@ DOT_DIAM_MM = (34.0, 54.0)       # 灰色の点の直径として受け入れる
 ASSOC_MARKER_MM = 80.0           # 見えたマーカーと、計画のスタートから見て予想したマスの中心が、これより離れていたら使わない
 ASSOC_DOT_MM = 60.0
 # 縮尺の当てはめ(fit_pose の fit_scale): 較正のずれで床の距離が全体に k 倍に見えると、位置が (1-k)×距離 だけずれる
-# (11/03の較正で約2.5%短く、机上で約14mm)。縮む中心はカメラの真下(車軸の11mm前、calib_1103)とする。
+# (11/03の較正で約2.5%短く、机上で約14mm)。縮む中心はカメラの真下(車軸の約11〜17mm前)とする。
+# 11/08: マットの上では置き場所でロボットの前後の傾き(カメラの下向き)が約0.8°変わり、50〜70cm先で約1.5〜2cmずれる。
+# 縮尺の当てはめはその近似(本当は置き場所ごとに下向きを当てはめたい)。
 CAM_NADIR_MM = (11.0, 0.0)
 SCALE_MIN_POINTS = 3
 SCALE_MIN_SPREAD_MM = 80.0       # 点の広がり(重心からの距離の平均)がこれより小さいと縮尺は当てない
@@ -75,6 +77,13 @@ class GroundCamera:
         pts = np.stack([XX.ravel(), YY.ravel(), np.zeros(XX.size)], 1)
         p, _ = cv2.projectPoints(pts, rv, t, K, dist)
         self.map = p.reshape(XX.shape + (2,)).astype(np.float32)
+        # 画像の中に入っている所(端から EDGE_PX 画素より内側)。端で切れた点・マーカーは中心がずれるので使わない(11/08)。
+        w, h = d["lens"]["size"]
+        e = self.EDGE_PX
+        self.valid = ((self.map[..., 0] >= e) & (self.map[..., 0] <= w - 1 - e) &
+                      (self.map[..., 1] >= e) & (self.map[..., 1] <= h - 1 - e))
+
+    EDGE_PX = 3
 
     def top_view(self, img):
         return self.cv2.remap(img, self.map[..., 0], self.map[..., 1], self.cv2.INTER_LINEAR, borderValue=(255, 255, 255))
@@ -84,6 +93,16 @@ class GroundCamera:
         np = self.np
         pts = np.asarray(pts, np.float64).reshape(-1, 2)
         return np.stack([self.top_x[1] - pts[:, 1] * self.top_s, self.top_y[1] - pts[:, 0] * self.top_s], 1)
+
+
+def _inside(cam, pts):
+    """真上から見た画像の点(列, 行)が、すべて元の画像の中(端から少し内側)に入っているか。"""
+    hgt, wid = cam.valid.shape
+    for x, y in pts:
+        xi, yi = int(round(x)), int(round(y))
+        if not (0 <= xi < wid and 0 <= yi < hgt) or not cam.valid[yi, xi]:
+            return False
+    return True
 
 
 def detect_ground(cam, img):
@@ -123,6 +142,8 @@ def detect_ground(cam, img):
             continue
         c = np.array([cx, cy])
         box = c + (cv2.boxPoints(rect) - c) * ((side + 1.0) / side)
+        if not _inside(cam, box):
+            continue
         g = cam.to_mm(box)
         dirs = []
         for q in range(4):
@@ -150,6 +171,9 @@ def detect_ground(cam, img):
         ys, xs = np.nonzero(lab == i)
         (ccx, ccy), rr = cv2.minEnclosingCircle(np.stack([xs, ys], 1).astype(np.float32))
         if not (r_lo <= rr <= r_hi) or area / (math.pi * rr * rr) < 0.65:
+            continue
+        ring = [(ccx + (rr + 3) * math.cos(a), ccy + (rr + 3) * math.sin(a)) for a in np.linspace(0, 2 * math.pi, 16, endpoint=False)]
+        if not _inside(cam, ring):
             continue
         out["dots"].append(tuple(float(x) for x in cam.to_mm([(cen[i][0], cen[i][1])])[0]))
     return out
