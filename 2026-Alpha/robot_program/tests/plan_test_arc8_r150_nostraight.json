@@ -1,0 +1,118 @@
+{
+ "note_1108": "前進の8の字(半径150)の12本だけで止まる(最後の40mm直進なし)。plan_test_arc8_r150.jsonで実測がログより約2cm後ろだったため、円弧と最後の直進のどちらで生じるかを分ける。終わりはスタートと同じ位置・向き0の見込み。",
+ "expected_end": {
+  "front_mm": 0.0,
+  "right_mm": 0.0,
+  "heading_deg": 0.0
+ },
+ "steps": [
+  {
+   "type": "arc",
+   "target_heading_deg": -180.0,
+   "sweep_deg": 180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": 0.0,
+   "sweep_deg": 180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -180.0,
+   "sweep_deg": -180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": 0.0,
+   "sweep_deg": -180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -180.0,
+   "sweep_deg": 180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": 0.0,
+   "sweep_deg": 180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -180.0,
+   "sweep_deg": -180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": 0.0,
+   "sweep_deg": -180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -180.0,
+   "sweep_deg": 180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": 0.0,
+   "sweep_deg": 180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -180.0,
+   "sweep_deg": -180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": 0.0,
+   "sweep_deg": -180.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": true,
+   "label": null
+  }
+ ]
+}
