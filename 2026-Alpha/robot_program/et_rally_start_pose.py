@@ -72,6 +72,10 @@ class GroundCamera:
         j = d["jig"][0]
         rv = np.array(j["rvec"], dtype=float); t = np.array(j["tvec"], dtype=float).reshape(3)
         self.top_x, self.top_y, self.top_s = top_x, top_y, top_s
+        # 下向きも当てはめる位置の出し方(fit_pose_pitch)で使う
+        self.K, self.dist, self.rvec, self.tvec = K, dist, rv, t
+        self.R0 = cv2.Rodrigues(rv)[0]
+        self.C0 = -self.R0.T @ t
         xs = np.arange(top_x[1], top_x[0], -top_s); ys = np.arange(top_y[1], top_y[0], -top_s)
         YY, XX = np.meshgrid(ys, xs)
         pts = np.stack([XX.ravel(), YY.ravel(), np.zeros(XX.size)], 1)
@@ -253,6 +257,71 @@ def fit_pose(dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror
     return result
 
 
+def fit_pose_pitch(cam, dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror=False, iters=40):
+    """2026-11-08: 置き場所ごとに、カメラの下向きも一緒に当てはめて位置と向きを出す。
+    マットの上では置き場所でロボットの前後の傾きが変わり、カメラの下向きが約0.2〜0.8°変わる(50〜70cm先で1.5〜2cm)。
+    動かした距離が分かっている5か所(前に0/30/60/100mm、右に20mm)で、動きのずれが
+    縮尺なし9〜18mm・縮尺あり9〜17mm に対して、この方法は1.8〜4.1mm。
+    まず fit_pose(縮尺なし)で、見えたものをマス・点に結びつけ、その画素の位置に合うように
+    (下向きの補正, x, y, 向き) を当てはめる(数値微分のガウス・ニュートン、減衰つき)。
+    3点以上結びつかないとき・cam がないときは fit_pose(縮尺なし)の結果を返す。
+    戻り値: fit_pose と同じ dict に pitch_deg(下向きの補正)と rms_px を足したもの。"""
+    r0 = fit_pose(dets, nominal=nominal, mirror=mirror, fit_scale=False)
+    if r0 is None or cam is None or not hasattr(cam, "K"):
+        return r0
+    cv2, np = cam.cv2, cam.np
+    sgn = -1.0 if mirror else 1.0
+    pose = r0["pose"]
+    items = [(m["xy"], CELLS, ASSOC_MARKER_MM) for m in dets.get("markers", [])] + [(d, DOTS, ASSOC_DOT_MM) for d in dets.get("dots", [])]
+    body_pts, world = [], []
+    for xy, ref, lim in items:
+        w = _to_world(pose, (xy[0], sgn * xy[1]))
+        c = min(ref, key=lambda q: math.hypot(q[0] - w[0], q[1] - w[1]))
+        if math.hypot(c[0] - w[0], c[1] - w[1]) <= lim:
+            body_pts.append([xy[0], xy[1], 0.0]); world.append(c)
+    if len(world) < 3:
+        return r0
+    px0, _ = cv2.projectPoints(np.array(body_pts, float), cam.rvec, cam.tvec, cam.K, cam.dist)
+    px0 = px0.reshape(-1, 2)
+
+    def res(p):
+        c, s_ = math.cos(p[0]), math.sin(p[0])
+        R = cam.R0 @ np.array([[c, 0, s_], [0, 1, 0], [-s_, 0, c]])
+        t = -R @ cam.C0
+        a = math.radians(p[3])
+        body = [[(w[0] - p[1]) * math.cos(a) + (w[1] - p[2]) * math.sin(a),
+                 sgn * (-(w[0] - p[1]) * math.sin(a) + (w[1] - p[2]) * math.cos(a)), 0.0] for w in world]
+        px, _ = cv2.projectPoints(np.array(body, float), cv2.Rodrigues(R)[0], t, cam.K, cam.dist)
+        return (px.reshape(-1, 2) - px0).ravel()
+
+    p = np.array([0.0, pose[0], pose[1], pose[2]])
+    r = res(p)
+    lam = 1e-3
+    steps = (1e-5, 1e-3, 1e-3, 1e-4)
+    for _ in range(iters):
+        J = np.zeros((len(r), 4))
+        for j in range(4):
+            q = p.copy(); q[j] += steps[j]
+            J[:, j] = (res(q) - r) / steps[j]
+        A = J.T @ J
+        step = np.linalg.solve(A + lam * np.diag(np.diag(A) + 1e-9), -J.T @ r)
+        q = p + step
+        rq = res(q)
+        if (rq ** 2).sum() < (r ** 2).sum():
+            p, r = q, rq
+            lam = max(lam / 3.0, 1e-7)
+            if np.abs(step).max() < 1e-6:
+                break
+        else:
+            lam *= 5.0
+    if abs(math.degrees(p[0])) > 3.0:   # 当てはめが外れた(ありえない傾き)ときは使わない
+        return r0
+    out = dict(r0)
+    out.update(pose=(float(p[1]), float(p[2]), _nd(float(p[3]))), pitch_deg=math.degrees(p[0]),
+               rms_px=float(math.sqrt((r ** 2).mean())), scale=1.0)
+    return out
+
+
 def median_pose(results):
     """何枚分かの fit_pose の結果から、それぞれの真ん中の値(向きは予想まわりで)。"""
     if not results:
@@ -431,6 +500,7 @@ class EtRallyStartPoseCapture(Behaviour):
         self.ready = ready
         self.started = False
         self.counting_since = None
+        self.cam = None
 
     def update(self):
         global _measured
@@ -450,6 +520,7 @@ class EtRallyStartPoseCapture(Behaviour):
                 return Status.SUCCESS
             try:
                 cam = GroundCamera(self.calib_path)
+                self.cam = cam
                 from py_etrobo_util import et_rally_marker_detector
                 et_rally_marker_detector.set_detector(_marker_detector_factory(cam))
                 video.begin_et_rally_marker_read()
@@ -468,10 +539,11 @@ class EtRallyStartPoseCapture(Behaviour):
             self.frames += 1
             dets = markers[0].get("ground") if isinstance(markers[0], dict) else None
             if dets:
-                r = fit_pose(dets, mirror=self.mirror)
+                # 11/08: 下向きも当てはめる出し方を使う(動かした距離での答え合わせで一番合った)
+                r = fit_pose_pitch(self.cam, dets, mirror=self.mirror)
                 if r is not None:
                     self.results.append(r)
-                    # 縮尺を当てはめない場合も残す(実機で定規と比べて、どちらが合うか決めるため。11/08)
+                    # 比べるために、下向きを当てはめない場合も残す
                     r0 = fit_pose(dets, mirror=self.mirror, fit_scale=False)
                     if r0 is not None:
                         self.results_noscale.append(r0)
@@ -497,16 +569,17 @@ class EtRallyStartPoseCapture(Behaviour):
                          n_markers=max(r["n_markers"] for r in self.results), n_dots=max(r["n_dots"] for r in self.results),
                          spread_mm=max(math.hypot(r["pose"][0] - pose[0], r["pose"][1] - pose[1]) for r in self.results),
                          spread_deg=max(abs(_nd(r["pose"][2] - pose[2])) for r in self.results),
-                         scale=sorted(r.get("scale", 1.0) for r in self.results)[len(self.results) // 2])
+                         scale=sorted(r.get("scale", 1.0) for r in self.results)[len(self.results) // 2],
+                         pitch_deg=sorted(r.get("pitch_deg", 0.0) for r in self.results)[len(self.results) // 2])
         self.logger.info("start pose: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f) poses=%d/%d frames "
-                         "markers=%d dots=%d spread=%.1fmm/%.2fdeg scale=%.4f" % (
+                         "markers=%d dots=%d spread=%.1fmm/%.2fdeg pitch_fix=%+.2fdeg" % (
                              pose[0], pose[1], pose[2], pose[0] - START_MM[0], pose[1] - START_MM[1],
                              _nd(pose[2] - START_HEADING_DEG), len(self.results), self.frames,
                              _measured["n_markers"], _measured["n_dots"], _measured["spread_mm"], _measured["spread_deg"],
-                             _measured["scale"]))
+                             _measured["pitch_deg"]))
         p0 = median_pose(self.results_noscale)
         if p0 is not None:
-            self.logger.info("start pose without scale fit: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f)" % (
+            self.logger.info("start pose without pitch fit: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f)" % (
                 p0[0], p0[1], p0[2], p0[0] - START_MM[0], p0[1] - START_MM[1], _nd(p0[2] - START_HEADING_DEG)))
         return Status.SUCCESS
 
