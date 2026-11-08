@@ -1466,6 +1466,9 @@ def _run_main(argv, startup_cleanup):
                         help=('Raise the arm while driving when the plan file says the arm can be up before the legs are '
                               'reached (et_rally_arm.must_be_up_sec >= --rally-arm-up-sec + 0.5); otherwise raise it at the '
                               'start as before (default off).'))
+    parser.add_argument('--rally-camera-log', type=int, default=None,
+                        help=('During the ET rally run, save every N-th camera frame (JPEG) with the capture time and the '
+                              'course position to run_logs/et_camera_* (default: none).'))
     parser.add_argument('--rally-arm-up-sec', type=float, default=None,
                         help='Seconds the arm needs to go up, for --rally-arm-while-driving (default 3.0, provisional).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
@@ -1566,6 +1569,12 @@ def _run_main(argv, startup_cleanup):
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-arm-while-driving requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(mission_config, et_rally_arm_while_driving=(args.rally_arm_while_driving == 'on'))
+    if args.rally_camera_log is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-camera-log requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 1 <= args.rally_camera_log <= 30:
+            parser.error('--rally-camera-log must be between 1 and 30')
+        mission_config = dataclasses.replace(mission_config, et_rally_camera_log_every=args.rally_camera_log)
     if args.rally_arm_up_sec is not None:
         if not 0.5 <= args.rally_arm_up_sec <= 10.0:
             parser.error('--rally-arm-up-sec must be between 0.5 and 10')

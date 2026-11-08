@@ -206,6 +206,9 @@ class RaceConfig:
     # 2026-11-06: 計画から見て間に合うなら、アームを走りながら上げる(behaviours/et_rally_arm.py arm_while_driving)。
     # 既定None=しない。アームを上げるのにかかる秒(仮、TODO実測)と、余裕の秒。
     et_rally_arm_while_driving: Optional[bool] = None
+    # 2026-11-08: 走行中のカメラの画像を、この枚数に1枚、撮った時刻とコース上の位置つきで run_logs/et_camera_* に残す
+    # (et_rally_course_pose.py、走りながらのカメラ補正の確認用)。既定None=残さない。
+    et_rally_camera_log_every: Optional[int] = None
     et_rally_arm_up_sec: Optional[float] = 3.0
     et_rally_arm_margin_sec: Optional[float] = 0.5
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する

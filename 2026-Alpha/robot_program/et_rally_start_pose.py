@@ -340,10 +340,17 @@ def rejoin_steps(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
 # ---------------- 走り出しへの取り込み(状態) ----------------
 _measured = None          # EtRallyStartPoseCapture の結果 dict(pose=..., frames=..., ...)
 _pending_rejoin = None    # EtRallyApplyStartPose が引き直しを決めたときの実際の姿勢 (x, y, 向き度)
+_applied = None           # EtRallyApplyStartPose が取り込んだ姿勢(コース上の位置の走り出しに使う)
 
 
 def measured_start_pose():
     return _measured
+
+
+def applied_start_pose():
+    """取り込んだスタートの姿勢 (x, y, 向き度)。取り込んでいなければ None。
+    向きだけを取り込んだとき(計画の座標が分からないとき)は、位置は計画のスタートとする。"""
+    return _applied
 
 
 def apply_pending_rejoin(steps, logger=None):
@@ -413,6 +420,7 @@ class EtRallyStartPoseCapture(Behaviour):
             self.frames = 0
             _measured = None
             video = getattr(runtime, "video", None)
+            self.prev_mode = getattr(video, "target_interested", None)
             if video is None:
                 self.logger.warning("start pose: no camera, skipped")
                 return Status.SUCCESS
@@ -454,6 +462,8 @@ class EtRallyStartPoseCapture(Behaviour):
             et_rally_marker_detector.set_detector(None)
         except Exception:
             pass
+        from .et_rally_course_pose import restore_video_mode
+        restore_video_mode(getattr(self, "prev_mode", None))
         if len(self.results) < self.min_frames:
             self.logger.warning("start pose: not enough frames (%d poses from %d frames), using the plan start" % (
                 len(self.results), self.frames))
@@ -492,8 +502,9 @@ class EtRallyApplyStartPose(Behaviour):
         self.max_offset_deg = float(max_offset_deg)
 
     def update(self):
-        global _pending_rejoin
+        global _pending_rejoin, _applied
         _pending_rejoin = None
+        _applied = None
         m = _measured
         if m is None:
             self.logger.info("start pose: not measured, start as planned")
@@ -509,7 +520,9 @@ class EtRallyApplyStartPose(Behaviour):
             gyro.set_heading_offset(getattr(runtime, "course", -1) * dth)
         else:
             self.logger.warning("start pose: gyro has no heading offset (EtRallyHeading not installed), heading not applied")
+        _applied = (x, y, h)
         if not self.plan_frame_known:
+            _applied = (START_MM[0], START_MM[1], h)
             how = "heading only (plan frame unknown)"
         elif math.hypot(dx, dy) >= self.rejoin_min_mm:
             _pending_rejoin = (x, y, h)

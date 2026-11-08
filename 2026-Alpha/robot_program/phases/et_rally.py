@@ -20,6 +20,8 @@ from ..et_rally_heading import (EtRallyArmUpWithDriftMeasure, EtRallyPostStopGyr
                                 RestoreEtRallyHeading)
 from ..runtime import runtime
 from ..et_rally_start_pose import EtRallyApplyStartPose, EtRallyStartPoseCapture
+from ..et_rally_course_pose import (EtRallyAnchorCoursePose, EtRallyCameraLogStart, EtRallyCameraLogStop,
+                                    EtRallyReleaseCoursePose)
 
 
 class SetGyroScaleDisabled(Behaviour):
@@ -162,6 +164,13 @@ def build_et_rally_phase(context, config):
         raise ValueError(
             "Unknown ET rally strategy source: " + str(config.et_rally_strategy_source)
         )
+    # 2026-11-08: コース上の自分の位置(et_rally_course_pose.py)。スタートの取り込みか、走行中の画像を残すときに持つ。
+    camera_log_every = getattr(config, "et_rally_camera_log_every", None)
+    track_course = install_heading and (getattr(config, "et_rally_start_pose", None) or camera_log_every)
+    if track_course:
+        children.append(EtRallyAnchorCoursePose("et_rally course pose"))
+    if camera_log_every:
+        children.append(EtRallyCameraLogStart("et_rally camera log", every_n=camera_log_every))
     execute = build_execute_strategy(context, config)
     if drive_arm:
         # 走りながらアームを上げる(走りとアームを同じtickで進める)。両方終わったら次へ。
@@ -173,6 +182,10 @@ def build_et_rally_phase(context, config):
     # ET用の直進は、区間が連続するゲート通過中に止まらないよう終了時のブレーキを持たない。
     # 最後の区間の後は、ここで明示的に停止する(単体テストでは、この後は何も動かさないため必須)。
     children.append(StopNow(name="et_rally final stop"))
+    if camera_log_every:
+        children.append(EtRallyCameraLogStop("et_rally camera log stop"))
+    if track_course:
+        children.append(EtRallyReleaseCoursePose("et_rally course pose release"))
     post_measure_sec = getattr(config, "et_rally_gyro_post_measure_sec", None)
     if post_measure_sec:
         children.append(EtRallyPostStopGyroMeasure("et_rally gyro post measure", post_measure_sec))

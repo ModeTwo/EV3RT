@@ -83,6 +83,8 @@ class EtRallyHeading(ScaledGyro):
         # 2026-11-06: スタートでカメラから測った向きのずれ(ジャイロの向きの単位、度)。get_angle に足す
         # (et_rally_start_pose.py)。計画の向きと実際の向きを合わせるため。
         self.heading_offset = 0.0
+        # 2026-11-08: 向きと位置を更新するたびに呼ぶ関数 f(self, heading)(et_rally_course_pose.py がコース上の位置を持つため)。
+        self.pose_listener = None
 
     def set_heading_offset(self, offset_deg):
         self.get_angle()   # ここまでの位置を、今までの向きで確定させる
@@ -162,6 +164,8 @@ class EtRallyHeading(ScaledGyro):
         heading += self.heading_offset
         if self.float_heading:
             self._update_pose(heading)
+            if self.pose_listener is not None:
+                self.pose_listener(self, heading)
         return heading
 
     def reset(self):
@@ -184,7 +188,9 @@ class EtRallyHeading(ScaledGyro):
 def et_pose_text():
     """ETラリー用の位置(四捨五入前の向きで計算)をログ用の文字列で返す。使っていなければ空文字。"""
     pose_text = getattr(runtime.gyro_sensor, "pose_text", None)
-    return pose_text() if pose_text is not None else ""
+    text = pose_text() if pose_text is not None else ""
+    from . import et_rally_course_pose
+    return text + et_rally_course_pose.text()
 
 
 def set_et_turning(turning):
