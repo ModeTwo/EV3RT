@@ -1,0 +1,191 @@
+{
+  "note_1109": "2026-11-09: 小さい(44度)その場旋回の時間を見るテスト。11/08の後退+旋回の周回で、後退で止まった直後の44度の旋回のphase1に3.4秒かかった。「後退150mm→-44度→0度→前進150mm→+44度→0度」を5回(旋回20回、後退直後が5回)。スタートに戻るので、終わりの位置で旋回の位置ずれも見られる。--rally-turn-sync-decel を変えて比べる(既定40,40 / 40,40,0.25,2 / 40,50)。",
+  "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution.",
+  "expected_end": {
+    "front_mm": 0.0,
+    "right_mm": 0.0,
+    "heading_deg": 0.0
+  },
+  "steps": [
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 150.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -44.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 150.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 44.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 150.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -44.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 150.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 44.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 150.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -44.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 150.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 44.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 150.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -44.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 150.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 44.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 150.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -44.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 150.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 44.0,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "label": null
+    }
+  ]
+}

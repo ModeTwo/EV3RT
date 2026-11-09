@@ -98,6 +98,8 @@ WHEEL_SYNC_MIN_POWER = 30
 # 2026-10-31: wheel_sync中に両輪の回転量がこのtick数より長く増えなければ、1tickごとに基準の出力をSTEPずつ上げる。
 WHEEL_SYNC_STALL_TICKS = 3
 WHEEL_SYNC_STALL_STEP = 2
+# 2026-11-09: sync_decelの4つ目(這う判定)を使うとき、両輪の回転量の増え方を見るtick数。
+WHEEL_SYNC_CRAWL_WINDOW = 5
 # 2026-11-01: 片輪だけの区間(tail)で、最後にこの度数以上進んでから同じtick数が過ぎたら止まりとみなす。
 TAIL_STALL_MIN_DEG = 2
 # 2026-11-01: パルスで左右の車輪の回転量の合計がこれ未満なら止まりとみなし、次のパルスの出力をSTEP上げる
@@ -184,6 +186,11 @@ class EtRallyTurnOneShot(Behaviour):
         # 2026-10-31: wheel_sync有効時の終盤の減速(エンコーダ度, 出力)。Noneならdecel_deg/decel_power。
         # 同期ありでは最後まで両輪が速いまま止まるため、止めた後の流れが約12度(同期なしは4〜6度)に増え、
         # phase1が右回り平均9度・左回り13度行き過ぎて、同期していないパルスが8〜20度に大きくなっていた。
+        # 2026-11-09: (度, 出力, 割合, 這う判定) の4つまで。割合=減速区間の上限を旋回の何割にするか(省略時0.5)。
+        # 這う判定=両輪の回転量の合計がWHEEL_SYNC_CRAWL_WINDOW tickの平均でこの度/tick未満なら、止まりと同じに
+        # 出力を上げる(省略時・0は従来どおり、まったく動かないときだけ)。11/08の後退+旋回の周回で、44度の旋回の
+        # phase1に3.4秒かかった(車輪の目標80度の半分の40度が減速区間で出力40、両輪合計約1度/tickで這い、
+        # 1度でも進むと止まりの数がリセットされて出力が上がらなかった。普通は90度で約1.3秒)。
         self.sync_decel = sync_decel
         # 2026-10-31: phase1の回転量を「実際の角度 = 係数×指令の角度 + 一定の流れ(度)」で見込む
         # ((headingが増える向きの係数, 流れ), (減る向きの係数, 流れ))。指定時はphase1_scaleを使わない。
@@ -307,6 +314,7 @@ class EtRallyTurnOneShot(Behaviour):
         # 同じ向きに動いていたため、区間ごとの左右の回転量を残す。
         self.wheel_marks = [("start", self.start_r, self.start_l, current_heading)]
         self.sync_last_progress = -1
+        self.sync_progress_hist = []
         self.sync_stall_ticks = 0
         self.sync_stall_logged = False
         self.tail_stall_logged = False
@@ -318,7 +326,7 @@ class EtRallyTurnOneShot(Behaviour):
                 runtime.plotter.get_distance(), self.__class__.__name__, current_heading,
                 self.target_heading, self.target_motor_deg, self.applied_phase1_scale,
                 (" wheel_sync=%.1f" % self.wheel_sync_gain if self.wheel_sync_gain > 0.0 else "")
-                + (" sync_decel=%g,%d" % tuple(self.sync_decel)
+                + (" sync_decel=%s" % ",".join("%g" % v for v in self.sync_decel)
                    if self.wheel_sync_gain > 0.0 and self.sync_decel is not None else "")))
 
     def _tick_phase1(self):
@@ -409,18 +417,27 @@ class EtRallyTurnOneShot(Behaviour):
         delta_l_in_r = delta_l * scale
         lead = delta_r - delta_l_in_r
         remaining = self.right_target_motor_deg - (delta_r + delta_l_in_r) / 2.0
+        crawl = 0.0
         if self.sync_decel is not None:
-            decel_deg, decel_power = self.sync_decel
-            # 小さい旋回でも減速するよう、減速区間は旋回の半分までにする。
-            zone = min(decel_deg, self.right_target_motor_deg / 2.0)
+            decel_deg, decel_power = self.sync_decel[0], self.sync_decel[1]
+            frac = self.sync_decel[2] if len(self.sync_decel) > 2 else 0.5
+            crawl = self.sync_decel[3] if len(self.sync_decel) > 3 else 0.0
+            # 小さい旋回でも減速するよう、減速区間は旋回のfrac(既定は半分)までにする。
+            zone = min(decel_deg, self.right_target_motor_deg * frac)
             p = decel_power if remaining < zone else self.main_power
         else:
             p = self.decel_power if use_decel and remaining < self.decel_deg else self.main_power
         # 2026-10-31: 減速中に出力が不感帯(CW35/CCW40前後)付近まで下がると両輪が止まったまま進まないことがある
         # (出力50・減速(40,40)の0⇔110度30回で、1回だけ約6秒止まっていた)。回転量が増えないtickが続いたら
-        # 基準の出力を少しずつ上げる。
+        # 基準の出力を少しずつ上げる。2026-11-09: crawl>0なら、増え方がcrawl度/tick未満のときも同じに数える。
         progress = delta_r + delta_l
-        if progress == self.sync_last_progress:
+        slow = False
+        if crawl > 0.0:
+            self.sync_progress_hist.append(progress)
+            del self.sync_progress_hist[:-(WHEEL_SYNC_CRAWL_WINDOW + 1)]
+            slow = (len(self.sync_progress_hist) > WHEEL_SYNC_CRAWL_WINDOW
+                    and self.sync_progress_hist[-1] - self.sync_progress_hist[0] < crawl * WHEEL_SYNC_CRAWL_WINDOW)
+        if progress == self.sync_last_progress or slow:
             self.sync_stall_ticks += 1
         else:
             self.sync_stall_ticks = 0
@@ -429,8 +446,9 @@ class EtRallyTurnOneShot(Behaviour):
             p = min(100, p + WHEEL_SYNC_STALL_STEP * (self.sync_stall_ticks - WHEEL_SYNC_STALL_TICKS))
             if not self.sync_stall_logged:
                 self.sync_stall_logged = True
-                self.logger.info("%+06d %s.phase1 wheel_sync stall: no wheel motion for %d ticks, raising power" % (
-                    runtime.plotter.get_distance(), self.__class__.__name__, self.sync_stall_ticks))
+                self.logger.info("%+06d %s.phase1 wheel_sync stall: %s for %d ticks, raising power" % (
+                    runtime.plotter.get_distance(), self.__class__.__name__,
+                    "slow wheel motion" if slow else "no wheel motion", self.sync_stall_ticks))
         correction = self.wheel_sync_gain * lead
         right_mag = int(round(max(WHEEL_SYNC_MIN_POWER, min(100, p - correction))))
         left_mag = int(round(max(WHEEL_SYNC_MIN_POWER, min(100, p + correction))))

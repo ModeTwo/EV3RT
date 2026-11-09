@@ -1326,9 +1326,11 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument(
         '--rally-turn-sync-decel',
         default=None,
-        help=('one_shot with --rally-turn-wheel-sync only: "DEG,POWER". Both wheels slow to POWER for the '
-              'last DEG encoder degrees of phase1 (capped at half of the turn) so the turn coasts less after '
-              'braking. Unset = the normal 15 deg / power 50.'),
+        help=('one_shot with --rally-turn-wheel-sync only: "DEG,POWER[,FRAC[,CRAWL]]". Both wheels slow to POWER '
+              'for the last DEG encoder degrees of phase1 (capped at FRAC of the turn, default 0.5) so the turn '
+              'coasts less after braking. CRAWL (deg/tick, both wheels together, default 0 = off): when the '
+              'wheels advance slower than this over 5 ticks, raise the power like a stall (2026-11-09: a 44 deg '
+              'turn crawled for 3.4 s). Default: 40,40.'),
     )
     parser.add_argument(
         '--rally-turn-pre-stop',
@@ -1617,13 +1619,21 @@ def _run_main(argv, startup_cleanup):
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-turn-sync-decel requires --mission rally-drive, bottle-rally or rally-sumo')
         try:
-            sync_decel_deg, sync_decel_power = (float(v) for v in args.rally_turn_sync_decel.split(','))
+            sync_decel_values = [float(v) for v in args.rally_turn_sync_decel.split(',')]
         except ValueError:
-            parser.error('--rally-turn-sync-decel must be "DEG,POWER" (e.g. 40,40)')
+            sync_decel_values = []
+        if not 2 <= len(sync_decel_values) <= 4:
+            parser.error('--rally-turn-sync-decel must be "DEG,POWER[,FRAC[,CRAWL]]" (e.g. 40,40 or 40,40,0.25,2)')
+        sync_decel_deg, sync_decel_power = sync_decel_values[:2]
         if not (0.0 <= sync_decel_deg <= 200.0 and 35.0 <= sync_decel_power <= 100.0):
             parser.error('--rally-turn-sync-decel DEG must be within 0..200 and POWER within 35..100')
+        if len(sync_decel_values) > 2 and not 0.0 <= sync_decel_values[2] <= 1.0:
+            parser.error('--rally-turn-sync-decel FRAC must be within 0..1')
+        if len(sync_decel_values) > 3 and not 0.0 <= sync_decel_values[3] <= 20.0:
+            parser.error('--rally-turn-sync-decel CRAWL must be within 0..20')
         mission_config = dataclasses.replace(
-            mission_config, et_rally_turn_sync_decel=(sync_decel_deg, int(sync_decel_power)))
+            mission_config, et_rally_turn_sync_decel=(sync_decel_deg, int(sync_decel_power),
+                                                      *sync_decel_values[2:]))
     if args.rally_turn_pre_stop is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-turn-pre-stop requires --mission rally-drive, bottle-rally or rally-sumo')
