@@ -12,17 +12,17 @@ from ..behaviours.section_motion import distance_motion
 
 # 色ごとの (ドロップゾーン側への進入方位, ゾーンまでの距離[mm])。
 # 方位はドロップコース基準。既存の方位座標系ではゾーン側が負方向なので、
-# 30/20/10度をそれぞれ -30/-20/-10度として指定する。
+# 色別の目標方位は下記の表を参照する。
 _DROP_ROUTE = {
-    BottleColor.YELLOW: (-30.0, 400.0),  # 黄: -30度で40 cm
-    BottleColor.BLUE: (-20.0, 700.0),    # 青: -20度で70 cm
-    BottleColor.RED: (-15.0, 900.0),     # 赤: -15度で90 cm
+    BottleColor.YELLOW: (-30.0, 430.0),  # 黄: -30度で430 mm
+    BottleColor.BLUE: (-20.0, 720.0),    # 青: -20度で720 mm
+    BottleColor.RED: (-18.0, 920.0),     # 赤: -18度で920 mm
 }
 
-# 色ごとの後退距離[mm]。黄は従来どおり10 cm。
+# 色ごとの後退距離[mm]。
 _DROP_BACK_DISTANCE_MM = {
-    BottleColor.YELLOW: 100.0,
-    BottleColor.BLUE: 200.0,
+    BottleColor.YELLOW: 80.0,
+    BottleColor.BLUE: 190.0,
     BottleColor.RED: 200.0,
 }
 
