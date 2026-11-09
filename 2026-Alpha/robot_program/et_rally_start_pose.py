@@ -9,7 +9,7 @@
   1. EtRallyStartPoseCapture: ジャイロの測り直しで止まっている間に、カメラの画像から
      マーカー(マスの中心、1辺約50mm)と灰色の点(格子の点、直径約44mm)を探し、位置と向きを出す。
      何枚か出して真ん中の値(中央値)を使う。
-  2. EtRallyApplyStartPose: 計画のスタート(START_MM・向き0)とのずれを、
+  2. EtRallyApplyStartPose: 計画のスタート(START_MM・START_HEADING_DEG)とのずれを、
      - 向き: ジャイロの向きに足す(EtRallyHeading.set_heading_offset)。
      - 位置: ずれが rejoin_min_mm 以上なら、最初のつなぎを引き直す(rejoin_steps)。
              それより小さければ、最初の区間の自分の位置の初期値にする(et_rally_path_segment.set_start_position)。
@@ -34,9 +34,10 @@ from .runtime import runtime
 P_MM = 246.4                     # 格子の点の間隔(実測246mm、経路を作る道具は24.64cm)
 CELLS = [((i + 0.5) * P_MM, (j + 0.5) * P_MM) for i in range(4) for j in range(4)]   # マーカー(マスの中心)
 DOTS = [(i * P_MM, j * P_MM) for i in range(5) for j in range(5)]                      # 灰色の点
-# 計画のスタート(hybrid_route.py の START: x = 2*2P - (4P + 17.8cm)、y = 3.5P、向き0)
-START_MM = (-178.0, 3.5 * P_MM)
-START_HEADING_DEG = 0.0
+# 計画のスタート(経路を作る道具と同じ座標)
+# 2026-11-09: 新スタート = 今のゴール地点(hybrid_route.py の start_at='goal': x = 4P + 14.9cm、y = 3.5P、向き180)
+START_MM = (4 * P_MM + 149.0, 3.5 * P_MM)
+START_HEADING_DEG = 180.0
 
 DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_1108.json"
 
@@ -339,7 +340,7 @@ def _integrate(steps, k, start=(START_MM[0], START_MM[1], START_HEADING_DEG)):
     x, y, h = start
     for s in steps[:k]:
         if s["type"] == "move":
-            hh = -float(s["target_heading_deg"]); th = math.radians(hh + (180.0 if s.get("reverse") else 0.0))
+            hh = START_HEADING_DEG - float(s["target_heading_deg"]); th = math.radians(hh + (180.0 if s.get("reverse") else 0.0))
             x += float(s["distance_mm"]) * math.cos(th); y += float(s["distance_mm"]) * math.sin(th); h = hh
         elif s["type"] == "arc":
             sw = -float(s["sweep_deg"]); r = float(s["radius_mm"]); sg = 1.0 if sw > 0 else -1.0
@@ -350,6 +351,11 @@ def _integrate(steps, k, start=(START_MM[0], START_MM[1], START_HEADING_DEG)):
         else:
             raise ValueError("turn before the join point")
     return (x, y, h)
+
+
+def _plan_heading(h):
+    """コースの向き(度)→計画の向き(target_heading_deg)。スタートの向きが計画の0で、右回りが+。"""
+    return round(_nd(START_HEADING_DEG - h), 3)
 
 
 def _step_len(s):
@@ -419,13 +425,13 @@ def rejoin_steps(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
         return None, "too long (%.0f mm vs %.0f mm)" % (tot, old)
     new = []
     if math.degrees(a1) > 0.05:
-        new.append({"type": "arc", "target_heading_deg": round(-(actual[2] + t1 * math.degrees(a1)), 3),
+        new.append({"type": "arc", "target_heading_deg": _plan_heading(actual[2] + t1 * math.degrees(a1)),
                     "sweep_deg": round(-t1 * math.degrees(a1), 3), "radius_mm": radius_mm,
                     "reverse": False, "stop": False, "label": None})
-    new.append({"type": "move", "target_heading_deg": round(-math.degrees(phi), 3), "distance_mm": round(Ls, 1),
+    new.append({"type": "move", "target_heading_deg": _plan_heading(math.degrees(phi)), "distance_mm": round(Ls, 1),
                 "reverse": False, "stop": False, "label": None})
     if math.degrees(a2) > 0.05:
-        new.append({"type": "arc", "target_heading_deg": round(-B[2], 3), "sweep_deg": round(-t2 * math.degrees(a2), 3),
+        new.append({"type": "arc", "target_heading_deg": _plan_heading(B[2]), "sweep_deg": round(-t2 * math.degrees(a2), 3),
                     "radius_mm": radius_mm, "reverse": False, "stop": False, "label": None})
     return new + list(steps[k:]), "rejoin %d steps -> %d steps, %.0f mm (plan %.0f mm)" % (k, len(new), tot, old)
 
@@ -591,7 +597,7 @@ class EtRallyApplyStartPose(Behaviour):
 
     def __init__(self, name, rejoin_min_mm=5.0, max_offset_mm=80.0, max_offset_deg=15.0, plan_frame_known=True):
         super().__init__(name)
-        # plan_frame_known: 計画が経路を作る道具の座標(スタート START_MM・向き0、gyro = -向き)か。
+        # plan_frame_known: 計画が経路を作る道具の座標(スタート START_MM・START_HEADING_DEG、gyro = スタートの向き - 向き)か。
         # 受信した計画(古い計画の道具)は座標の決め方が違うので、向きだけを取り込む。
         self.plan_frame_known = bool(plan_frame_known)
         self.rejoin_min_mm = float(rejoin_min_mm)

@@ -173,7 +173,8 @@ def build_et_rally_phase(context, config):
     if track_course:
         children.append(EtRallyAnchorCoursePose("et_rally course pose"))
     if camera_log_every:
-        children.append(EtRallyCameraLogStart("et_rally camera log", every_n=camera_log_every))
+        children.append(EtRallyCameraLogStart("et_rally camera log", every_n=camera_log_every,
+                                              exposure=getattr(config, "et_rally_camera_exposure", None)))
     execute = build_execute_strategy(context, config)
     if drive_arm:
         # 走りながらアームを上げる(走りとアームを同じtickで進める)。両方終わったら次へ。

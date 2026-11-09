@@ -8,7 +8,8 @@
   走り出しの時点の et_loc を、コース上の走り出しの姿勢(スタートで測った位置、なければ計画のスタート)に合わせる。
 - 座標: x はゴール側が+、y はスタートとゴールの列の側が+(mm)、向きは左回りが+(度)。et_rally_start_pose.py と同じ。
   et_loc は plotter と同じ形(x += d·sin(a)、y += d·cos(a)、a = ジャイロの向き)なので、
-  コースの dx = et_loc の dy、コースの dy = course × et_loc の dx、コースの向き = course × ジャイロの向き。
+  スタートの向き h0(START_HEADING_DEG)のとき、(u, v) = (et_loc の dy, course × et_loc の dx) を h0 だけ回したものがコースの dx, dy、
+  コースの向き = h0 + course × ジャイロの向き(ジャイロの0がスタートの向き)。
 - 補正量(camera_correction): カメラで分かったずれを足す(今は足すだけの入れ物。使い方は実機のデータを見て決める)。
 - 履歴: 直近約2秒の (時刻, x, y, 向き, 走った距離) を残す。撮った時刻の位置を引くため。
 
@@ -38,9 +39,11 @@ def _on_pose(gyro, heading):
     c = _anchor["course"]
     dpx = gyro.pose_x - _anchor["plot"][0]
     dpy = gyro.pose_y - _anchor["plot"][1]
-    x = _anchor["plan"][0] + dpy + _correction[0]
-    y = _anchor["plan"][1] + c * dpx + _correction[1]
-    h = c * heading + _correction[2]
+    cos_h0, sin_h0 = _anchor["rot"]
+    u, v = dpy, c * dpx
+    x = _anchor["plan"][0] + u * cos_h0 - v * sin_h0 + _correction[0]
+    y = _anchor["plan"][1] + u * sin_h0 + v * cos_h0 + _correction[1]
+    h = _anchor["h0"] + c * heading + _correction[2]
     try:
         dist = runtime.plotter.get_distance()
     except Exception:
@@ -51,7 +54,8 @@ def _on_pose(gyro, heading):
 
 def anchor(plan_pose, logger=None):
     """今の et_loc を、コース上の姿勢 plan_pose=(x, y, 向き度) に合わせる。向きはジャイロ側で合わせてある前提
-    (スタートの取り込みで set_heading_offset 済み、なければ計画のスタートの向き0)。"""
+    (スタートの取り込みで set_heading_offset 済み、なければ計画のスタートの向き)。"""
+    from .et_rally_start_pose import START_HEADING_DEG
     global _anchor, _last
     gyro = runtime.gyro_sensor
     if not hasattr(gyro, "pose_listener"):
@@ -60,7 +64,8 @@ def anchor(plan_pose, logger=None):
         return False
     gyro.get_angle()   # ここまでの位置を確定させる
     _anchor = dict(plot=(gyro.pose_x, gyro.pose_y), plan=(float(plan_pose[0]), float(plan_pose[1])),
-                   course=1 if getattr(runtime, "course", -1) == 1 else -1)
+                   course=1 if getattr(runtime, "course", -1) == 1 else -1, h0=START_HEADING_DEG,
+                   rot=(math.cos(math.radians(START_HEADING_DEG)), math.sin(math.radians(START_HEADING_DEG))))
     _correction[:] = [0.0, 0.0, 0.0]
     _history.clear()
     _last = None
@@ -144,10 +149,13 @@ class EtRallyCameraLogStart(Behaviour):
 
     state = None
 
-    def __init__(self, name, every_n=5, quality=90):
+    def __init__(self, name, every_n=5, quality=90, exposure=None):
         super().__init__(name)
         self.every_n = max(1, int(every_n))
         self.quality = int(quality)
+        # 2026-11-09: 露出を手動で固定する値(V4L2の単位、1=100マイクロ秒。50なら5ms)。None なら自動のまま。
+        # カメラの設定は画像を受け取るスレッドからしか触れないので、最初の画像が来たときに設定する。
+        self.exposure = exposure
 
     def update(self):
         import json
@@ -166,9 +174,21 @@ class EtRallyCameraLogStart(Behaviour):
         folder.mkdir(parents=True, exist_ok=True)
         meta = open(folder / "meta.jsonl", "w", encoding="utf-8")
         st = dict(count=0, saved=0, folder=folder, meta=meta, prev=getattr(video, "target_interested", None))
-        every_n, quality = self.every_n, self.quality
+        every_n, quality, exposure = self.every_n, self.quality, self.exposure
+        logger = self.logger
+        st["exposure_set"] = False
 
         def save(frame):
+            if not st["exposure_set"]:
+                st["exposure_set"] = True
+                try:
+                    if exposure is not None:
+                        video.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                        video.cap.set(cv2.CAP_PROP_EXPOSURE, float(exposure))
+                    logger.info("camera log: exposure request=%s auto=%s exposure=%s gain=%s" % (
+                        exposure, video.cap.get(cv2.CAP_PROP_AUTO_EXPOSURE), video.cap.get(cv2.CAP_PROP_EXPOSURE), video.cap.get(cv2.CAP_PROP_GAIN)))
+                except Exception as error:
+                    logger.warning("camera log: exposure setup failed (%r)" % (error,))
             st["count"] += 1
             if st["count"] % every_n:
                 return []
@@ -176,6 +196,11 @@ class EtRallyCameraLogStart(Behaviour):
             pose = at(t)
             name = "frame_%05d.jpg" % st["count"]
             cv2.imwrite(str(folder / name), frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+            if st["saved"] % 25 == 0:   # 自動露出のときに、走行中どんな露出になっているかを残す
+                try:
+                    logger.info("camera log: frame %s exposure=%s" % (name, video.cap.get(cv2.CAP_PROP_EXPOSURE)))
+                except Exception:
+                    pass
             meta.write(json.dumps({"file": name, "t": round(t, 4), "pose": None if pose is None else [round(v, 2) if v is not None else None for v in pose[1:]],
                                    "pose_t": None if pose is None else round(pose[0], 4)}) + "\n")
             st["saved"] += 1

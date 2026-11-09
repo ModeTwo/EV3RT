@@ -215,6 +215,8 @@ class RaceConfig:
     # 2026-11-08: 走行中のカメラの画像を、この枚数に1枚、撮った時刻とコース上の位置つきで run_logs/et_camera_* に残す
     # (et_rally_course_pose.py、走りながらのカメラ補正の確認用)。既定None=残さない。
     et_rally_camera_log_every: Optional[int] = None
+    # 2026-11-09: 走行中の画像を残すときの露出(V4L2の単位、1=100マイクロ秒。None=自動のまま)
+    et_rally_camera_exposure: Optional[int] = None
     et_rally_arm_up_sec: Optional[float] = 3.0
     et_rally_arm_margin_sec: Optional[float] = 0.5
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
