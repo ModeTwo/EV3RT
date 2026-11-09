@@ -2265,13 +2265,13 @@ def read_bottle_color_for_final_mission(mission, color_argument, check_tree):
 
     # 通常ミッションでは色の手入力を使わない。
 
-    if mission not in ('bottle-final', 'to-bottle', 'bottle-rally'):
+    if mission not in ('bottle-final', 'to-bottle', 'bottle-rally', 'bottle-sumo'):
 
         if color_argument is not None:
 
             raise ValueError(
 
-                '--bottle-color requires bottle-final, to-bottle or bottle-rally'
+                '--bottle-color requires bottle-final, to-bottle, bottle-rally or bottle-sumo'
 
             )
 
@@ -2393,7 +2393,7 @@ def _run_main(argv, startup_cleanup):
 
         default=None,
 
-        help='Held bottle color for bottle-final, to-bottle or bottle-rally',
+        help='Held bottle color for bottle-final, to-bottle, bottle-rally or bottle-sumo',
 
     )
 

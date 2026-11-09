@@ -1352,3 +1352,7 @@ summary.routeにpost_return_correction=false、return_angle_gate=false、push_he
 子ノードは従来の制御器を共有して担当工程を進める。正対/捕捉/旋回/押し出しの細かい状態処理とカメラ・記録の所有権は既存制御器に残すため、実際の構造はSequenceと制御器の二層である。Sequenceが工程を切り替える際、同一周期に共有制御器を二重にtickしない。外側の取消は制御器へ伝え制動・録画終了する。既存のNC_/ROUTE_状態名とログ形式、センサー確認、距離優先停止、戻り後の実停止方位、出力や閾値は変更しない。
 
 --check-treeで4工程が表示される。通常の旧相撲、sumo-align/catch/sensor/turn-testは変更しない。較正なしと較正ありの両方で同じ工程ツリーを使用する。PCで改修前後のモーター指令・センサー読取順・状態/記録の差分と子ノードの切替・取消を確認し、Pi/実走は別途検証する。
+
+## ボトルデリバリー → ET相撲
+
+専用ミッションと通し順序の接続・未実装区間は [DELIVERY_SUMO_INTEGRATION_v1.md](DELIVERY_SUMO_INTEGRATION_v1.md) を参照。

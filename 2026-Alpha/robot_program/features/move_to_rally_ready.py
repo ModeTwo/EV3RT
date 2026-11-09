@@ -115,7 +115,7 @@ def build_move_to_rally_ready(context, config):
         stop_on_success=(config.mission_mode == 'bottle-final' or
                          (config.mission_mode == 'configured' and
                           not (config.enable_et_rally and config.et_rally_laps > 0) and
-                          not config.enable_finish)),
+                          not config.enable_finish and not config.enable_et_sumo)),
     ))
     # 最後の停止旋回は行わず、走行終了時の実方位を記録する。
     root.add_child(MarkRallyReady("mark rally ready", context))

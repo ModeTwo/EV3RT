@@ -302,6 +302,22 @@ class AlignTests(unittest.TestCase):
         self.assertEqual(self.node.distance.orig_dist, 50)
         self.assertGreater(runtime.left_motor.power, 0)
 
+    def test_continuous_entry_drives_while_recorder_starts_and_counts_from_entry(self):
+        self.node.continuous_entry = True
+        self.video.record_status['ready'] = False
+        runtime.left_motor.set_power(70)
+        runtime.right_motor.set_power(70)
+        self.node.tick_once()
+        self.assertEqual(self.node.phase, 'DRIVE')
+        self.assertEqual(self.node.distance.orig_dist, 0)
+        self.assertNotIn(0, runtime.left_motor.outputs)
+        self.assertGreater(runtime.left_motor.power, 0)
+        self.video.record_status['error'] = 'disk full'
+        self.now.return_value = .1
+        self.node.tick_once()
+        self.assertEqual(self.node.status, Status.FAILURE)
+        self.assert_stopped()
+
     def test_recording_error_stops_and_finishes_recording(self):
         self.node.tick_once()
         self.video.record_status['error'] = 'disk full'

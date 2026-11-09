@@ -112,7 +112,7 @@ class RaceConfig:
 
 
 INTEGRATION_MISSIONS = ('at-to', 'to-bottle', 'at-to-bottle',
-                        'bottle-rally', 'rally-sumo', 'sumo-garage')
+                        'bottle-rally', 'bottle-sumo', 'rally-sumo', 'sumo-garage')
 MANUAL_RALLY_MISSIONS = ('rally-drive', 'bottle-rally', 'rally-sumo')
 
 
@@ -169,7 +169,7 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         if mission in ('bottle-rally', 'rally-sumo'):
             disabled['enable_et_rally'] = True
             disabled['et_rally_laps'] = max(1, config.et_rally_laps)
-        if mission in ('rally-sumo', 'sumo-garage'):
+        if mission in ('bottle-sumo', 'rally-sumo', 'sumo-garage'):
             disabled['enable_et_sumo'] = True
         if mission == 'sumo-garage':
             disabled['enable_finish'] = True
@@ -213,7 +213,7 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
 
 def mission_requires_qr(config: RaceConfig) -> bool:
     # Hint読取を含まない単体工程ではQRデコーダーを起動条件にしない。
-    if config.mission_mode in ('bottle-rally', 'rally-sumo', 'sumo-garage'):
+    if config.mission_mode in ('bottle-rally', 'bottle-sumo', 'rally-sumo', 'sumo-garage'):
         return False
     if config.mission_mode in INTEGRATION_MISSIONS:
         return True
