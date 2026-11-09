@@ -7,13 +7,16 @@ import json, math, sys
 c = json.load(open(sys.argv[1]))
 gates = json.load(open(sys.argv[2]))['gates']
 nd = lambda a: (a + 180.0) % 360.0 - 180.0
-g = lambda h: round(nd(-h), 2)
+# 2026-11-09: スタートの向き(planner角)を基準に gyro 目標を出す(新スタートは向き180)。ジャイロはスタートで0。
+START_H0 = 180.0 if c.get('params', {}).get('start_at') in ('goal', 'goal_mid') else 0.0
+garage = c.get('params', {}).get('goal_at') == 'garage'
+g = lambda h: round(nd(-(h - START_H0)), 2)
 
 steps = []
-h = 0.0          # planner frame robot heading
+h = START_H0     # planner frame robot heading
 max_gap = 0.0
 for b in c['blocks']:
-    label = f"lap{b['lap']}-{b['color']}" if b['kind'] == 'visit' else None
+    label = f"lap{b['lap']}-{b['color']}" if b['kind'] == 'visit' and b['lap'] >= 1 else None   # lap0 は赤の前に通る黄
     for p in b['prims']:
         if p['t'] == 'pivot':
             if p['deg'] >= 0.3:
@@ -55,7 +58,9 @@ for i, st in enumerate(steps):
     nxt = steps[i + 1] if i + 1 < len(steps) else None
     if st['type'] == 'arc' and st['stop'] and (nxt is None or nxt['type'] != 'turn'):
         fixed.append({'type': 'turn', 'target_heading_deg': st['target_heading_deg'], 'label': 'arc-fix'})
-if fixed[-1]['type'] != 'turn' or fixed[-1]['label'] != 'arc-fix':
+if garage:
+    pass   # ガレージは向きの決まりがないので、最後の旋回はしない
+elif fixed[-1]['type'] != 'turn' or fixed[-1]['label'] != 'arc-fix':
     fixed.append({'type': 'turn', 'target_heading_deg': g(90.0), 'label': 'goal'})
 else:
     fixed[-1] = {'type': 'turn', 'target_heading_deg': g(90.0), 'label': 'goal'}
@@ -72,7 +77,7 @@ plan = {
     'gates': {'mode': 'random', 'seed': gates.get('seed'), 'course': 'right', **{k: gates[k] for k in ('red', 'blue', 'yellow')}},
     'heading_convention': 'target_heading_deg is the GYRO target for course=right file-mode execution (gyro = -planner angle), same as plan_seed9392783_right_1031b.json. arc: target_heading_deg is the end heading, sweep_deg the signed heading change in the same frame (start = end - sweep), radius_mm the radius of the robot-centre path.',
     'note_1101': '2026-11-01 試作: 往復・後退でのゲート通過を許した経路(4周)のつなぎ区間を、円弧+直進+円弧などに置き換えたもの(検討セッションのスクラッチパッドの shuttle_plan2.py / curve_route.py で作成)。近似式の見積もりで走行部分 %.1f 秒。' % c['total'],
-    'laps': 4,
+    'laps': c.get('params', {}).get('laps', 4),
     'total_distance_mm': round(dist, 1),
     'move_count': sum(1 for s in steps if s['type'] == 'move'),
     'arc_count': sum(1 for s in steps if s['type'] == 'arc'),

@@ -38,7 +38,8 @@ PARAMS = dict(
     oblique_both=True,
     # スタート: 'default' = 今のスタート位置(向き0)、'goal' = 今のゴール地点(向き180、フィールドの方を向く)、
     # 'goal_mid' = 今のゴール地点のXで、Yはユーザーの呼び方のY4とY3の列の中点(y = 2.5P、向き180)。2026-11-08 検討用
-    start_at='default',
+    # 2026-11-09 ユーザー決定: スタートは今のゴール地点で向き180(フィールドを向く)を既定に。ゴールは同じ場所(goal_at='default')、ガレージは goal_at='garage'
+    start_at='goal',
     # ゴール: 'default' = 今のゴール地点(向き90)、'garage' = ガレージ(以前の planner config の GOAL_SHIFT_CM=(-61,-115) の位置を
     # 右コースにしたもの、向き goal_heading)。2026-11-08 検討用(ガレージの正確な範囲は未確認)
     goal_at='default', goal_heading=0.0,
