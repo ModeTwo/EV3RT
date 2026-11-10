@@ -29,6 +29,7 @@ _anchor = None            # dict(plot=(x0, y0), plan=(x, y), course=±1)
 _correction = [0.0, 0.0, 0.0]
 _history = deque(maxlen=200)    # 1tickに数回呼ばれることもあるので、約2秒分より多めに持つ
 _last = None
+_recorder = None          # 2026-11-10: 走行中の画像と突き合わせるため、位置を時刻つきでファイルに残す(dict(file=, last_t=))
 
 
 def _on_pose(gyro, heading):
@@ -50,6 +51,10 @@ def _on_pose(gyro, heading):
         dist = None
     _last = (time.monotonic(), x, y, h, dist)
     _history.append(_last)
+    rec = _recorder
+    if rec is not None and _last[0] - rec["last_t"] >= 0.009:
+        rec["last_t"] = _last[0]
+        rec["file"].write("%.4f %.2f %.2f %.3f %s\n" % (_last[0], x, y, h, "" if dist is None else dist))
 
 
 def anchor(plan_pose, logger=None):
@@ -158,75 +163,74 @@ class EtRallyCameraLogStart(Behaviour):
         self.exposure = exposure
 
     def update(self):
-        import json
-        from pathlib import Path
-        video = getattr(runtime, "video", None)
-        if video is None:
-            self.logger.warning("camera log: no camera, skipped")
+        # 2026-11-10: 画像は子プロセス(et_rally_camera_proc.py)が撮って保存する(meta.jsonl に撮った時刻)。
+        # 親はコース上の位置を時刻つきで poses.txt に残す(「時刻 x y 向き 走った距離」、あとで時刻で突き合わせる)。
+        global _recorder
+        from . import et_rally_camera_proc
+        proc = et_rally_camera_proc.current()
+        if proc is None or proc.folder is None:
+            self.logger.warning("camera log: camera process not running, skipped")
             return Status.SUCCESS
-        try:
-            import cv2
-            from py_etrobo_util import et_rally_marker_detector
-        except Exception as error:
-            self.logger.warning("camera log: setup failed (%r), skipped" % (error,))
-            return Status.SUCCESS
-        folder = Path(__file__).resolve().parents[1] / "run_logs" / ("et_camera_" + time.strftime("%Y%m%dT%H%M%S"))
-        folder.mkdir(parents=True, exist_ok=True)
-        meta = open(folder / "meta.jsonl", "w", encoding="utf-8")
-        st = dict(count=0, saved=0, folder=folder, meta=meta, prev=getattr(video, "target_interested", None))
-        every_n, quality, exposure = self.every_n, self.quality, self.exposure
-        logger = self.logger
-        st["exposure_set"] = False
-
-        def save(frame):
-            if not st["exposure_set"]:
-                st["exposure_set"] = True
-                try:
-                    if exposure is not None:
-                        video.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-                        video.cap.set(cv2.CAP_PROP_EXPOSURE, float(exposure))
-                    logger.info("camera log: exposure request=%s auto=%s exposure=%s gain=%s" % (
-                        exposure, video.cap.get(cv2.CAP_PROP_AUTO_EXPOSURE), video.cap.get(cv2.CAP_PROP_EXPOSURE), video.cap.get(cv2.CAP_PROP_GAIN)))
-                except Exception as error:
-                    logger.warning("camera log: exposure setup failed (%r)" % (error,))
-            st["count"] += 1
-            if st["count"] % every_n:
-                return []
-            t = time.monotonic()
-            pose = at(t)
-            name = "frame_%05d.jpg" % st["count"]
-            cv2.imwrite(str(folder / name), frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
-            if st["saved"] % 25 == 0:   # 自動露出のときに、走行中どんな露出になっているかを残す
-                try:
-                    logger.info("camera log: frame %s exposure=%s" % (name, video.cap.get(cv2.CAP_PROP_EXPOSURE)))
-                except Exception:
-                    pass
-            meta.write(json.dumps({"file": name, "t": round(t, 4), "pose": None if pose is None else [round(v, 2) if v is not None else None for v in pose[1:]],
-                                   "pose_t": None if pose is None else round(pose[0], 4)}) + "\n")
-            st["saved"] += 1
-            return []
-
-        et_rally_marker_detector.set_detector(save)
-        video.begin_et_rally_marker_read()
-        EtRallyCameraLogStart.state = st
-        self.logger.info("camera log: saving every %d frames to %s" % (every_n, folder))
+        _recorder = dict(file=open(proc.folder / "poses.txt", "w", encoding="utf-8"), last_t=0.0)
+        proc.send("save 1")
+        EtRallyCameraLogStart.state = dict(folder=proc.folder)
+        self.logger.info("camera log: saving every %d frames to %s (camera %s)" % (self.every_n, proc.folder, proc.ready))
         return Status.SUCCESS
 
 
 class EtRallyCameraLogStop(Behaviour):
     def update(self):
+        global _recorder
         st = EtRallyCameraLogStart.state
         EtRallyCameraLogStart.state = None
         if st is None:
             return Status.SUCCESS
+        from . import et_rally_camera_proc
+        rec, _recorder = _recorder, None
+        stopped = et_rally_camera_proc.close_shared()
+        if rec is not None:
+            rec["file"].close()
+        self.logger.info("camera log: stopped %s, saved in %s" % (stopped, st["folder"]))
+        return Status.SUCCESS
+
+
+class EtRallyCameraProcessStart(Behaviour):
+    """2026-11-10: ETラリーの最初に、カメラの子プロセスを起動する(開くのに約1秒かかるので早めに)。
+    走行中の画像を残すときは、保存先のフォルダもここで決める(保存を始めるのは EtRallyCameraLogStart)。"""
+
+    def __init__(self, name, log_every=None, exposure=None, calib_path=None, quality=90):
+        super().__init__(name)
+        self.log_every = log_every
+        self.exposure = exposure
+        self.calib_path = calib_path
+        self.quality = quality
+
+    def update(self):
+        from pathlib import Path
+        from . import et_rally_camera_proc
+        folder = None
+        if self.log_every:
+            folder = Path(__file__).resolve().parents[1] / "run_logs" / ("et_camera_" + time.strftime("%Y%m%dT%H%M%S"))
         try:
-            from py_etrobo_util import et_rally_marker_detector
-            et_rally_marker_detector.set_detector(None)
-        except Exception:
-            pass
-        restore_video_mode(st["prev"])
-        st["meta"].close()
-        self.logger.info("camera log: %d frames seen, %d saved in %s" % (st["count"], st["saved"], st["folder"]))
+            proc = et_rally_camera_proc.shared(folder=folder, every_n=self.log_every or 5, quality=self.quality,
+                                               exposure=self.exposure, calib_path=self.calib_path,
+                                               mirror=getattr(runtime, "course", -1) == 1)
+            proc.folder = folder
+        except Exception as error:
+            self.logger.warning("camera process: start failed (%r)" % (error,))
+            return Status.SUCCESS
+        self.logger.info("camera process: started (log=%s, exposure=%s)" % (folder, self.exposure))
+        return Status.SUCCESS
+
+
+class EtRallyCameraProcessStop(Behaviour):
+    """走行中の画像を残さないとき(スタートの取り込みだけ)に、走り出す前に子プロセスを止める。"""
+
+    def update(self):
+        from . import et_rally_camera_proc
+        stopped = et_rally_camera_proc.close_shared()
+        if stopped is not None:
+            self.logger.info("camera process: stopped %s" % (stopped,))
         return Status.SUCCESS
 
 

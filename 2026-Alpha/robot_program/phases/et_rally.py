@@ -21,7 +21,7 @@ from ..et_rally_heading import (EtRallyArmUpWithDriftMeasure, EtRallyPostStopGyr
 from ..runtime import runtime
 from ..et_rally_start_pose import EtRallyApplyStartPose, EtRallyStartPoseCapture
 from ..et_rally_course_pose import (EtRallyAnchorCoursePose, EtRallyCameraLogStart, EtRallyCameraLogStop,
-                                    EtRallyReleaseCoursePose)
+                                    EtRallyCameraProcessStart, EtRallyCameraProcessStop, EtRallyReleaseCoursePose)
 
 
 class SetGyroScaleDisabled(Behaviour):
@@ -106,6 +106,14 @@ def build_et_rally_phase(context, config):
     if install_heading:
         children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation, scale_neg,
                                               scale_pos))
+    # 2026-11-10: カメラ(スタートの取り込み・走行中の画像)は子プロセスで動かす。開くのに時間がかかるので最初に起動する。
+    camera_log_every = getattr(config, "et_rally_camera_log_every", None)
+    use_start_pose = bool(getattr(config, "et_rally_start_pose", None))
+    if camera_log_every or use_start_pose:
+        children.append(EtRallyCameraProcessStart(
+            "et_rally camera process", log_every=camera_log_every,
+            exposure=getattr(config, "et_rally_camera_exposure", None),
+            calib_path=getattr(config, "et_rally_camera_calib_path", None)))
     # 2026-11-06: 計画から見て間に合うなら、アームは走りながら上げる(et_rally_arm.arm_while_driving)。
     drive_arm, drive_arm_reason = arm_while_driving(config)
     if arm_up_before_touch(config):
@@ -151,6 +159,8 @@ def build_et_rally_phase(context, config):
         children.append(EtRallyApplyStartPose(
             "et_rally apply start pose", rejoin_min_mm=5.0 if rejoin_min is None else rejoin_min,
             plan_frame_known=(config.et_rally_strategy_source == "file")))
+        if not camera_log_every:
+            children.append(EtRallyCameraProcessStop("et_rally camera process stop"))
     else:
         children.append(arm_up)
     carry_integral = bool(getattr(config, "et_rally_move_carry_integral", None))
@@ -168,7 +178,6 @@ def build_et_rally_phase(context, config):
             "Unknown ET rally strategy source: " + str(config.et_rally_strategy_source)
         )
     # 2026-11-08: コース上の自分の位置(et_rally_course_pose.py)。スタートの取り込みか、走行中の画像を残すときに持つ。
-    camera_log_every = getattr(config, "et_rally_camera_log_every", None)
     track_course = install_heading and (getattr(config, "et_rally_start_pose", None) or camera_log_every)
     if track_course:
         children.append(EtRallyAnchorCoursePose("et_rally course pose"))

@@ -382,8 +382,9 @@ def mission_requires_qr(config: RaceConfig) -> bool:
 def mission_requires_camera(config: RaceConfig) -> bool:
     # ET相撲は黒テープ付き力士ボトルの捕捉にカメラを使用する。
     if config.mission_mode == 'rally-drive':
-        # 2026-11-10: ETラリー単体の走行でも、スタート位置の取り込み・走行中の画像保存を指定したときだけカメラを起動する。
-        return bool(getattr(config, 'et_rally_start_pose', None) or getattr(config, 'et_rally_camera_log_every', None))
+        # 2026-11-10: ETラリーのカメラ(スタートの取り込み・走行中の画像)は子プロセス(et_rally_camera_proc.py)が持つので、
+        # 同じプロセスのカメラ(VideoThread)は起動しない(起動すると走りの制御が止まり、カメラも取り合いになる)。
+        return False
     if config.mission_mode in INTEGRATION_MISSIONS:
         return True
     if config.mission_mode in ('at', 'to', 'hint2', 'hint2-return'):

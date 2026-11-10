@@ -118,7 +118,7 @@ def _delete(remote, names):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--host', default='etrobo-raspi.local')
+    ap.add_argument('--host', default='shunsuke09@etrobo-raspi')  # 2026-11-10: .local では見つからないことがあった
     ap.add_argument('--remote-dir', default='EV3RT/2026-Alpha/run_logs')
     ap.add_argument('--dest', default=str(Path.home() / 'Downloads' / 'et_run_logs'))
     ap.add_argument('--watch', action='store_true')

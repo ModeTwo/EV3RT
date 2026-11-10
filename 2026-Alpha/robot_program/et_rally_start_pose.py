@@ -519,53 +519,42 @@ class EtRallyStartPoseCapture(Behaviour):
             self.last_frame = None
             self.frames = 0
             _measured = None
-            video = getattr(runtime, "video", None)
-            self.prev_mode = getattr(video, "target_interested", None)
-            if video is None:
-                self.logger.warning("start pose: no camera, skipped")
+            # 2026-11-10: カメラは子プロセス(et_rally_camera_proc.py)が持ち、位置もそこで出す
+            # (同じプロセスでカメラを動かすと、走りの制御が止まるため)。
+            from . import et_rally_camera_proc
+            self.proc = et_rally_camera_proc.current()
+            if self.proc is None:
+                self.logger.warning("start pose: camera process not running, skipped")
                 return Status.SUCCESS
-            try:
-                cam = GroundCamera(self.calib_path)
-                self.cam = cam
-                from py_etrobo_util import et_rally_marker_detector
-                et_rally_marker_detector.set_detector(_marker_detector_factory(cam))
-                video.begin_et_rally_marker_read()
-            except Exception as error:   # 較正ファイルがない・cv2 がないなど
-                self.logger.warning("start pose: camera setup failed (%r), skipped" % (error,))
-                return Status.SUCCESS
-            self.mirror = getattr(runtime, "course", -1) == 1
             return Status.RUNNING
+        if self.proc.ready is None and now - self.start_time < self.MAX_WAIT_SEC:
+            return Status.RUNNING   # カメラが開くのを待つ
         if self.counting_since is None:
             if self.ready is not None and not self.ready() and now - self.start_time < self.MAX_WAIT_SEC:
+                self.proc.poll()
                 return Status.RUNNING
             self.counting_since = now
-        _, frame_id, markers = runtime.video.get_et_rally_marker_observation()
-        if frame_id is not None and frame_id != self.last_frame and markers:
-            self.last_frame = frame_id
+            self.proc.poll()
+            self.proc.send("detect 1")
+        for ev in self.proc.poll():
+            if ev.get("ev") == "error":
+                self.logger.warning("start pose: camera process: %s" % ev.get("what"))
+            if ev.get("ev") != "pose" or ev.get("t", 0.0) < self.counting_since:
+                continue
             self.frames += 1
-            dets = markers[0].get("ground") if isinstance(markers[0], dict) else None
-            if dets:
-                # 11/08: 下向きも当てはめる出し方を使う(動かした距離での答え合わせで一番合った)
-                r = fit_pose_pitch(self.cam, dets, mirror=self.mirror)
-                if r is not None:
-                    self.results.append(r)
-                    # 比べるために、下向きを当てはめない場合も残す
-                    r0 = fit_pose(dets, mirror=self.mirror, fit_scale=False)
-                    if r0 is not None:
-                        self.results_noscale.append(r0)
+            # 11/08: 下向きも当てはめる出し方を使う(動かした距離での答え合わせで一番合った)。比べるために当てはめない場合も残す
+            if ev.get("r"):
+                self.results.append(ev["r"])
+            if ev.get("r0"):
+                self.results_noscale.append(ev["r0"])
         if now - self.counting_since < self.duration_sec:
             return Status.RUNNING
         return self._finish()
 
     def _finish(self):
         global _measured
-        try:
-            from py_etrobo_util import et_rally_marker_detector
-            et_rally_marker_detector.set_detector(None)
-        except Exception:
-            pass
-        from .et_rally_course_pose import restore_video_mode
-        restore_video_mode(getattr(self, "prev_mode", None))
+        if getattr(self, "proc", None) is not None:
+            self.proc.send("detect 0")
         if len(self.results) < self.min_frames:
             self.logger.warning("start pose: not enough frames (%d poses from %d frames), using the plan start" % (
                 len(self.results), self.frames))
