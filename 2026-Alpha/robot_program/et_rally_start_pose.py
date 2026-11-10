@@ -26,8 +26,12 @@ import math
 import time
 from pathlib import Path
 
-from py_trees.behaviour import Behaviour
-from py_trees.common import Status
+try:
+    from py_trees.behaviour import Behaviour
+    from py_trees.common import Status
+except ImportError:   # 2026-11-10: カメラの子プロセス(普通のPython、py_treesなし)では位置の計算だけを使う
+    Behaviour = object
+    Status = None
 
 from .runtime import runtime
 
@@ -43,6 +47,9 @@ DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et
 
 # 真上から見た画像の範囲(車体の座標、mm)と1画素の大きさ。スタートでは止まっているので、少し広めに細かく見る。
 TOP_S = 0.5
+# 2026-11-10: カメラの子プロセス(ロボット)で使う粗さ。0.5mmだと1枚約1秒かかる(ロボットで計測)。1mmにすると
+# PCで6.2倍速く、床の画像71枚で灰色の点は取りこぼし1/82・位置の差0.12mm以内、マーカーは取りこぼし15/99・差1.1mm以内。
+FAST_TOP_S = 1.0
 TOP_X = (300.0, 820.0)
 TOP_Y = (-330.0, 330.0)
 QR_SIDE_MM = (44.0, 56.0)        # マーカーの1辺として受け入れる範囲(実物は50〜51mm)
@@ -121,8 +128,14 @@ def detect_ground(cam, img):
     top = cam.top_view(img)
     hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
     v = hsv[..., 2].astype(np.int16)
-    k_bg = int(round(30.0 / S)) | 1
-    bg = cv2.medianBlur(hsv[..., 2], min(k_bg, 255)).astype(np.int16)
+    if S >= 0.75:
+        # 粗い画像(子プロセス用)では、30mm四方の中央値も4分の1に縮めた画像でとる(一番重い処理のため)
+        sm = cv2.resize(hsv[..., 2], None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+        k_bg = int(round(30.0 / (S * 4))) | 1
+        bg = cv2.resize(cv2.medianBlur(sm, max(3, k_bg)), (v.shape[1], v.shape[0]), interpolation=cv2.INTER_LINEAR).astype(np.int16)
+    else:
+        k_bg = int(round(30.0 / S)) | 1
+        bg = cv2.medianBlur(hsv[..., 2], min(k_bg, 255)).astype(np.int16)
     low_sat = hsv[..., 1] < 150
     out = {"markers": [], "dots": []}
     # マーカー
@@ -135,7 +148,7 @@ def detect_ground(cam, img):
         if not ((35.0 / S) ** 2 <= st[i, 4] <= (62.0 / S) ** 2):
             continue
         ys, xs = np.nonzero((lab == i) & (dark > 0))
-        if len(xs) < 10:
+        if len(xs) < 10 * (0.5 / S) ** 2:
             continue
         rect = cv2.minAreaRect(np.stack([xs, ys], 1).astype(np.float32))
         (cx, cy), (rw, rh), _ = rect
@@ -166,7 +179,7 @@ def detect_ground(cam, img):
     k_dot = int(round(100.0 / (S * 4))) | 1
     bg_dot = cv2.resize(cv2.medianBlur(small, min(k_dot, 255)), (v.shape[1], v.shape[0]), interpolation=cv2.INTER_LINEAR).astype(np.int16)
     gray = (((bg_dot - v) > 10) & low_sat & (marker_mask == 0)).astype(np.uint8) * 255
-    gray = cv2.morphologyEx(gray, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    gray = cv2.morphologyEx(gray, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, ((int(round(2.5 / S)) | 1),) * 2))
     n, lab, st, cen = cv2.connectedComponentsWithStats(gray)
     r_lo, r_hi = DOT_DIAM_MM[0] / 2.0 / S, DOT_DIAM_MM[1] / 2.0 / S
     for i in range(1, n):
@@ -177,7 +190,7 @@ def detect_ground(cam, img):
         (ccx, ccy), rr = cv2.minEnclosingCircle(np.stack([xs, ys], 1).astype(np.float32))
         if not (r_lo <= rr <= r_hi) or area / (math.pi * rr * rr) < 0.65:
             continue
-        ring = [(ccx + (rr + 3) * math.cos(a), ccy + (rr + 3) * math.sin(a)) for a in np.linspace(0, 2 * math.pi, 16, endpoint=False)]
+        ring = [(ccx + (rr + 1.5 / S) * math.cos(a), ccy + (rr + 1.5 / S) * math.sin(a)) for a in np.linspace(0, 2 * math.pi, 16, endpoint=False)]
         if not _inside(cam, ring):
             continue
         out["dots"].append(tuple(float(x) for x in cam.to_mm([(cen[i][0], cen[i][1])])[0]))
@@ -535,7 +548,7 @@ class EtRallyStartPoseCapture(Behaviour):
                 return Status.RUNNING
             self.counting_since = now
             self.proc.poll()
-            self.proc.send("detect 1")
+            self.proc.send("detect 1 %d" % (1 if getattr(runtime, "course", -1) == 1 else 0))
         for ev in self.proc.poll():
             if ev.get("ev") == "error":
                 self.logger.warning("start pose: camera process: %s" % ev.get("what"))

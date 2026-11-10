@@ -37,7 +37,7 @@ class CameraProcess:
         cfg = dict(folder=None if folder is None else str(folder), every_n=int(every_n), quality=int(quality),
                    exposure=exposure, calib_path=None if calib_path is None else str(calib_path), mirror=bool(mirror))
         root = Path(__file__).resolve().parents[1]
-        self.proc = subprocess.Popen([sys.executable, '-m', 'robot_program.et_rally_camera_proc', json.dumps(cfg)],
+        self.proc = subprocess.Popen([child_python(), '-m', 'robot_program.et_rally_camera_proc', json.dumps(cfg)],
                                      cwd=str(root), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, bufsize=1, universal_newlines=True)
         self.folder = None if folder is None else Path(folder)
@@ -94,6 +94,18 @@ class CameraProcess:
         return self.stopped
 
 
+def child_python():
+    """子プロセスを動かすPython。ロボットのPyPyはnumpyを使う処理がとても遅い(numpyの読み込み3.2秒など)ので、
+    普通のPython(/usr/bin/python3、2026-11-10に python3-numpy・python3-opencv を入れた)があればそちらを使う。
+    環境変数 ET_CAMERA_PYTHON で指定もできる。"""
+    env = os.environ.get('ET_CAMERA_PYTHON')
+    if env:
+        return env
+    if platform.python_implementation() == 'PyPy' and os.path.exists('/usr/bin/python3'):
+        return '/usr/bin/python3'
+    return sys.executable
+
+
 _shared = None
 
 
@@ -124,8 +136,12 @@ def _child(cfg):
             sys.stdout.write(json.dumps(ev) + '\n')
             sys.stdout.flush()
 
-    import cv2
-    state = dict(save=False, detect=False, quit=False)
+    try:
+        import cv2
+    except ImportError as error:
+        say(ev='error', what='cannot import cv2 in %s (%r)' % (sys.executable, error))
+        return
+    state = dict(save=False, detect=False, quit=False, mirror=bool(cfg.get('mirror')))
 
     def commands():
         for line in sys.stdin:
@@ -136,6 +152,8 @@ def _child(cfg):
                 break
             if parts[0] in ('save', 'detect') and len(parts) > 1:
                 state[parts[0]] = parts[1] == '1'
+                if parts[0] == 'detect' and len(parts) > 2:   # "detect 1 1" = 左コース(見た左右を逆にする)
+                    state['mirror'] = parts[2] == '1'
         state['quit'] = True   # 親が終わった(標準入力が閉じた)ときも終わる
 
     threading.Thread(target=commands, daemon=True).start()
@@ -182,10 +200,10 @@ def _child(cfg):
             try:
                 from robot_program import et_rally_start_pose as sp
                 if cam is None:
-                    cam = sp.GroundCamera(cfg.get('calib_path'))
+                    cam = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S)
                 dets = sp.detect_ground(cam, frame)
-                r = sp.fit_pose_pitch(cam, dets, mirror=cfg['mirror'])
-                r0 = sp.fit_pose(dets, mirror=cfg['mirror'], fit_scale=False) if r is not None else None
+                r = sp.fit_pose_pitch(cam, dets, mirror=state['mirror'])
+                r0 = sp.fit_pose(dets, mirror=state['mirror'], fit_scale=False) if r is not None else None
                 say(ev='pose', t=t, n=n, r=_plain(r), r0=_plain(r0))
                 detected += 1
             except Exception as error:   # 較正ファイルがないなど。1回だけ知らせて、位置を出すのはやめる

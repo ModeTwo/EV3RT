@@ -113,7 +113,8 @@ def build_et_rally_phase(context, config):
         children.append(EtRallyCameraProcessStart(
             "et_rally camera process", log_every=camera_log_every,
             exposure=getattr(config, "et_rally_camera_exposure", None),
-            calib_path=getattr(config, "et_rally_camera_calib_path", None)))
+            calib_path=getattr(config, "et_rally_camera_calib_path", None),
+            prestart=(getattr(config, "mission_mode", None) == "rally-drive")))
     # 2026-11-06: 計画から見て間に合うなら、アームは走りながら上げる(et_rally_arm.arm_while_driving)。
     drive_arm, drive_arm_reason = arm_while_driving(config)
     if arm_up_before_touch(config):
