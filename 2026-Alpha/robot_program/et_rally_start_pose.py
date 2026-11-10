@@ -125,6 +125,15 @@ class GroundCamera:
             rv = cv2.Rodrigues(R2)[0].ravel()
             t = -R2 @ C
         self.pitch_fix = pitch_fix
+        # 2026-11-10: カメラの左右の位置の補正(mm、車体の左が+)。止まって撮った画像でも走行中でも、カメラは
+        # ロボットを毎回同じ向き(左)に数mmずれて見ていた(較正台でボードが左右にずれていた分などが入っていない)。
+        # カメラの位置だけを車体の左右に動かす(向きは変えない)。
+        lat_fix = float(d.get("lat_fix_mm", 0.0))
+        if lat_fix:
+            R = cv2.Rodrigues(np.asarray(rv, float).reshape(3, 1))[0]
+            C = -R.T @ t
+            t = -R @ (C + np.array([0.0, lat_fix, 0.0]))
+        self.lat_fix = lat_fix
         self.top_x, self.top_y, self.top_s = top_x, top_y, top_s
         # 下向きも当てはめる位置の出し方(fit_pose_pitch)で使う
         self.K, self.dist, self.rvec, self.tvec = K, dist, rv, t
