@@ -250,6 +250,16 @@ def fit_pose(dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror
             sxx = sum(p[2] * ((p[0][0] - ax) * (p[1][0] - bx) + (p[0][1] - ay) * (p[1][1] - by)) for p in pairs)
             sxy = sum(p[2] * ((p[0][0] - ax) * (p[1][1] - by) - (p[0][1] - ay) * (p[1][0] - bx)) for p in pairs)
             h = math.degrees(math.atan2(sxy, sxx))
+            marks_used = [p[3] for p in pairs if p[3] is not None]
+            if len(pairs) == 2 and marks_used:
+                # 2026-11-10: 2つだけ(マーカー1つ+点1つなど)だと、並びの向きはどちらかの少しのずれで大きく動く
+                # (実機: 右のタイヤだけ15mm下げた置き方で、並びから右回り4.6°・マーカーの辺から6.2°、置き方は6.8°)。
+                # このときは向きをマーカーの辺の傾きから出す(90°ごとのうち、並びの向きに近いもの)。
+                hs = []
+                for mk in marks_used:
+                    base = -mk["rot"]
+                    hs.append(base + 90.0 * round((h - base) / 90.0))
+                h = math.degrees(math.atan2(sum(math.sin(math.radians(v)) for v in hs), sum(math.cos(math.radians(v)) for v in hs)))
             a = math.radians(h)
             saa = sum(p[2] * ((p[0][0] - ax) ** 2 + (p[0][1] - ay) ** 2) for p in pairs)
             spread = sum(p[2] * math.hypot(p[0][0] - ax, p[0][1] - ay) for p in pairs) / W
@@ -621,13 +631,15 @@ class EtRallyStartPoseCapture(Behaviour):
                          spread_mm=max(math.hypot(r["pose"][0] - pose[0], r["pose"][1] - pose[1]) for r in self.results),
                          spread_deg=max(abs(_nd(r["pose"][2] - pose[2])) for r in self.results),
                          scale=sorted(r.get("scale", 1.0) for r in self.results)[len(self.results) // 2],
-                         pitch_deg=sorted(r.get("pitch_deg", 0.0) for r in self.results)[len(self.results) // 2])
+                         pitch_deg=sorted(r.get("pitch_deg", 0.0) for r in self.results)[len(self.results) // 2],
+                         resid_mm=sorted(r.get("resid_mm", 0.0) for r in self.results)[len(self.results) // 2],
+                         items=sorted(int(r["n_markers"] + r["n_dots"]) for r in self.results)[len(self.results) // 2])
         self.logger.info("start pose: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f) poses=%d/%d frames "
-                         "markers=%d dots=%d spread=%.1fmm/%.2fdeg pitch_fix=%+.2fdeg" % (
+                         "markers=%d dots=%d spread=%.1fmm/%.2fdeg pitch_fix=%+.2fdeg resid=%.1fmm items=%d" % (
                              pose[0], pose[1], pose[2], pose[0] - START_MM[0], pose[1] - START_MM[1],
                              _nd(pose[2] - START_HEADING_DEG), len(self.results), self.frames,
                              _measured["n_markers"], _measured["n_dots"], _measured["spread_mm"], _measured["spread_deg"],
-                             _measured["pitch_deg"]))
+                             _measured["pitch_deg"], _measured["resid_mm"], _measured["items"]))
         p0 = median_pose(self.results_noscale)
         if p0 is not None:
             self.logger.info("start pose without pitch fit: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f)" % (
@@ -640,8 +652,10 @@ class EtRallyApplyStartPose(Behaviour):
     最初のつなぎを引き直す予定にし(計画の読み込み時に apply_pending_rejoin)、小さければ最初の区間の位置に入れる。
     max_offset_mm / max_offset_deg を超えるずれは、測り間違いとみなして取り込まない。"""
 
-    def __init__(self, name, rejoin_min_mm=5.0, max_offset_mm=80.0, max_offset_deg=15.0, plan_frame_known=True):
+    def __init__(self, name, rejoin_min_mm=5.0, max_offset_mm=80.0, max_offset_deg=15.0, plan_frame_known=True,
+                 min_items_for_position=3):
         super().__init__(name)
+        self.min_items_for_position = int(min_items_for_position)
         # plan_frame_known: 計画が経路を作る道具の座標(スタート START_MM・START_HEADING_DEG、gyro = スタートの向き - 向き)か。
         # 受信した計画(古い計画の道具)は座標の決め方が違うので、向きだけを取り込む。
         self.plan_frame_known = bool(plan_frame_known)
@@ -672,6 +686,12 @@ class EtRallyApplyStartPose(Behaviour):
         if not self.plan_frame_known:
             _applied = (START_MM[0], START_MM[1], h)
             how = "heading only (plan frame unknown)"
+        elif m.get("items", 99) < self.min_items_for_position:
+            # 2026-11-10: 見えたものが2つ以下(マーカー1つ+点1つなど)だと、位置は測り間違いのおそれがあるので入れない
+            # (実機: 右のタイヤだけ15mm下げた置き方を2回、どちらも前後が約17mm違っていた。3つ以上見えた置き方は合っていた)。
+            # 向き(マーカーの辺の傾きから)だけ入れて、計画のスタートにいるとみなす。残差では見分けられなかった。
+            _applied = (START_MM[0], START_MM[1], h)
+            how = "heading only (%d items < %d)" % (m["items"], self.min_items_for_position)
         elif math.hypot(dx, dy) >= self.rejoin_min_mm:
             _pending_rejoin = (x, y, h)
             how = "rejoin planned"
