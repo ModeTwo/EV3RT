@@ -76,7 +76,7 @@ class Remote:
     def __init__(self, args):
         self.hosts = [h.strip() for h in args.host.split(',') if h.strip()]
         self.user = self.hosts[0].split('@', 1)[0] + '@' if '@' in self.hosts[0] else ''
-        self.base = shlex.split(args.ssh) + (['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4'] if args.ssh == 'ssh' else [])
+        self.base = shlex.split(args.ssh) + (['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4', '-o', 'StrictHostKeyChecking=accept-new'] if args.ssh == 'ssh' else [])
         self.dir = args.remote_dir
         self.cache_path = Path(os.environ.get('ET_FETCH_CACHE') or CACHE)
         self.cache = _load_cache(self.cache_path)
