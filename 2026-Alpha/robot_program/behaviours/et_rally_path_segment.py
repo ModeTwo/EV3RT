@@ -107,8 +107,15 @@ def shift_active_position(dx_course, dy_course):
         return False
     from ..et_rally_start_pose import START_HEADING_DEG
     th = math.radians(START_HEADING_DEG - seg.start_heading + (180.0 if seg.reverse else 0.0))
-    seg.pos_x += dx_course * math.cos(th) + dy_course * math.sin(th)
+    along = dx_course * math.cos(th) + dy_course * math.sin(th)
+    seg.pos_x += along
     seg.pos_y += dx_course * math.sin(th) - dy_course * math.cos(th)
+    # 2026-11-10: 進む向きの成分は、区間の終わりの距離にも入れる(実際は前にいる → その分早く終える)。
+    # 区間の終わりは走った距離で決めているので、位置を動かすだけでは前後のずれが止まる位置に効かなかった
+    # (実機: 補正で前に約15mmいると分かっていたのに、ゴールで前に12.5mm)。続く区間は終わりの距離から起点を
+    # 引き継ぐので、そのまま次の区間にも効く。走った距離は後退でも増え、後退の区間の座標も進む向きにとってあるので、
+    # 前進・後退とも同じ向きにずらす。
+    seg.orig_dist -= along
     return True
 
 
