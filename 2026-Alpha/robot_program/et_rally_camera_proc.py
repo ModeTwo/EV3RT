@@ -180,46 +180,76 @@ def _child(cfg):
         os.makedirs(folder, exist_ok=True)
         meta = open(os.path.join(folder, 'meta.jsonl'), 'a', encoding='utf-8')
     cam = None
-    n = saved = detected = tracked = 0
-    first = True
+    cnt = dict(n=0, saved=0, detected=0, tracked=0)
+    latest = dict(frame=None, t=0.0, n=0)
+    lock = threading.Lock()
+    ready_ev = threading.Event()
+
+    def reader():
+        """2026-11-10: 画像を読み続けて、一番新しい1枚と時刻だけを持つ。位置の計算(1枚0.2〜0.5秒)と同じ流れで読むと、
+        カメラにたまった古い画像を読み、読んだ時刻を撮った時刻としてしまっていた(走行中の補正が実機でほとんど入らなかった原因)。
+        保存もここで行う(保存する画像の時刻も正しくなる)。"""
+        first = True
+        while not state['quit']:
+            ok, frame = cap.read()
+            t = time.monotonic()
+            if not ok or frame is None:
+                time.sleep(0.005)
+                continue
+            cnt['n'] += 1
+            n = cnt['n']
+            if n in (1, 5):
+                # 撮り始める前に設定した露出は効かないことがある(ロボットで、露出50の指定なのに真っ白)。
+                # 撮り始めてからもう一度設定し、効くまで数枚待ってから「使える」と知らせる。
+                set_exposure()
+                continue
+            if first and n >= 10:
+                first = False
+                say(ev='ready', t=t, auto=cap.get(cv2.CAP_PROP_AUTO_EXPOSURE), exposure=cap.get(cv2.CAP_PROP_EXPOSURE),
+                    gain=cap.get(cv2.CAP_PROP_GAIN), shape=list(frame.shape), brightness=round(float(frame[::8, ::8].mean()), 1))
+            if first:
+                continue
+            with lock:
+                latest.update(frame=frame, t=t, n=n)
+            ready_ev.set()
+            if state['save'] and meta is not None and n % cfg['every_n'] == 0:
+                name = 'frame_%05d.jpg' % n
+                cv2.imwrite(os.path.join(folder, name), frame, [cv2.IMWRITE_JPEG_QUALITY, cfg['quality']])
+                meta.write(json.dumps({'file': name, 't': round(t, 4), 'n': n}) + '\n')
+                cnt['saved'] += 1
+                if cnt['saved'] % 25 == 0:
+                    meta.flush()
+
+    rt = threading.Thread(target=reader, daemon=True)
+    rt.start()
+    done_n = 0
     while not state['quit']:
-        ok, frame = cap.read()
-        t = time.monotonic()
-        if not ok or frame is None:
-            time.sleep(0.005)
+        if not (state['track'] or state['detect']):
+            time.sleep(0.01)
             continue
-        n += 1
-        if n in (1, 5):
-            # 2026-11-10: 撮り始める前に設定した露出は効かないことがある(ロボットで、露出50の指定なのに真っ白)。
-            # 撮り始めてからもう一度設定し、効くまで数枚待ってから「使える」と知らせる。
-            set_exposure()
+        if not ready_ev.wait(0.1):
             continue
-        if first and n >= 10:
-            first = False
-            say(ev='ready', t=t, auto=cap.get(cv2.CAP_PROP_AUTO_EXPOSURE), exposure=cap.get(cv2.CAP_PROP_EXPOSURE),
-                gain=cap.get(cv2.CAP_PROP_GAIN), shape=list(frame.shape), brightness=round(float(frame[::8, ::8].mean()), 1))
-        if first:
+        with lock:
+            frame, t, n = latest['frame'], latest['t'], latest['n']
+        if frame is None or n == done_n:
+            time.sleep(0.003)
             continue
-        if state['save'] and meta is not None and n % cfg['every_n'] == 0:
-            name = 'frame_%05d.jpg' % n
-            cv2.imwrite(os.path.join(folder, name), frame, [cv2.IMWRITE_JPEG_QUALITY, cfg['quality']])
-            meta.write(json.dumps({'file': name, 't': round(t, 4), 'n': n}) + '\n')
-            saved += 1
-            if saved % 25 == 0:
-                meta.flush()
+        done_n = n
+        age = time.monotonic() - t
         if state['track'] and not state['detect']:
-            # 2026-11-10: 走行中の補正(et_rally_camera_correct.py)。見つけたもの(車体の座標)だけを送り、
+            # 走行中の補正(et_rally_camera_correct.py)。見つけたもの(車体の座標)だけを送り、
             # 地図への結びつけは親が撮った時刻の位置で行う。
             try:
                 from robot_program import et_rally_start_pose as sp
                 if cam is None:
                     cam = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S)
+                    sp.set_gate_legs(cfg.get('gates'))
                 dets = sp.detect_ground(cam, frame)
                 if dets['markers'] or len(dets['dots']) >= 2:
-                    say(ev='dets', t=t, n=n, markers=[{'xy': [round(v, 2) for v in m['xy']], 'rot': round(m['rot'], 3)}
-                                                      for m in dets['markers']],
+                    say(ev='dets', t=t, n=n, age=round(age, 3),
+                        markers=[{'xy': [round(v, 2) for v in m['xy']], 'rot': round(m['rot'], 3)} for m in dets['markers']],
                         dots=[[round(v, 2) for v in d] for d in dets['dots']])
-                tracked += 1
+                cnt['tracked'] += 1
             except Exception as error:
                 say(ev='error', what='track failed: %r' % (error,))
                 state['track'] = False
@@ -233,14 +263,15 @@ def _child(cfg):
                 r = sp.fit_pose_pitch(cam, dets, mirror=state['mirror'])
                 r0 = sp.fit_pose_search(dets, mirror=state['mirror']) if r is not None else None
                 say(ev='pose', t=t, n=n, r=_plain(r), r0=_plain(r0))
-                detected += 1
+                cnt['detected'] += 1
             except Exception as error:   # 較正ファイルがないなど。1回だけ知らせて、位置を出すのはやめる
                 say(ev='error', what='detect failed: %r' % (error,))
                 state['detect'] = False
+    rt.join(1.0)
     cap.release()
     if meta is not None:
         meta.close()
-    say(ev='stopped', frames=n, saved=saved, detected=detected, tracked=tracked)
+    say(ev='stopped', frames=cnt['n'], saved=cnt['saved'], detected=cnt['detected'], tracked=cnt['tracked'])
 
 
 def _plain(r):
@@ -295,6 +326,15 @@ def _check():
                                                         [e.get('what') for e in ev if e.get('ev') == 'error']))
     if poses and poses[-1].get('r'):
         print('last pose:', [round(v, 1) for v in poses[-1]['r']['pose']])
+    p.send('detect 0')
+    p.poll()
+    p.send('track 1')
+    print('tracking :', loop(4))
+    ev = p.poll()
+    dets = [e for e in ev if e.get('ev') == 'dets']
+    ages = sorted(e.get('age', 0.0) for e in dets) or [0.0]
+    print('track results %d, image age median %.3fs max %.3fs' % (len(dets), ages[len(ages) // 2], ages[-1]))
+    p.send('track 0')
     print('stopped:', p.close(), 'images in', folder)
 
 

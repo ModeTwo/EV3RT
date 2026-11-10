@@ -106,6 +106,7 @@ class EtRallyCameraCorrect(Behaviour):
         self.gain_pos, self.gain_head, self.lag_sec = gain_pos, gain_head, lag_sec
         self.proc = None
         self.corrector = None
+        self.ages = []
         self.last_log = 0.0
 
     def initialise(self):
@@ -130,6 +131,7 @@ class EtRallyCameraCorrect(Behaviour):
             if ev.get("ev") != "dets":
                 continue
             res = self.corrector.process(ev)
+            self.ages.append(float(ev.get("age", 0.0)))
             if res is not None:
                 dx, dy, dh, (ex, ey, eh, nd, nm, resid) = res
                 self.logger.info("camera correct: diff (%+.1f,%+.1f mm %+.2f deg) items D%d M%d resid %.1f -> applied (%+.1f,%+.1f %+.2f) total (%+.1f,%+.1f %+.2f)" % (
@@ -140,5 +142,6 @@ class EtRallyCameraCorrect(Behaviour):
         if self.proc is not None:
             self.proc.send("track 0")
         if self.corrector is not None:
-            self.logger.info("camera correct: finished %s total (%+.1f,%+.1f mm %+.2f deg)" % (
-                self.corrector.counts, *self.corrector.total))
+            ages = sorted(self.ages) or [0.0]
+            self.logger.info("camera correct: finished %s total (%+.1f,%+.1f mm %+.2f deg) image age median %.3fs max %.3fs" % (
+                self.corrector.counts, *self.corrector.total, ages[len(ages) // 2], ages[-1]))
