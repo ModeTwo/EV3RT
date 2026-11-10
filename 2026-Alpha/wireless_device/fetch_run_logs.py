@@ -14,7 +14,9 @@ PC に同じ中身のファイルがすでにあれば、取り込み直さな�
 """
 import argparse
 import hashlib
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -35,36 +37,102 @@ def wanted(rel):
     return (rel.startswith('run_') and rel.endswith('.log') and '/' not in rel) or rel.startswith('et_camera_')
 
 
+CACHE = Path.home() / '.et_run_logs_robot.json'
+
+
+def _load_cache(path):
+    try:
+        return json.load(open(path, encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+
+
+def _neighbor_ips(mac):
+    """PCの近くの機器一覧(ARP表・IPv6の近隣表)から、MACアドレスが mac の機器のIPアドレス(Windows)。"""
+    if not mac:
+        return []
+    want = mac.lower().replace(':', '-')
+    out = []
+    for cmd in (['arp', '-a'], ['netsh', 'interface', 'ipv6', 'show', 'neighbors']):
+        try:
+            text = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5).stdout.decode(errors='replace')
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for line in text.splitlines():
+            if want in line.lower():
+                ip = line.split()[0]
+                if not ip.lower().startswith('fe80'):
+                    out.append(ip)
+    return out
+
+
 class Remote:
-    """--host はカンマ区切りで複数書ける。つながらなければ次を試し、つながったものを次から先に使う
-    (2026-11-10: ロボットの名前は etrobo-raspi と etrobo-raspi.local のどちらが引けるかが時間によって変わった)。"""
+    """つながる相手を順に試す(2026-11-10: ロボットの名前 etrobo-raspi / etrobo-raspi.local は、どちらが引けるかが
+    時間によって変わり、両方とも引けないこともあった)。
+    候補: 前回つながった相手 → --host(カンマ区切り) → 前回つながったときに記録したIPアドレス
+          → PCの近くの機器一覧で、記録したMACアドレスの機器(IPアドレスが変わったとき)。
+    つながったら、ロボットのIPアドレスとMACアドレスを ~/.et_run_logs_robot.json に記録する。"""
 
     def __init__(self, args):
         self.hosts = [h.strip() for h in args.host.split(',') if h.strip()]
-        self.base = shlex.split(args.ssh) + (['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5'] if args.ssh == 'ssh' else [])
+        self.user = self.hosts[0].split('@', 1)[0] + '@' if '@' in self.hosts[0] else ''
+        self.base = shlex.split(args.ssh) + (['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4'] if args.ssh == 'ssh' else [])
         self.dir = args.remote_dir
+        self.cache_path = Path(os.environ.get('ET_FETCH_CACHE') or CACHE)
+        self.cache = _load_cache(self.cache_path)
+        self.cur = None
 
-    def run(self, command, data=None, stdout=subprocess.PIPE):
-        return subprocess.run(self.base + [self.hosts[0], 'cd %s && %s' % (self.dir, command)], input=data, stdout=stdout,
+    def candidates(self):
+        out = []
+        for h in [self.cache.get('last')] + self.hosts + [self.user + ip for ip in self.cache.get('ips', [])] \
+                + [self.user + ip for ip in _neighbor_ips(self.cache.get('mac'))]:
+            if h and h not in out:
+                out.append(h)
+        return out
+
+    def run(self, command, data=None, stdout=subprocess.PIPE, host=None):
+        return subprocess.run(self.base + [host or self.cur, 'cd %s && %s' % (self.dir, command)], input=data, stdout=stdout,
                               stderr=subprocess.PIPE)
 
     def listing(self, min_age):
         errors = []
-        for _ in range(len(self.hosts)):
+        for host in self.candidates():
             try:
-                return self._listing(min_age)
+                result = self._listing(min_age, host)
             except ConnectionError as error:
-                errors.append('%s: %s' % (self.hosts[0], error))
-                self.hosts.append(self.hosts.pop(0))
+                errors.append('%s: %s' % (host, str(error).splitlines()[-1] if str(error) else 'failed'))
+                continue
+            if self.cur != host:
+                print('connected via %s' % host, flush=True)
+            self.cur = host
+            return result
         raise ConnectionError(' / '.join(errors))
 
-    def _listing(self, min_age):
+    def _remember(self, host, info):
+        ips = [w for w in info.split() if re.fullmatch(r'[0-9.]+|[0-9a-fA-F:]+', w) and ':' not in w[:1]
+               and not w.lower().startswith('fe80')]
+        macs = re.findall(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}', info.lower())
+        new = dict(self.cache, last=host, ips=[ip for ip in ips if not re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}', ip.lower())],
+                   updated=time.strftime('%Y-%m-%d %H:%M:%S'))
+        if macs:
+            new['mac'] = macs[0]
+        if new != self.cache:
+            self.cache = new
+            try:
+                json.dump(new, open(self.cache_path, 'w', encoding='utf-8'), indent=1)
+            except OSError:
+                pass
+
+    def _listing(self, min_age, host):
         """(更新から min_age 秒たったファイル {名前: SHA-256}, 各ファイルの更新からの秒数 {名前: 秒})"""
-        r = self.run("find . -type f -mmin +%.3f -exec sha256sum {} + ; echo ===; find . -type f -printf '%%T@ %%p\\n'; echo ===; date +%%s.%%N"
-                     % (min_age / 60.0))
+        r = self.run("find . -type f -mmin +%.3f -exec sha256sum {} + ; echo ===; find . -type f -printf '%%T@ %%p\\n'; echo ===; date +%%s.%%N;"
+                     " echo ===; hostname -I; cat /sys/class/net/wlan0/address 2>/dev/null" % (min_age / 60.0), host=host)
         if r.returncode != 0:
             raise ConnectionError(r.stderr.decode(errors='replace').strip())
-        sums, times, now = r.stdout.decode().split('===\n')
+        parts = r.stdout.decode().split('===\n')
+        sums, times, now = parts[:3]
+        if len(parts) > 3:
+            self._remember(host, parts[3])
         now = float(now.strip())
         out, age = {}, {}
         for line in sums.splitlines():
