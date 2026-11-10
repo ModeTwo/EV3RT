@@ -171,7 +171,11 @@ class EtRallyCameraLogStart(Behaviour):
         if proc is None or proc.folder is None:
             self.logger.warning("camera log: camera process not running, skipped")
             return Status.SUCCESS
-        _recorder = dict(file=open(proc.folder / "poses.txt", "w", encoding="utf-8"), last_t=0.0)
+        try:
+            proc.folder.mkdir(parents=True, exist_ok=True)
+            _recorder = dict(file=open(proc.folder / "poses.txt", "w", encoding="utf-8"), last_t=0.0)
+        except OSError as error:   # 位置の記録が書けなくても、走りは止めない
+            self.logger.warning("camera log: cannot write poses.txt (%r)" % (error,))
         proc.send("save 1")
         EtRallyCameraLogStart.state = dict(folder=proc.folder)
         self.logger.info("camera log: saving every %d frames to %s (camera %s)" % (self.every_n, proc.folder, proc.ready))

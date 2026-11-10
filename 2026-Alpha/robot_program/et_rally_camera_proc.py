@@ -41,6 +41,8 @@ class CameraProcess:
                                      cwd=str(root), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, bufsize=1, universal_newlines=True)
         self.folder = None if folder is None else Path(folder)
+        if self.folder is not None:
+            self.folder.mkdir(parents=True, exist_ok=True)   # 子がカメラを開く前に、親が位置の記録を書き始めることがある
         self.events = deque()
         self.ready = None
         self.stopped = None
