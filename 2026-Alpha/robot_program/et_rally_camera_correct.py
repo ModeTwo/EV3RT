@@ -50,7 +50,7 @@ class CameraCorrector:
         self.at = at            # at(t) -> (t, x, y, 向き, 走った距離) か None
         self.apply = apply      # apply(dx, dy, dh): コースの座標で、思っている位置・向きに足す量
         self.logger = logger
-        self.counts = dict(seen=0, used=0, rate=0, items=0, resid=0, far=0, nopose=0)
+        self.counts = dict(seen=0, used=0, rate=0, items=0, resid=0, far=0, nopose=0, not_line=0)
         self.total = [0.0, 0.0, 0.0]
 
     def process(self, ev):
@@ -80,17 +80,22 @@ class CameraCorrector:
             self.counts["far"] += 1
             return None
         dx, dy, dh = self.gain_pos * ex, self.gain_pos * ey, self.gain_head * eh
-        if self.apply is not None:
-            self.apply(dx, dy, dh)
+        if self.apply is not None and self.apply(dx, dy, dh) is False:
+            self.counts["not_line"] += 1
+            return None
         self.counts["used"] += 1
         self.total = [self.total[0] + dx, self.total[1] + dy, self.total[2] + dh]
         return dx, dy, dh, (ex, ey, eh, r["n_dots"], r["n_markers"], r["resid_mm"])
 
 
 def apply_to_robot(dx, dy, dh):
-    """コースの座標で、思っている位置を (dx, dy)、向きを dh(左回りが+)だけ動かす。"""
+    """コースの座標で、思っている位置を (dx, dy)、向きを dh(左回りが+)だけ動かす。入れたら True。
+    2026-11-10: 直進の区間を走っているときだけ入れる。円弧の中で区間の進んだ距離をずらすと、目標の向きが飛ぶ
+    (実機: 円弧を0.9倍に遅くしたら円弧の中でも補正が入り、長さ63mmの円弧で向きのずれ最大31°になって止めた)。"""
     from . import et_rally_course_pose as cp
     from .behaviours import et_rally_path_segment as ps
+    if ps.active_kind() != "line":
+        return False
     cp.add_correction(dx, dy, 0.0)
     cp.shift_history(dx, dy, dh)   # 向きはジャイロの向きに入れるので、これから先の位置は自然にそろう
     ps.shift_active_position(dx, dy)
@@ -98,6 +103,7 @@ def apply_to_robot(dx, dy, dh):
     if dh and hasattr(gyro, "set_heading_offset"):
         # スタートの取り込みと同じ向き: コースの向きが +dh になるように、ジャイロの向きに course × dh を足す
         gyro.set_heading_offset(gyro.heading_offset + getattr(runtime, "course", -1) * dh)
+    return True
 
 
 class EtRallyCameraCorrect(Behaviour):

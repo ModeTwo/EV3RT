@@ -99,6 +99,14 @@ def set_start_position(front_mm, right_mm):
 _active = None
 
 
+def active_kind():
+    """いま走っている区間の種類("line" / "arc")。走っていなければ None。"""
+    seg = _active
+    if seg is None or not getattr(seg, "running", False):
+        return None
+    return seg.kind
+
+
 def shift_active_position(dx_course, dy_course):
     """いま走っている区間の自分の位置を、コースの座標で (dx, dy) mm だけ動かす。走っていなければ何もしない。
     区間の座標: 始めの計画上の点が原点、x = 始めの進む向き、y = その右(計画の向き = スタートの向き - コースの向き)。"""
