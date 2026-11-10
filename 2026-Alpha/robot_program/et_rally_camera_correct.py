@@ -12,6 +12,9 @@
   - 差が max_pos_mm・max_head_deg を超える(取り違えか、まだ直し始めで大きいとき。後者はスタートの取り込みが受け持つ)
 撮った時刻は子プロセスの time.monotonic()(親と同じ時計)。実際に撮ったのはそれより少し前なので lag_sec だけ前の位置を使う
 (6周の画像で0〜0.03秒、直進の画像で約0.03秒)。
+11/10 夜(カメラを固定し直し、床での下向きの補正つき)の6周の画像を流した机上の確認: 1枚ごとのばらつきは2.6〜2.8mm・0.33°。
+カメラは6周で約14mm前へずれていく様子を捉えていた(ゴールのログに出ないずれ約17mm)。強さ0.3/0.2・残差8mm未満で、
+最後に入る補正が+17.2mm(0.2/0.1・6mmでは+10.4mm、0.5/0.3では+19.7mmで行き来が大きい)。
 """
 
 import math
@@ -30,7 +33,7 @@ def _nd(a):
 class CameraCorrector:
     """走行中の補正の中身(Behaviour から呼ぶ。机上で記録を流して試せるように、木から切り離してある)。"""
 
-    def __init__(self, gain_pos=0.5, gain_head=0.3, lag_sec=0.02, max_rate_deg=60.0, max_resid_mm=6.0,
+    def __init__(self, gain_pos=0.3, gain_head=0.2, lag_sec=0.02, max_rate_deg=60.0, max_resid_mm=8.0,
                  max_pos_mm=40.0, max_head_deg=3.0, min_items=2, mirror=False,
                  at=None, apply=None, logger=None):
         self.gain_pos = float(gain_pos)
