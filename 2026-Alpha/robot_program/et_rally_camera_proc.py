@@ -162,11 +162,14 @@ def _child(cfg):
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 30)
-    if cfg.get('exposure') is not None:
-        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-        cap.set(cv2.CAP_PROP_EXPOSURE, float(cfg['exposure']))
-    else:
-        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+    def set_exposure():
+        if cfg.get('exposure') is not None:
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+            cap.set(cv2.CAP_PROP_EXPOSURE, float(cfg['exposure']))
+        else:
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+
+    set_exposure()
     if not cap.isOpened():
         say(ev='error', what='camera not opened')
         return
@@ -185,10 +188,17 @@ def _child(cfg):
             time.sleep(0.005)
             continue
         n += 1
-        if first:
+        if n in (1, 5):
+            # 2026-11-10: 撮り始める前に設定した露出は効かないことがある(ロボットで、露出50の指定なのに真っ白)。
+            # 撮り始めてからもう一度設定し、効くまで数枚待ってから「使える」と知らせる。
+            set_exposure()
+            continue
+        if first and n >= 10:
             first = False
             say(ev='ready', t=t, auto=cap.get(cv2.CAP_PROP_AUTO_EXPOSURE), exposure=cap.get(cv2.CAP_PROP_EXPOSURE),
-                gain=cap.get(cv2.CAP_PROP_GAIN), shape=list(frame.shape))
+                gain=cap.get(cv2.CAP_PROP_GAIN), shape=list(frame.shape), brightness=round(float(frame[::8, ::8].mean()), 1))
+        if first:
+            continue
         if state['save'] and meta is not None and n % cfg['every_n'] == 0:
             name = 'frame_%05d.jpg' % n
             cv2.imwrite(os.path.join(folder, name), frame, [cv2.IMWRITE_JPEG_QUALITY, cfg['quality']])
