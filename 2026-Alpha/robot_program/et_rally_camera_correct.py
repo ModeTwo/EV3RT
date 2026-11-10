@@ -90,6 +90,7 @@ def apply_to_robot(dx, dy, dh):
     from . import et_rally_course_pose as cp
     from .behaviours import et_rally_path_segment as ps
     cp.add_correction(dx, dy, 0.0)
+    cp.shift_history(dx, dy, dh)   # 向きはジャイロの向きに入れるので、これから先の位置は自然にそろう
     ps.shift_active_position(dx, dy)
     gyro = runtime.gyro_sensor
     if dh and hasattr(gyro, "set_heading_offset"):

@@ -27,7 +27,10 @@ from .runtime import runtime
 
 _anchor = None            # dict(plot=(x0, y0), plan=(x, y), course=±1)
 _correction = [0.0, 0.0, 0.0]
-_history = deque(maxlen=200)    # 1tickに数回呼ばれることもあるので、約2秒分より多めに持つ
+_history = deque(maxlen=1000)   # 2026-11-10: 時刻で HISTORY_SEC 秒分を持つ(200件では1tickに何度も呼ばれて約0.5秒分しか残らず、
+                                # カメラの子プロセスから0.2〜0.5秒遅れて届く画像の位置が引けなかった)
+HISTORY_SEC = 3.0
+HISTORY_MIN_DT = 0.004
 _last = None
 _recorder = None          # 2026-11-10: 走行中の画像と突き合わせるため、位置を時刻つきでファイルに残す(dict(file=, last_t=))
 
@@ -50,7 +53,10 @@ def _on_pose(gyro, heading):
     except Exception:
         dist = None
     _last = (time.monotonic(), x, y, h, dist)
-    _history.append(_last)
+    if not _history or _last[0] - _history[-1][0] >= HISTORY_MIN_DT:
+        _history.append(_last)
+        while _history and _last[0] - _history[0][0] > HISTORY_SEC:
+            _history.popleft()
     rec = _recorder
     if rec is not None and _last[0] - rec["last_t"] >= 0.009:
         rec["last_t"] = _last[0]
@@ -98,12 +104,12 @@ def current():
 
 
 def at(t):
-    """時刻 t の姿勢(前後の記録の間を直線でつなぐ)。履歴の外なら一番近い端。履歴がなければ None。"""
+    """時刻 t の姿勢(前後の記録の間を直線でつなぐ)。新しい側の外なら最後の記録(0.05秒まで)。
+    それより外・古い側の外・履歴がなければ None(2026-11-10: 以前は一番近い端を返していて、遅れて届いた画像に
+    違う位置を使っていた)。"""
     hist = list(_history)
-    if not hist:
+    if not hist or t < hist[0][0] or t > hist[-1][0] + 0.05:
         return None
-    if t <= hist[0][0]:
-        return hist[0]
     for a, b in zip(hist, hist[1:]):
         if a[0] <= t <= b[0]:
             k = 0.0 if b[0] == a[0] else (t - a[0]) / (b[0] - a[0])
@@ -111,6 +117,16 @@ def at(t):
             dist = None if a[4] is None or b[4] is None else a[4] + (b[4] - a[4]) * k
             return (t, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k, a[3] + dh * k, dist)
     return hist[-1]
+
+
+def shift_history(dx, dy, dh=0.0):
+    """2026-11-10: 走行中の補正を入れたとき、残っている過去の位置も同じだけずらす(補正の前に撮った画像が補正のあとに
+    届いても、同じずれをもう一度直さないように)。"""
+    global _last
+    for i, e in enumerate(_history):
+        _history[i] = (e[0], e[1] + dx, e[2] + dy, e[3] + dh, e[4])
+    if _last is not None:
+        _last = (_last[0], _last[1] + dx, _last[2] + dy, _last[3] + dh, _last[4])
 
 
 def add_correction(dx, dy, dh=0.0):
