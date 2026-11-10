@@ -113,6 +113,18 @@ class GroundCamera:
             Rz = np.array([[c_, -s_, 0.0], [s_, c_, 0.0], [0.0, 0.0, 1.0]])
             rv = cv2.Rodrigues(cv2.Rodrigues(rv)[0] @ Rz)[0].ravel()
         self.yaw_fix = yaw_fix
+        # 2026-11-10: 床での下向きの補正(度)。較正台の上とマットの上でロボットの前後の傾きが違い、床では遠いものが
+        # 遠く・近いものが近く見えていた(前後に約6%伸びる)。床で撮った8枚の当てはめで -0.46°(ばらつき0.11°)。
+        # カメラの位置は変えずに、車体の左右の軸のまわりに回す(fit_pose_pitch と同じ回し方)。
+        pitch_fix = float(d.get("pitch_fix_deg", 0.0))
+        if pitch_fix:
+            R = cv2.Rodrigues(np.asarray(rv, float).reshape(3, 1))[0]
+            C = -R.T @ t
+            c_, s_ = math.cos(math.radians(pitch_fix)), math.sin(math.radians(pitch_fix))
+            R2 = R @ np.array([[c_, 0.0, s_], [0.0, 1.0, 0.0], [-s_, 0.0, c_]])
+            rv = cv2.Rodrigues(R2)[0].ravel()
+            t = -R2 @ C
+        self.pitch_fix = pitch_fix
         self.top_x, self.top_y, self.top_s = top_x, top_y, top_s
         # 下向きも当てはめる位置の出し方(fit_pose_pitch)で使う
         self.K, self.dist, self.rvec, self.tvec = K, dist, rv, t
@@ -685,7 +697,9 @@ class EtRallyApplyStartPose(Behaviour):
     max_offset_mm / max_offset_deg を超えるずれは、測り間違いとみなして取り込まない。"""
 
     def __init__(self, name, rejoin_min_mm=5.0, max_offset_mm=80.0, max_offset_deg=15.0, plan_frame_known=True,
-                 min_items_for_position=3):
+                 min_items_for_position=2):
+        # min_items_for_position: 11/10 夕に3(2つ以下は向きだけ)としたが、床での下向きの補正(calib_1110b の pitch_fix_deg)を
+        # 入れたら、2つだけ(マーカー1+点1)でも前後の測り間違いが約17mm→約4mmになったので2に戻した(1つだけなら向きだけ)。
         super().__init__(name)
         self.min_items_for_position = int(min_items_for_position)
         # plan_frame_known: 計画が経路を作る道具の座標(スタート START_MM・START_HEADING_DEG、gyro = スタートの向き - 向き)か。
