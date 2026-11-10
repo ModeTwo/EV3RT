@@ -213,7 +213,7 @@ def _child(cfg):
                     cam = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S)
                 dets = sp.detect_ground(cam, frame)
                 r = sp.fit_pose_pitch(cam, dets, mirror=state['mirror'])
-                r0 = sp.fit_pose(dets, mirror=state['mirror'], fit_scale=False) if r is not None else None
+                r0 = sp.fit_pose_search(dets, mirror=state['mirror']) if r is not None else None
                 say(ev='pose', t=t, n=n, r=_plain(r), r0=_plain(r0))
                 detected += 1
             except Exception as error:   # 較正ファイルがないなど。1回だけ知らせて、位置を出すのはやめる

@@ -279,6 +279,41 @@ def fit_pose(dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror
     return result
 
 
+def _score(r):
+    return (r["n_dots"] + 2 * r["n_markers"], -r["resid_mm"])
+
+
+def fit_pose_search(dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror=False, max_dh=20.0, max_dxy=40.0):
+    """2026-11-10: 予想(計画のスタート)から向きが大きくずれていても結びつくように、予想の向きと位置を少しずつ変えて
+    fit_pose(縮尺なし)を試し、一番多く結びつくもの(同じなら残差の小さいもの)を返す。
+    実機で向き約+9°・前に25mmずらして置いたら、予想のままでは50〜60cm先のマーカーが約9cm離れて見え、1つも結びつかなかった。
+    向きの候補: 予想、マーカーの辺の傾きから出した向き(90°ごとのうち予想に近いもの)、予想±max_dh を4°おき。
+    位置の候補: 予想と ±max_dxy。予想から max_dh+5°・100mm より離れた答えは、隣のマスとの取り違えとみなして使わない。"""
+    sgn = -1.0 if mirror else 1.0
+    x0, y0, h0 = nominal
+    heads = [h0]
+    for m in dets.get("markers", []):
+        base = -sgn * m["rot"]
+        h = base + 90.0 * round((h0 - base) / 90.0)
+        if abs(_nd(h - h0)) <= max_dh:
+            heads.append(h)
+    k = int(max_dh // 4)
+    heads += [h0 + 4.0 * i for i in range(-k, k + 1) if i]
+    best = None
+    for h in heads:
+        for dx in (0.0, -max_dxy, max_dxy):
+            for dy in (0.0, -max_dxy, max_dxy):
+                r = fit_pose(dets, nominal=(x0 + dx, y0 + dy, h), mirror=mirror, fit_scale=False)
+                if r is None or r["n_dots"] + r["n_markers"] < 2:
+                    continue
+                p = r["pose"]
+                if math.hypot(p[0] - x0, p[1] - y0) > 100.0 or abs(_nd(p[2] - h0)) > max_dh + 5.0:
+                    continue
+                if best is None or _score(r) > _score(best):
+                    best = r
+    return best
+
+
 def fit_pose_pitch(cam, dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror=False, iters=40):
     """2026-11-08: 置き場所ごとに、カメラの下向きも一緒に当てはめて位置と向きを出す。
     マットの上では置き場所でロボットの前後の傾きが変わり、カメラの下向きが約0.2〜0.8°変わる(50〜70cm先で1.5〜2cm)。
@@ -288,7 +323,7 @@ def fit_pose_pitch(cam, dets, nominal=(START_MM[0], START_MM[1], START_HEADING_D
     (下向きの補正, x, y, 向き) を当てはめる(数値微分のガウス・ニュートン、減衰つき)。
     3点以上結びつかないとき・cam がないときは fit_pose(縮尺なし)の結果を返す。
     戻り値: fit_pose と同じ dict に pitch_deg(下向きの補正)と rms_px を足したもの。"""
-    r0 = fit_pose(dets, nominal=nominal, mirror=mirror, fit_scale=False)
+    r0 = fit_pose_search(dets, nominal=nominal, mirror=mirror)
     if r0 is None or cam is None or not hasattr(cam, "K"):
         return r0
     cv2, np = cam.cv2, cam.np
