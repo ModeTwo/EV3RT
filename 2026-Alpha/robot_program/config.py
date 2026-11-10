@@ -204,7 +204,7 @@ class RaceConfig:
     et_rally_arm_up_before_touch: Optional[bool] = None
     # 2026-11-06: スタートで止まっている間にカメラで位置と向きを測り、走り出しに取り込む(et_rally_start_pose.py)。
     # 既定None=しない。測る秒数(Noneなら2秒)、位置のずれがこのmm以上なら最初のつなぎを引き直す(Noneなら5mm、
-    # それより小さければ最初の区間の自分の位置に入れる)、カメラの較正ファイル(Noneなら calib_1110.json)。
+    # それより小さければ最初の区間の自分の位置に入れる)、カメラの較正ファイル(Noneなら calib_1110b.json)。
     et_rally_start_pose: Optional[bool] = None
     et_rally_start_pose_sec: Optional[float] = None
     et_rally_start_pose_rejoin_min_mm: Optional[float] = None
