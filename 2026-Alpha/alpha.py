@@ -1474,6 +1474,9 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument('--rally-camera-exposure', type=int, default=None,
                         help=('With --rally-camera-log: fix the camera exposure (V4L2 units, 1 = 100 us; 50 = 5 ms). '
                               'Default: automatic exposure.'))
+    parser.add_argument('--rally-camera-correct', default=None,
+                        help=('ET rally: correct the position and heading while driving with the camera (prototype). '
+                              'POS,HEAD = the fraction of the difference applied per image (e.g. 0.5,0.3). Default: off.'))
     parser.add_argument('--rally-arm-up-sec', type=float, default=None,
                         help='Seconds the arm needs to go up, for --rally-arm-while-driving (default 3.0, provisional).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
@@ -1590,6 +1593,16 @@ def _run_main(argv, startup_cleanup):
         if not 1 <= args.rally_camera_exposure <= 5000:
             parser.error('--rally-camera-exposure must be between 1 and 5000')
         mission_config = dataclasses.replace(mission_config, et_rally_camera_exposure=args.rally_camera_exposure)
+    if args.rally_camera_correct is not None:
+        try:
+            gains = tuple(float(v) for v in args.rally_camera_correct.split(','))
+        except ValueError:
+            gains = ()
+        if len(gains) != 2 or not all(0.0 <= g <= 1.0 for g in gains):
+            parser.error('--rally-camera-correct must be POS,HEAD with values between 0 and 1')
+        if args.mission != 'rally-drive':
+            parser.error('--rally-camera-correct requires --mission rally-drive (for now)')
+        mission_config = dataclasses.replace(mission_config, et_rally_camera_correct=gains)
     if args.rally_arm_up_sec is not None:
         if not 0.5 <= args.rally_arm_up_sec <= 10.0:
             parser.error('--rally-arm-up-sec must be between 0.5 and 10')

@@ -95,6 +95,23 @@ def set_start_position(front_mm, right_mm):
     _start_position = (float(front_mm), float(right_mm))
 
 
+# 2026-11-10: 走行中のカメラの補正(et_rally_camera_correct.py)用。いま走っている区間。
+_active = None
+
+
+def shift_active_position(dx_course, dy_course):
+    """いま走っている区間の自分の位置を、コースの座標で (dx, dy) mm だけ動かす。走っていなければ何もしない。
+    区間の座標: 始めの計画上の点が原点、x = 始めの進む向き、y = その右(計画の向き = スタートの向き - コースの向き)。"""
+    seg = _active
+    if seg is None or not getattr(seg, "running", False):
+        return False
+    from ..et_rally_start_pose import START_HEADING_DEG
+    th = math.radians(START_HEADING_DEG - seg.start_heading + (180.0 if seg.reverse else 0.0))
+    seg.pos_x += dx_course * math.cos(th) + dy_course * math.sin(th)
+    seg.pos_y += dx_course * math.sin(th) - dy_course * math.cos(th)
+    return True
+
+
 def reset_chain():
     global _chain_end_dist, _chain_pid, _chain_lat, _chain_shape, _chain_speed
     _chain_shape = None
@@ -302,6 +319,8 @@ class EtRallyPathSegment(Behaviour):
         _chain_speed = None
         self.start_heading_actual = _heading()
         self.running = True
+        global _active
+        _active = self
         self.logger.info("%+06d %s.%s started %s heading %.1f->%.1f length=%d radius=%d stop=%s cont=%s rest=%d loc=(%d,%d)%s" % (
             now, self.__class__.__name__, self.kind, "reverse" if self.reverse else "forward",
             self.start_heading, self.end_heading, self.length_mm, self.radius_mm, self.stop_at_end,

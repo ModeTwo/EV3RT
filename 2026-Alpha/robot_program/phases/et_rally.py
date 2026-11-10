@@ -20,6 +20,7 @@ from ..et_rally_heading import (EtRallyArmUpWithDriftMeasure, EtRallyPostStopGyr
                                 RestoreEtRallyHeading)
 from ..runtime import runtime
 from ..et_rally_start_pose import EtRallyApplyStartPose, EtRallyStartPoseCapture
+from ..et_rally_camera_correct import EtRallyCameraCorrect
 from ..et_rally_course_pose import (EtRallyAnchorCoursePose, EtRallyCameraLogStart, EtRallyCameraLogStop,
                                     EtRallyCameraProcessStart, EtRallyCameraProcessStop, EtRallyReleaseCoursePose)
 
@@ -109,7 +110,8 @@ def build_et_rally_phase(context, config):
     # 2026-11-10: カメラ(スタートの取り込み・走行中の画像)は子プロセスで動かす。開くのに時間がかかるので最初に起動する。
     camera_log_every = getattr(config, "et_rally_camera_log_every", None)
     use_start_pose = bool(getattr(config, "et_rally_start_pose", None))
-    if camera_log_every or use_start_pose:
+    camera_correct = getattr(config, "et_rally_camera_correct", None)
+    if camera_log_every or use_start_pose or camera_correct:
         children.append(EtRallyCameraProcessStart(
             "et_rally camera process", log_every=camera_log_every,
             exposure=getattr(config, "et_rally_camera_exposure", None),
@@ -160,7 +162,7 @@ def build_et_rally_phase(context, config):
         children.append(EtRallyApplyStartPose(
             "et_rally apply start pose", rejoin_min_mm=5.0 if rejoin_min is None else rejoin_min,
             plan_frame_known=(config.et_rally_strategy_source == "file")))
-        if not camera_log_every:
+        if not camera_log_every and not camera_correct:
             children.append(EtRallyCameraProcessStop("et_rally camera process stop"))
     else:
         children.append(arm_up)
@@ -179,13 +181,18 @@ def build_et_rally_phase(context, config):
             "Unknown ET rally strategy source: " + str(config.et_rally_strategy_source)
         )
     # 2026-11-08: コース上の自分の位置(et_rally_course_pose.py)。スタートの取り込みか、走行中の画像を残すときに持つ。
-    track_course = install_heading and (getattr(config, "et_rally_start_pose", None) or camera_log_every)
+    track_course = install_heading and (getattr(config, "et_rally_start_pose", None) or camera_log_every or camera_correct)
     if track_course:
         children.append(EtRallyAnchorCoursePose("et_rally course pose"))
     if camera_log_every:
         children.append(EtRallyCameraLogStart("et_rally camera log", every_n=camera_log_every,
                                               exposure=getattr(config, "et_rally_camera_exposure", None)))
     execute = build_execute_strategy(context, config)
+    if camera_correct and track_course:
+        # 2026-11-10: 走りながらカメラで位置と向きを直す(試作)。走行が終わったら止める。
+        corrected = Parallel(name="et_rally drive + camera correct", policy=ParallelPolicy.SuccessOnSelected(children=[execute]))
+        corrected.add_children([execute, EtRallyCameraCorrect("et_rally camera correct", camera_correct[0], camera_correct[1])])
+        execute = corrected
     if drive_arm:
         # 走りながらアームを上げる(走りとアームを同じtickで進める)。両方終わったら次へ。
         driving = Parallel(name="et_rally drive + arm up", policy=ParallelPolicy.SuccessOnAll(synchronise=True))
@@ -196,7 +203,7 @@ def build_et_rally_phase(context, config):
     # ET用の直進は、区間が連続するゲート通過中に止まらないよう終了時のブレーキを持たない。
     # 最後の区間の後は、ここで明示的に停止する(単体テストでは、この後は何も動かさないため必須)。
     children.append(StopNow(name="et_rally final stop"))
-    if camera_log_every:
+    if camera_log_every or camera_correct:
         children.append(EtRallyCameraLogStop("et_rally camera log stop"))
     if track_course:
         children.append(EtRallyReleaseCoursePose("et_rally course pose release"))

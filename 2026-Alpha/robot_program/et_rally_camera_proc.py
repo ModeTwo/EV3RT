@@ -141,7 +141,7 @@ def _child(cfg):
     except ImportError as error:
         say(ev='error', what='cannot import cv2 in %s (%r)' % (sys.executable, error))
         return
-    state = dict(save=False, detect=False, quit=False, mirror=bool(cfg.get('mirror')))
+    state = dict(save=False, detect=False, track=False, quit=False, mirror=bool(cfg.get('mirror')))
 
     def commands():
         for line in sys.stdin:
@@ -150,7 +150,7 @@ def _child(cfg):
                 continue
             if parts[0] == 'quit':
                 break
-            if parts[0] in ('save', 'detect') and len(parts) > 1:
+            if parts[0] in ('save', 'detect', 'track') and len(parts) > 1:
                 state[parts[0]] = parts[1] == '1'
                 if parts[0] == 'detect' and len(parts) > 2:   # "detect 1 1" = 左コース(見た左右を逆にする)
                     state['mirror'] = parts[2] == '1'
@@ -179,7 +179,7 @@ def _child(cfg):
         os.makedirs(folder, exist_ok=True)
         meta = open(os.path.join(folder, 'meta.jsonl'), 'a', encoding='utf-8')
     cam = None
-    n = saved = detected = 0
+    n = saved = detected = tracked = 0
     first = True
     while not state['quit']:
         ok, frame = cap.read()
@@ -206,6 +206,22 @@ def _child(cfg):
             saved += 1
             if saved % 25 == 0:
                 meta.flush()
+        if state['track'] and not state['detect']:
+            # 2026-11-10: 走行中の補正(et_rally_camera_correct.py)。見つけたもの(車体の座標)だけを送り、
+            # 地図への結びつけは親が撮った時刻の位置で行う。
+            try:
+                from robot_program import et_rally_start_pose as sp
+                if cam is None:
+                    cam = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S)
+                dets = sp.detect_ground(cam, frame)
+                if dets['markers'] or len(dets['dots']) >= 2:
+                    say(ev='dets', t=t, n=n, markers=[{'xy': [round(v, 2) for v in m['xy']], 'rot': round(m['rot'], 3)}
+                                                      for m in dets['markers']],
+                        dots=[[round(v, 2) for v in d] for d in dets['dots']])
+                tracked += 1
+            except Exception as error:
+                say(ev='error', what='track failed: %r' % (error,))
+                state['track'] = False
         if state['detect']:
             try:
                 from robot_program import et_rally_start_pose as sp
@@ -222,7 +238,7 @@ def _child(cfg):
     cap.release()
     if meta is not None:
         meta.close()
-    say(ev='stopped', frames=n, saved=saved, detected=detected)
+    say(ev='stopped', frames=n, saved=saved, detected=detected, tracked=tracked)
 
 
 def _plain(r):

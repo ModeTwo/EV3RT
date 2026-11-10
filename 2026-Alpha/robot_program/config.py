@@ -217,6 +217,8 @@ class RaceConfig:
     et_rally_camera_log_every: Optional[int] = None
     # 2026-11-09: 走行中の画像を残すときの露出(V4L2の単位、1=100マイクロ秒。None=自動のまま)
     et_rally_camera_exposure: Optional[int] = None
+    # 2026-11-10: 走行中のカメラの補正 (位置の割合, 向きの割合)。None=使わない(et_rally_camera_correct.py、試作)
+    et_rally_camera_correct: Optional[tuple] = None
     et_rally_arm_up_sec: Optional[float] = 3.0
     et_rally_arm_margin_sec: Optional[float] = 0.5
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する

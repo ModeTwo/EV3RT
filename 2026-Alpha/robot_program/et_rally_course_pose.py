@@ -187,9 +187,12 @@ class EtRallyCameraLogStop(Behaviour):
         global _recorder
         st = EtRallyCameraLogStart.state
         EtRallyCameraLogStart.state = None
-        if st is None:
-            return Status.SUCCESS
         from . import et_rally_camera_proc
+        if st is None:   # 画像は残さず、走行中の補正だけで子プロセスを使ったとき
+            stopped = et_rally_camera_proc.close_shared()
+            if stopped is not None:
+                self.logger.info("camera process: stopped %s" % (stopped,))
+            return Status.SUCCESS
         rec, _recorder = _recorder, None
         stopped = et_rally_camera_proc.close_shared()
         if rec is not None:
