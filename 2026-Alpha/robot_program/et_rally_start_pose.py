@@ -79,6 +79,14 @@ class GroundCamera:
         K = np.array(d["lens"]["K"]); dist = np.array(d["lens"]["dist"])
         j = d["jig"][0]
         rv = np.array(j["rvec"], dtype=float); t = np.array(j["tvec"], dtype=float).reshape(3)
+        # 2026-11-10: 較正台での左右の向きのずれの補正(度)。コースの線にぴったり置いた画像で、カメラが出す向きが
+        # 約+1.3°ずれていた。車体の座標を車軸の真ん中のまわりにこの角度だけ回してから、カメラへ写す。
+        yaw_fix = float(d.get("yaw_fix_deg", 0.0))
+        if yaw_fix:
+            c_, s_ = math.cos(math.radians(yaw_fix)), math.sin(math.radians(yaw_fix))
+            Rz = np.array([[c_, -s_, 0.0], [s_, c_, 0.0], [0.0, 0.0, 1.0]])
+            rv = cv2.Rodrigues(cv2.Rodrigues(rv)[0] @ Rz)[0].ravel()
+        self.yaw_fix = yaw_fix
         self.top_x, self.top_y, self.top_s = top_x, top_y, top_s
         # 下向きも当てはめる位置の出し方(fit_pose_pitch)で使う
         self.K, self.dist, self.rvec, self.tvec = K, dist, rv, t

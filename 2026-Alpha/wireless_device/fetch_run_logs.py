@@ -36,14 +36,29 @@ def wanted(rel):
 
 
 class Remote:
+    """--host はカンマ区切りで複数書ける。つながらなければ次を試し、つながったものを次から先に使う
+    (2026-11-10: ロボットの名前は etrobo-raspi と etrobo-raspi.local のどちらが引けるかが時間によって変わった)。"""
+
     def __init__(self, args):
-        self.ssh = shlex.split(args.ssh) + ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', args.host] if args.ssh == 'ssh' else shlex.split(args.ssh) + [args.host]
+        self.hosts = [h.strip() for h in args.host.split(',') if h.strip()]
+        self.base = shlex.split(args.ssh) + (['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5'] if args.ssh == 'ssh' else [])
         self.dir = args.remote_dir
 
     def run(self, command, data=None, stdout=subprocess.PIPE):
-        return subprocess.run(self.ssh + ['cd %s && %s' % (self.dir, command)], input=data, stdout=stdout, stderr=subprocess.PIPE)
+        return subprocess.run(self.base + [self.hosts[0], 'cd %s && %s' % (self.dir, command)], input=data, stdout=stdout,
+                              stderr=subprocess.PIPE)
 
     def listing(self, min_age):
+        errors = []
+        for _ in range(len(self.hosts)):
+            try:
+                return self._listing(min_age)
+            except ConnectionError as error:
+                errors.append('%s: %s' % (self.hosts[0], error))
+                self.hosts.append(self.hosts.pop(0))
+        raise ConnectionError(' / '.join(errors))
+
+    def _listing(self, min_age):
         """(更新から min_age 秒たったファイル {名前: SHA-256}, 各ファイルの更新からの秒数 {名前: 秒})"""
         r = self.run("find . -type f -mmin +%.3f -exec sha256sum {} + ; echo ===; find . -type f -printf '%%T@ %%p\\n'; echo ===; date +%%s.%%N"
                      % (min_age / 60.0))
@@ -118,7 +133,8 @@ def _delete(remote, names):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--host', default='shunsuke09@etrobo-raspi')  # 2026-11-10: .local では見つからないことがあった
+    ap.add_argument('--host', default='shunsuke09@etrobo-raspi,shunsuke09@etrobo-raspi.local',
+                    help='カンマ区切りで複数。つながったものを使う')
     ap.add_argument('--remote-dir', default='EV3RT/2026-Alpha/run_logs')
     ap.add_argument('--dest', default=str(Path.home() / 'Downloads' / 'et_run_logs'))
     ap.add_argument('--watch', action='store_true')
