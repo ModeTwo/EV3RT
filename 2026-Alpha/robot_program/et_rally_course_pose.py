@@ -205,8 +205,9 @@ class EtRallyCameraProcessStart(Behaviour):
     """2026-11-10: ETラリーの最初に、カメラの子プロセスを起動する(開くのに約1秒かかるので早めに)。
     走行中の画像を残すときは、保存先のフォルダもここで決める(保存を始めるのは EtRallyCameraLogStart)。"""
 
-    def __init__(self, name, log_every=None, exposure=None, calib_path=None, quality=90, prestart=False):
+    def __init__(self, name, log_every=None, exposure=None, calib_path=None, quality=90, prestart=False, gates=None):
         super().__init__(name)
+        self.gates = gates
         self.log_every = log_every
         self.exposure = exposure
         self.calib_path = calib_path
@@ -227,7 +228,7 @@ class EtRallyCameraProcessStart(Behaviour):
         if self.folder is None and self.log_every:
             self.folder = Path(__file__).resolve().parents[1] / "run_logs" / ("et_camera_" + time.strftime("%Y%m%dT%H%M%S"))
         proc = et_rally_camera_proc.shared(folder=self.folder, every_n=self.log_every or 5, quality=self.quality,
-                                           exposure=self.exposure, calib_path=self.calib_path)
+                                           exposure=self.exposure, calib_path=self.calib_path, gates=self.gates)
         return proc
 
     def update(self):

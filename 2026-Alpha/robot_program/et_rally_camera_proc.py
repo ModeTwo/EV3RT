@@ -31,11 +31,12 @@ elif platform.python_implementation() == 'PyPy':
 class CameraProcess:
     """子プロセスを起動して、知らせを裏のスレッドで受け取る。受け取った知らせは poll() で取り出す。"""
 
-    def __init__(self, folder=None, every_n=5, quality=90, exposure=None, calib_path=None, mirror=False):
+    def __init__(self, folder=None, every_n=5, quality=90, exposure=None, calib_path=None, mirror=False, gates=None):
         import subprocess
         from pathlib import Path
         cfg = dict(folder=None if folder is None else str(folder), every_n=int(every_n), quality=int(quality),
-                   exposure=exposure, calib_path=None if calib_path is None else str(calib_path), mirror=bool(mirror))
+                   exposure=exposure, calib_path=None if calib_path is None else str(calib_path), mirror=bool(mirror),
+                   gates=gates)
         root = Path(__file__).resolve().parents[1]
         self.proc = subprocess.Popen([child_python(), '-m', 'robot_program.et_rally_camera_proc', json.dumps(cfg)],
                                      cwd=str(root), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -227,6 +228,7 @@ def _child(cfg):
                 from robot_program import et_rally_start_pose as sp
                 if cam is None:
                     cam = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S)
+                    sp.set_gate_legs(cfg.get('gates'))
                 dets = sp.detect_ground(cam, frame)
                 r = sp.fit_pose_pitch(cam, dets, mirror=state['mirror'])
                 r0 = sp.fit_pose_search(dets, mirror=state['mirror']) if r is not None else None

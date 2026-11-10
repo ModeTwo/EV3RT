@@ -76,6 +76,17 @@ class SetTireDiameter(Behaviour):
         return Status.SUCCESS
 
 
+def _plan_gates(config):
+    """計画のファイルの gates(ゲートの位置)。読めなければ None(脚の点を外さない)。"""
+    try:
+        import json
+        from ..features.execute_strategy import _resolve_plan_path
+        path = _resolve_plan_path(getattr(config, "et_rally_plan_path", None))
+        return json.load(open(path, encoding="utf-8")).get("gates")
+    except Exception:
+        return None
+
+
 def build_et_rally_phase(context, config):
     # PCまたは固定planが全周回分を一つのSEQとして返すため、SEQは一度だけ実行する。
     # ボトル配送までアームを下げたまま運んでいるため、ETラリー走行の前に上げ直す。
@@ -112,11 +123,15 @@ def build_et_rally_phase(context, config):
     use_start_pose = bool(getattr(config, "et_rally_start_pose", None))
     camera_correct = getattr(config, "et_rally_camera_correct", None)
     if camera_log_every or use_start_pose or camera_correct:
+        # 2026-11-10: ゲートの脚の上の点は地図から外す(計画のファイルの gates)。親(走行中の補正)と子(スタートの取り込み)の両方で使う。
+        gates = _plan_gates(config)
+        from .. import et_rally_start_pose as _sp
+        _sp.set_gate_legs(gates)
         children.append(EtRallyCameraProcessStart(
             "et_rally camera process", log_every=camera_log_every,
             exposure=getattr(config, "et_rally_camera_exposure", None),
             calib_path=getattr(config, "et_rally_camera_calib_path", None),
-            prestart=(getattr(config, "mission_mode", None) == "rally-drive")))
+            prestart=(getattr(config, "mission_mode", None) == "rally-drive"), gates=gates))
     # 2026-11-06: 計画から見て間に合うなら、アームは走りながら上げる(et_rally_arm.arm_while_driving)。
     drive_arm, drive_arm_reason = arm_while_driving(config)
     if arm_up_before_touch(config):

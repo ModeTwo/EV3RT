@@ -38,6 +38,32 @@ from .runtime import runtime
 P_MM = 246.4                     # 格子の点の間隔(実測246mm、経路を作る道具は24.64cm)
 CELLS = [((i + 0.5) * P_MM, (j + 0.5) * P_MM) for i in range(4) for j in range(4)]   # マーカー(マスの中心)
 DOTS = [(i * P_MM, j * P_MM) for i in range(5) for j in range(5)]                      # 灰色の点
+
+# 2026-11-10: ゲートの脚は灰色の点(マス目の交点)の上に立つ。脚の上の点は見えない(一部だけ見えると中心がずれる)ので
+# 地図から外し、脚の近くで見つかった点・マーカーは、脚やT字の部品の見間違いのおそれがあるので使わない。
+# 計画のファイルの gates(マス目の番号、計画の座標)から set_gate_legs で入れる。
+LEG_EXCLUDE_MM = 40.0
+_legs = []
+_dots_visible = list(DOTS)
+
+
+def set_gate_legs(gates):
+    """gates: 計画のファイルの "gates"({色: {a: [i, j], b: [i, j]}})か None。脚の位置を覚える。"""
+    global _legs, _dots_visible
+    legs = []
+    for color in ("red", "blue", "yellow"):
+        g = (gates or {}).get(color)
+        if isinstance(g, dict):
+            for key in ("a", "b"):
+                if key in g:
+                    legs.append((float(g[key][0]) * P_MM, float(g[key][1]) * P_MM))
+    _legs = legs
+    _dots_visible = [d for d in DOTS if all(math.hypot(d[0] - l[0], d[1] - l[1]) > 1.0 for l in legs)]
+    return legs
+
+
+def _near_leg(w):
+    return any(math.hypot(w[0] - l[0], w[1] - l[1]) < LEG_EXCLUDE_MM for l in _legs)
 # 計画のスタート(経路を作る道具と同じ座標)
 # 2026-11-09: 新スタート = 今のゴール地点(hybrid_route.py の start_at='goal': x = 4P + 14.9cm、y = 3.5P、向き180)
 START_MM = (4 * P_MM + 149.0, 3.5 * P_MM)
@@ -233,12 +259,16 @@ def fit_pose(dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror
         pairs = []   # (車体の座標, コースの座標, 重み, 種類)
         for m in marks:
             w = _to_world(pose, m["xy"])
+            if _near_leg(w):
+                continue
             c = min(CELLS, key=lambda q: math.hypot(q[0] - w[0], q[1] - w[1]))
             if math.hypot(c[0] - w[0], c[1] - w[1]) <= ASSOC_MARKER_MM:
                 pairs.append((m["xy"], c, 2.0, m))
         for d in dots:
             w = _to_world(pose, d)
-            c = min(DOTS, key=lambda q: math.hypot(q[0] - w[0], q[1] - w[1]))
+            if _near_leg(w) or not _dots_visible:
+                continue
+            c = min(_dots_visible, key=lambda q: math.hypot(q[0] - w[0], q[1] - w[1]))
             if math.hypot(c[0] - w[0], c[1] - w[1]) <= ASSOC_DOT_MM:
                 pairs.append((d, c, 1.0, None))
         if not pairs:
@@ -339,10 +369,12 @@ def fit_pose_pitch(cam, dets, nominal=(START_MM[0], START_MM[1], START_HEADING_D
     cv2, np = cam.cv2, cam.np
     sgn = -1.0 if mirror else 1.0
     pose = r0["pose"]
-    items = [(m["xy"], CELLS, ASSOC_MARKER_MM) for m in dets.get("markers", [])] + [(d, DOTS, ASSOC_DOT_MM) for d in dets.get("dots", [])]
+    items = [(m["xy"], CELLS, ASSOC_MARKER_MM) for m in dets.get("markers", [])] + [(d, _dots_visible, ASSOC_DOT_MM) for d in dets.get("dots", [])]
     body_pts, world = [], []
     for xy, ref, lim in items:
         w = _to_world(pose, (xy[0], sgn * xy[1]))
+        if _near_leg(w) or not ref:
+            continue
         c = min(ref, key=lambda q: math.hypot(q[0] - w[0], q[1] - w[1]))
         if math.hypot(c[0] - w[0], c[1] - w[1]) <= lim:
             body_pts.append([xy[0], xy[1], 0.0]); world.append(c)
