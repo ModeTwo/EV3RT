@@ -161,6 +161,9 @@ def arm_up_before_touch(config):
     return bool(getattr(config, "et_rally_arm_up_before_touch", None)) if config is not None else False
 
 
+CALIBRATION_ARM_POWER = 20.0
+
+
 def make_arm_up_down(name, direction, config, from_bottom=False):
     """--rally-arm-stop-ticks があればこの版、なければ従来の ArmUpDownFull を返す。
     from_bottom: 一番下から上げる動き(ETラリーの開始時)。--rally-arm-travel-deg があれば、その角度で止める。"""
@@ -168,6 +171,10 @@ def make_arm_up_down(name, direction, config, from_bottom=False):
     if not stop_ticks:
         return ArmUpDownFull(name=name, direction=direction)
     power = getattr(config, "et_rally_arm_power", None)
+    if not from_bottom and power is not None:
+        # 2026-11-11: タッチ前などの、位置がわからない状態からの上げ下げは、--rally-arm-power に関係なく出力20まで
+        # (実機: 出力25以上では上がりきったあとギアが滑ってひどくカチカチ鳴った。部品の破損を防ぐ)。
+        power = min(float(power), CALIBRATION_ARM_POWER)
     travel = getattr(config, "et_rally_arm_travel_deg", None) if from_bottom else None
     return EtRallyArmUpDown(name, direction, stop_ticks=stop_ticks,
                             power=ArmUpDownFull.ARM_SHIFT_PWM if power is None else power, max_travel_deg=travel)
