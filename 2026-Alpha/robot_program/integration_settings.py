@@ -81,8 +81,8 @@ class IntegrationSettings:
     to_exit_heading_tolerance_deg: float = 5.0
     # TURN序盤の誤検出を避けるため、目標方位までの残り誤差がこの範囲内に入るまで黒検出を数えない。実機未校正の試走初期値。
     to_exit_turn_black_detect_max_error_deg: float = 60.0
-    to_spin_min_power: int = 60
-    to_spin_max_power: int = 60
+    to_spin_min_power: int = 80
+    to_spin_max_power: int = 80
     # Hint2後の移動完了位置から、黄→青→赤のドロップゾーン前を進む。
     delivery_trace_target_v: int = 75
     delivery_trace_power: int = 50
@@ -90,7 +90,7 @@ class IntegrationSettings:
     delivery_marker_full_width_mm: float = 120.0
     delivery_marker_half_width_mm: float = 60.0
     delivery_drop_distance_first_mm: float = 100.0
-    delivery_drive_first_power: int = 50
+    delivery_drive_first_power: int = 90
     delivery_drop_distance_second_mm: float = 100.0
     delivery_drive_second_power: int = 50
     # ドロップゾーン進入・退出をDeliveryEtRun(方位保持、power<0で後退)で行うためのPID。

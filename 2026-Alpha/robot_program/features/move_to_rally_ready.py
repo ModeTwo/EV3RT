@@ -1,148 +1,122 @@
-"""Feature 09 subtree factory."""
+"""赤→白を通過後、上250mm・内側300mmを目指してラリー準備位置へ。"""
 
-from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
-from ..behaviours.bottle import IsDropZoneUnset, IsSelectedDropZone, MarkRallyReady
-from ..behaviours.conditions import IsColorDetected
-from ..behaviours.line_trace import TraceLine
-from ..behaviours.motor_control import StopNow
-from ..behaviours.section_motion import distance_motion
-# ボトルを離した後の旋回なので、エンコーダ旋回+ジャイロ仕上げ(behaviours/encoder_spin.py)
-from ..behaviours.encoder_spin import delivery_encoder_turn as to_turn
+import math
 
+from ..behaviours.bottle import MarkRallyReady
+from ..behaviours.conditions import IsColorTransitionDetected
+from ..behaviours.corrected_run import DeliveryEtRun
+from ..behaviours.encoder_spin import delivery_encoder_turn
+from ..behaviours.gyro_drive import RunByGyro
+from ..types import HeadingType
+from .bt_imports import Behaviour, BottleColor, Color, Parallel, ParallelPolicy, Sequence, Status, runtime
 
-def _trace_motor(name, settings):
-    return TraceLine(
-        name=name,
-        target=settings.delivery_trace_target_v,
-        power=settings.delivery_trace_power,
-        pid_p=0.65,
-        pid_i=0.000001,
-        pid_d=0.045,
-        trace_side=TraceSide.NORMAL,
-    )
-
-
-def _trace_until_blue(name, settings):
-    search = Parallel(name=name, policy=ParallelPolicy.SuccessOnOne())
-    search.add_children(
-        [
-            _trace_motor(name + " motor", settings),
-            IsColorDetected(name=name + " detector", color=Color.BLUE),
-        ]
-    )
-    root = Sequence(name=name + " segment", memory=True)
-    root.add_children([search, StopNow(name=name + " brake")])
-    return root
+# 配置ライン基準: 0度が上、+90度がコース内側。左右差は既存の制御が扱う。
+_CURVE_RADIUS_MM = 250.0
+_CURVE_ARC_MM = math.pi * _CURVE_RADIUS_MM / 2.0
+_INWARD_STRAIGHT_MM = 50.0
+_CURVE_DISTANCE_MM = _CURVE_ARC_MM + _INWARD_STRAIGHT_MM
+# Piで2回目以降に使用した値。旧ローカル版からの意図的な反映。
+_APPROACH_POWER = 70
+_CURVE_POWER = 70
+# 11/5 各1回の白判定距離。実機再測定までの仮値。
+_FALLBACK_MM = {BottleColor.RED.value: 403.0, BottleColor.BLUE.value: 592.0,
+                BottleColor.YELLOW.value: 744.0}
+_RED_TO_WHITE_FALLBACK_MM = 220.0
 
 
-def _leave_current_center_and_find_next(name, settings):
-    # 配置後は青ライン中央にいるため、残り半分だけ進んでから次の線を探す。
-    root = Sequence(name=name, memory=True)
-    root.add_children(
-        [
-            distance_motion(
-                name + " leave current marker",
-                _trace_motor(name + " leave motor", settings),
-                settings.delivery_marker_half_width_mm,
-            ),
-            _trace_until_blue(name + " find next blue", settings),
-        ]
-    )
-    return root
+def _curve_heading(distance_mm):
+    """0→90度の円弧後、90度のまま直進する目標方位（開始時からの相対角）。"""
+    progress = max(0.0, min(float(distance_mm), _CURVE_ARC_MM))
+    return math.degrees(progress / _CURVE_RADIUS_MM)
 
 
-def _pass_intermediate_and_find_next(name, settings):
-    # 次の青ライン手前端から全幅を抜け、さらに上段の青ラインを探す。
-    root = Sequence(name=name, memory=True)
-    root.add_children(
-        [
-            distance_motion(
-                name + " pass intermediate marker",
-                _trace_motor(name + " pass motor", settings),
-                settings.delivery_marker_full_width_mm,
-            ),
-            _trace_until_blue(name + " find next blue", settings),
-        ]
-    )
-    return root
+class RedWhiteOrDistance(Behaviour):
+    """赤→白を優先し、未検知時は距離でカーブへ引き渡す。"""
+    def __init__(self, name, context):
+        super().__init__(name)
+        self.context = context
+        self.detector = IsColorTransitionDetected(
+            name + " detector", Color.RED, Color.WHITE, 0.0, 0.02)
+
+    def initialise(self):
+        runtime.require("plotter")
+        self.start_distance = runtime.plotter.get_distance()
+        zone = getattr(self.context.selected_drop_zone, "value", self.context.selected_drop_zone)
+        self.limit = _FALLBACK_MM.get(zone, _FALLBACK_MM[BottleColor.RED.value])
+        self.red_distance = None
+        # 条件クラスの状態は再実行時に自動初期化されない。
+        self.detector.from_started_at = None
+        self.detector.to_started_at = None
+        self.detector.from_confirmed = False
+        self.detector.classifier.window.clear()
+
+    def update(self):
+        current = runtime.plotter.get_distance()
+        progress = abs(current - self.start_distance)
+        self.detector.tick_once()
+        if self.detector.status == Status.SUCCESS:
+            self.logger.info("red-white transition: color distance=%.1f" % progress)
+            return Status.SUCCESS
+        if self.detector.status == Status.FAILURE:
+            return Status.FAILURE
+        if self.detector.from_confirmed and self.red_distance is None:
+            self.red_distance = progress
+        if self.red_distance is not None:
+            if progress - self.red_distance >= _RED_TO_WHITE_FALLBACK_MM:
+                self.logger.info("red-white transition: white-missed distance=%.1f red=%.1f" %
+                                 (progress, self.red_distance))
+                return Status.SUCCESS
+        elif progress >= self.limit:
+            self.logger.info("red-white transition: red-missed distance=%.1f limit=%.1f" %
+                             (progress, self.limit))
+            return Status.SUCCESS
+        return Status.RUNNING
+
+    def terminate(self, new_status):
+        if self.detector.status != Status.INVALID:
+            self.detector.stop(Status.INVALID)
+
+
+class ContinuousCurve(RunByGyro):
+    """単体実行の終了時は停止し、連続実行時は後続へ出力を渡す。"""
+    def __init__(self, *args, stop_on_success=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stop_on_success = stop_on_success
+
+    def terminate(self, new_status):
+        if new_status == Status.SUCCESS and not self.stop_on_success:
+            self.running = False
+        else:
+            super().terminate(new_status)
 
 
 def build_move_to_rally_ready(context, config):
-    # No.9 最上段の青ライン中央へ移動し、ETラリーエリア内側へ向ける。
     settings = config.integration
     root = Sequence(name="move_to_rally_ready", memory=True)
-    start_zone_route = Selector(name="route from delivered zone to rally start", memory=True)
 
-    # 赤へ配置した場合は、すでに最上段の青ライン中央へ戻っている。
-    red_route = Sequence(name="red zone is rally start", memory=True)
-    red_route.add_children(
-        [IsSelectedDropZone("started from red zone", BottleColor.RED, context)]
-    )
+    # 配置後は0度に合わせ、赤を見てから白へ抜けるまで距離を指定せず直進。
+    root.add_child(delivery_encoder_turn("face course absolute 0", context, settings, 0.0))
+    search = Parallel(name="drive until red then white", policy=ParallelPolicy.SuccessOnOne())
+    search.add_children([
+        DeliveryEtRun("red white search motor", context, target=0.0, power=_APPROACH_POWER,
+                      pid_p=settings.delivery_drive_pid_p, pid_i=settings.delivery_drive_pid_i,
+                      pid_d=settings.delivery_drive_pid_d),
+        RedWhiteOrDistance("red then white or fallback", context),
+    ])
+    # 直進の次周期を待たず、同じtickでカーブの駆動に引き継ぐ。
+    root.add_child(search)
 
-    # 青からは一段、黄からは二段上の赤ゾーン前まで進む。
-    blue_route = Sequence(name="blue zone to rally start", memory=True)
-    blue_route.add_children(
-        [
-            IsSelectedDropZone("started from blue zone", BottleColor.BLUE, context),
-            _leave_current_center_and_find_next("blue to red rally line", settings),
-            distance_motion(
-                "center red rally line from blue",
-                _trace_motor("center red rally line motor from blue", settings),
-                settings.delivery_marker_half_width_mm,
-            ),
-        ]
-    )
-
-    yellow_route = Sequence(name="yellow zone to rally start", memory=True)
-    yellow_route.add_children(
-        [
-            IsSelectedDropZone("started from yellow zone", BottleColor.YELLOW, context),
-            _leave_current_center_and_find_next("yellow to blue rally line", settings),
-            _pass_intermediate_and_find_next("blue to red rally line from yellow", settings),
-            distance_motion(
-                "center red rally line from yellow",
-                _trace_motor("center red rally line motor from yellow", settings),
-                settings.delivery_marker_half_width_mm,
-            ),
-        ]
-    )
-
-    # ラリー単体モードではボトル配置を経ないため、黄ゾーン前の手前端から赤まで進む。
-    no_bottle_route = Sequence(name="first marker to rally start without bottle", memory=True)
-    no_bottle_route.add_children(
-        [
-            IsDropZoneUnset("drop zone was not selected", context),
-            _trace_until_blue("find yellow zone without bottle", settings),
-            _pass_intermediate_and_find_next("yellow to blue without bottle", settings),
-            _pass_intermediate_and_find_next("blue to red without bottle", settings),
-            distance_motion(
-                "center red rally line without bottle",
-                _trace_motor("center red rally line motor without bottle", settings),
-                settings.delivery_marker_half_width_mm,
-            ),
-        ]
-    )
-    # 配置した色ごとに、最上段の赤ゾーン前までの移動量を切り替える。
-    start_zone_route.add_children(
-        [red_route, blue_route, yellow_route, no_bottle_route]
-    )
-
-    # コース絶対方位+90度を目標にする。直前の向きの誤差は加算しない。
-    turn_toward_rally = to_turn(
-        "turn inward at rally start",
-        context,
-        settings,
-        settings.delivery_inward_turn_deg,
-    )
-    stop_at_rally_start = StopNow(name="stop at rally start")
-    mark_rally_ready = MarkRallyReady("mark rally ready", context)
-
-    root.add_children(
-        [
-            start_zone_route,
-            turn_toward_rally,
-            stop_at_rally_start,
-            mark_rally_ready,
-        ]
-    )
+    # 白検知後の位置から、半径250mmの1/4円弧＋90度方向50mm。
+    # 理想軌跡の移動量は上250mm・内側300mm。実機誤差は別途測定する。
+    root.add_child(ContinuousCurve(
+        "curve to rally entry", target=_curve_heading, power=_CURVE_POWER,
+        pid_p=1.8, pid_i=0.0, pid_d=0.03, target_type=HeadingType.RELATIVE,
+        distance_limit_mm=_CURVE_DISTANCE_MM, feedforward_gain=1.0, wheel_tread_mm=117.0,
+        stop_on_success=(config.mission_mode == 'bottle-final' or
+                         (config.mission_mode == 'configured' and
+                          not (config.enable_et_rally and config.et_rally_laps > 0) and
+                          not config.enable_finish and not config.enable_et_sumo)),
+    ))
+    # 最後の停止旋回は行わず、走行終了時の実方位を記録する。
+    root.add_child(MarkRallyReady("mark rally ready", context))
     return root

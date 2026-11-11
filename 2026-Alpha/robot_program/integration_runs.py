@@ -15,7 +15,7 @@ from .features.catch_bottle import build_catch_bottle
 from .features.to_hint_route import build_tantou_tree
 from .phases.bottle_and_rally_preparation import build_bottle_delivery_final_phase
 from .phases.et_rally import build_et_rally_phase
-from .phases.et_sumo import build_et_sumo_phase
+from .phases.et_sumo import build_et_sumo_phase, build_sumo_after_delivery
 from .phases.finish import build_finish_phase
 
 
@@ -89,6 +89,14 @@ def sumo_exit_ready(context):
 def build_later_integration_children(context, config):
     mode = config.mission_mode
     nodes = []
+    if mode == 'bottle-sumo':
+        if not valid_color(context):
+            raise ValueError('bottle-sumo requires the held bottle color')
+        nodes.append(ObservedStage('BOTTLE', build_bottle_delivery_final_phase(
+            context, config), context, lambda c: c.bottle_delivered and c.rally_ready))
+        nodes.append(build_sumo_after_delivery(context, config))
+        nodes.append(StopNow(name='Integration range complete brake'))
+        return nodes
     if mode in ('bottle-rally', 'rally-sumo'):
         if not context.hint1 or not context.hint2_gate_info:
             raise ValueError('Manual decoded rally hints are required')
@@ -114,7 +122,7 @@ def build_later_integration_children(context, config):
 
 def build_integration_children(context, config):
     mode = config.mission_mode
-    if mode in ('bottle-rally', 'rally-sumo', 'sumo-garage'):
+    if mode in ('bottle-rally', 'bottle-sumo', 'rally-sumo', 'sumo-garage'):
         return build_later_integration_children(context, config)
     if mode not in ('at-to', 'to-bottle', 'at-to-bottle'):
         raise ValueError('Unknown integration run: ' + mode)

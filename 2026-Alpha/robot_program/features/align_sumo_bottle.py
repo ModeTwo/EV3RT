@@ -39,6 +39,7 @@ class AlignSumoBottle(Behaviour):
         self.drive = None
         self.turn = None
         self.session = None
+        self.continuous_entry = False
 
     def _brake(self):
         self.brake_command_at = time.monotonic()  # Command time, not physical stop.
@@ -159,7 +160,10 @@ class AlignSumoBottle(Behaviour):
         self.requested_turn_bearing = self.requested_turn_step = None
         self.measured_heading_error = self.camera_error_px = None
         runtime.require("video", "plotter", "gyro_sensor", "left_motor", "right_motor")
-        self._brake()
+        if self.continuous_entry:
+            self.brake_command_at = None
+        else:
+            self._brake()
         self.context.sumo.bottle_aligned = False
         self.context.sumo.bottle_captured = False
         self.context.sumo.bottle_pushed_out = False
@@ -178,6 +182,9 @@ class AlignSumoBottle(Behaviour):
         current_bearing(self.context)
         self._new_session()
         runtime.video.begin_sumo_alignment_recording(self._record_snapshot)
+        if self.continuous_entry:
+            # 録画準備と並行して、カーブ直後から距離を数えて直進する。
+            self._start_drive(self.started_at)
 
     def _settle(self, now, after_turn=False):
         if after_turn:
@@ -234,6 +241,8 @@ class AlignSumoBottle(Behaviour):
                 "recording failed: %s"
                 % (recording["error"] if recording else "not started")
             )
+        if self.continuous_entry and not recording["ready"] and now - self.started_at > 5.0:
+            return self._fail("recording/camera startup timeout")
         if self.phase == "RECORD_START":
             if not recording["ready"]:
                 if now - self.phase_started_at > 5.0:

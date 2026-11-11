@@ -19,7 +19,7 @@ def build_et_sumo_after_delivery_phase(context, config):
 
     root = Sequence(name="et_sumo_after_delivery", memory=True)
     root.add_children([
-        build_move_delivery_to_sumo_straight(context, config),
+        # build_move_delivery_to_sumo_straight(context, config),
         build_sumo_push_tree(context, config),
         build_move_sumo_to_rally_start(context, config),
     ])
