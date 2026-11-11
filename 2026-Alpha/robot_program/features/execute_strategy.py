@@ -418,6 +418,9 @@ _STRATEGY_KWARGS_FROM_CONFIG = (
     ("path_line_boost_power", "et_rally_path_line_boost_power"),
     ("path_line_boost_sec", "et_rally_path_line_boost_sec"),
     ("path_carry_error", "et_rally_path_carry_error"),
+    ("path_decel", "et_rally_path_decel"),
+    ("path_accel", "et_rally_path_accel"),
+    ("path_stop_ticks", "et_rally_path_stop_ticks"),
 )
 
 
@@ -646,6 +649,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         path_line_boost_sec=None,
                         # 2026-11-11: 止まったあとの走り出しで、コース上の今の位置(カメラで直したもの)と計画の位置の差を引き継ぐ。
                         path_carry_error=None,
+                        # 2026-11-11: EtRallyPathSegment だけの減速 (mm, 出力の下限)・加速 (mm, 始めの出力)・止まったとみなすtick数。
+                        path_decel=None, path_accel=None, path_stop_ticks=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -852,8 +857,11 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 continue_from_prev=step.get("continue_from_prev", False),
                 remaining_after_mm=step.get("remaining_after_mm", 0.0),
                 stop_lead_mm=stop_lead_mm,
-                accel_mm=move_accel_mm, accel_min_power=move_accel_min_power,
-                decel_mm=move_decel_mm, decel_min_power=move_decel_min_power,
+                accel_mm=move_accel_mm if path_accel is None else float(path_accel[0]),
+                accel_min_power=move_accel_min_power if path_accel is None else int(path_accel[1]),
+                decel_mm=move_decel_mm if path_decel is None else float(path_decel[0]),
+                decel_min_power=move_decel_min_power if path_decel is None else int(path_decel[1]),
+                stop_stable_ticks=None if path_stop_ticks is None else int(path_stop_ticks),
                 next_profile=step.get("next_profile", ()),
                 lead_sec=0.06 if path_lead_sec is None else path_lead_sec,
                 arc_pid_i=0.6 if path_arc_pid_i is None else path_arc_pid_i,

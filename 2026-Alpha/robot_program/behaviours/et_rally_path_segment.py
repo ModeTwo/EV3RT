@@ -167,7 +167,7 @@ class EtRallyPathSegment(Behaviour):
                  arc_pid_p=None, ramp_mm: float = 0.0, inner_min_power=None, ramp_sec: float = 0.0,
                  wheel_log_ticks: int = 0, ff_scale: float = 1.0,
                  line_pid_p=None, line_pid_d=None, line_boost_power=None, line_boost_sec: float = 0.0,
-                 plan_start=None) -> None:
+                 plan_start=None, stop_stable_ticks=None) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -217,6 +217,7 @@ class EtRallyPathSegment(Behaviour):
         self.line_boost_power = line_boost_power
         self.line_boost_sec = max(0.0, float(line_boost_sec or 0.0))
         self.plan_start = plan_start
+        self.stop_stable_ticks = STOP_STABLE_TICKS if stop_stable_ticks is None else max(1, int(stop_stable_ticks))
         self.prev_shape = None
         self.running = False
         self.stopping = False
@@ -428,10 +429,10 @@ class EtRallyPathSegment(Behaviour):
             self.stop_ticks += 1
             self.stop_stable = self.stop_stable + 1 if counts == self.stop_prev else 0
             self.stop_prev = counts
-            if self.stop_stable < STOP_STABLE_TICKS and self.stop_ticks < STOP_MAX_TICKS:
+            if self.stop_stable < self.stop_stable_ticks and self.stop_ticks < STOP_MAX_TICKS:
                 return Status.RUNNING
             self._finish_log(runtime.plotter.get_distance(), " stopped ticks=%d%s" % (
-                self.stop_ticks, "" if self.stop_stable >= STOP_STABLE_TICKS else " (timeout)"))
+                self.stop_ticks, "" if self.stop_stable >= self.stop_stable_ticks else " (timeout)"))
             return Status.SUCCESS
 
         now = runtime.plotter.get_distance()

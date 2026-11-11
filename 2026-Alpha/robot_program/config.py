@@ -179,10 +179,12 @@ class RaceConfig:
     et_rally_path_arc_pid_i: Optional[float] = None
     # 2026-11-02: 同じ計画で、円弧の速さの倍率。1.0なら外側の車輪が直進の出力を超えない速さ(従来)。
     # 1.0より大きいと外側の車輪が直進より速く回る(±100で頭打ち)。円弧の速さと滑りの確認用。Noneなら1.0。
-    et_rally_path_arc_speed_scale: Optional[float] = None
+    # 2026-11-11: 出力100と合わせて0.945(外側の車輪が出力約95)。seedの6周で2回、精度を保ったまま約1.5秒速かった。
+    et_rally_path_arc_speed_scale: Optional[float] = 0.945
     # 2026-11-03: 同じ計画で、計画の線からの横のずれを戻す強さ(横のずれ1mmあたり、目標の向きを何度ずらすか)。
     # Noneなら0(従来どおり向きだけを追う)。上限(度)はNoneなら8。
-    et_rally_path_lat_gain: Optional[float] = 0.3
+    # 2026-11-11: 0.3→0.5(出力100で円弧のあとゲートの直進で計画の線に戻りきらなかったため)。
+    et_rally_path_lat_gain: Optional[float] = 0.5
     et_rally_path_lat_max_deg: Optional[float] = None
     # 2026-11-03: 同じ計画で、走りを滑らかにする(円弧に入ると左右の出力が大きく上下し、内側の車輪が逆回しになっていた)。
     # 円弧の中だけの向きのPIDのP(Noneなら直進と同じ)、目標の向き・左右の差を前後に平均する幅mm(Noneなら0)、
@@ -191,8 +193,9 @@ class RaceConfig:
     et_rally_path_ramp_mm: Optional[float] = 40.0
     et_rally_path_inner_min_power: Optional[float] = 0.0
     # 2026-11-03: 速度を上げる準備。平均の幅を時間で決める秒(幅 = max(ramp_mm, 秒×今の速さ))と、円弧・直進の区間の出力(Noneなら80)。
-    et_rally_path_ramp_sec: Optional[float] = 0.12
-    et_rally_path_power: Optional[float] = None
+    # 2026-11-11: 0.12→0.1、出力 80→100(C+D+調整)。seedの6周で 59.6→58.2/58.0秒、ゲートの横ずれ 前半2.8〜7.0・後半6.6〜7.9mm。
+    et_rally_path_ramp_sec: Optional[float] = 0.1
+    et_rally_path_power: Optional[float] = 100.0
     # 2026-11-03: 円弧・直進の区間の始めから何tick分、毎tickの出力と実際の車輪の回りをログに出すか(Noneなら出さない)。
     et_rally_path_wheel_log_ticks: Optional[float] = None
     # 2026-11-03: 円弧の左右の差(フィードフォワード)の倍率(Noneなら1.0)。円弧では実際の輪距が計算より大きく効くため。
@@ -211,6 +214,11 @@ class RaceConfig:
     # 切り返しの多い配置37で、止まるたびにずれを忘れて1周ごとに約1cmずつたまり、6周目に青ゲートに当たったため。
     # 同日、配置37とseedの実機で効果を確かめて既定にした。
     et_rally_path_carry_error: Optional[bool] = True
+    # 2026-11-11: 止まる区間の減速(残りの距離mm, 下げる出力の下限)・止まった状態からの加速(mm, 始めの出力)・
+    # 止まったとみなす「車輪が動かないtick」の数。Noneなら従来(80mm/40、30mm/40、2tick)。止まる多い配置の時間を縮める試験用。
+    et_rally_path_decel: Optional[tuple] = None
+    et_rally_path_accel: Optional[tuple] = None
+    et_rally_path_stop_ticks: Optional[float] = None
     # 2026-11-11: 走行中の補正で、差が40mmを超える画像は取り違えとして捨てるが、この枚数続けて同じずれ(互いに15mm以内)に
     # 見えたら本当のずれとして受け入れる(Noneか0なら従来どおり捨てる)。
     et_rally_camera_far_confirm: Optional[float] = 3

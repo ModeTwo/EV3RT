@@ -1456,6 +1456,12 @@ def _run_main(argv, startup_cleanup):
                         help='Multiply the arc left/right feedforward (half tread / radius) by this (default 1.0).')
     parser.add_argument('--rally-start-pose-sec', type=float, default=None,
                         help='Seconds of camera frames used for the start pose after the arm/gyro are ready (default 2.0).')
+    parser.add_argument('--rally-path-decel', type=str, default=None,
+                        help='Path segments: slow down over the last MM before a stop, down to POWER (MM,POWER; default 80,40).')
+    parser.add_argument('--rally-path-accel', type=str, default=None,
+                        help='Path segments: speed up over the first MM after a stop, starting at POWER (MM,POWER; default 30,40).')
+    parser.add_argument('--rally-path-stop-ticks', type=float, default=None,
+                        help='Path segments: ticks with no wheel movement before a stop counts as finished (default 2).')
     parser.add_argument('--rally-path-carry-error', choices=('on', 'off'), default=None,
                         help=('After each stop, start the next path segment from the course pose (camera-corrected) instead of '
                               'assuming the robot is exactly on the plan, so known errors are not forgotten (default on).'))
@@ -1766,6 +1772,20 @@ def _run_main(argv, startup_cleanup):
         if not 0.0 <= args.rally_path_lat_max_deg <= 30.0:
             parser.error('--rally-path-lat-max-deg must be between 0 and 30')
         mission_config = dataclasses.replace(mission_config, et_rally_path_lat_max_deg=args.rally_path_lat_max_deg)
+    for opt, attr, key in (('--rally-path-decel', 'rally_path_decel', 'et_rally_path_decel'),
+                           ('--rally-path-accel', 'rally_path_accel', 'et_rally_path_accel')):
+        value = getattr(args, attr)
+        if value is None:
+            continue
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('%s requires --mission rally-drive, bottle-rally or rally-sumo' % opt)
+        try:
+            mm, power = (float(v) for v in value.split(','))
+        except ValueError:
+            parser.error('%s must be MM,POWER (e.g. 40,40)' % opt)
+        if not 0.0 <= mm <= 300.0 or not 10.0 <= power <= 100.0:
+            parser.error('%s: MM must be 0-300 and POWER 10-100' % opt)
+        mission_config = dataclasses.replace(mission_config, **{key: (mm, power)})
     if args.rally_path_carry_error is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-path-carry-error requires --mission rally-drive, bottle-rally or rally-sumo')
@@ -1789,6 +1809,7 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-path-line-pid-p', 'rally_path_line_pid_p', 0.0, 20.0),
                               ('--rally-camera-far-confirm', 'rally_camera_far_confirm', 0.0, 10.0),
                               ('--rally-start-pose-sec', 'rally_start_pose_sec', 0.5, 5.0),
+                              ('--rally-path-stop-ticks', 'rally_path_stop_ticks', 1.0, 10.0),
                               ('--rally-path-line-pid-d', 'rally_path_line_pid_d', 0.0, 2.0),
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),
