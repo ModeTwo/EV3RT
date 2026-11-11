@@ -35,10 +35,11 @@
     }
   },
   "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution (gyro = -planner angle), same as plan_seed9392783_right_1031b.json. arc: target_heading_deg is the end heading, sweep_deg the signed heading change in the same frame (start = end - sweep), radius_mm the radius of the robot-centre path.",
-  "note_1101": "2026-11-01 試作: 往復・後退でのゲート通過を許した経路(4周)のつなぎ区間を、円弧+直進+円弧などに置き換えたもの(検討セッションのスクラッチパッドの shuttle_plan2.py / curve_route.py で作成)。近似式の見積もりで走行部分 77.4 秒。",
+  "note_1101": "2026-11-01 試作: 往復・後退でのゲート通過を許した経路(4周)のつなぎ区間を、円弧+直進+円弧などに置き換えたもの(検討セッションのスクラッチパッドの shuttle_plan2.py / curve_route.py で作成)。近似式の見積もりで走行部分 77.5 秒。",
   "laps": 6,
-  "total_distance_mm": 23813.7,
-  "move_count": 67,
+  "goal_at": "garage",
+  "total_distance_mm": 23816.2,
+  "move_count": 68,
   "arc_count": 52,
   "turn_count": 0,
   "steps": [
@@ -1014,8 +1015,8 @@
     },
     {
       "type": "arc",
-      "target_heading_deg": -173.27,
-      "sweep_deg": -23.27,
+      "target_heading_deg": -172.36,
+      "sweep_deg": -22.36,
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
@@ -1023,16 +1024,24 @@
     },
     {
       "type": "move",
-      "target_heading_deg": -173.27,
-      "distance_mm": 1253.2,
+      "target_heading_deg": -172.36,
+      "distance_mm": 813.9,
       "reverse": false,
       "stop": false,
       "label": null
     },
     {
+      "type": "move",
+      "target_heading_deg": -172.36,
+      "distance_mm": 441.8,
+      "reverse": false,
+      "stop": false,
+      "label": "garage-arm-down"
+    },
+    {
       "type": "arc",
       "target_heading_deg": -180.0,
-      "sweep_deg": -6.73,
+      "sweep_deg": -7.64,
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,

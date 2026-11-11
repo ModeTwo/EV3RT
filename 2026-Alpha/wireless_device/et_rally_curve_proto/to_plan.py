@@ -65,6 +65,43 @@ elif fixed[-1]['type'] != 'turn' or fixed[-1]['label'] != 'arc-fix':
 else:
     fixed[-1] = {'type': 'turn', 'target_heading_deg': g(90.0), 'label': 'goal'}
 steps = fixed
+# 2026-11-11(ユーザー): ガレージで終わる計画では、最後の黄ゲートを通ったあとの最後の長い直進(150mm以上)に印を付ける。
+# ロボットはこの直進からアームを下げ始める(下げたアームの分、ガレージエリアにかかる所が増える)。
+# 下げたアームは車体の前に約5cm出る(経路を作る道具は、アームを下げた状態の当たり判定をしていない)ので、下げ始めるのは
+# 車軸がスタート側の列の点から ARM_DOWN_X_CM より外に出てから(アームの先がどの脚の長方形よりも外)。そこで直進を2つに分ける。
+ARM_DOWN_X_CM = 4 * 24.64 + 10.0
+if garage:
+    last_lap = max((i for i, st in enumerate(steps) if (st.get('label') or '').startswith('lap')), default=-1)
+    # 計画をたどって、各ステップの始めの車軸の位置(経路を作る道具の座標 cm、コースの向きは 180 - ジャイロの目標)
+    px, py, ph = 113.46, 86.24, START_H0
+    starts = []
+    for st in steps:
+        starts.append((px, py, ph))
+        if st['type'] == 'turn':
+            ph = START_H0 - st['target_heading_deg']
+        elif st['type'] == 'move':
+            hh = START_H0 - st['target_heading_deg']; th = math.radians(hh + (180 if st.get('reverse') else 0))
+            px += st['distance_mm'] / 10 * math.cos(th); py += st['distance_mm'] / 10 * math.sin(th); ph = hh
+        else:
+            sw = -st['sweep_deg']; r = st['radius_mm'] / 10; sg = 1.0 if sw > 0 else -1.0
+            th0 = math.radians(ph + (180 if st.get('reverse') else 0))
+            cx, cy = px - sg * r * math.sin(th0), py + sg * r * math.cos(th0); th1 = th0 + math.radians(sw)
+            px, py = cx + sg * r * math.sin(th1), cy - sg * r * math.cos(th1); ph += sw
+    cand = [i for i, st in enumerate(steps) if i > last_lap and st['type'] == 'move' and st.get('distance_mm', 0) >= 150.0
+            and not st.get('reverse')]
+    if cand:
+        i = cand[-1]; st = steps[i]
+        x0, y0, _ = starts[i]
+        th = math.radians(START_H0 - st['target_heading_deg'])
+        L = st['distance_mm'] / 10
+        if x0 >= ARM_DOWN_X_CM:
+            st['label'] = 'garage-arm-down'
+        elif math.cos(th) > 0.3:
+            k = (ARM_DOWN_X_CM - x0) / math.cos(th)
+            if k < L - 0.5:
+                first = dict(st, distance_mm=round(k * 10, 1), stop=False, label=None)
+                second = dict(st, distance_mm=round((L - k) * 10, 1), label='garage-arm-down')
+                steps[i:i + 1] = [first, second]
 # 同じラベルが続く(往復など)ときは最初の1つだけ残す
 seen = set()
 for st in steps:
@@ -78,6 +115,7 @@ plan = {
     'heading_convention': 'target_heading_deg is the GYRO target for course=right file-mode execution (gyro = -planner angle), same as plan_seed9392783_right_1031b.json. arc: target_heading_deg is the end heading, sweep_deg the signed heading change in the same frame (start = end - sweep), radius_mm the radius of the robot-centre path.',
     'note_1101': '2026-11-01 試作: 往復・後退でのゲート通過を許した経路(4周)のつなぎ区間を、円弧+直進+円弧などに置き換えたもの(検討セッションのスクラッチパッドの shuttle_plan2.py / curve_route.py で作成)。近似式の見積もりで走行部分 %.1f 秒。' % c['total'],
     'laps': c.get('params', {}).get('laps', 4),
+    'goal_at': 'garage' if garage else 'goal',
     'total_distance_mm': round(dist, 1),
     'move_count': sum(1 for s in steps if s['type'] == 'move'),
     'arc_count': sum(1 for s in steps if s['type'] == 'arc'),

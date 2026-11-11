@@ -107,6 +107,8 @@ PARAMS = dict(
     # 向き(goal_headings、空なら 0/90/180/-90)ごとに、フィールドに近い角・フィールド側の辺の真ん中・スタート側の辺の真ん中・
     # エリアの真ん中の4か所を候補にし、一番速いものを選ばせる。'inside' は車体全体を入れる(上の garage_margin_cm)。
     garage_rule='overlap', garage_overlap_cm=6.0,
+    # 2026-11-11(ユーザー): Y方向(Y5の方向)の食い込みはもう2cm増やす(配置37の実機で止まった位置がぎりぎりに見えた)。
+    garage_overlap_y_cm=8.0,
     # 2026-11-11: 中継の点を置く範囲 [x0, x1, y0, y1](cm)を上書きする(空なら下の BOUNDS)。入ってはいけない範囲を動かして試すとき用。
     wp_bounds=[],
     # 2026-11-11: 止まった状態(前後の切り替え・スタート)から走り出すつなぎは、まずこの長さ(cm)の直進で走り出してから円弧に入る。
@@ -150,13 +152,14 @@ def garage_overlap_goals(h):
     フィールドとスタートは、エリアから見て x の小さい側・y の大きい側にある。"""
     x0, x1, y0, y1 = GARAGE_BOX
     D = float(GARAGE_OVERLAP_CM)
+    Dy = float(GARAGE_OVERLAP_Y_CM)
     c, sn = math.cos(math.radians(h)), math.sin(math.radians(h))
     half_len = (FRONT + REAR) / 2.0
     ex = abs(c) * half_len + abs(sn) * HALF_WIDTH
     ey = abs(sn) * half_len + abs(c) * HALF_WIDTH
     off = (FRONT - REAR) / 2.0
     near_x = x0 + D - ex          # 車体の x の大きい側の端が、エリアのフィールド側の辺から D 入る
-    near_y = y1 - D + ey          # 車体の y の小さい側の端が、エリアのスタート側の辺から D 入る
+    near_y = y1 - Dy + ey         # 車体の y の小さい側の端が、エリアのスタート側の辺から Dy 入る
     mid_x, mid_y = (x0 + x1) / 2.0, (y0 + y1) / 2.0
     out = []
     for bx, by in ((near_x, near_y), (near_x, mid_y), (mid_x, near_y), (mid_x, mid_y)):
@@ -1622,8 +1625,8 @@ def main():
     if GARAGE_BOX is not None and GARAGE_RULE == 'overlap':
         goal_pose = [(g, h, 0) for h in (GOAL_HEADINGS or [0.0, 90.0, 180.0, -90.0]) for g in garage_overlap_goals(float(h))]
         goal_pose = [(g, float(h), z) for g, h, z in goal_pose]
-        print('garage (overlap >= %.1fcm) box x %.1f..%.1f y %.1f..%.1f, %d goal candidates' % (
-            (GARAGE_OVERLAP_CM,) + GARAGE_BOX + (len(goal_pose),)), flush=True)
+        print('garage (overlap x >= %.1fcm, y >= %.1fcm) box x %.1f..%.1f y %.1f..%.1f, %d goal candidates' % (
+            (GARAGE_OVERLAP_CM, GARAGE_OVERLAP_Y_CM) + GARAGE_BOX + (len(goal_pose),)), flush=True)
     elif GARAGE_BOX is not None:
         goal_pose = [(garage_goal(float(h)), float(h), 0) for h in (GOAL_HEADINGS or [GOAL_H])
                      if garage_goal(float(h)) is not None]

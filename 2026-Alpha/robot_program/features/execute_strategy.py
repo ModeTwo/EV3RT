@@ -418,6 +418,8 @@ _STRATEGY_KWARGS_FROM_CONFIG = (
     ("path_line_boost_power", "et_rally_path_line_boost_power"),
     ("path_line_boost_sec", "et_rally_path_line_boost_sec"),
     ("path_carry_error", "et_rally_path_carry_error"),
+    ("arm_down_at_garage", "et_rally_arm_down_at_garage"),
+    ("arm_stop_ticks", "et_rally_arm_stop_ticks"),
     ("path_decel", "et_rally_path_decel"),
     ("path_accel", "et_rally_path_accel"),
     ("path_stop_ticks", "et_rally_path_stop_ticks"),
@@ -501,7 +503,9 @@ def _merge_consecutive_moves(steps):
     merged = []
     for step in steps:
         prev = merged[-1] if merged else None
+        # 2026-11-11: アームを下げ始める印(garage-arm-down)の付いた直進は、まとめない(ここから下げ始めるため)。
         if (step["type"] == "move" and prev is not None and prev["type"] == "move"
+                and step.get("label") != "garage-arm-down"
                 and abs(step["target_heading_deg"] - prev["target_heading_deg"]) < 1e-6
                 and step.get("reverse", False) == prev.get("reverse", False)):
             prev["distance_mm"] += step["distance_mm"]
@@ -651,6 +655,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         path_carry_error=None,
                         # 2026-11-11: EtRallyPathSegment だけの減速 (mm, 出力の下限)・加速 (mm, 始めの出力)・止まったとみなすtick数。
                         path_decel=None, path_accel=None, path_stop_ticks=None,
+                        # 2026-11-11: 印(label 'garage-arm-down')の付いた直進からアームを下げ始める(走りと並行)。arm_stop_ticks はアームの止め方。
+                        arm_down_at_garage=None, arm_stop_ticks=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -797,9 +803,12 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
     if start_check_mm and start_check_mm > 0:
         nodes.extend(check_legs("start check", 0.0, start_check_mm))
     prev_lap = None
+    arm_down_node = None
     for index, step in enumerate(steps):
         heading = step["target_heading_deg"]
         label = step["label"]
+        if label == "garage-arm-down" and arm_down_node is None:
+            arm_down_node = len(nodes)
         label_text = "" if label is None else " " + str(label)
 
         # 周回ごとの位置ズレを診断するため、ラベル(lapN-color-entry/exit)の
@@ -1018,6 +1027,15 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         left_target_scale=turn_left_target_scale,
                     )
                 )
+    if arm_down_at_garage and arm_down_node is not None:
+        # 2026-11-11: 印の付いた直進から最後までを、アームを下げる動きと並べる(両方終わったら終わり)。
+        from ..behaviours.et_rally_arm import EtRallyArmUpDown, CALIBRATION_ARM_POWER
+        tail = Sequence(name="et_rally drive to garage", memory=True)
+        tail.add_children(nodes[arm_down_node:])
+        both = Parallel(name="et_rally drive to garage + arm down", policy=ParallelPolicy.SuccessOnAll(synchronise=True))
+        both.add_children([tail, EtRallyArmUpDown("et_rally arm down at garage", ArmDirection.DOWN,
+                                                  stop_ticks=int(arm_stop_ticks or 3), power=CALIBRATION_ARM_POWER)])
+        nodes = nodes[:arm_down_node] + [both]
     return nodes
 
 

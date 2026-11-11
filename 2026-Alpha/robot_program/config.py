@@ -218,6 +218,9 @@ class RaceConfig:
     et_rally_path_carry_error: Optional[bool] = True
     # 2026-11-11: 止まる区間の減速(残りの距離mm, 下げる出力の下限)・止まった状態からの加速(mm, 始めの出力)・
     # 止まったとみなす「車輪が動かないtick」の数。Noneなら従来(80mm/40、30mm/40、2tick)。止まる多い配置の時間を縮める試験用。
+    # 2026-11-11(ユーザー): ガレージで終わる計画で、印(label 'garage-arm-down')の付いた最後の直進からアームを下げ始める
+    # (走りと並行、下げ終わるまで待つ。出力は部品を守るため20まで)。下げたアームの分、ガレージエリアにかかる所が増える。
+    et_rally_arm_down_at_garage: Optional[bool] = True
     et_rally_path_decel: Optional[tuple] = None
     et_rally_path_accel: Optional[tuple] = None
     et_rally_path_stop_ticks: Optional[float] = None

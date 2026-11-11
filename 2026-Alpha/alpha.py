@@ -1456,6 +1456,8 @@ def _run_main(argv, startup_cleanup):
                         help='Multiply the arc left/right feedforward (half tread / radius) by this (default 1.0).')
     parser.add_argument('--rally-start-pose-sec', type=float, default=None,
                         help='Seconds of camera frames used for the start pose after the arm/gyro are ready (default 2.0).')
+    parser.add_argument('--rally-arm-down-at-garage', choices=('on', 'off'), default=None,
+                        help='Plans ending in the garage: lower the arm from the marked last straight (default on).')
     parser.add_argument('--rally-path-decel', type=str, default=None,
                         help='Path segments: slow down over the last MM before a stop, down to POWER (MM,POWER; default 80,40).')
     parser.add_argument('--rally-path-accel', type=str, default=None,
@@ -1786,6 +1788,10 @@ def _run_main(argv, startup_cleanup):
         if not 0.0 <= mm <= 300.0 or not 10.0 <= power <= 100.0:
             parser.error('%s: MM must be 0-300 and POWER 10-100' % opt)
         mission_config = dataclasses.replace(mission_config, **{key: (mm, power)})
+    if args.rally_arm_down_at_garage is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-arm-down-at-garage requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_arm_down_at_garage=(args.rally_arm_down_at_garage == 'on'))
     if args.rally_path_carry_error is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-path-carry-error requires --mission rally-drive, bottle-rally or rally-sumo')
