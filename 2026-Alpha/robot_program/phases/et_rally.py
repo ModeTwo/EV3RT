@@ -30,6 +30,9 @@ class EtRallyArrivedAtStart(Behaviour):
 
     def update(self):
         self.logger.info("ARRIVED AT START: distance %d" % runtime.plotter.get_distance())
+        # 2026-11-11: 経過時間で周回数を決めるとき(--rally-time-budget)は、ここから数え直す(テストでスタート位置まで進む分を除く)
+        from .. import et_rally_time_budget
+        et_rally_time_budget.start()
         return Status.SUCCESS
 
 
@@ -123,7 +126,9 @@ def build_et_rally_phase(context, config):
     root = Sequence(name="et_rally", memory=True)
     # DD-19ベースライン計測用: Falseならジャイロ倍率補正・タイヤ径較正(DD-17)を適用しない。
     gyro_tire_calibration = getattr(config, "et_rally_gyro_tire_calibration_enabled", True)
-    children = [EtRallyBatteryLog("et_rally battery begin", "begin")]
+    from ..et_rally_time_budget import EtRallyTimeBudgetStart
+    # 2026-11-11: 経過時間の数え始め(本番はETラリーの始め。テストでスタート位置まで進むときは着いたときに数え直す)
+    children = [EtRallyTimeBudgetStart("et_rally time budget start"), EtRallyBatteryLog("et_rally battery begin", "begin")]
     # 2026-10-29: 四捨五入前の向き・止まっている間のずれの差し引き(robot_program/et_rally_heading.py)。
     float_heading = bool(getattr(config, "et_rally_gyro_float_heading", None))
     drift_compensation = bool(getattr(config, "et_rally_gyro_drift_compensation", None))

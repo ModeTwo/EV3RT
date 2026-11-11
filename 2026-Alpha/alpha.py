@@ -1456,6 +1456,11 @@ def _run_main(argv, startup_cleanup):
                         help='Multiply the arc left/right feedforward (half tread / radius) by this (default 1.0).')
     parser.add_argument('--rally-start-pose-sec', type=float, default=None,
                         help='Seconds of camera frames used for the start pose after the arm/gyro are ready (default 2.0).')
+    parser.add_argument('--rally-time-budget', type=float, default=None,
+                        help=('Decide the number of laps while driving: seconds available for the ET rally (competition: '
+                              '120 minus the time before the ET rally starts; tests: 70). Needs a garage plan with "exit". Default off.'))
+    parser.add_argument('--rally-time-margin', type=float, default=None,
+                        help='Safety margin in seconds for --rally-time-budget (default 2.0).')
     parser.add_argument('--rally-arm-down-at-garage', choices=('on', 'off'), default=None,
                         help='Plans ending in the garage: lower the arm from the marked last straight (default on).')
     parser.add_argument('--rally-path-decel', type=str, default=None,
@@ -1816,6 +1821,8 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-camera-far-confirm', 'rally_camera_far_confirm', 0.0, 10.0),
                               ('--rally-start-pose-sec', 'rally_start_pose_sec', 0.5, 5.0),
                               ('--rally-path-stop-ticks', 'rally_path_stop_ticks', 1.0, 10.0),
+                              ('--rally-time-budget', 'rally_time_budget', 10.0, 120.0),
+                              ('--rally-time-margin', 'rally_time_margin', 0.0, 20.0),
                               ('--rally-path-line-pid-d', 'rally_path_line_pid_d', 0.0, 2.0),
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),

@@ -10,7 +10,7 @@ from pathlib import Path
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 
-from .bt_imports import Failure, HeadingType, Parallel, ParallelPolicy, Sequence
+from .bt_imports import Failure, HeadingType, Parallel, ParallelPolicy, Selector, Sequence
 from ..behaviours.et_rally_drive import EtRallyRunByGyro, EtRallySpinAroundByEncoder
 from ..behaviours.et_rally_path_segment import EtRallyPathSegment
 from ..behaviours.et_rally_turn_one_shot import EtRallyTurnOneShot
@@ -354,6 +354,34 @@ class DeferredStrategySequence(Sequence):
                 # 2026-11-11: 止まったあとの走り出しで計画とのずれを引き継ぐため、各ステップの計画のコース上の姿勢を入れる
                 # (引き直しで差し替わる最初のつなぎには入らない。そこはスタートの取り込みが受け持つ)。
                 et_rally_start_pose.annotate_plan_course(plan_steps)
+            # 2026-11-11: 経過時間で周回数を決める(--rally-time-budget)。計画の exit(途中の周で切り上げるときの、
+            # 黄ゲートの抜けからガレージまでのつなぎ)のノードを作る関数を渡す(切り上げる周ごとに別のノードが要る)。
+            exit_plan = _PLAN_EXIT if extra_kwargs.get("time_budget_sec") else None
+            if exit_plan and exit_plan.get("steps"):
+                import copy as _copy
+                from ..et_rally_time_budget import estimate_steps
+                exit_raw = exit_plan["steps"]
+                mark_pose = next((st.get("_plan_course") for st in plan_steps if st.get("marks")), None)
+                kw = {k: v for k, v in extra_kwargs.items()
+                      if k not in ("time_budget_sec", "time_margin_sec", "start_check_mm")}
+
+                def exit_factory(exit_raw=exit_raw, mark_pose=mark_pose, kw=kw):
+                    ex = _copy.deepcopy(exit_raw)
+                    if mark_pose is not None and kw.get("path_carry_error"):
+                        et_rally_start_pose.annotate_plan_course(ex, start=mark_pose)
+                    return steps_from_strategy(ex, initial_heading_deg=self._initial_heading_deg,
+                                               turn_method=self._turn_method,
+                                               compensation_enabled=self._compensation_enabled, **kw)
+
+                est_exit = estimate_steps([dict(st, distance_mm=st.get("distance_mm") or
+                                                (float(st.get("radius_mm", 0.0)) * math.radians(abs(float(st.get("sweep_deg", 0.0))))))
+                                           for st in exit_raw])
+                extra_kwargs["exit_factory"] = exit_factory
+                extra_kwargs["exit_est_sec"] = est_exit
+                self.logger.info("time budget: %.1fs (margin %s), early exit to the garage after laps %s (%.1fs by plan)" % (
+                    extra_kwargs["time_budget_sec"], extra_kwargs.get("time_margin_sec"), exit_plan.get("laps"), est_exit))
+            elif extra_kwargs.get("time_budget_sec"):
+                self.logger.warning("time budget: the plan has no exit (needs a garage plan made by the new tool), running all laps")
             nodes = steps_from_strategy(
                 et_rally_start_pose.apply_pending_rejoin(plan_steps, self.logger),
                 initial_heading_deg=self._initial_heading_deg,
@@ -420,6 +448,8 @@ _STRATEGY_KWARGS_FROM_CONFIG = (
     ("path_carry_error", "et_rally_path_carry_error"),
     ("arm_down_at_garage", "et_rally_arm_down_at_garage"),
     ("arm_stop_ticks", "et_rally_arm_stop_ticks"),
+    ("time_budget_sec", "et_rally_time_budget"),
+    ("time_margin_sec", "et_rally_time_margin"),
     ("path_decel", "et_rally_path_decel"),
     ("path_accel", "et_rally_path_accel"),
     ("path_stop_ticks", "et_rally_path_stop_ticks"),
@@ -474,9 +504,14 @@ def _resolve_plan_path(configured_path):
     return path if path.is_absolute() else PROJECT_ROOT / path
 
 
+_PLAN_EXIT = None   # 2026-11-11: 計画の exit(途中の周で切り上げてガレージへ向かうつなぎ)。_load_plan_steps が入れる
+
+
 def _load_plan_steps(plan_path):
+    global _PLAN_EXIT
     with open(plan_path, encoding="utf-8") as file:
         plan = json.load(file)
+    _PLAN_EXIT = plan.get("exit") if isinstance(plan, dict) else None
     if not isinstance(plan, dict) or "steps" not in plan:
         raise ValueError("Plan must contain steps")
     return plan["steps"]
@@ -505,7 +540,7 @@ def _merge_consecutive_moves(steps):
         prev = merged[-1] if merged else None
         # 2026-11-11: アームを下げ始める印(garage-arm-down)の付いた直進は、まとめない(ここから下げ始めるため)。
         if (step["type"] == "move" and prev is not None and prev["type"] == "move"
-                and step.get("label") != "garage-arm-down"
+                and step.get("label") != "garage-arm-down" and not step.get("marks")
                 and abs(step["target_heading_deg"] - prev["target_heading_deg"]) < 1e-6
                 and step.get("reverse", False) == prev.get("reverse", False)):
             prev["distance_mm"] += step["distance_mm"]
@@ -657,6 +692,10 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         path_decel=None, path_accel=None, path_stop_ticks=None,
                         # 2026-11-11: 印(label 'garage-arm-down')の付いた直進からアームを下げ始める(走りと並行)。arm_stop_ticks はアームの止め方。
                         arm_down_at_garage=None, arm_stop_ticks=None,
+                        # 2026-11-11: 経過時間で周回数を決める(--rally-time-budget)。持ち時間・余裕(秒)、
+                        # 切り上げのつなぎのノードを作る関数と、その見込みの時間。continue_first: 最初の区間が前から止まらずに続く。
+                        time_budget_sec=None, time_margin_sec=None, exit_factory=None, exit_est_sec=None,
+                        continue_first=False,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -699,6 +738,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         if "_plan_course" in step:
             # 2026-11-11: 計画のコース上の姿勢(annotate_plan_course)。止まったあとの走り出しでずれを引き継ぐのに使う。
             checked["_plan_course"] = step["_plan_course"]
+        if step.get("marks"):
+            # 2026-11-11: 周の終わりの印(lapN-end)。経過時間で周回数を決めるとき(--rally-time-budget)の判断の場所。
+            checked["marks"] = list(step["marks"])
         if step_type in ("move", "arc"):
             # 2026-11-01: 後退(reverse)と、止まらずに次へ続ける(stop=False)の指定。
             # どちらかが計画にあるとき(またはarcがあるとき)だけ、EtRallyPathSegmentで走る。
@@ -755,6 +797,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
     steps = _merge_consecutive_moves(steps)
     if path_mode:
         _prepare_path_chains(steps)
+        if continue_first and steps and steps[0]["type"] in ("move", "arc"):
+            steps[0]["continue_from_prev"] = True
 
     def check_legs(prefix, heading, check_mm):
         # 指定の向きへcheck_mmだけ前進→停止→同じ距離だけ後退→停止する。
@@ -804,11 +848,16 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         nodes.extend(check_legs("start check", 0.0, start_check_mm))
     prev_lap = None
     arm_down_node = None
+    lap_end_nodes = []   # (ノードの位置, 周, ステップの位置)
     for index, step in enumerate(steps):
         heading = step["target_heading_deg"]
         label = step["label"]
         if label == "garage-arm-down" and arm_down_node is None:
             arm_down_node = len(nodes)
+        for mark in step.get("marks", ()):
+            m_ = re.match(r"^lap(\d+)-end$", mark)
+            if m_:
+                lap_end_nodes.append((len(nodes), int(m_.group(1)), index))
         label_text = "" if label is None else " " + str(label)
 
         # 周回ごとの位置ズレを診断するため、ラベル(lapN-color-entry/exit)の
@@ -1036,6 +1085,32 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         both.add_children([tail, EtRallyArmUpDown("et_rally arm down at garage", ArmDirection.DOWN,
                                                   stop_ticks=int(arm_stop_ticks or 3), power=CALIBRATION_ARM_POWER)])
         nodes = nodes[:arm_down_node] + [both]
+    if time_budget_sec and exit_factory is not None and lap_end_nodes:
+        # 2026-11-11: 周の終わりごとに [判断 → 切り上げのつなぎ] / [残り] のセレクタを、後ろから入れ子に組む。
+        from ..et_rally_time_budget import EtRallyLapDecision, estimate_steps
+        laps_total = max(n for _, n, _ in lap_end_nodes) + 1
+        marks = sorted(lap_end_nodes)
+        exit_est = float(exit_est_sec or 0.0)
+        cur = None
+        for k in range(len(marks) - 1, -1, -1):
+            node_i, lap, step_i = marks[k]
+            prev_step_i = marks[k - 1][2] if k > 0 else 0
+            this_lap = estimate_steps(steps[prev_step_i:step_i])
+            if k + 1 < len(marks):
+                cont = estimate_steps(steps[step_i:marks[k + 1][2]]) + exit_est
+            else:
+                cont = estimate_steps(steps[step_i:])
+            tail_nodes = (nodes[node_i:marks[k + 1][0]] + [cur]) if cur is not None else nodes[node_i:]
+            rest = Sequence(name="et_rally after lap%d" % lap, memory=True)
+            rest.add_children(tail_nodes)
+            leave = Sequence(name="et_rally lap%d to garage" % lap, memory=True)
+            leave.add_children([EtRallyLapDecision("et_rally time budget lap%d" % lap, lap, laps_total, time_budget_sec,
+                                                   2.0 if time_margin_sec is None else time_margin_sec,
+                                                   this_lap, cont, exit_est)] + list(exit_factory()))
+            sel = Selector(name="et_rally lap%d end" % lap, memory=True)
+            sel.add_children([leave, rest])
+            cur = sel
+        nodes = nodes[:marks[0][0]] + [cur]
     return nodes
 
 

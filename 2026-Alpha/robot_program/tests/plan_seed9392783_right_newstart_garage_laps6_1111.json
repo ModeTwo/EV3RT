@@ -193,7 +193,10 @@
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": null,
+      "marks": [
+        "lap1-end"
+      ]
     },
     {
       "type": "move",
@@ -328,7 +331,10 @@
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": null,
+      "marks": [
+        "lap2-end"
+      ]
     },
     {
       "type": "move",
@@ -463,7 +469,10 @@
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": null,
+      "marks": [
+        "lap3-end"
+      ]
     },
     {
       "type": "move",
@@ -598,7 +607,10 @@
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": null,
+      "marks": [
+        "lap4-end"
+      ]
     },
     {
       "type": "move",
@@ -733,7 +745,10 @@
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": null,
+      "marks": [
+        "lap5-end"
+      ]
     },
     {
       "type": "move",
@@ -931,6 +946,48 @@
       "label": null
     }
   ],
+  "exit": {
+    "laps": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "steps": [
+      {
+        "type": "turn",
+        "target_heading_deg": 30.04,
+        "label": null
+      },
+      {
+        "type": "move",
+        "target_heading_deg": 30.04,
+        "distance_mm": 987.0,
+        "reverse": true,
+        "stop": false,
+        "label": "garage-arm-down"
+      },
+      {
+        "type": "arc",
+        "target_heading_deg": 90.0,
+        "sweep_deg": 59.96,
+        "radius_mm": 300.0,
+        "reverse": true,
+        "stop": false,
+        "label": null
+      },
+      {
+        "type": "move",
+        "target_heading_deg": 90.0,
+        "distance_mm": 40.0,
+        "reverse": true,
+        "stop": true,
+        "label": null
+      }
+    ],
+    "tool_cost_sec": 7.61
+  },
   "et_rally_arm": {
     "must_be_up_mm": 781.0,
     "must_be_up_sec": 1.91,

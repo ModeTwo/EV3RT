@@ -558,13 +558,13 @@ def rejoin_steps(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
 
 # ---------------- 走り出しへの取り込み(状態) ----------------
 _measured = None          # EtRallyStartPoseCapture の結果 dict(pose=..., frames=..., ...)
-def annotate_plan_course(steps):
+def annotate_plan_course(steps, start=None):
     """2026-11-11: 計画の各ステップの始めの、コース上の計画の姿勢 (x, y, コースの向き度) を step["_plan_course"] に入れる
     (計画のスタート START_MM・向き START_HEADING_DEG から、計画どおりに走ったとしてたどる)。
     止まったあとの走り出しで、コース上の今の位置(カメラで直したもの)と計画の位置の差を区間に引き継ぐのに使う
     (et_rally_path_segment の carry_error)。座標・向きは et_rally_course_pose と同じ(左回りが+、コースの向き = 180 − ジャイロの目標)。
     steps をそのまま返す。"""
-    x, y, h = START_MM[0], START_MM[1], START_HEADING_DEG
+    x, y, h = (START_MM[0], START_MM[1], START_HEADING_DEG) if start is None else (float(start[0]), float(start[1]), float(start[2]))
     for st in steps:
         t = st.get("type")
         st["_plan_course"] = (x, y, h)

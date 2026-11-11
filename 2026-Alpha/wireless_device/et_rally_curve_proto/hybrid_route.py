@@ -1799,7 +1799,34 @@ def main():
         key, e, s_ = used[-1]
         arm_down = arm_can_be_down(list(T[key].prims[(e, s_)]))
         print('arm: can be down from %.1fcm of the last connection (%.1fcm)' % (arm_down['cm'], arm_down['total_cm']), flush=True)
-    json.dump(dict(total=total, params=PARAMS, margin=MARGIN_FRONT, narrow=bool(MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]), audit=audit, arm=arm, arm_down=arm_down, blocks=blocks), open(sys.argv[2], 'w'))
+    # 2026-11-11: 途中の周で切り上げてガレージへ向かうためのつなぎ(exit)。1〜(LAPS-1)周目の黄ゲートの抜けが同じ姿勢のときだけ、
+    # その姿勢から GOAL(ガレージ)までの一番速い当たらないつなぎを、('yellow','GOAL') の表で求める
+    # (6周目の黄はガレージへ行きやすい別の通り方になることがあるため、最後のつなぎとは別に要る)。
+    exit_info = None
+    if GOAL_AT == 'garage' and used:
+        es = [e for (key, e, s_) in used if key == ('yellow', 'red')]
+        if es and all(x == es[0] for x in es):
+            e0 = es[0]; tab = T[('yellow', 'GOAL')]
+            best = None
+            for s_ in range(len(tab.starts)):
+                for _ in range(4):
+                    if tab.done[e0, s_]:
+                        break
+                    tab.resolve(e0, s_)
+                    if not tab.done[e0, s_] or (e0, s_) in tab.pending:
+                        tab.open_via()
+                if tab.done[e0, s_] and tab.C[e0, s_] < INF / 2 and (e0, s_) in tab.prims:
+                    if best is None or tab.C[e0, s_] < best[0]:
+                        best = (float(tab.C[e0, s_]), s_)
+            if best is not None:
+                ep = list(tab.prims[(e0, best[1])])
+                exit_info = dict(cost=round(best[0], 2), laps=list(range(1, LAPS)), prims=[ser(p) for p in ep],
+                                 arm_down=arm_can_be_down(ep))
+                print('exit: from laps 1..%d yellow to the garage %.1fs (arm down from %.1fcm)' % (
+                    LAPS - 1, best[0], exit_info['arm_down']['cm']), flush=True)
+        else:
+            print('exit: the yellow exits differ between laps, no early exit to the garage', flush=True)
+    json.dump(dict(total=total, params=PARAMS, margin=MARGIN_FRONT, narrow=bool(MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]), audit=audit, arm=arm, arm_down=arm_down, exit=exit_info, blocks=blocks), open(sys.argv[2], 'w'))
 
 
 if __name__ == '__main__':

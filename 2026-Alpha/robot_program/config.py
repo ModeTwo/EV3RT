@@ -221,6 +221,10 @@ class RaceConfig:
     # 2026-11-11(ユーザー): ガレージで終わる計画で、印(label 'garage-arm-down')の付いた最後の直進からアームを下げ始める
     # (走りと並行、下げ終わるまで待つ。出力は部品を守るため20まで)。下げたアームの分、ガレージエリアにかかる所が増える。
     et_rally_arm_down_at_garage: Optional[bool] = True
+    # 2026-11-11: 経過時間で周回数を決める(秒)。ETラリーの持ち時間(本番は 120 − ETラリーを始めるまでの時間、テストは70)。
+    # Noneなら使わない(計画の周回をすべて走る)。余裕(秒)は Noneなら2.0。計画に exit(新しい道具のガレージの計画)が要る。
+    et_rally_time_budget: Optional[float] = None
+    et_rally_time_margin: Optional[float] = None
     et_rally_path_decel: Optional[tuple] = None
     et_rally_path_accel: Optional[tuple] = None
     et_rally_path_stop_ticks: Optional[float] = None

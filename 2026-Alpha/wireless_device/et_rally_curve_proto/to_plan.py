@@ -44,62 +44,93 @@ def _split_prims(prims, d0):
     return out
 
 
-for bi, b in enumerate(c['blocks']):
-    label = f"lap{b['lap']}-{b['color']}" if b['kind'] == 'visit' and b['lap'] >= 1 else None   # lap0 は赤の前に通る黄
-    prims = b['prims']
-    if garage and ARM_DOWN is not None and bi == len(c['blocks']) - 1 and b['kind'] == 'conn':
-        prims = _split_prims(prims, float(ARM_DOWN['cm']))
-    for p in prims:
-        if p.get('arm_down'):
-            label = 'garage-arm-down'
+def prims_to_steps(seq, h):
+    """seq: [(prim, label, mark)]。mark(周の終わりの印など)は、そのプリミティブから最初にできたステップに付ける
+    (できなければ次にできたステップへ)。戻り値 (steps, h, max_gap)。"""
+    out = []; gap = 0.0; pending = None
+    for p, label, mark in seq:
+        if mark:
+            pending = mark
+        n0 = len(out)
         if p['t'] == 'pivot':
             if p['deg'] >= 0.3:
-                max_gap = max(max_gap, abs(nd(p['h_from'] - h)))
-                steps.append({'type': 'turn', 'target_heading_deg': g(p['h_to']), 'label': None})
+                gap = max(gap, abs(nd(p['h_from'] - h)))
+                out.append({'type': 'turn', 'target_heading_deg': g(p['h_to']), 'label': None})
             h = p['h_to']
         elif p['t'] == 'line':
             a, e = p['a'], p['b']
             L = math.hypot(e[0] - a[0], e[1] - a[1]) * 10
-            if L < 0.5:
-                continue
-            hh = math.degrees(math.atan2(e[1] - a[1], e[0] - a[0])) + (0 if p['m'] > 0 else 180)
-            max_gap = max(max_gap, abs(nd(hh - h)))
-            st = {'type': 'move', 'target_heading_deg': g(hh), 'distance_mm': round(L, 1), 'reverse': p['m'] < 0,
-                  'stop': False, 'label': 'garage-arm-down' if p.get('arm_down') else (label if label != 'garage-arm-down' else None)}
-            steps.append(st)
-            h = hh
+            if L >= 0.5:
+                hh = math.degrees(math.atan2(e[1] - a[1], e[0] - a[0])) + (0 if p['m'] > 0 else 180)
+                gap = max(gap, abs(nd(hh - h)))
+                out.append({'type': 'move', 'target_heading_deg': g(hh), 'distance_mm': round(L, 1), 'reverse': p['m'] < 0,
+                            'stop': False, 'label': 'garage-arm-down' if p.get('arm_down') else label})
+                h = hh
         else:
-            if p['deg'] < 0.05:
-                continue
-            h0 = p['th0'] + (0 if p['m'] > 0 else 180)
-            max_gap = max(max_gap, abs(nd(h0 - h)))
-            h1 = h0 + p['s'] * p['deg']
-            steps.append({'type': 'arc', 'target_heading_deg': g(h1), 'sweep_deg': round(-p['s'] * p['deg'], 2),
-                          'radius_mm': round(p['r'] * 10, 1), 'reverse': p['m'] < 0, 'stop': False,
-                          'label': 'garage-arm-down' if p.get('arm_down') else None})
-            h = h1
-# 止まる場所: 旋回の前・前後の切り替えの前・最後
-for i, st in enumerate(steps):
-    if st['type'] == 'turn':
-        continue
-    nxt = steps[i + 1] if i + 1 < len(steps) else None
-    if nxt is None or nxt['type'] == 'turn' or nxt['reverse'] != st['reverse']:
-        st['stop'] = True
-# 止まって終わる円弧のあとには、向きを直す旋回を入れる(止まる手前で終える分、円弧の終わりの向きが足りないため)。
-# 最後には、ゴールの向き(planner 90度 = gyro -90度)への旋回を入れる。
-fixed = []
-for i, st in enumerate(steps):
-    fixed.append(st)
-    nxt = steps[i + 1] if i + 1 < len(steps) else None
-    if st['type'] == 'arc' and st['stop'] and (nxt is None or nxt['type'] != 'turn'):
-        fixed.append({'type': 'turn', 'target_heading_deg': st['target_heading_deg'], 'label': 'arc-fix'})
-if garage:
-    pass   # ガレージは向きの決まりがないので、最後の旋回はしない
-elif fixed[-1]['type'] != 'turn' or fixed[-1]['label'] != 'arc-fix':
-    fixed.append({'type': 'turn', 'target_heading_deg': g(90.0), 'label': 'goal'})
-else:
-    fixed[-1] = {'type': 'turn', 'target_heading_deg': g(90.0), 'label': 'goal'}
-steps = fixed
+            if p['deg'] >= 0.05:
+                h0 = p['th0'] + (0 if p['m'] > 0 else 180)
+                gap = max(gap, abs(nd(h0 - h)))
+                h1 = h0 + p['s'] * p['deg']
+                out.append({'type': 'arc', 'target_heading_deg': g(h1), 'sweep_deg': round(-p['s'] * p['deg'], 2),
+                            'radius_mm': round(p['r'] * 10, 1), 'reverse': p['m'] < 0, 'stop': False,
+                            'label': 'garage-arm-down' if p.get('arm_down') else None})
+                h = h1
+        if pending and len(out) > n0:
+            out[n0]['marks'] = [pending]; pending = None
+    return out, h, gap
+
+
+def finalize(steps, main):
+    """止まる場所・止まって終わる円弧のあとの向きの直し・(ゴールなら)最後の向きの旋回。"""
+    # 止まる場所: 旋回の前・前後の切り替えの前・最後
+    for i, st in enumerate(steps):
+        if st['type'] == 'turn':
+            continue
+        nxt = steps[i + 1] if i + 1 < len(steps) else None
+        if nxt is None or nxt['type'] == 'turn' or nxt['reverse'] != st['reverse']:
+            st['stop'] = True
+    # 止まって終わる円弧のあとには、向きを直す旋回を入れる(止まる手前で終える分、円弧の終わりの向きが足りないため)。
+    # 最後には、ゴールの向き(planner 90度 = gyro -90度)への旋回を入れる。
+    fixed = []
+    for i, st in enumerate(steps):
+        fixed.append(st)
+        nxt = steps[i + 1] if i + 1 < len(steps) else None
+        if st['type'] == 'arc' and st['stop'] and (nxt is None or nxt['type'] != 'turn'):
+            fixed.append({'type': 'turn', 'target_heading_deg': st['target_heading_deg'], 'label': 'arc-fix'})
+    if garage or not main:
+        pass   # ガレージは向きの決まりがないので、最後の旋回はしない
+    elif fixed[-1]['type'] != 'turn' or fixed[-1]['label'] != 'arc-fix':
+        fixed.append({'type': 'turn', 'target_heading_deg': g(90.0), 'label': 'goal'})
+    else:
+        fixed[-1] = {'type': 'turn', 'target_heading_deg': g(90.0), 'label': 'goal'}
+    return fixed
+
+
+LAPS = c.get('params', {}).get('laps', 4)
+EXIT = c.get('exit') if garage else None
+seq = []
+blocks = c['blocks']
+for bi, b in enumerate(blocks):
+    label = f"lap{b['lap']}-{b['color']}" if b['kind'] == 'visit' and b['lap'] >= 1 else None   # lap0 は赤の前に通る黄
+    prims = b['prims']
+    if garage and ARM_DOWN is not None and bi == len(blocks) - 1 and b['kind'] == 'conn':
+        prims = _split_prims(prims, float(ARM_DOWN['cm']))
+    # 2026-11-11: 途中で切り上げてガレージへ向かえる周の終わり(N周目の黄ゲートのあとの、赤へのつなぎの始め)に印 'lapN-end'
+    mark = None
+    if (EXIT and b['kind'] == 'conn' and bi > 0 and blocks[bi - 1]['kind'] == 'visit' and blocks[bi - 1]['color'] == 'yellow'
+            and blocks[bi - 1]['lap'] in EXIT.get('laps', []) and bi < len(blocks) - 1):
+        mark = 'lap%d-end' % blocks[bi - 1]['lap']
+    for k, p in enumerate(prims):
+        seq.append((p, label, mark if k == 0 else None))
+steps, h, max_gap = prims_to_steps(seq, START_H0)
+steps = finalize(steps, True)
+exit_steps = None
+if EXIT and EXIT.get('prims'):
+    ep = EXIT['prims']
+    if EXIT.get('arm_down') is not None:
+        ep = _split_prims(ep, float(EXIT['arm_down']['cm']))
+    exit_steps, _, _ = prims_to_steps([(p, None, None) for p in ep], START_H0)
+    exit_steps = finalize(exit_steps, False)
 # 2026-11-11(ユーザー): ガレージで終わる計画では、最後の黄ゲートを通ったあとの最後の長い直進(150mm以上)に印を付ける。
 # ロボットはこの直進からアームを下げ始める(下げたアームの分、ガレージエリアにかかる所が増える)。
 # 下げたアームは車体の前に約5cm出る(経路を作る道具は、アームを下げた状態の当たり判定をしていない)ので、下げ始めるのは
@@ -158,6 +189,9 @@ plan = {
     'turn_count': sum(1 for s in steps if s['type'] == 'turn'),
     'steps': steps,
 }
+if exit_steps:
+    # 2026-11-11: 途中の周(印 lapN-end)で切り上げるときに、そこから走るガレージまでのつなぎ(--rally-time-budget)
+    plan['exit'] = {'laps': EXIT.get('laps', []), 'steps': exit_steps, 'tool_cost_sec': EXIT.get('cost')}
 # 2026-11-06: アームを下げたままだと脚に当たる最初の点(hybrid_route.py の arm、なければ書かない)。
 # ロボットは、ここまでに上げ終わる見込みなら走りながら上げ、間に合わなければスタートで止まっている間に上げる。
 if c.get('arm') is not None or 'arm' in c:
@@ -170,4 +204,5 @@ if c.get('arm') is not None or 'arm' in c:
     }
 json.dump(plan, open(sys.argv[3], 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
 print('steps', len(steps), 'moves', plan['move_count'], 'arcs', plan['arc_count'], 'turns', plan['turn_count'],
-      'dist', plan['total_distance_mm'], 'max heading gap', round(max_gap, 3))
+      'dist', plan['total_distance_mm'], 'max heading gap', round(max_gap, 3),
+      'exit', ('%d steps from laps %s' % (len(exit_steps), EXIT.get('laps'))) if exit_steps else 'none')

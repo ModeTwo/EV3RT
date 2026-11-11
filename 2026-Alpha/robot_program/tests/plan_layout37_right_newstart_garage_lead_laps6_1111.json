@@ -227,7 +227,10 @@
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": null,
+      "marks": [
+        "lap1-end"
+      ]
     },
     {
       "type": "move",
@@ -379,7 +382,10 @@
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": null,
+      "marks": [
+        "lap2-end"
+      ]
     },
     {
       "type": "move",
@@ -531,7 +537,10 @@
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": null,
+      "marks": [
+        "lap3-end"
+      ]
     },
     {
       "type": "move",
@@ -683,7 +692,10 @@
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": null,
+      "marks": [
+        "lap4-end"
+      ]
     },
     {
       "type": "move",
@@ -835,7 +847,10 @@
       "radius_mm": 80.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": null,
+      "marks": [
+        "lap5-end"
+      ]
     },
     {
       "type": "move",
@@ -1048,6 +1063,52 @@
       "label": null
     }
   ],
+  "exit": {
+    "laps": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "steps": [
+      {
+        "type": "arc",
+        "target_heading_deg": -143.68,
+        "sweep_deg": 126.32,
+        "radius_mm": 80.0,
+        "reverse": false,
+        "stop": false,
+        "label": "garage-arm-down"
+      },
+      {
+        "type": "move",
+        "target_heading_deg": -143.68,
+        "distance_mm": 1536.8,
+        "reverse": false,
+        "stop": false,
+        "label": null
+      },
+      {
+        "type": "arc",
+        "target_heading_deg": -180.0,
+        "sweep_deg": -36.32,
+        "radius_mm": 80.0,
+        "reverse": false,
+        "stop": false,
+        "label": null
+      },
+      {
+        "type": "move",
+        "target_heading_deg": -180.0,
+        "distance_mm": 40.0,
+        "reverse": false,
+        "stop": true,
+        "label": null
+      }
+    ],
+    "tool_cost_sec": 5.45
+  },
   "et_rally_arm": {
     "must_be_up_mm": 0.0,
     "must_be_up_sec": 0.0,
