@@ -1,0 +1,18 @@
+{
+  "note_1111": "2026-11-11: アームを上げ下げするだけの確認用。10mm進んで止まるだけ(--rally-arm-power を変えて、カチカチ鳴らない上限と上げる時間を見る)。",
+  "expected_end": {
+    "front_mm": 10.0,
+    "right_mm": 0.0,
+    "heading_deg": 0.0
+  },
+  "steps": [
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 10.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    }
+  ]
+}
