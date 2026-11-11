@@ -474,6 +474,14 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
                 now - self.start_time, self.arm_done_time - self.start_time, self.settle_sec, settle_range,
                 self.measure_sec, n, self.rejected, mean, std, self.stationary_true, self.stationary_n,
                 -mean if used else 0.0, "used" if used else "not used", _format_tilt(self.acc_sum, self.acc_n)))
+        # 2026-11-11: ハブがジャイロ用に直した版(brakecal、ブレーキ中も止まっている判定)なら、ここはほぼ全部「止まっている」になる
+        # (11/10 は 150/150 前後)。素の版(0.1.1)に戻っていると版の番号が同じでプログラムは止まらず、判定が0になり、
+        # ハブのジャイロの測り直しが効かない(11/08 に一度あった)。割合が低ければ警告を出す。
+        if self.stationary_n >= 20 and self.stationary_true < 0.5 * self.stationary_n:
+            self.logger.warning(
+                "HUB CHECK: imu_stationary only %d/%d while braking - the hub may not be the brakecal firmware "
+                "(asp_brakecal_904096d_v011.bin). Gyro bias is not being recalibrated." % (
+                    self.stationary_true, self.stationary_n))
 
     def terminate(self, new_status):
         self.started = False
