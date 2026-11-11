@@ -331,7 +331,7 @@ def _pivot_hits(px, py, h_from, h_to, back, front, rear, hw, mf, mr, lc, lu, lv,
 
 
 @njit(cache=True)
-def _piv_opt_hits(f, m, r, s1, ex, ey, he, sx, sy, hs, ds, tail, back, front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach):
+def _piv_opt_hits(f, m, r, s1, ex, ey, he, sx, sy, hs, ds, tail, back, front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach, de=1, lead=0.0):
     """その場旋回を含む候補(1=PLP, 2=PLA, 3=ALP)が確実に当たるなら True。形が作れないときも True(hybrid_route は None になる)。"""
     add = 0.0 if m > 0 else 180.0
     stop_s = ds == 0 or ds != m
@@ -354,6 +354,9 @@ def _piv_opt_hits(f, m, r, s1, ex, ey, he, sx, sy, hs, ds, tail, back, front, re
                 or _pivot_hits(ex, ey, he, math.degrees(phi) + add, back, front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach)
                 or _arc_hits(c2x, c2y, r, phi, s1, _ccw(s1 * (thb - phi)), m, front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach))
     tha = math.radians(he + add)
+    if lead > 0.0 and (de == 0 or de != m):
+        # 2026-11-11: 止まった状態からは lead の直進のあとに円弧(hybrid_route の lead_cm)
+        ex = ex + lead * math.cos(tha); ey = ey + lead * math.sin(tha)
     c1x = ex - s1 * r * math.sin(tha); c1y = ey + s1 * r * math.cos(tha)
     D = math.hypot(sx - c1x, sy - c1y)
     if D <= r + 1e-9:
@@ -366,14 +369,14 @@ def _piv_opt_hits(f, m, r, s1, ex, ey, he, sx, sy, hs, ds, tail, back, front, re
 
 
 @njit(cache=True)
-def next_option(ex, ey, he, sx, sy, hs, ds, order, ptr, approx, inf2, fam, ms, rs, ws, tail, back, front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach):
+def next_option(ex, ey, he, sx, sy, hs, ds, order, ptr, approx, inf2, fam, ms, rs, ws, tail, back, front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach, de=1, lead=0.0):
     """今の順番 ptr から、「円弧-直進-円弧」の形で柱に確実に当たる候補を飛ばし、次に Python で調べる候補の番号を返す。
     円弧-直進-円弧 以外の形(その場旋回を含む)は、ここでは判断せずに返す。"""
     n = len(order)
     while ptr < n and approx[ptr] < inf2:
         o = order[ptr]
         if fam[o] != 0:
-            if not _piv_opt_hits(fam[o], ms[o], rs[o], float(ws[o]), ex, ey, he, sx, sy, hs, ds, tail, back, front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach):
+            if not _piv_opt_hits(fam[o], ms[o], rs[o], float(ws[o]), ex, ey, he, sx, sy, hs, ds, tail, back, front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach, de, lead):
                 return ptr
             ptr += 1
             continue
@@ -383,7 +386,10 @@ def next_option(ex, ey, he, sx, sy, hs, ds, order, ptr, approx, inf2, fam, ms, r
         stop_s = ds == 0 or ds != m
         bx = sx - tail * math.cos(thb) if stop_s else sx
         by = sy - tail * math.sin(thb) if stop_s else sy
-        ok, a1, a2, a3, th1, th2, p1x, p1y, p2x, p2y, c1x, c1y, c2x, c2y, c3x, c3y = dubins_params(ex, ey, tha, bx, by, thb, r, w)
+        fx, fy = ex, ey
+        if lead > 0.0 and (de == 0 or de != m):
+            fx = ex + lead * math.cos(tha); fy = ey + lead * math.sin(tha)
+        ok, a1, a2, a3, th1, th2, p1x, p1y, p2x, p2y, c1x, c1y, c2x, c2y, c3x, c3y = dubins_params(fx, fy, tha, bx, by, thb, r, w)
         if ok:
             s1 = 1.0 if w in (0, 1, 4, 5) else -1.0
             s2 = (1.0 if w in (0, 2) else -1.0) if w < 4 else s1

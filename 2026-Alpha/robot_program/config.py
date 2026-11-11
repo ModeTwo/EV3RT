@@ -106,7 +106,9 @@ class RaceConfig:
     et_rally_turn_fine_trim_enabled: Optional[bool] = None
     # DD-22較正用: spin_encoderのフェーズ1の駆動パワーを上書きする。片輪エンコーダ
     # テスト(power=50既定)と同じ出力で比較するために使う。Noneなら素の既定値(70)。
-    et_rally_turn_main_power: Optional[int] = 50
+    # 2026-11-11: 50→70。その場旋回の試験(±54・±90・±135を12回)で、合計27.7→15.3秒(1回2.3→1.28秒)、
+    # 止まったときの向きのずれは同じくらい(±0.6°以内)、最後の300mmの左右のずれも目立たなかった。
+    et_rally_turn_main_power: Optional[int] = 70
     # DD-22較正用: Trueなら上の固定値の代わりに、実測の引き込まれ量から毎回
     # 更新していく推定値(指数移動平均)を使う。固定値では追従できない旋回ごとの
     # ばらつき・power依存を、実行中に自動で合わせ込む狙い。既定False。

@@ -81,7 +81,9 @@ PARAMS = dict(
     arm_front_cm=5.0, arm_half_width_cm=7.0,
     # 時間: 直進 cm/s、円弧は arc_k*v_line/(1+half_tread/r)、後退は rev_speed_scale 倍の速さ
     v_line=36.0, arc_k=0.77, half_tread=5.85, rev_speed_scale=1.0,
-    t_stop=0.67, t_turn0=0.7, t_turn_deg=0.012,
+    # 2026-11-11: その場旋回の時間を実測(出力70)に合わせる: 54°で約1.1秒、90°で約1.2秒、135°で約1.5秒 → 0.87秒+1°あたり0.0047秒
+    # (以前は仮の 0.7+0.012。出力50の実測は約2.3秒/回だった)。
+    t_stop=0.67, t_turn0=0.87, t_turn_deg=0.0047,
     # 精度の重み(秒に換算して時間に足す。0なら時間だけで選ぶ)
     pen_stop=0.0, pen_pivot=0.0, pen_rev_m=0.0, pen_arc_100deg=0.0,
     # 中継
@@ -105,6 +107,13 @@ PARAMS = dict(
     # 向き(goal_headings、空なら 0/90/180/-90)ごとに、フィールドに近い角・フィールド側の辺の真ん中・スタート側の辺の真ん中・
     # エリアの真ん中の4か所を候補にし、一番速いものを選ばせる。'inside' は車体全体を入れる(上の garage_margin_cm)。
     garage_rule='overlap', garage_overlap_cm=6.0,
+    # 2026-11-11: 中継の点を置く範囲 [x0, x1, y0, y1](cm)を上書きする(空なら下の BOUNDS)。入ってはいけない範囲を動かして試すとき用。
+    wp_bounds=[],
+    # 2026-11-11: 止まった状態(前後の切り替え・スタート)から走り出すつなぎは、まずこの長さ(cm)の直進で走り出してから円弧に入る。
+    # 止まった状態から半径8cmの円弧に入ると、車輪が向きの変化に追いつかず、内側の車輪が逆回りしてその場旋回のようになり
+    # 遅かった(配置37: 122mmの円弧に約1〜1.3秒、走りながらなら約0.5秒)。その場旋回のあとに円弧へ入るときも同じ長さの直進を挟む。
+    # 0で無効(従来どおり)。
+    lead_cm=4.0,
 )
 if os.environ.get('HR_PARAMS'):
     PARAMS.update(json.load(open(os.environ['HR_PARAMS'], encoding='utf-8')))
@@ -175,6 +184,8 @@ if PARAMS['keepout'] != 'planner':
 BOUNDS = (-31.0, 126.0, -36.0, 4 * P + 40)
 if GOAL_AT == 'garage':
     BOUNDS = (-31.0, 180.0, -45.0, 4 * P + 40)   # ガレージまでの中継の点も置けるように
+if WP_BOUNDS:
+    BOUNDS = tuple(float(v) for v in WP_BOUNDS)
 
 
 def nd(a):
@@ -1011,14 +1022,17 @@ def approx_costs(E, S):
         add = 0.0 if m > 0 else 180.0
         stopE_run = (ed != 0) & (ed != m)
         stopS_run = (sd == 0) | (sd != m)
+        restE = (ed == 0) | (ed != m)          # 止まった状態から走り出す(LEAD_CM の直進を先に置く)
+        lead = LEAD_CM * restE
         if fam == 'run':
             if (m, r) not in dcache:
                 thE = np.radians(eh + add); thS = np.radians(sh + add)
                 tx = sx - TAIL_CM * stopS_run * np.cos(thS); ty = sy - TAIL_CM * stopS_run * np.sin(thS)
-                dcache[(m, r)] = dubins_vec(ex, ey, thE, tx, ty, thS, r)
+                fx = ex + lead * np.cos(thE); fy = ey + lead * np.sin(thE)
+                dcache[(m, r)] = dubins_vec(fx, fy, thE, tx, ty, thS, r)
             A, L = dcache[(m, r)]
             a, l = A[w], L[w]
-            t = (r * a / v_arc(r) + (l + TAIL_CM * stopS_run) / V_LINE) * spd(m)
+            t = (r * a / v_arc(r) + (l + TAIL_CM * stopS_run + lead) / V_LINE) * spd(m)
             st = stopE_run.astype(float) + stopS_run
             c = t + (T_STOP + PEN_STOP) * st + PEN_ARC_100DEG * np.degrees(a) / 100.0 \
                 + (PEN_REV_M * (r * a + l + TAIL_CM * stopS_run) / 100.0 if m < 0 else 0.0)
@@ -1051,11 +1065,13 @@ def approx_costs(E, S):
             c = _tc(pe) + (L / V_LINE + r * a2 / v_arc(r) + TAIL_CM * stopS_run / V_LINE) * spd(m) \
                 + (T_STOP + PEN_STOP) * (stE.astype(float) + stopS_run) + PEN_PIVOT * (pe >= 0.3) \
                 + PEN_ARC_100DEG * np.degrees(a2) / 100.0 + (PEN_REV_M * (L + r * a2) / 100.0 if m < 0 else 0.0)
-            out[:, j] = np.where(ok & ~pbad, c, INF)
+            need_lead = restE | (pe >= 0.3)
+            out[:, j] = np.where(ok & ~pbad & ~(need_lead & (L < LEAD_CM)), c, INF)
         else:  # ALP
             s1 = w
             thA = np.radians(eh + add)
-            c1x = ex - s1 * r * np.sin(thA); c1y = ey + s1 * r * np.cos(thA)
+            fx = ex + lead * np.cos(thA); fy = ey + lead * np.sin(thA)
+            c1x = fx - s1 * r * np.sin(thA); c1y = fy + s1 * r * np.cos(thA)
             D = np.hypot(sx - c1x, sy - c1y)
             ok = D > r + 1e-9
             phi = np.arctan2(sy - c1y, sx - c1x) + np.arcsin(np.clip(s1 * r / np.where(ok, D, 1.0), -1, 1))
@@ -1065,7 +1081,7 @@ def approx_costs(E, S):
             pbad = _piv_bad(-nd(sh - (np.degrees(phi) + add)), sl, sr)
             ps = np.abs(nd(sh - (np.degrees(phi) + add)))
             stS = ~((ps < 0.3) & (sd == m))
-            c = _tc(ps) + (L / V_LINE + r * a1 / v_arc(r)) * spd(m) \
+            c = _tc(ps) + ((L + lead) / V_LINE + r * a1 / v_arc(r)) * spd(m) \
                 + (T_STOP + PEN_STOP) * (stopE_run.astype(float) + stS) + PEN_PIVOT * (ps >= 0.3) \
                 + PEN_ARC_100DEG * np.degrees(a1) / 100.0 + (PEN_REV_M * (L + r * a1) / 100.0 if m < 0 else 0.0)
             out[:, j] = np.where(ok & (L >= TAIL_CM) & ~pbad, c, INF)
@@ -1084,13 +1100,15 @@ def build_opt(opt, ep, sp):
     E, hE, dE = ep; S, hS, dS = sp
     add = 0.0 if m > 0 else 180.0
     stopS = dS == 0 or dS != m
+    restE = (dE == 0 or dE != m) and LEAD_CM > 0
     if fam == 'run':
         thE = math.radians(hE + add); thS = math.radians(hS + add)
         B = S - TAIL_CM * tdir(thS) if stopS else S
-        prims = dubins_one(E, thE, B, thS, r, w, m)
+        F = E + LEAD_CM * tdir(thE) if restE else E
+        prims = dubins_one(F, thE, B, thS, r, w, m)
         if prims is None:
             return None
-        return prims + ([('line', B, S, m)] if stopS else [])
+        return ([('line', E, F, m)] if restE else []) + prims + ([('line', B, S, m)] if stopS else [])
     if fam == 'PLP':
         hl = math.degrees(math.atan2(*(S - E)[::-1])) + add
         return [('pivot', E, hE, nd(hl)), ('line', E, S, m), ('pivot', S, nd(hl), hS)]
@@ -1102,16 +1120,20 @@ def build_opt(opt, ep, sp):
             return None
         phi = math.atan2(*(c2 - E)[::-1]) - math.asin(s1 * r / D)
         p2 = c2 - s1 * r * nL(phi)
+        pe = abs(nd(math.degrees(phi) + add - hE))
+        if (restE or pe >= 0.3) and float(np.hypot(*(p2 - E))) < LEAD_CM:
+            return None
         pr = [('pivot', E, hE, nd(math.degrees(phi) + add)), ('line', E, p2, m),
               arc_prim(p2, phi, s1, ccw(s1 * (thB - phi)), r, m)]
         return pr + ([('line', B, S, m)] if stopS else [])
     s1 = w; thA = math.radians(hE + add)
-    c1 = E + s1 * r * nL(thA); D = float(np.hypot(*(S - c1)))
+    F = E + LEAD_CM * tdir(thA) if restE else E
+    c1 = F + s1 * r * nL(thA); D = float(np.hypot(*(S - c1)))
     if D <= r + 1e-9:
         return None
     phi = math.atan2(*(S - c1)[::-1]) + math.asin(s1 * r / D)
     p1 = c1 - s1 * r * nL(phi)
-    return [arc_prim(E, thA, s1, ccw(s1 * (phi - thA)), r, m), ('line', p1, S, m),
+    return ([('line', E, F, m)] if restE else []) + [arc_prim(F, thA, s1, ccw(s1 * (phi - thA)), r, m), ('line', p1, S, m),
             ('pivot', S, nd(math.degrees(phi) + add), hS)]
 
 
@@ -1345,7 +1367,7 @@ class Table:
                     float(ep[0][0]), float(ep[0][1]), float(ep[1]), float(sp[0][0]), float(sp[0][1]), float(sp[1]), int(sp[2]),
                     self.order[e, s], int(self.ptr[e, s]), self.approx[e, s], INF / 2, _OPT_FAM, _OPT_M, _OPT_R, _OPT_W,
                     float(TAIL_CM), float(PIVOT_BACK_CM), float(FRONT), float(REAR), float(HALF_WIDTH), float(MARGIN_FRONT), float(MARGIN_REAR),
-                    LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, float(_RECT_REACH))
+                    LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, float(_RECT_REACH), int(ep[2]), float(LEAD_CM))
                 if not (self.ptr[e, s] < len(OPTS) and self.approx[e, s, self.ptr[e, s]] < INF / 2):
                     break
             opt = OPTS[self.order[e, s, self.ptr[e, s]]]
