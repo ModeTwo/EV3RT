@@ -361,17 +361,25 @@ class DeferredStrategySequence(Sequence):
                 import copy as _copy
                 from ..et_rally_time_budget import estimate_steps
                 exit_raw = exit_plan["steps"]
-                mark_pose = next((st.get("_plan_course") for st in plan_steps if st.get("marks")), None)
+                mark_i = next((i for i, st in enumerate(plan_steps) if st.get("marks")), None)
+                mark_pose = plan_steps[mark_i].get("_plan_course") if mark_i is not None else None
+                # 黄ゲートの最後の区間が止まらずに続く形で、切り上げのつなぎも同じ向きの直進・円弧で始まるなら、止まらずにつなぐ
+                prev = plan_steps[mark_i - 1] if mark_i else None
+                first = exit_raw[0] if exit_raw else None
+                cont_first = bool(prev is not None and first is not None and prev.get("type") in ("move", "arc")
+                                  and not prev.get("stop", True) and first.get("type") in ("move", "arc")
+                                  and bool(first.get("reverse", False)) == bool(prev.get("reverse", False)))
                 kw = {k: v for k, v in extra_kwargs.items()
                       if k not in ("time_budget_sec", "time_margin_sec", "start_check_mm")}
 
-                def exit_factory(exit_raw=exit_raw, mark_pose=mark_pose, kw=kw):
+                def exit_factory(exit_raw=exit_raw, mark_pose=mark_pose, kw=kw, cont_first=cont_first):
                     ex = _copy.deepcopy(exit_raw)
                     if mark_pose is not None and kw.get("path_carry_error"):
                         et_rally_start_pose.annotate_plan_course(ex, start=mark_pose)
                     return steps_from_strategy(ex, initial_heading_deg=self._initial_heading_deg,
                                                turn_method=self._turn_method,
-                                               compensation_enabled=self._compensation_enabled, **kw)
+                                               compensation_enabled=self._compensation_enabled,
+                                               continue_first=cont_first, **kw)
 
                 est_exit = estimate_steps([dict(st, distance_mm=st.get("distance_mm") or
                                                 (float(st.get("radius_mm", 0.0)) * math.radians(abs(float(st.get("sweep_deg", 0.0))))))
