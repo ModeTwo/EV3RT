@@ -357,8 +357,11 @@ class EtRallyPathSegment(Behaviour):
             self.pos_x, self.pos_y = carried if carried is not None else (0.0, 0.0)
         else:
             self.pos_x, self.pos_y = 0.0, 0.0
-        if carried is not None:
+        if carried is not None and self.kind == "line":
             # 前後の差: 計画より front mm 先にいるなら、その分だけ短く走る(走った距離の起点を前にずらす)。
+            # 2026-11-11: 円弧ではしない。円弧で走った距離を進めると、目標の向きもその分だけ先に回り、止まった状態から
+            # いきなり向きを合わせにいってその場旋回のようになっていた(配置37の青の後の円弧: 前に13〜23mm → 目標の向きが
+            # 9〜16°先、左右の出力 -44/+51 や ±100 で約1.7倍遅く、ガクッとした)。円弧では位置のずれとしてだけ持つ。
             self.orig_dist = now - carried[0]
         _start_position = None
         _chain_lat = None
