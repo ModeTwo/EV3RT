@@ -1454,12 +1454,14 @@ def _run_main(argv, startup_cleanup):
                               '50 mm or longer (default 16; shorter ones use --rally-move-short-lead).'))
     parser.add_argument('--rally-path-ff-scale', type=float, default=None,
                         help='Multiply the arc left/right feedforward (half tread / radius) by this (default 1.0).')
+    parser.add_argument('--rally-start-pose-sec', type=float, default=None,
+                        help='Seconds of camera frames used for the start pose after the arm/gyro are ready (default 2.0).')
     parser.add_argument('--rally-path-carry-error', choices=('on', 'off'), default=None,
                         help=('After each stop, start the next path segment from the course pose (camera-corrected) instead of '
-                              'assuming the robot is exactly on the plan, so known errors are not forgotten (default off).'))
+                              'assuming the robot is exactly on the plan, so known errors are not forgotten (default on).'))
     parser.add_argument('--rally-camera-far-confirm', type=float, default=None,
                         help=('Running camera correction: accept a difference larger than 40 mm when this many consecutive images '
-                              'agree within 15 mm (up to 100 mm). Default 0 = always reject.'))
+                              'agree within 15 mm (up to 100 mm). Default 3; 0 = always reject.'))
     parser.add_argument('--rally-path-line-pid-p', type=float, default=None,
                         help='Heading PID P used only on straight path segments (default 3; 4 = old behaviour).')
     parser.add_argument('--rally-path-line-pid-d', type=float, default=None,
@@ -1617,8 +1619,10 @@ def _run_main(argv, startup_cleanup):
         mission_config = dataclasses.replace(mission_config, et_rally_camera_exposure=args.rally_camera_exposure)
     if args.rally_camera_correct is not None:
         try:
-            # 2026-11-11: "on" = 既定(位置0.15・向き0)。11/10の比較で向きの補正は合計が1°以上たまって横ずれを増やした。
-            gains = (0.15, 0.0) if args.rally_camera_correct == 'on' else tuple(float(v) for v in args.rally_camera_correct.split(','))
+            # 2026-11-11: "on" = 既定(位置0.15・向き0.1)。11/10は向きの補正が1°以上たまるのを誤りと見て0にしたが、
+            # 11/11に配置37(右回り中心)で向きが1周約0.4°ずつずれて青ゲートに当たり、向き0.1で解消した(たまっていたのは
+            # ジャイロの倍率の約0.1%のずれで、本当の向きのずれだった)。seedでも精度は悪くならなかった。
+            gains = (0.15, 0.1) if args.rally_camera_correct == 'on' else tuple(float(v) for v in args.rally_camera_correct.split(','))
         except ValueError:
             gains = ()
         if len(gains) != 2 or not all(0.0 <= g <= 1.0 for g in gains):
@@ -1784,6 +1788,7 @@ def _run_main(argv, startup_cleanup):
     for opt, attr, lo, hi in (('--rally-path-arc-pid-p', 'rally_path_arc_pid_p', 0.0, 20.0),
                               ('--rally-path-line-pid-p', 'rally_path_line_pid_p', 0.0, 20.0),
                               ('--rally-camera-far-confirm', 'rally_camera_far_confirm', 0.0, 10.0),
+                              ('--rally-start-pose-sec', 'rally_start_pose_sec', 0.5, 5.0),
                               ('--rally-path-line-pid-d', 'rally_path_line_pid_d', 0.0, 2.0),
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),

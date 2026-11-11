@@ -162,7 +162,9 @@ class RaceConfig:
     # 2026-11-08: headingが増える向き(右回り)の回転にだけ使う倍率(et_rally_heading.py)。
     # 90度×30回で、1.00579は5〜13mm(2.6〜6.6度)多く回り(同期なし・出力70でも約3度)、1.0073で1〜2mmに合った→1.0073。
     # None=1.00579。
-    et_rally_gyro_scale_pos: Optional[float] = 1.0073
+    # 2026-11-11: 1.0073(11/08、その場旋回で測った値)→1.0063。右回り中心の配置37で、向きの補正が右回り1940°で+1.91°
+    # (約0.1%)たまっていた。1.0063にすると補正の合計+0.57°で増えなくなり、赤ゲートの横ずれ+20〜39→+7〜9mm(カメラ)。
+    et_rally_gyro_scale_pos: Optional[float] = 1.0063
     # 2026-10-30: 直進の向きのPIDのI成分を、前の直進から引き継ぐ(et_rally_drive.py)。既定None=引き継がない。
     et_rally_move_carry_integral: Optional[bool] = True
     # 2026-10-31: 直進の左右の出力を小数のまま出す(端数を次のtickへ持ち越す、et_rally_drive.py)。既定None=従来の切り捨て。
@@ -207,10 +209,11 @@ class RaceConfig:
     et_rally_path_line_boost_sec: Optional[float] = 0.3
     # 2026-11-11: 止まったあとの走り出しで、コース上の今の位置(カメラで直したもの)と計画の位置の差を引き継ぐ(Noneなら使わない)。
     # 切り返しの多い配置37で、止まるたびにずれを忘れて1周ごとに約1cmずつたまり、6周目に青ゲートに当たったため。
-    et_rally_path_carry_error: Optional[bool] = None
+    # 同日、配置37とseedの実機で効果を確かめて既定にした。
+    et_rally_path_carry_error: Optional[bool] = True
     # 2026-11-11: 走行中の補正で、差が40mmを超える画像は取り違えとして捨てるが、この枚数続けて同じずれ(互いに15mm以内)に
     # 見えたら本当のずれとして受け入れる(Noneか0なら従来どおり捨てる)。
-    et_rally_camera_far_confirm: Optional[float] = None
+    et_rally_camera_far_confirm: Optional[float] = 3
     # 2026-11-03: アームの止め方(EtRallyArmUpDown)。動きの遅いtickがこの回数連続したら止める(Noneなら従来の ArmUpDownFull)と、押す出力(Noneなら35)。
     et_rally_arm_stop_ticks: Optional[float] = 3.0
     et_rally_arm_power: Optional[float] = 20.0
