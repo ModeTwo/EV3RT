@@ -1439,6 +1439,36 @@ def arm_must_be_up(prims):
     return None
 
 
+def arm_can_be_down(prims):
+    """2026-11-11: ガレージへの最後のつなぎ(prims)で、アームを下げた部分(arm_must_be_up と同じ形)と脚のすき間が、
+    その点から最後まで下限(MARGIN_FRONT)を切らない、一番手前の点までの距離(cm、prims の始めから)。
+    最後まで当たらなければ 0(つなぎの始め = 黄ゲートを抜けた直後から下げてよい)。"""
+    dist = 0.0; last_bad = None
+    x0, x1 = FRONT, FRONT + ARM_FRONT_CM
+    for q in prims:
+        if q[0] == 'line':
+            L = prim_len(q); n = max(2, int(L / 0.5) + 1); k = np.linspace(0, 1, n)
+            h = math.atan2(*(q[2] - q[1])[::-1]) + (0 if q[3] > 0 else math.pi)
+            px = q[1][0] + (q[2][0] - q[1][0]) * k; py = q[1][1] + (q[2][1] - q[1][1]) * k; hh = np.full(n, h)
+            ds = L * k; seg_d = L
+        elif q[0] == 'arc':
+            px, py, hd = arc_samples(q, 0.5); hh = np.radians(hd)
+            L = prim_len(q); ds = L * np.linspace(0, 1, len(px)); seg_d = L
+        else:
+            dd = nd(q[3] - q[2])
+            if abs(dd) < 0.3:
+                continue
+            hd = q[2] + dd * np.linspace(0, 1, int(abs(dd)) + 2)
+            px, py = _pivot_axle(q[1], q[2], hd); hh = np.radians(hd)
+            ds = np.zeros(len(px)); seg_d = 0.0
+        c = _rect_clear(np.asarray(px, float), np.asarray(py, float), np.asarray(hh, float), x0, x1, hw=ARM_HALF_WIDTH_CM)
+        bad = np.flatnonzero(c < MARGIN_FRONT)
+        if len(bad):
+            last_bad = float(dist + ds[int(bad[-1])])
+        dist += seg_d
+    return dict(cm=0.0 if last_bad is None else round(min(last_bad + 1.0, dist), 1), total_cm=round(dist, 1))
+
+
 def route_audit(conn_prims, visits, used):
     """できた経路全体を細かく(直進0.5cm・円弧と旋回1°)調べ、柱までの一番小さいすき間と、進入禁止へのはみ出しを出す。"""
     allp = []
@@ -1764,7 +1794,12 @@ def main():
     arm = arm_must_be_up(seq)
     print('arm: must be up by %s (arm front %.1fcm, half width %.1fcm)' % (
         'never' if arm is None else '%.1fcm / %.2fs' % (arm['cm'], arm['sec']), ARM_FRONT_CM, ARM_HALF_WIDTH_CM), flush=True)
-    json.dump(dict(total=total, params=PARAMS, margin=MARGIN_FRONT, narrow=bool(MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]), audit=audit, arm=arm, blocks=blocks), open(sys.argv[2], 'w'))
+    arm_down = None
+    if GOAL_AT == 'garage' and used:
+        key, e, s_ = used[-1]
+        arm_down = arm_can_be_down(list(T[key].prims[(e, s_)]))
+        print('arm: can be down from %.1fcm of the last connection (%.1fcm)' % (arm_down['cm'], arm_down['total_cm']), flush=True)
+    json.dump(dict(total=total, params=PARAMS, margin=MARGIN_FRONT, narrow=bool(MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]), audit=audit, arm=arm, arm_down=arm_down, blocks=blocks), open(sys.argv[2], 'w'))
 
 
 if __name__ == '__main__':

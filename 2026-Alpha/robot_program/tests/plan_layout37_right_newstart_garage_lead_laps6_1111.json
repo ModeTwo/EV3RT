@@ -39,7 +39,7 @@
   "laps": 6,
   "goal_at": "garage",
   "total_distance_mm": 23816.2,
-  "move_count": 68,
+  "move_count": 67,
   "arc_count": 52,
   "turn_count": 0,
   "steps": [
@@ -994,7 +994,7 @@
       "radius_mm": 120.0,
       "reverse": false,
       "stop": false,
-      "label": null
+      "label": "garage-arm-down"
     },
     {
       "type": "move",
@@ -1025,18 +1025,10 @@
     {
       "type": "move",
       "target_heading_deg": -172.36,
-      "distance_mm": 813.9,
+      "distance_mm": 1255.7,
       "reverse": false,
       "stop": false,
       "label": null
-    },
-    {
-      "type": "move",
-      "target_heading_deg": -172.36,
-      "distance_mm": 441.8,
-      "reverse": false,
-      "stop": false,
-      "label": "garage-arm-down"
     },
     {
       "type": "arc",

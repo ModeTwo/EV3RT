@@ -15,9 +15,43 @@ g = lambda h: round(nd(-(h - START_H0)), 2)
 steps = []
 h = START_H0     # planner frame robot heading
 max_gap = 0.0
-for b in c['blocks']:
+# 2026-11-11(ユーザー): ガレージへの最後のつなぎで、アームを下げても脚に当たらない点(hybrid_route の arm_down、
+# 黄ゲートを抜けたあとの距離 cm)から下げ始める。その点で直進・円弧を2つに分け、後ろの区間に印 'garage-arm-down' を付ける。
+ARM_DOWN = c.get('arm_down')
+
+
+def _split_prims(prims, d0):
+    out = []; cum = 0.0; done = False
+    for p in prims:
+        if done or p['t'] == 'pivot':
+            out.append(dict(p)); continue
+        if p['t'] == 'line':
+            L = math.hypot(p['b'][0] - p['a'][0], p['b'][1] - p['a'][1])
+        else:
+            L = p['r'] * math.radians(p['deg'])
+        if cum + L <= d0 + 1e-6:
+            out.append(dict(p)); cum += L; continue
+        f = max(0.0, (d0 - cum) / L) if L > 0 else 0.0
+        if f * L < 0.05:
+            q = dict(p); q['arm_down'] = True; out.append(q)
+        elif p['t'] == 'line':
+            m_ = [p['a'][0] + (p['b'][0] - p['a'][0]) * f, p['a'][1] + (p['b'][1] - p['a'][1]) * f]
+            out.append(dict(p, b=m_)); out.append(dict(p, a=m_, arm_down=True))
+        else:
+            d1 = p['deg'] * f
+            out.append(dict(p, deg=d1)); out.append(dict(p, deg=p['deg'] - d1, th0=p['th0'] + p['s'] * d1, arm_down=True))
+        done = True
+    return out
+
+
+for bi, b in enumerate(c['blocks']):
     label = f"lap{b['lap']}-{b['color']}" if b['kind'] == 'visit' and b['lap'] >= 1 else None   # lap0 は赤の前に通る黄
-    for p in b['prims']:
+    prims = b['prims']
+    if garage and ARM_DOWN is not None and bi == len(c['blocks']) - 1 and b['kind'] == 'conn':
+        prims = _split_prims(prims, float(ARM_DOWN['cm']))
+    for p in prims:
+        if p.get('arm_down'):
+            label = 'garage-arm-down'
         if p['t'] == 'pivot':
             if p['deg'] >= 0.3:
                 max_gap = max(max_gap, abs(nd(p['h_from'] - h)))
@@ -31,7 +65,7 @@ for b in c['blocks']:
             hh = math.degrees(math.atan2(e[1] - a[1], e[0] - a[0])) + (0 if p['m'] > 0 else 180)
             max_gap = max(max_gap, abs(nd(hh - h)))
             st = {'type': 'move', 'target_heading_deg': g(hh), 'distance_mm': round(L, 1), 'reverse': p['m'] < 0,
-                  'stop': False, 'label': label}
+                  'stop': False, 'label': 'garage-arm-down' if p.get('arm_down') else (label if label != 'garage-arm-down' else None)}
             steps.append(st)
             h = hh
         else:
@@ -41,7 +75,8 @@ for b in c['blocks']:
             max_gap = max(max_gap, abs(nd(h0 - h)))
             h1 = h0 + p['s'] * p['deg']
             steps.append({'type': 'arc', 'target_heading_deg': g(h1), 'sweep_deg': round(-p['s'] * p['deg'], 2),
-                          'radius_mm': round(p['r'] * 10, 1), 'reverse': p['m'] < 0, 'stop': False, 'label': None})
+                          'radius_mm': round(p['r'] * 10, 1), 'reverse': p['m'] < 0, 'stop': False,
+                          'label': 'garage-arm-down' if p.get('arm_down') else None})
             h = h1
 # 止まる場所: 旋回の前・前後の切り替えの前・最後
 for i, st in enumerate(steps):
@@ -70,7 +105,8 @@ steps = fixed
 # 下げたアームは車体の前に約5cm出る(経路を作る道具は、アームを下げた状態の当たり判定をしていない)ので、下げ始めるのは
 # 車軸がスタート側の列の点から ARM_DOWN_X_CM より外に出てから(アームの先がどの脚の長方形よりも外)。そこで直進を2つに分ける。
 ARM_DOWN_X_CM = 4 * 24.64 + 10.0
-if garage:
+if garage and ARM_DOWN is None:
+    # 経路のファイルに arm_down がない(古い道具)ときだけ、以前の決め方(フィールドを出てから)
     last_lap = max((i for i, st in enumerate(steps) if (st.get('label') or '').startswith('lap')), default=-1)
     # 計画をたどって、各ステップの始めの車軸の位置(経路を作る道具の座標 cm、コースの向きは 180 - ジャイロの目標)
     px, py, ph = 113.46, 86.24, START_H0
