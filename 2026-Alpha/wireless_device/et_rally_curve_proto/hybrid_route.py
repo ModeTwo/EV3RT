@@ -100,6 +100,11 @@ PARAMS = dict(
     # 箱が長方形の内側に garage_margin_cm 以上の余裕で入らない向きは使わない(24.5×30cmなので、車体25.4cmは
     # フィールドと平行な向き ±90 でしか入らない)。空なら以前の1点(スタートから +61, -115)。
     garage_area=[45.5, 70.0, 100.0, 130.0], garage_margin_cm=1.0,
+    # 2026-11-11(ユーザー): 規則は「走行体の一部がガレージエリアにかかっていればよい」。'overlap' では、車体の箱が
+    # エリアに x・y とも garage_overlap_cm 以上食い込む位置で止める(止まる位置のずれ: 今日の実測で前後約2.5cm・左右約1.6cm)。
+    # 向き(goal_headings、空なら 0/90/180/-90)ごとに、フィールドに近い角・フィールド側の辺の真ん中・スタート側の辺の真ん中・
+    # エリアの真ん中の4か所を候補にし、一番速いものを選ばせる。'inside' は車体全体を入れる(上の garage_margin_cm)。
+    garage_rule='overlap', garage_overlap_cm=6.0,
 )
 if os.environ.get('HR_PARAMS'):
     PARAMS.update(json.load(open(os.environ['HR_PARAMS'], encoding='utf-8')))
@@ -129,6 +134,25 @@ if GOAL_AT == 'garage':
     if GARAGE_AREA:
         _a = [float(v) for v in GARAGE_AREA]
         GARAGE_BOX = (_s0[0] + _a[0], _s0[0] + _a[1], _s0[1] - _a[3], _s0[1] - _a[2])   # (x0, x1, y0, y1)
+
+
+def garage_overlap_goals(h):
+    """'overlap': 向き h で、車体の箱がエリアに x・y とも GARAGE_OVERLAP_CM 以上食い込む車軸の位置の候補(4か所)。
+    フィールドとスタートは、エリアから見て x の小さい側・y の大きい側にある。"""
+    x0, x1, y0, y1 = GARAGE_BOX
+    D = float(GARAGE_OVERLAP_CM)
+    c, sn = math.cos(math.radians(h)), math.sin(math.radians(h))
+    half_len = (FRONT + REAR) / 2.0
+    ex = abs(c) * half_len + abs(sn) * HALF_WIDTH
+    ey = abs(sn) * half_len + abs(c) * HALF_WIDTH
+    off = (FRONT - REAR) / 2.0
+    near_x = x0 + D - ex          # 車体の x の大きい側の端が、エリアのフィールド側の辺から D 入る
+    near_y = y1 - D + ey          # 車体の y の小さい側の端が、エリアのスタート側の辺から D 入る
+    mid_x, mid_y = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    out = []
+    for bx, by in ((near_x, near_y), (near_x, mid_y), (mid_x, near_y), (mid_x, mid_y)):
+        out.append(np.array([bx - off * c, by - off * sn]))
+    return out
 
 
 def garage_goal(h):
@@ -1573,7 +1597,12 @@ def main():
                 v[key] = idx[k]
     start_pose = [(START, START_H, 0)]
     goal_pose = [(GOAL, float(h), 0) for h in GOAL_HEADINGS] if GOAL_HEADINGS else [(GOAL, GOAL_H, 0)]
-    if GARAGE_BOX is not None:
+    if GARAGE_BOX is not None and GARAGE_RULE == 'overlap':
+        goal_pose = [(g, h, 0) for h in (GOAL_HEADINGS or [0.0, 90.0, 180.0, -90.0]) for g in garage_overlap_goals(float(h))]
+        goal_pose = [(g, float(h), z) for g, h, z in goal_pose]
+        print('garage (overlap >= %.1fcm) box x %.1f..%.1f y %.1f..%.1f, %d goal candidates' % (
+            (GARAGE_OVERLAP_CM,) + GARAGE_BOX + (len(goal_pose),)), flush=True)
+    elif GARAGE_BOX is not None:
         goal_pose = [(garage_goal(float(h)), float(h), 0) for h in (GOAL_HEADINGS or [GOAL_H])
                      if garage_goal(float(h)) is not None]
         if not goal_pose:
