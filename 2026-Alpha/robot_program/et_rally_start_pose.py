@@ -97,7 +97,7 @@ SCALE_LIMIT = (0.94, 1.06)
 class GroundCamera:
     """較正(calib_*.json の lens と jig[0])から、画像 → 床(車体の座標)の対応表を作っておく。"""
 
-    def __init__(self, calib_path=None, top_x=TOP_X, top_y=TOP_Y, top_s=TOP_S):
+    def __init__(self, calib_path=None, top_x=TOP_X, top_y=TOP_Y, top_s=TOP_S, extra_pitch_deg=0.0):
         import cv2
         import numpy as np
         self.cv2, self.np = cv2, np
@@ -116,7 +116,8 @@ class GroundCamera:
         # 2026-11-10: 床での下向きの補正(度)。較正台の上とマットの上でロボットの前後の傾きが違い、床では遠いものが
         # 遠く・近いものが近く見えていた(前後に約6%伸びる)。床で撮った8枚の当てはめで -0.46°(ばらつき0.11°)。
         # カメラの位置は変えずに、車体の左右の軸のまわりに回す(fit_pose_pitch と同じ回し方)。
-        pitch_fix = float(d.get("pitch_fix_deg", 0.0))
+        # 2026-11-11: extra_pitch_deg = スタート位置の取り込みで当てはめた下向き(走行中の補正に使う)。同じ回し方で足す。
+        pitch_fix = float(d.get("pitch_fix_deg", 0.0)) + float(extra_pitch_deg or 0.0)
         if pitch_fix:
             R = cv2.Rodrigues(np.asarray(rv, float).reshape(3, 1))[0]
             C = -R.T @ t

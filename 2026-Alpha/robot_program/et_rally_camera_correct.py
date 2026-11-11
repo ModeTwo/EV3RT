@@ -162,6 +162,14 @@ class EtRallyCameraCorrect(Behaviour):
             self.logger.warning("camera correct: camera process not running, no correction")
             return
         self.proc.poll()
+        # 2026-11-11: スタート位置の取り込みで当てはめた下向きを、走行中の補正にも使う(点が見えて当てはめたときだけ)。
+        # 右seedの画像で、較正ファイルの下向きのままだと残差が大きく 28/111 枚を捨てていたのが、当てはめた値なら 2/110 枚。
+        if getattr(runtime, "et_rally_camera_pitch_from_start", True):
+            from . import et_rally_start_pose as sp
+            m = sp.measured_start_pose()
+            if m and m.get("n_dots", 0) >= 1 and abs(m.get("pitch_deg", 0.0)) <= 1.5 and m.get("pitch_deg"):
+                self.proc.send("pitch %.3f" % m["pitch_deg"])
+                self.logger.info("camera correct: using the start pose pitch %+.2f deg while driving" % m["pitch_deg"])
         self.proc.send("track 1")
         self.logger.info("camera correct: started gain_pos=%.2f gain_head=%.2f lag=%.3fs far_confirm=%d" % (
             self.gain_pos, self.gain_head, self.lag_sec, self.far_confirm))

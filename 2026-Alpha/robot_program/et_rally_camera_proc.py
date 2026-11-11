@@ -151,6 +151,14 @@ def _child(cfg):
                 continue
             if parts[0] == 'quit':
                 break
+            if parts[0] == 'pitch' and len(parts) > 1:
+                # 2026-11-11: 走行中の補正(track)で使うカメラに、この下向き(度)を足して作り直す
+                # (スタート位置の取り込みで当てはめた値。カメラの角度が較正ファイルからずれていても走行中に合わせる)。
+                try:
+                    state['extra_pitch'] = float(parts[1]); state['cam_reset'] = True
+                except ValueError:
+                    pass
+                continue
             if parts[0] in ('save', 'detect', 'track') and len(parts) > 1:
                 state[parts[0]] = parts[1] == '1'
                 if parts[0] == 'detect' and len(parts) > 2:   # "detect 1 1" = 左コース(見た左右を逆にする)
@@ -236,13 +244,16 @@ def _child(cfg):
             continue
         done_n = n
         age = time.monotonic() - t
+        if state.pop('cam_reset', False):
+            cam = None
         if state['track'] and not state['detect']:
             # 走行中の補正(et_rally_camera_correct.py)。見つけたもの(車体の座標)だけを送り、
             # 地図への結びつけは親が撮った時刻の位置で行う。
             try:
                 from robot_program import et_rally_start_pose as sp
                 if cam is None:
-                    cam = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S)
+                    cam = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S,
+                                          extra_pitch_deg=state.get('extra_pitch', 0.0))
                     sp.set_gate_legs(cfg.get('gates'))
                 dets = sp.detect_ground(cam, frame)
                 if dets['markers'] or len(dets['dots']) >= 2:
