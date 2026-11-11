@@ -741,12 +741,14 @@ class EtRallyApplyStartPose(Behaviour):
         if not self.plan_frame_known:
             _applied = (START_MM[0], START_MM[1], h)
             how = "heading only (plan frame unknown)"
-        elif m.get("items", 99) < self.min_items_for_position:
+        elif m.get("items", 99) < self.min_items_for_position or (m.get("n_dots", 1) == 0 and m.get("items", 99) < 3):
             # 2026-11-10: 見えたものが2つ以下(マーカー1つ+点1つなど)だと、位置は測り間違いのおそれがあるので入れない
             # (実機: 右のタイヤだけ15mm下げた置き方を2回、どちらも前後が約17mm違っていた。3つ以上見えた置き方は合っていた)。
             # 向き(マーカーの辺の傾きから)だけ入れて、計画のスタートにいるとみなす。残差では見分けられなかった。
             _applied = (START_MM[0], START_MM[1], h)
-            how = "heading only (%d items < %d)" % (m["items"], self.min_items_for_position)
+            # 2026-11-11: 点が1つも見えずマーカー2つだけのときも位置は入れない(画像が明るすぎて点が見つからず、
+            # マーカー2つから前後が約18mm違って測れた。点がないと下向きの当てはめ直しができないため)。
+            how = "heading only (%d items, %d dots)" % (m["items"], m.get("n_dots", -1))
         elif math.hypot(dx, dy) >= self.rejoin_min_mm:
             _pending_rejoin = (x, y, h)
             how = "rejoin planned"
