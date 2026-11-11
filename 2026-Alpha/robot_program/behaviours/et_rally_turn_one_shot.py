@@ -91,6 +91,10 @@ PULSE_TABLE = [
     (29.25, 24, 29.2908), (29.50, 24, 29.2908), (29.75, 24, 29.2908), (30.00, 25, 30.6566),
 ]
 MAX_PULSE_ATTEMPTS = 2  # これ以上は追いかけない(不感帯より細かい残差を無理に追わない)
+# 2026-11-11: 残りがこの角度以上なら、MAX_PULSE_ATTEMPTS を超えても EXTRA_PULSE_ATTEMPTS 回まで追う。配置36の実機で、
+# 出力70のphase1が8〜12°回り足りず(最後の出力40で車輪が止まった)、2回で打ち切って4〜5°ずれたまま次へ進み、ゲートの脚にぎりぎりだった。
+LARGE_ERROR_DEG = 2.0
+EXTRA_PULSE_ATTEMPTS = 3
 # 2026-10-31: phase1_model使用時、一定の流れを満額見込む旋回の大きさ(度)。これ未満は角度に比例して小さくする。
 PHASE1_FLOW_FULL_DEG = 40.0
 # 2026-10-31: wheel_sync使用時の、片輪の出力の下限(不感帯CW35/CCW40前後で止まりきらないよう少し下)。
@@ -567,8 +571,10 @@ class EtRallyTurnOneShot(Behaviour):
                 return "running"
             if self.pulse_attempt > 0 and abs(error) >= self.fine_tolerance_deg:
                 self._check_pulse_stall()
+            used = self.pulse_attempt - self.stalled_pulses
             if (abs(error) < self.fine_tolerance_deg
-                    or self.pulse_attempt - self.stalled_pulses >= self.max_pulse_attempts):
+                    or (used >= self.max_pulse_attempts and abs(error) < LARGE_ERROR_DEG)
+                    or used >= self.max_pulse_attempts + EXTRA_PULSE_ATTEMPTS):
                 turn_forward_mm = forward_mm_since(self.start_r, self.start_l)
                 # 2026-10-29: 次の直進が(オプション有効時に)この分だけ短く走れるよう渡す。
                 set_turn_forward_mm(turn_forward_mm)
