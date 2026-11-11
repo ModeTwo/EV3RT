@@ -1458,6 +1458,10 @@ def _run_main(argv, startup_cleanup):
                         help='Stop the arm when it has moved slowly for this many consecutive ticks (about 3; default: old ArmUpDownFull).')
     parser.add_argument('--rally-arm-power', type=float, default=None,
                         help='With --rally-arm-stop-ticks: arm push power (default 35).')
+    parser.add_argument('--rally-arm-travel-deg', type=float, default=None,
+                        help=('With --rally-arm-stop-ticks: when the ET rally raises the arm from the bottom, stop after this many '
+                              'degrees (full travel is about 270; e.g. 260). Slows to power 20 for the last 40 degrees. '
+                              'Lets a higher --rally-arm-power be used without the gear slipping at the top. Default: off.'))
     parser.add_argument('--rally-arm-up-before-touch', choices=['on', 'off'], default=None,
                         help='Raise the arm before the touch start; after the touch only re-measure the gyro (default off).')
     parser.add_argument('--rally-start-pose', choices=['on', 'off'], default=None,
@@ -1750,7 +1754,8 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-path-ff-scale', 'rally_path_ff_scale', 0.5, 2.0),
                               ('--rally-path-stop-lead', 'rally_path_stop_lead', 0.0, 40.0),
                               ('--rally-arm-stop-ticks', 'rally_arm_stop_ticks', 1.0, 20.0),
-                              ('--rally-arm-power', 'rally_arm_power', 10.0, 60.0)):
+                              ('--rally-arm-power', 'rally_arm_power', 10.0, 60.0),
+                              ('--rally-arm-travel-deg', 'rally_arm_travel_deg', 90.0, 400.0)):
         value = getattr(args, attr)
         if value is None:
             continue

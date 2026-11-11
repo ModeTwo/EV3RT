@@ -139,7 +139,7 @@ def build_et_rally_phase(context, config):
     elif drive_arm:
         arm_up = EtRallyArmUpLater("et_rally arm up later", drive_arm_reason)
     else:
-        arm_up = make_arm_up_down("et_rally arm up", ArmDirection.UP, config)
+        arm_up = make_arm_up_down("et_rally arm up", ArmDirection.UP, config, from_bottom=True)
     # 2026-10-29: ハブのプログラムを書き換えた版(ブレーキ中もハブがジャイロのくせを測り直す)用に、
     # アームを上げ切って振動が収まってから、この秒数だけブレーキをかけて止まる。
     hub_recal_sec = getattr(config, "et_rally_gyro_hub_recal_sec", None)
@@ -211,7 +211,7 @@ def build_et_rally_phase(context, config):
     if drive_arm:
         # 走りながらアームを上げる(走りとアームを同じtickで進める)。両方終わったら次へ。
         driving = Parallel(name="et_rally drive + arm up", policy=ParallelPolicy.SuccessOnAll(synchronise=True))
-        driving.add_children([execute, make_arm_up_down("et_rally arm up while driving", ArmDirection.UP, config)])
+        driving.add_children([execute, make_arm_up_down("et_rally arm up while driving", ArmDirection.UP, config, from_bottom=True)])
         children.append(driving)
     else:
         children.append(execute)

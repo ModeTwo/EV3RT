@@ -31,8 +31,18 @@ class EtRallyArmUpDown(Behaviour):
     TIMEOUT_SEC = 4.0
     TRAIL_TICKS = 12   # ログに出す、止める直前の1tickごとの動き
 
-    def __init__(self, name: str, direction, stop_ticks: int = 3, power: float = 35.0, slow_deg=None) -> None:
+    # 2026-11-11: 止める角度の手前この角度から、出力を SLOW_POWER まで下げる(上がりきるときの当たりを弱める)
+    SLOW_ZONE_DEG = 40.0
+    SLOW_POWER = 20.0
+
+    def __init__(self, name: str, direction, stop_ticks: int = 3, power: float = 35.0, slow_deg=None,
+                 max_travel_deg=None) -> None:
         super().__init__(name)
+        # 2026-11-11: 一番下から上げるときだけ使う、止める角度(下から上まで約270°)。出力25以上では上がりきったあとも
+        # ギアが滑って1tickに2〜4°ずつ回り続け(カチカチ鳴る)、「遅くなったら止める」が働かず4秒まで押し続けた。
+        # この角度だけ回したら止める。None なら従来どおり。
+        self.max_travel_deg = None if max_travel_deg is None else abs(float(max_travel_deg))
+        self.slowed = False
         self.direction = direction
         self.stop_ticks = max(1, int(stop_ticks))
         self.power = abs(float(power))
@@ -47,6 +57,7 @@ class EtRallyArmUpDown(Behaviour):
             self.running = True
             self.start_time = now
             self.start_degree = self.prev_degree = runtime.arm_motor.get_count()
+            self.slowed = False
             self.ticks = 0
             self.peak = 0.0
             self.slow = 0
@@ -71,13 +82,22 @@ class EtRallyArmUpDown(Behaviour):
             # それを一番速い動きとしたため、ふつうに動いている(5度/tick)のに遅いと判定して止まった。
             self.peak = max(self.peak, delta)
         timed_out = now - self.start_time > self.TIMEOUT_SEC
-        if self.slow >= self.stop_ticks or timed_out:
+        reached = False
+        if self.max_travel_deg is not None:
+            moved = abs(cur - self.start_degree)
+            if moved >= self.max_travel_deg:
+                reached = True
+            elif not self.slowed and moved >= self.max_travel_deg - self.SLOW_ZONE_DEG and self.power > self.SLOW_POWER:
+                self.slowed = True
+                runtime.arm_motor.set_power(int(round(self.SLOW_POWER)) * int(self.direction))
+        if self.slow >= self.stop_ticks or timed_out or reached:
             runtime.arm_motor.set_power(0)
             runtime.arm_motor.set_brake(True)
             self.logger.info(
                 "%+06d %s.position set to %d (moved %d in %.2fs, ticks=%d, peak=%d deg/tick%s) last=%s" % (
                     runtime.plotter.get_distance(), self.__class__.__name__, cur, cur - self.start_degree,
-                    now - self.start_time, self.ticks, self.peak, ", TIMEOUT" if timed_out else "",
+                    now - self.start_time, self.ticks, self.peak,
+                    ", TIMEOUT" if timed_out else (", travel %.0f reached" % self.max_travel_deg if reached else ""),
                     ",".join("%d" % d for d in self.trail)))
             return Status.SUCCESS
         return Status.RUNNING
@@ -141,11 +161,13 @@ def arm_up_before_touch(config):
     return bool(getattr(config, "et_rally_arm_up_before_touch", None)) if config is not None else False
 
 
-def make_arm_up_down(name, direction, config):
-    """--rally-arm-stop-ticks があればこの版、なければ従来の ArmUpDownFull を返す。"""
+def make_arm_up_down(name, direction, config, from_bottom=False):
+    """--rally-arm-stop-ticks があればこの版、なければ従来の ArmUpDownFull を返す。
+    from_bottom: 一番下から上げる動き(ETラリーの開始時)。--rally-arm-travel-deg があれば、その角度で止める。"""
     stop_ticks = getattr(config, "et_rally_arm_stop_ticks", None) if config is not None else None
     if not stop_ticks:
         return ArmUpDownFull(name=name, direction=direction)
     power = getattr(config, "et_rally_arm_power", None)
+    travel = getattr(config, "et_rally_arm_travel_deg", None) if from_bottom else None
     return EtRallyArmUpDown(name, direction, stop_ticks=stop_ticks,
-                            power=ArmUpDownFull.ARM_SHIFT_PWM if power is None else power)
+                            power=ArmUpDownFull.ARM_SHIFT_PWM if power is None else power, max_travel_deg=travel)
