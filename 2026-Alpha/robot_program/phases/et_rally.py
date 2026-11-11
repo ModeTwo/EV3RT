@@ -25,6 +25,14 @@ from ..et_rally_course_pose import (EtRallyAnchorCoursePose, EtRallyCameraLogSta
                                     EtRallyCameraProcessStart, EtRallyCameraProcessStop, EtRallyReleaseCoursePose)
 
 
+class EtRallyArrivedAtStart(Behaviour):
+    """2026-11-11: スタート位置に着いた時刻をログに出す(本番に近い流れのテストで、ここから停止までを測る)。"""
+
+    def update(self):
+        self.logger.info("ARRIVED AT START: distance %d" % runtime.plotter.get_distance())
+        return Status.SUCCESS
+
+
 class SetGyroScaleDisabled(Behaviour):
     # DD-19較正用: EtRallyRunByGyro等が内部で無条件に呼ぶensure_scaled_gyro()を、
     # この工程の間だけ無効化する(--rally-gyro-tire-calibration off)。
@@ -132,6 +140,15 @@ def build_et_rally_phase(context, config):
             exposure=getattr(config, "et_rally_camera_exposure", None),
             calib_path=getattr(config, "et_rally_camera_calib_path", None),
             prestart=(getattr(config, "mission_mode", None) == "rally-drive"), gates=gates))
+    # 2026-11-11: 本番に近い流れのテスト。スタート位置の手前に置いてタッチし、この距離だけ進んでスタート位置に着いてから、
+    # ジャイロの測り直し・スタートの取り込みをして走り出す(本番は前の種目からスタート位置へ来て、タッチなしで始まる)。
+    pre_move_mm = getattr(config, "et_rally_pre_move_mm", None)
+    if pre_move_mm:
+        from ..behaviours.et_rally_path_segment import EtRallyPathSegment
+        children.append(EtRallyPathSegment(
+            name="et_rally move to start", kind="line", end_heading_deg=0.0, length_mm=float(pre_move_mm), power=40,
+            pid_p=4.0, pid_i=0.6, pid_d=0.06, stop=True))
+        children.append(EtRallyArrivedAtStart("et_rally arrived at start"))
     # 2026-11-06: 計画から見て間に合うなら、アームは走りながら上げる(et_rally_arm.arm_while_driving)。
     drive_arm, drive_arm_reason = arm_while_driving(config)
     if arm_up_before_touch(config):

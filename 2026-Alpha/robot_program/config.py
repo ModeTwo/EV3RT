@@ -219,6 +219,8 @@ class RaceConfig:
     et_rally_camera_exposure: Optional[int] = None
     # 2026-11-11: ETラリー開始時にアームを一番下から上げるとき、この角度だけ回したら止める(None=従来の止め方だけ)
     et_rally_arm_travel_deg: Optional[float] = None
+    # 2026-11-11: タッチのあと、この距離だけ進んでスタート位置に着いてから測り直し・取り込みをする(本番に近い流れのテスト)
+    et_rally_pre_move_mm: Optional[float] = None
     # 2026-11-10: 走行中のカメラの補正 (位置の割合, 向きの割合)。None=使わない(et_rally_camera_correct.py、試作)
     et_rally_camera_correct: Optional[tuple] = None
     et_rally_arm_up_sec: Optional[float] = 3.0
