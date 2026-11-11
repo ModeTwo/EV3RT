@@ -349,8 +349,13 @@ class DeferredStrategySequence(Sequence):
         try:
             # 2026-11-06: スタートでカメラから測った位置がずれていれば、最初のつなぎを引き直す(et_rally_start_pose.py)。
             # 予定がなければ計画のまま。
+            plan_steps = self._loader()
+            if extra_kwargs.get("path_carry_error"):
+                # 2026-11-11: 止まったあとの走り出しで計画とのずれを引き継ぐため、各ステップの計画のコース上の姿勢を入れる
+                # (引き直しで差し替わる最初のつなぎには入らない。そこはスタートの取り込みが受け持つ)。
+                et_rally_start_pose.annotate_plan_course(plan_steps)
             nodes = steps_from_strategy(
-                et_rally_start_pose.apply_pending_rejoin(self._loader(), self.logger),
+                et_rally_start_pose.apply_pending_rejoin(plan_steps, self.logger),
                 initial_heading_deg=self._initial_heading_deg,
                 turn_method=self._turn_method, compensation_enabled=self._compensation_enabled,
                 **extra_kwargs)
@@ -412,6 +417,7 @@ _STRATEGY_KWARGS_FROM_CONFIG = (
     ("path_line_pid_d", "et_rally_path_line_pid_d"),
     ("path_line_boost_power", "et_rally_path_line_boost_power"),
     ("path_line_boost_sec", "et_rally_path_line_boost_sec"),
+    ("path_carry_error", "et_rally_path_carry_error"),
 )
 
 
@@ -638,6 +644,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         path_line_pid_d=None,
                         path_line_boost_power=None,
                         path_line_boost_sec=None,
+                        # 2026-11-11: 止まったあとの走り出しで、コース上の今の位置(カメラで直したもの)と計画の位置の差を引き継ぐ。
+                        path_carry_error=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -677,6 +685,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             "target_heading_deg": _finite_number(step.get("target_heading_deg"), "target_heading_deg"),
             "label": step.get("label"),
         }
+        if "_plan_course" in step:
+            # 2026-11-11: 計画のコース上の姿勢(annotate_plan_course)。止まったあとの走り出しでずれを引き継ぐのに使う。
+            checked["_plan_course"] = step["_plan_course"]
         if step_type in ("move", "arc"):
             # 2026-11-01: 後退(reverse)と、止まらずに次へ続ける(stop=False)の指定。
             # どちらかが計画にあるとき(またはarcがあるとき)だけ、EtRallyPathSegmentで走る。
@@ -858,6 +869,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 line_pid_p=path_line_pid_p, line_pid_d=path_line_pid_d,
                 line_boost_power=path_line_boost_power,
                 line_boost_sec=0.0 if path_line_boost_sec is None else path_line_boost_sec,
+                plan_start=step.get("_plan_course") if path_carry_error else None,
             ))
             if pause_after_move:
                 nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),

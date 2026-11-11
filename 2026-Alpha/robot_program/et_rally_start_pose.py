@@ -557,6 +557,45 @@ def rejoin_steps(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
 
 # ---------------- 走り出しへの取り込み(状態) ----------------
 _measured = None          # EtRallyStartPoseCapture の結果 dict(pose=..., frames=..., ...)
+def annotate_plan_course(steps):
+    """2026-11-11: 計画の各ステップの始めの、コース上の計画の姿勢 (x, y, コースの向き度) を step["_plan_course"] に入れる
+    (計画のスタート START_MM・向き START_HEADING_DEG から、計画どおりに走ったとしてたどる)。
+    止まったあとの走り出しで、コース上の今の位置(カメラで直したもの)と計画の位置の差を区間に引き継ぐのに使う
+    (et_rally_path_segment の carry_error)。座標・向きは et_rally_course_pose と同じ(左回りが+、コースの向き = 180 − ジャイロの目標)。
+    steps をそのまま返す。"""
+    x, y, h = START_MM[0], START_MM[1], START_HEADING_DEG
+    for st in steps:
+        t = st.get("type")
+        st["_plan_course"] = (x, y, h)
+        if t == "turn":
+            h = START_HEADING_DEG - float(st["target_heading_deg"])
+        elif t == "move":
+            hh = START_HEADING_DEG - float(st["target_heading_deg"])
+            th = math.radians(hh + (180.0 if st.get("reverse") else 0.0))
+            L = float(st["distance_mm"])
+            x += L * math.cos(th)
+            y += L * math.sin(th)
+            h = hh
+        elif t == "arc":
+            sw = -float(st["sweep_deg"])
+            r = float(st["radius_mm"])
+            sg = 1.0 if sw > 0 else -1.0
+            th0 = math.radians(h + (180.0 if st.get("reverse") else 0.0))
+            cx, cy = x - sg * r * math.sin(th0), y + sg * r * math.cos(th0)
+            th1 = th0 + math.radians(sw)
+            x, y = cx + sg * r * math.sin(th1), cy - sg * r * math.cos(th1)
+            h += sw
+    return steps
+
+
+def plan_offset_in_segment(plan_pose, reverse, actual_xy):
+    """コース上の今の位置 actual_xy と、計画の区間の始めの姿勢 plan_pose の差を、区間の自分の位置の形 (前, 右) mm にする
+    (前 = 計画の始めの進む向き。後退なら車体の後ろ向き。右 = 進む向きの右)。"""
+    a = math.radians(plan_pose[2] + (180.0 if reverse else 0.0))
+    dx, dy = actual_xy[0] - plan_pose[0], actual_xy[1] - plan_pose[1]
+    return dx * math.cos(a) + dy * math.sin(a), dx * math.sin(a) - dy * math.cos(a)
+
+
 _pending_rejoin = None    # EtRallyApplyStartPose が引き直しを決めたときの実際の姿勢 (x, y, 向き度)
 _applied = None           # EtRallyApplyStartPose が取り込んだ姿勢(コース上の位置の走り出しに使う)
 

@@ -35,9 +35,16 @@ def _nd(a):
 class CameraCorrector:
     """走行中の補正の中身(Behaviour から呼ぶ。机上で記録を流して試せるように、木から切り離してある)。"""
 
+    # 2026-11-11: far_confirm 枚が続けて(FAR_WINDOW_SEC 秒以内)互いに FAR_AGREE_MM 以内の同じずれに見えたら、
+    # max_pos_mm を超えていても本当のずれとして受け入れる(FAR_ACCEPT_MAX_MM までは)。切り返しの多い配置37で、ずれが
+    # 40mmを超えたあと補正が止まり(1回の走りで88枚を捨てた)、たまる一方になっていたため。
+    FAR_AGREE_MM = 15.0
+    FAR_WINDOW_SEC = 2.0
+    FAR_ACCEPT_MAX_MM = 100.0
+
     def __init__(self, gain_pos=0.3, gain_head=0.2, lag_sec=0.0, max_rate_deg=60.0, max_resid_mm=8.0,
                  max_pos_mm=40.0, max_head_deg=3.0, min_items=2, mirror=False,
-                 at=None, apply=None, logger=None):
+                 at=None, apply=None, logger=None, far_confirm=0):
         self.gain_pos = float(gain_pos)
         self.gain_head = float(gain_head)
         self.lag_sec = float(lag_sec)
@@ -50,7 +57,9 @@ class CameraCorrector:
         self.at = at            # at(t) -> (t, x, y, 向き, 走った距離) か None
         self.apply = apply      # apply(dx, dy, dh): コースの座標で、思っている位置・向きに足す量
         self.logger = logger
-        self.counts = dict(seen=0, used=0, rate=0, items=0, resid=0, far=0, nopose=0, not_line=0)
+        self.far_confirm = int(far_confirm or 0)
+        self.recent_far = []
+        self.counts = dict(seen=0, used=0, rate=0, items=0, resid=0, far=0, far_ok=0, nopose=0, not_line=0)
         self.total = [0.0, 0.0, 0.0]
 
     def process(self, ev):
@@ -76,16 +85,40 @@ class CameraCorrector:
             return None
         ex, ey = r["pose"][0] - p[1], r["pose"][1] - p[2]
         eh = _nd(r["pose"][2] - p[3])
+        far_ok = False
         if math.hypot(ex, ey) > self.max_pos_mm or abs(eh) > self.max_head_deg:
-            self.counts["far"] += 1
-            return None
+            if not self._confirm_far(t, ex, ey, eh):
+                self.counts["far"] += 1
+                return None
+            far_ok = True
+        else:
+            self.recent_far = []
         dx, dy, dh = self.gain_pos * ex, self.gain_pos * ey, self.gain_head * eh
         if self.apply is not None and self.apply(dx, dy, dh) is False:
             self.counts["not_line"] += 1
             return None
         self.counts["used"] += 1
+        if far_ok:
+            self.counts["far_ok"] += 1
+            self.recent_far = []
         self.total = [self.total[0] + dx, self.total[1] + dy, self.total[2] + dh]
         return dx, dy, dh, (ex, ey, eh, r["n_dots"], r["n_markers"], r["resid_mm"])
+
+
+def _confirm_far_impl(self, t, ex, ey, eh):
+    """大きいずれ (ex, ey) が、直前の大きいずれと続けて同じなら True(受け入れる)。"""
+    if self.far_confirm <= 0 or abs(eh) > self.max_head_deg or math.hypot(ex, ey) > self.FAR_ACCEPT_MAX_MM:
+        return False
+    self.recent_far = [f for f in self.recent_far if t - f[0] <= self.FAR_WINDOW_SEC] + [(t, ex, ey)]
+    if len(self.recent_far) < self.far_confirm:
+        return False
+    last = self.recent_far[-self.far_confirm:]
+    mx = sum(f[1] for f in last) / len(last)
+    my = sum(f[2] for f in last) / len(last)
+    return all(math.hypot(f[1] - mx, f[2] - my) <= self.FAR_AGREE_MM for f in last)
+
+
+CameraCorrector._confirm_far = _confirm_far_impl
 
 
 def apply_to_robot(dx, dy, dh):
@@ -109,9 +142,10 @@ def apply_to_robot(dx, dy, dh):
 class EtRallyCameraCorrect(Behaviour):
     """走行(execute)と並べて置く。毎tick、子プロセスから届いた dets を処理する。終わらない(並びの相手が終わったら止まる)。"""
 
-    def __init__(self, name, gain_pos=0.5, gain_head=0.3, lag_sec=0.0):
+    def __init__(self, name, gain_pos=0.5, gain_head=0.3, lag_sec=0.0, far_confirm=0):
         super().__init__(name)
         self.gain_pos, self.gain_head, self.lag_sec = gain_pos, gain_head, lag_sec
+        self.far_confirm = int(far_confirm or 0)
         self.proc = None
         self.corrector = None
         self.ages = []
@@ -123,14 +157,14 @@ class EtRallyCameraCorrect(Behaviour):
         self.proc = et_rally_camera_proc.current()
         self.corrector = CameraCorrector(self.gain_pos, self.gain_head, self.lag_sec,
                                          mirror=getattr(runtime, "course", -1) == 1, at=cp.at, apply=apply_to_robot,
-                                         logger=self.logger)
+                                         logger=self.logger, far_confirm=self.far_confirm)
         if self.proc is None:
             self.logger.warning("camera correct: camera process not running, no correction")
             return
         self.proc.poll()
         self.proc.send("track 1")
-        self.logger.info("camera correct: started gain_pos=%.2f gain_head=%.2f lag=%.3fs" % (
-            self.gain_pos, self.gain_head, self.lag_sec))
+        self.logger.info("camera correct: started gain_pos=%.2f gain_head=%.2f lag=%.3fs far_confirm=%d" % (
+            self.gain_pos, self.gain_head, self.lag_sec, self.far_confirm))
 
     def update(self):
         if self.proc is None:

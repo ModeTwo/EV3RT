@@ -1454,6 +1454,12 @@ def _run_main(argv, startup_cleanup):
                               '50 mm or longer (default 16; shorter ones use --rally-move-short-lead).'))
     parser.add_argument('--rally-path-ff-scale', type=float, default=None,
                         help='Multiply the arc left/right feedforward (half tread / radius) by this (default 1.0).')
+    parser.add_argument('--rally-path-carry-error', choices=('on', 'off'), default=None,
+                        help=('After each stop, start the next path segment from the course pose (camera-corrected) instead of '
+                              'assuming the robot is exactly on the plan, so known errors are not forgotten (default off).'))
+    parser.add_argument('--rally-camera-far-confirm', type=float, default=None,
+                        help=('Running camera correction: accept a difference larger than 40 mm when this many consecutive images '
+                              'agree within 15 mm (up to 100 mm). Default 0 = always reject.'))
     parser.add_argument('--rally-path-line-pid-p', type=float, default=None,
                         help='Heading PID P used only on straight path segments (default 3; 4 = old behaviour).')
     parser.add_argument('--rally-path-line-pid-d', type=float, default=None,
@@ -1756,6 +1762,10 @@ def _run_main(argv, startup_cleanup):
         if not 0.0 <= args.rally_path_lat_max_deg <= 30.0:
             parser.error('--rally-path-lat-max-deg must be between 0 and 30')
         mission_config = dataclasses.replace(mission_config, et_rally_path_lat_max_deg=args.rally_path_lat_max_deg)
+    if args.rally_path_carry_error is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-carry-error requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_carry_error=(args.rally_path_carry_error == 'on'))
     if args.rally_path_line_boost is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-path-line-boost requires --mission rally-drive, bottle-rally or rally-sumo')
@@ -1773,6 +1783,7 @@ def _run_main(argv, startup_cleanup):
                                                  et_rally_path_line_boost_sec=boost_sec)
     for opt, attr, lo, hi in (('--rally-path-arc-pid-p', 'rally_path_arc_pid_p', 0.0, 20.0),
                               ('--rally-path-line-pid-p', 'rally_path_line_pid_p', 0.0, 20.0),
+                              ('--rally-camera-far-confirm', 'rally_camera_far_confirm', 0.0, 10.0),
                               ('--rally-path-line-pid-d', 'rally_path_line_pid_d', 0.0, 2.0),
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),

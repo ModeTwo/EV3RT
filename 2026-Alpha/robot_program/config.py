@@ -205,6 +205,12 @@ class RaceConfig:
     et_rally_path_line_pid_d: Optional[float] = 0.12
     et_rally_path_line_boost_power: Optional[float] = 100.0
     et_rally_path_line_boost_sec: Optional[float] = 0.3
+    # 2026-11-11: 止まったあとの走り出しで、コース上の今の位置(カメラで直したもの)と計画の位置の差を引き継ぐ(Noneなら使わない)。
+    # 切り返しの多い配置37で、止まるたびにずれを忘れて1周ごとに約1cmずつたまり、6周目に青ゲートに当たったため。
+    et_rally_path_carry_error: Optional[bool] = None
+    # 2026-11-11: 走行中の補正で、差が40mmを超える画像は取り違えとして捨てるが、この枚数続けて同じずれ(互いに15mm以内)に
+    # 見えたら本当のずれとして受け入れる(Noneか0なら従来どおり捨てる)。
+    et_rally_camera_far_confirm: Optional[float] = None
     # 2026-11-03: アームの止め方(EtRallyArmUpDown)。動きの遅いtickがこの回数連続したら止める(Noneなら従来の ArmUpDownFull)と、押す出力(Noneなら35)。
     et_rally_arm_stop_ticks: Optional[float] = 3.0
     et_rally_arm_power: Optional[float] = 20.0

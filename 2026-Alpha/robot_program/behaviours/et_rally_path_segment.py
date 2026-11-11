@@ -34,6 +34,11 @@
     ためて、区間の終わりに1行で出す(0なら出さない=従来どおり)。円弧の入り口で内側の車輪が実際にいつ遅くなるかを見るため。
   - ff_scale: 円弧の左右の差(フィードフォワード)の倍率(1.0なら従来どおり 半輪距/半径)。
   - line_pid_p / line_pid_d: 直進の区間だけ使う向きのPIDのP・D(Noneなら pid_p / pid_d。2026-11-11、試す用)。
+  - plan_start: 計画のこの区間の始めの、コース上の姿勢 (x, y, コースの向き)(et_rally_start_pose.annotate_plan_course)。
+    これがあり、前から続かない区間(止まったあとの走り出し)なら、コース上の今の位置(et_rally_course_pose、カメラで直したもの)との差を
+    自分の位置の初期値にし、前後の差は走る距離に入れる(2026-11-11: 止まるたびに「計画どおりの点にいる」とみなして数え直していたため、
+    切り返しの多い配置37で、カメラで分かったずれが引き継がれず、1周ごとに約1cmずつたまって6周目に青ゲートに当たった)。
+    差が CARRY_MAX_MM を超えるときは使わない(位置の取り違えのおそれ)。
   - line_boost_power / line_boost_sec: 直進の始めの line_boost_sec 秒だけ、出力を line_boost_power まで上げる
     (円弧のあと 150〜270mm/s から巡航の約420mm/s まで約0.3秒かかり、直進1本あたり約0.1秒遅れていた。2026-11-11、試す用)。
     長さ BOOST_MIN_LEN_MM 以上の前進の直進で、円弧のあと・止まった状態からのときだけ。終わりの BOOST_END_MARGIN_MM と、
@@ -67,6 +72,8 @@ STOP_STABLE_TICKS = 2
 STOP_MAX_TICKS = 25
 # 2026-11-11: 直進の始めの加速の上乗せをする直進の長さの下限と、終わりの手前で上乗せをやめる距離(mm)。
 BOOST_MIN_LEN_MM = 150.0
+# 2026-11-11: 止まったあとの走り出しで引き継ぐ、計画とのずれの上限(mm)。これを超えたら引き継がない。
+CARRY_MAX_MM = 80.0
 BOOST_END_MARGIN_MM = 100.0
 
 # 止まらずに続く区間の受け渡し(次の区間の距離の起点と、引き継ぐPID)。
@@ -159,7 +166,8 @@ class EtRallyPathSegment(Behaviour):
                  arc_speed_scale: float = 1.0, lat_gain: float = 0.0, lat_max_deg: float = 8.0,
                  arc_pid_p=None, ramp_mm: float = 0.0, inner_min_power=None, ramp_sec: float = 0.0,
                  wheel_log_ticks: int = 0, ff_scale: float = 1.0,
-                 line_pid_p=None, line_pid_d=None, line_boost_power=None, line_boost_sec: float = 0.0) -> None:
+                 line_pid_p=None, line_pid_d=None, line_boost_power=None, line_boost_sec: float = 0.0,
+                 plan_start=None) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -208,6 +216,7 @@ class EtRallyPathSegment(Behaviour):
         self.line_pid_d = line_pid_d
         self.line_boost_power = line_boost_power
         self.line_boost_sec = max(0.0, float(line_boost_sec or 0.0))
+        self.plan_start = plan_start
         self.prev_shape = None
         self.running = False
         self.stopping = False
@@ -336,13 +345,20 @@ class EtRallyPathSegment(Behaviour):
         # 止まらずに続く区間では、前の区間から引き継ぐ(計画の線は区間をまたいでつながっているため)。
         self.pos_prev_dist = now
         self.prev_heading = _heading()
+        carried = None
         if self.continue_from_prev and _chain_lat is not None:
             self.pos_x, self.pos_y, self.pos_prev_dist, self.prev_heading = _chain_lat
         elif _start_position is not None:
             self.pos_x, self.pos_y = _start_position
             self.logger.info("start position from camera: front %+.1f right %+.1f mm" % _start_position)
+        elif self.plan_start is not None and not self.continue_from_prev:
+            carried = self._carry_from_course()
+            self.pos_x, self.pos_y = carried if carried is not None else (0.0, 0.0)
         else:
             self.pos_x, self.pos_y = 0.0, 0.0
+        if carried is not None:
+            # 前後の差: 計画より front mm 先にいるなら、その分だけ短く走る(走った距離の起点を前にずらす)。
+            self.orig_dist = now - carried[0]
         _start_position = None
         _chain_lat = None
         self._arc_angle = None
@@ -364,6 +380,20 @@ class EtRallyPathSegment(Behaviour):
             self.start_heading, self.end_heading, self.length_mm, self.radius_mm, self.stop_at_end,
             self.continue_from_prev, self.remaining_after_mm,
             runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text()))
+
+    def _carry_from_course(self):
+        """コース上の今の位置と計画の始めの位置の差 (前, 右) mm。使えなければ None(理由はログ)。"""
+        from .. import et_rally_course_pose as cp
+        from .. import et_rally_start_pose as sp
+        cur = cp.current()
+        if cur is None:
+            return None
+        front, right = sp.plan_offset_in_segment(self.plan_start, self.reverse, (cur[1], cur[2]))
+        if math.hypot(front, right) > CARRY_MAX_MM:
+            self.logger.warning("carry error: offset from plan (front %+.1f right %+.1f mm) too large, not used" % (front, right))
+            return None
+        self.logger.info("carry error: start from course pose, offset from plan front %+.1f right %+.1f mm" % (front, right))
+        return front, right
 
     def _finish_log(self, now, tag=""):
         current = _heading()
