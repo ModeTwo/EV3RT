@@ -90,6 +90,10 @@ PARAMS = dict(
     via_always=False, via_budget_sec=8.0,
     # その場の旋回の中心が車軸からどれだけ後ろか(cm)。10/31の左右同期の旋回で約0.5cm(測り直し予定)
     pivot_back_cm=0.5,   # 2段目(遠回りで速くなるか)の時間の上限。超えたら1段目の経路を使う
+    # 2026-11-11(ユーザーの指示): ゲートを抜けたとみなす距離(cm)。車体の後ろの端(後退なら前の端)の角が、ゲートの2つの点の
+    # 中心を結ぶ線を、線に垂直にこの距離だけ越えるまで直進で抜ける。規則は「ロボットが完全にゲートを通過すること」で、
+    # ゲートには幅があり置き方にもむらがあるため、灰色の点の端(半径2.2cm、直径約44mm)から2cm = 4.2cm にした(以前は2.0cm)。
+    pass_cm=4.2,
 )
 if os.environ.get('HR_PARAMS'):
     PARAMS.update(json.load(open(os.environ['HR_PARAMS'], encoding='utf-8')))
@@ -103,7 +107,7 @@ globals().update({k.upper(): v for k, v in PARAMS.items()})
 
 P = 24.64
 POST_R, ARM = 1.0, 4.0
-PM, CLR = 2.0, 0.5
+PM, CLR = PASS_CM, 0.5   # PM: 抜けの距離(上の pass_cm)。CLR: 入りで先の端の角が線の手前に来る距離
 INF = 1e9
 TAU = 2 * math.pi
 START = np.array([2 * 2 * P - (4 * P + 17.8), 3.5 * P]); START_H = 0.0

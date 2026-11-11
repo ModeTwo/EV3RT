@@ -33,6 +33,28 @@ class EtRallyArrivedAtStart(Behaviour):
         return Status.SUCCESS
 
 
+class EtRallyBatteryLog(Behaviour):
+    """2026-11-11: 電池の電圧・電流をログに出す(power_log.RALLY_BATT)。
+    mode: "begin"(ETラリーの最初、止まっている間。低ければ警告)/ "start"(走り出す直前。ここから走行中のまとめを取り直す)/
+    "end"(止まった直後。走行中の最低・平均とあわせて出す)。"""
+
+    def __init__(self, name, mode):
+        super().__init__(name)
+        self.mode = mode
+
+    def update(self):
+        from .. import power_log
+        if self.mode == "begin":
+            power_log.battery_snapshot("begin (still)", warn_low=True)
+        elif self.mode == "start":
+            power_log.battery_snapshot("drive start (still)", warn_low=True)
+            power_log.reset_battery_stats()
+        else:
+            power_log.battery_summary("drive")
+            power_log.battery_snapshot("drive end")
+        return Status.SUCCESS
+
+
 class SetGyroScaleDisabled(Behaviour):
     # DD-19較正用: EtRallyRunByGyro等が内部で無条件に呼ぶensure_scaled_gyro()を、
     # この工程の間だけ無効化する(--rally-gyro-tire-calibration off)。
@@ -101,7 +123,7 @@ def build_et_rally_phase(context, config):
     root = Sequence(name="et_rally", memory=True)
     # DD-19ベースライン計測用: Falseならジャイロ倍率補正・タイヤ径較正(DD-17)を適用しない。
     gyro_tire_calibration = getattr(config, "et_rally_gyro_tire_calibration_enabled", True)
-    children = []
+    children = [EtRallyBatteryLog("et_rally battery begin", "begin")]
     # 2026-10-29: 四捨五入前の向き・止まっている間のずれの差し引き(robot_program/et_rally_heading.py)。
     float_heading = bool(getattr(config, "et_rally_gyro_float_heading", None))
     drift_compensation = bool(getattr(config, "et_rally_gyro_drift_compensation", None))
@@ -219,6 +241,7 @@ def build_et_rally_phase(context, config):
     if camera_log_every:
         children.append(EtRallyCameraLogStart("et_rally camera log", every_n=camera_log_every,
                                               exposure=getattr(config, "et_rally_camera_exposure", None)))
+    children.append(EtRallyBatteryLog("et_rally battery drive start", "start"))
     execute = build_execute_strategy(context, config)
     if camera_correct and track_course:
         # 2026-11-10: 走りながらカメラで位置と向きを直す(試作)。走行が終わったら止める。
@@ -235,6 +258,7 @@ def build_et_rally_phase(context, config):
     # ET用の直進は、区間が連続するゲート通過中に止まらないよう終了時のブレーキを持たない。
     # 最後の区間の後は、ここで明示的に停止する(単体テストでは、この後は何も動かさないため必須)。
     children.append(StopNow(name="et_rally final stop"))
+    children.append(EtRallyBatteryLog("et_rally battery drive end", "end"))
     if camera_log_every or camera_correct:
         children.append(EtRallyCameraLogStop("et_rally camera log stop"))
     if track_course:
