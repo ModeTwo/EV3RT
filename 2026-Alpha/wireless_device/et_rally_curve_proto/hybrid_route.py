@@ -94,6 +94,12 @@ PARAMS = dict(
     # 中心を結ぶ線を、線に垂直にこの距離だけ越えるまで直進で抜ける。規則は「ロボットが完全にゲートを通過すること」で、
     # ゲートには幅があり置き方にもむらがあるため、灰色の点の端(半径2.2cm、直径約44mm)から2cm = 4.2cm にした(以前は2.0cm)。
     pass_cm=4.2,
+    # 2026-11-11(ユーザーの実測): ガレージエリア。今のスタート地点から、フィールドと逆向き(+x)に [x0, x1] cm、
+    # Y5の方向(-y)に [y0, y1] cm の長方形。goal_at='garage' のとき、止まる向き(goal_headings)ごとに、車体の箱
+    # (車軸から前 front・後ろ rear、幅 half_width×2)がこの長方形の真ん中に来るように車軸の位置を決める。
+    # 箱が長方形の内側に garage_margin_cm 以上の余裕で入らない向きは使わない(24.5×30cmなので、車体25.4cmは
+    # フィールドと平行な向き ±90 でしか入らない)。空なら以前の1点(スタートから +61, -115)。
+    garage_area=[45.5, 70.0, 100.0, 130.0], garage_margin_cm=1.0,
 )
 if os.environ.get('HR_PARAMS'):
     PARAMS.update(json.load(open(os.environ['HR_PARAMS'], encoding='utf-8')))
@@ -116,8 +122,26 @@ if START_AT == 'goal':
     START = GOAL.copy(); START_H = 180.0
 elif START_AT == 'goal_mid':
     START = np.array([GOAL[0], 2.5 * P]); START_H = 180.0
+GARAGE_BOX = None
 if GOAL_AT == 'garage':
-    GOAL = np.array([2 * 2 * P - (0 * P - 14.9) + 61.0, 3.5 * P - 115.0]); GOAL_H = float(GOAL_HEADING)
+    _s0 = np.array([2 * 2 * P - (0 * P - 14.9), 3.5 * P])   # 今のスタート地点(新スタート)
+    GOAL = np.array([_s0[0] + 61.0, _s0[1] - 115.0]); GOAL_H = float(GOAL_HEADING)
+    if GARAGE_AREA:
+        _a = [float(v) for v in GARAGE_AREA]
+        GARAGE_BOX = (_s0[0] + _a[0], _s0[0] + _a[1], _s0[1] - _a[3], _s0[1] - _a[2])   # (x0, x1, y0, y1)
+
+
+def garage_goal(h):
+    """向き h(度)で止まるとき、車体の箱がガレージの真ん中に来る車軸の位置。入らなければ None。"""
+    x0, x1, y0, y1 = GARAGE_BOX
+    c, sn = abs(math.cos(math.radians(h))), abs(math.sin(math.radians(h)))
+    half_len = (FRONT + REAR) / 2.0
+    ex, ey = c * half_len + sn * HALF_WIDTH, sn * half_len + c * HALF_WIDTH
+    if ex > (x1 - x0) / 2.0 - GARAGE_MARGIN_CM + 1e-9 or ey > (y1 - y0) / 2.0 - GARAGE_MARGIN_CM + 1e-9:
+        return None
+    off = (FRONT - REAR) / 2.0   # 車軸から見た車体の真ん中(前が+)
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    return np.array([cx - off * math.cos(math.radians(h)), cy - off * math.sin(math.radians(h))])
 _mx = lambda x: 4 * P - x
 KEEPOUT = [(_mx(INF), _mx(-17.0), -INF, -37.0),
            (_mx(INF), _mx(4 * P + 17.8 + 14.0), -INF, INF),
@@ -1549,6 +1573,13 @@ def main():
                 v[key] = idx[k]
     start_pose = [(START, START_H, 0)]
     goal_pose = [(GOAL, float(h), 0) for h in GOAL_HEADINGS] if GOAL_HEADINGS else [(GOAL, GOAL_H, 0)]
+    if GARAGE_BOX is not None:
+        goal_pose = [(garage_goal(float(h)), float(h), 0) for h in (GOAL_HEADINGS or [GOAL_H])
+                     if garage_goal(float(h)) is not None]
+        if not goal_pose:
+            raise SystemExit('garage: the body does not fit in the garage area in any of goal_headings')
+        print('garage box x %.1f..%.1f y %.1f..%.1f, goals %s' % (GARAGE_BOX + (
+            [(round(float(g[0][0]), 1), round(float(g[0][1]), 1), g[1]) for g in goal_pose],)), flush=True)
     T = {('START', 'red'): Table(start_pose, starts['red'], is_start=True, via_first=True),
          ('red', 'blue'): Table(ends['red'], starts['blue']),
          ('blue', 'yellow'): Table(ends['blue'], starts['yellow']),
