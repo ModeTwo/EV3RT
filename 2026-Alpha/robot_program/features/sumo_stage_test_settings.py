@@ -9,8 +9,8 @@ from typing import Optional
 class SumoStageTestSettings:
     # 実験条件をここに記入。押し出し距離は捕捉後の追加距離。
     push_distance_mm: Optional[float] = 300.0
-    approach_distance_mm: float = 1000.0
-    approach_power: int = 80
+    approach_distance_mm: float = 950.0
+    approach_power: int = 100
     capture_max_mm: float = 500.0
     push_power: int = 80
     turn_power: int = 50

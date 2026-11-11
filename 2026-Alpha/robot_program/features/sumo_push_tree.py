@@ -114,6 +114,9 @@ def build_sumo_push_tree(context, config):
     from ..runtime import runtime
 
     engine = build_sumo_push_route(context, config)
+    engine.immediate_rally_handoff = (
+        config.mission_mode in ("sumo-stage-all", "bottle-sumo")
+    )
     # 単体は開始向きを0°、結合で利用するときはスタート基準で
     # LEFT=-90° / RIGHT=+90°。相撲の床面方位登録とは別の値。
     if config.mission_mode in ("sumo-stage-all", "sumo-stage-push"):

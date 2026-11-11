@@ -16,6 +16,7 @@ from .features.to_hint_route import build_tantou_tree
 from .phases.bottle_and_rally_preparation import build_bottle_delivery_final_phase
 from .phases.et_rally import build_et_rally_phase
 from .phases.et_sumo import build_et_sumo_phase, build_sumo_after_delivery
+from .features.sumo_rally_transition import build_move_sumo_to_rally_start
 from .phases.finish import build_finish_phase
 
 
@@ -95,6 +96,7 @@ def build_later_integration_children(context, config):
         nodes.append(ObservedStage('BOTTLE', build_bottle_delivery_final_phase(
             context, config), context, lambda c: c.bottle_delivered and c.rally_ready))
         nodes.append(build_sumo_after_delivery(context, config))
+        nodes.append(build_move_sumo_to_rally_start(context, config))
         nodes.append(StopNow(name='Integration range complete brake'))
         return nodes
     if mode in ('bottle-rally', 'rally-sumo'):

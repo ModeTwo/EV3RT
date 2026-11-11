@@ -85,6 +85,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.capture_leg_mm = None
         self.push_leg_mm = None
         self.capture_turn_performed = False
+        self.context.sumo.rally_avoidance_performed = None
         self.capture_candidate_at = None
         self.capture_candidate_progress = None
         self.nc_evidence = CaptureEvidence(self.push_settings)
@@ -95,6 +96,18 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     def _start_drive(self, now):
         # 最初の直進で指示する絶対目標を床面方位に変換して保持する。
         # 開始時の実姿勢ではなく、直進に使用する目標そのものを基準にする。
+        if self.continuous_entry:
+            if runtime.course not in (-1, 1):
+                raise ValueError("unsupported course for delivery-to-sumo")
+            self.approach_offset_from_reset_deg = -90.0 * runtime.course
+        if (
+            getattr(self, "delivery_green_on_right", False)
+            and runtime.course == 1
+        ):
+            from dataclasses import replace
+            self.push_settings = replace(
+                self.push_settings, green_bearing_deg=180.0
+            )
         ref = self.context.sumo.bearing_reference
         if ref.reset_gyro_deg is None:
             raise RuntimeError("sumo gyro reference is not registered")
@@ -120,7 +133,117 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.nc_heading = current_bearing(self.context)
         self.aligned_heading = self.nc_heading
         self.capture_encoder_origin = self._encoder_pair()
+        if self.catch_track is None or self.selected_capture_at is None:
+            return self._nc_fail("missing capture camera handoff")
+        self.capture_camera_heading = -runtime.course * self.catch_heading
+        self.capture_camera_last_at = self.selected_capture_at
+        self.capture_camera_next_at = 0.0
+        self.catch_last_frame = self.selected_frame_id
+        self.drive.target = self._capture_camera_target
         return Status.RUNNING
+
+    def _on_alignment_turn_limit(self, now, observation, target):
+        # Only this camera-guided capture route accepts incomplete alignment.
+        try:
+            values = (
+                float(observation["t"]),
+                float(observation["gyro_deg"]),
+                float(observation["candidate"]["cx"]),
+                float(target),
+            )
+            valid = (
+                all(math.isfinite(v) for v in values)
+                and observation.get("session") == self.session
+                and observation.get("confirmed")
+                and observation.get("track_id") is not None
+                and 0 <= values[2] < 320
+                and 0 <= now - values[0]
+                <= self.push_settings.capture_camera_max_age_sec
+            )
+        except (KeyError, TypeError, ValueError):
+            valid = False
+        if not valid:
+            return self._fail("invalid camera handoff at alignment turn limit")
+        self.context.sumo.bottle_aligned = False
+        self.context.sumo.camera_capture_bearing_deg = target
+        self.context.sumo.camera_capture_heading_deg = (
+            runtime.gyro_sensor.get_angle()
+        )
+        self.context.sumo.bottle_bearing_deg = target
+        self.observation_decision = "turn-limit-camera-handoff"
+        self.logger.info(
+            "SUMO_ALIGN TURN_LIMIT_CAMERA_HANDOFF turns=%d track=%s"
+            % (self.turns, self.selected_track_id)
+        )
+        self.catch_started = True
+        # Keep aligned_at unset: this route did not complete alignment.
+        self.catch_track = self.selected_track_id
+        return self._start_catch_drive()
+
+    def _capture_camera_target(self, distance_mm):
+        # Return an equivalent angle near the drive's unwrapped heading.
+        current = self.drive.continuous_heading
+        return current + delta(self.capture_camera_heading, current)
+
+    def _update_capture_camera(self):
+        now = time.monotonic()
+        settings = self.push_settings
+        observation = runtime.video.get_sumo_alignment_observation(self.session)
+        if (
+            observation is not None
+            and now >= self.capture_camera_next_at
+        ):
+            try:
+                frame = observation["frame_id"]
+                t = float(observation["t"])
+                gyro = float(observation["gyro_deg"])
+                cx = float(observation["candidate"]["cx"])
+                valid = (
+                    observation.get("session") == self.session
+                    and observation.get("confirmed")
+                    and self.catch_track is not None
+                    and observation.get("track_id") == self.catch_track
+                    and frame > self.catch_last_frame
+                    and all(math.isfinite(v) for v in (t, gyro, cx))
+                    and 0 <= cx < 320
+                    and 0 <= now - t <= settings.capture_camera_max_age_sec
+                    and t > self.capture_camera_last_at
+                )
+            except (KeyError, TypeError, ValueError):
+                valid = False
+            if valid:
+                current_gyro = float(runtime.gyro_sensor.get_angle())
+                if not math.isfinite(current_gyro):
+                    return self._nc_fail("invalid capture camera control gyro")
+                # Correct capture-time pixel error for rotation since capture.
+                error = (
+                    (cx - self.settings.target_cx)
+                    / self.settings.visual_px_per_degree
+                    - delta(current_gyro, gyro)
+                )
+                limit = settings.capture_camera_max_correction_deg
+                correction = max(-limit, min(limit, error))
+                desired = -runtime.course * (current_gyro + correction)
+                self.capture_camera_heading += (
+                    settings.capture_camera_smoothing_alpha
+                    * delta(desired, self.capture_camera_heading)
+                )
+                self.capture_camera_last_at = t
+                self.capture_camera_next_at = (
+                    now + settings.capture_camera_update_interval_sec
+                )
+                self.catch_last_frame = frame
+                self.catch_error = cx - self.settings.target_cx
+                self.catch_age = now - t
+                self.logger.info(
+                    "SUMO_RELATIVE CAPTURE_CAMERA frame=%s error=%.2f "
+                    "correction=%.2f target=%.2f"
+                    % (frame, error, correction, self.capture_camera_heading)
+                )
+        # Repeated frames never extend this capture-time based timeout.
+        if now - self.capture_camera_last_at > settings.capture_camera_loss_timeout_sec:
+            return self._nc_fail("capture camera target lost")
+        return None
 
     def _encoder_pair(self):
         left = float(runtime.left_motor.get_count())
@@ -174,6 +297,10 @@ class RelativeAlignAndPush(AlignAndCatchTest):
                 capture_candidate_at=self.capture_candidate_at,
                 capture_candidate_progress_mm=self.capture_candidate_progress,
                 requested_push_distance_mm=self.push_settings.push_distance_mm,
+                actual_push_distance_mm=getattr(
+                    self, "actual_push_distance_mm", None
+                ),
+                total_forward_target_mm=800.0,
                 power=self.push_settings.power,
                 capture_max_mm=self.push_settings.capture_max_mm,
                 turn_power=self.push_settings.turn_power,
@@ -210,6 +337,19 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     def _push(self, now):
         """押し直進を開始する。目標は引継ぎ時の実際の方位。"""
         self.phase = "NC_PUSH"
+                # 接近開始から押し出し完了までの合計前進距離を800mmにする
+        self.actual_push_distance_mm = max(
+            0.0,
+            800.0 - self.capture_leg_mm,
+        )
+
+        self.logger.info(
+            "SUMO_RELATIVE PUSH_DISTANCE "
+            "capture=%.1f target=%.1f total=%.1f"
+            % ( self.capture_leg_mm,
+                self.actual_push_distance_mm,
+                self.capture_leg_mm + self.actual_push_distance_mm,
+            )) 
         self.phase_started_at = now
         self.catch_origin = float(runtime.plotter.get_distance())
         self.push_encoder_origin = self._encoder_pair()
@@ -240,10 +380,12 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         return Status.RUNNING
 
     def _start_backoff(self, now):
-        """押し区間の実走距離を同じ方位で逆走する。"""
+        """押し出し完了後、同じ方位で150mm後退する。"""
         self._hold("NC_BACK", now)
         self.push_leg_mm = max(0.0, self._forward_mm_from(self.push_encoder_origin))
-        self.back_target_mm = self.push_leg_mm
+
+        # 押し出し距離に関係なく150mm後退する
+        self.back_target_mm = 150.0
         self.back_left_origin = float(runtime.left_motor.get_count())
         self.back_right_origin = float(runtime.right_motor.get_count())
         self.back_heading = current_bearing(self.context)
@@ -256,12 +398,12 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         )
         self.drive = BoundedBackoffRunByGyro(
             name="sumo reverse after push", target=target,
-            target_type=HeadingType.ABSOLUTE, power=-80,
+            target_type=HeadingType.ABSOLUTE, power=-75,
             pid_p=self.motion_settings.drive_pid_p,
             pid_i=self.motion_settings.drive_pid_i,
             pid_d=self.motion_settings.drive_pid_d,
         )
-        self.logger.info("SUMO_RELATIVE BACK_START segment=push distance=%.1f power=-80 bearing=%.2f" % (self.back_target_mm, self.back_heading))
+        self.logger.info("SUMO_RELATIVE BACK_START segment=push distance=%.1f power=-75 bearing=%.2f" % (self.back_target_mm, self.back_heading))
         return Status.RUNNING
 
     def _update_backoff(self, now):
@@ -274,9 +416,20 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.back_progress_mm = progress
         if progress >= self.back_target_mm:
             self.logger.info("SUMO_RELATIVE BACK_SEGMENT_COMPLETE phase=%s progress=%.1f target=%.1f" % (self.phase, progress, self.back_target_mm))
-            if self.phase == "NC_BACK":
-                return self._start_alignment_return_turn(now)
+            # 押し出し分の後退が完了したら、そのまま停止へ進む。
             self.logger.info("SUMO_RELATIVE BACK_COMPLETE progress=%.1f" % progress)
+            if getattr(self, "immediate_rally_handoff", False):
+                self.context.sumo.rally_avoidance_performed = (
+                    self.capture_turn_performed
+                )
+                self.nc_outcome = "push-and-backoff-complete"
+                # Request asynchronous recording close, then hand off now.
+                result = AlignSumoBottle._finish_recording(
+                    self, Status.SUCCESS, self.nc_outcome
+                )
+                if result == Status.RUNNING:
+                    return Status.SUCCESS
+                return result
             self._hold("NC_DONE", now)
             return Status.RUNNING
         if progress - self.back_progress_anchor >= self.catch_settings.stall_progress_mm:
@@ -354,7 +507,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             # Distance first: do not read/command another forward tick at the endpoint.
             if self.phase == "NC_CAPTURE" and progress >= push_settings.capture_max_mm:
                 return self._push_without_capture(now, progress)
-            if self.phase == "NC_PUSH" and progress >= push_settings.push_distance_mm:
+            if self.phase == "NC_PUSH" and progress >= self.actual_push_distance_mm:
                 return self._start_backoff(now)
             # None: この周期は未読取 / False: 範囲外 / True: 一回で成立。
             evidence = None
@@ -510,6 +663,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             tolerance=1.0,
         )
         self.phase = "NC_TURN"
+        self.capture_turn_performed = True
         self.phase_started_at = now
         return Status.RUNNING
 
@@ -527,12 +681,24 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         return Status.RUNNING
 
     def _update_post_push_recording(self, now):
-        """押し距離終了後は制動を維持し、1秒の録画を完了する。"""
+        """押し出し後に停止し、録画を終了する。"""
         self._brake()
+
         if now - self.phase_started_at < 1.0:
             return Status.RUNNING
-        self.nc_outcome = "specified-push-and-alignment-return-complete-outside-unconfirmed"
-        return AlignSumoBottle._finish_recording(self, Status.SUCCESS, self.nc_outcome)
+
+        # ET相撲で回避旋回したかどうかを③工程に渡す
+        self.context.sumo.rally_avoidance_performed = (
+            self.capture_turn_performed
+        )
+
+        self.nc_outcome = "push-and-backoff-complete"
+
+        return AlignSumoBottle._finish_recording(
+            self,
+            Status.SUCCESS,
+            self.nc_outcome,
+        )
 
     def _drive_forward(self, now, progress, bearing):
         """方位はジャイロで補正し、走行中の角度ずれでは失敗しない。"""
@@ -543,6 +709,10 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             self.progress_at = now
         elif now - self.progress_at > self.catch_settings.stall_timeout_sec:
             return self._nc_fail("no forward progress")
+        if self.phase == "NC_CAPTURE":
+            result = self._update_capture_camera()
+            if result is not None:
+                return result
         self.drive.tick_once()
         if self.drive.status == Status.FAILURE:
             return self._nc_fail("gyro drive failed")

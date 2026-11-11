@@ -37,7 +37,7 @@ class ColorClassifier:
     _BLUE_MIN_H = 205
     _BLUE_MAX_H = 215
     _BLUE_MIN_S = 60
-    _BLUE_MIN_V = 70
+    _BLUE_MIN_V = 60
     _BLUE_MAX_V = 100
 
     def __init__(self):

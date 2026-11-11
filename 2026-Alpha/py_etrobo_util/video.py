@@ -187,6 +187,9 @@ class Video(object):
         self._sumo_alignment_observation = None
         self._sumo_alignment_detector_session = None
         self._sumo_alignment_detector = None
+        # ETラリー開始位置の青い丸検出
+        self._rally_blue_detector = None
+        self._rally_blue_detector_session = None
         self._sumo_recording = None
         self._sumo_recording_telemetry = None
         # (insight, color, cx, theta, bottom_row, area, in_blindspot)
@@ -431,9 +434,13 @@ class Video(object):
             img_orig = cv2.resize(frame_169, (FRAME_WIDTH, FRAME_HEIGHT),
                                  interpolation=cv2.INTER_AREA if capture_mode == 'sumo_align' else cv2.INTER_LINEAR)
             if capture_mode == "sumo_align":
-                self._process_sumo_alignment(img_orig, capture_session, sumo_metadata)
+                self._process_sumo_alignment(
+                    img_orig, capture_session, sumo_metadata
+                )
+            elif capture_mode == "rally_blue":
+                self._process_rally_blue(img_orig, capture_session)
             else:
-                img_hsv  = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HSV)
+                img_hsv = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HSV)
 
                 # Track the locked colour once identified, else scan all four.
                 if self._bottle_lock_color is not None:
@@ -921,6 +928,108 @@ class Video(object):
                 )
         recording.submit(raw, detected, row)
 
+    def begin_rally_blue_read(self):
+        """青い丸の画像認識を開始する。"""
+        self.set_target_interested(
+            TargetInterested.BOTTLE,
+            observation_mode="rally_blue",
+        )
+        return self._vision_sessions.capture_token()[0]
+
+
+    def get_rally_blue_observation(self, session):
+        """指定セッションの青い丸検出結果を取得する。"""
+        current_session, frame_id, observation = (
+            self._vision_sessions.get_rally_blue()
+        )
+
+        if current_session != session:
+            return None
+
+        if self._vision_sessions.capture_token() != (
+            session, "rally_blue"
+        ):
+            return None
+
+        return observation
+
+
+    def end_rally_blue_read(self, session):
+        """青い丸の画像認識を終了する。"""
+        if self._vision_sessions.capture_token() == (
+            session, "rally_blue"
+        ):
+            self.set_target_interested(TargetInterested.LINE)
+
+    def _process_rally_blue(self, image, session):
+        """カメラスレッドで青い丸を検出する。"""
+        from robot_program.features.sumo_blue_detector import (
+            SumoBlueDetector,
+        )
+
+        if self._vision_sessions.capture_token() != (
+            session, "rally_blue"
+        ):
+            return
+
+        if self._rally_blue_detector_session != session:
+            self._rally_blue_detector = SumoBlueDetector()
+            self._rally_blue_detector_session = session
+
+        result = self._rally_blue_detector.step(image)
+
+        # Save one actual detector input per observation session.
+        detector = self._rally_blue_detector
+        detector.debug_frame_count = getattr(detector, "debug_frame_count", 0) + 1
+        if detector.debug_frame_count == 10:
+            try:
+                from pathlib import Path
+                from datetime import datetime
+                import json
+
+                folder = Path(__file__).resolve().parents[1] / "work" / "rally-blue-debug"
+                folder.mkdir(parents=True, exist_ok=True)
+                prefix = folder / (
+                    datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+                    + "-session-" + str(session)
+                )
+                hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+                mask = cv2.inRange(
+                    hsv,
+                    np.array(detector.HSV_LOWER, dtype=np.uint8),
+                    np.array(detector.HSV_UPPER, dtype=np.uint8),
+                )
+                kernel = np.ones((3, 3), np.uint8)
+                cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+                cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+                for suffix, data in (
+                    ("-input.png", image),
+                    ("-mask.png", mask),
+                    ("-cleaned.png", cleaned),
+                ):
+                    if not cv2.imwrite(str(prefix) + suffix, data):
+                        raise RuntimeError("image save failed: " + suffix)
+                Path(str(prefix) + "-result.json").write_text(
+                    json.dumps(result, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                print("RALLY_BLUE DEBUG SAVED " + str(prefix))
+            except Exception as error:
+                print("RALLY_BLUE DEBUG SAVE FAILED: " + str(error))
+
+        observation = dict(
+            result,
+            session=session,
+            frame_id=self.frame_id,
+            t=time.monotonic(),
+        )
+
+        self._vision_sessions.publish_rally_blue(
+            session,
+            self.frame_id,
+            observation,
+        )
+    
     def begin_sumo_alignment_read(
         self, *, gyro_reader, distance_reader, preserve_history=False
     ):

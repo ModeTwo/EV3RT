@@ -1,0 +1,23 @@
+"""ET sumo phase composition."""
+
+from py_trees.composites import Sequence
+from dataclasses import replace
+from ..features.sumo_push_tree import build_sumo_push_tree
+
+from ..features.capture_sumo_bottle_camera import build_capture_sumo_bottle_camera
+from ..features.move_to_sumo_exit import build_move_to_sumo_exit
+from ..features.move_to_sumo_start import build_move_to_sumo_start
+
+
+def build_et_sumo_phase(context, config):
+    return build_sumo_push_tree(context, config)
+
+
+def build_sumo_after_delivery(context, config):
+    """カーブから既存の直線相撲へ接続。押し出しは捕捉後1000mm。"""
+    push = replace(config.sumo_relative_push, push_distance_mm=1000.0)
+    config = replace(config, sumo_push_calibration=None, sumo_push_execute=True,
+                     sumo_relative_push=push)
+    tree = build_sumo_push_tree(context, config)
+    tree.engine.continuous_entry = True
+    return tree

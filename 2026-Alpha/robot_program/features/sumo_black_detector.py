@@ -177,7 +177,10 @@ class SumoBlackDetector:
             seeds = [
                 point
                 for point in points
-                if point["x"] > 0 and point["x"] + point["w"] < 320
+                if point["x"] > 0
+                and point["x"] + point["w"] < 320
+                and point["area"] >= 900
+                and point["h"] >= point["w"] * 1.25
             ]
             if seeds:
                 candidate = seeds[0]

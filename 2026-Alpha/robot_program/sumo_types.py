@@ -40,6 +40,7 @@ class SumoState:
     garage_line_found: bool = False
     line_trace_ready: bool = False
     failure_reason: Optional[str] = None
+    rally_avoidance_performed: Optional[bool] = None
 
 
 @dataclass(frozen=True)

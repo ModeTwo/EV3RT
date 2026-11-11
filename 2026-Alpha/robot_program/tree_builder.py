@@ -5,7 +5,6 @@ from .phases.bottle_and_rally_preparation import (
     build_bottle_delivery_final_phase,
 )
 from .phases.et_rally import build_et_rally_phase
-from .phases.et_sumo import build_et_sumo_phase, build_sumo_after_delivery
 from .phases.finish import build_finish_phase
 from .phases.lap_gate import build_lap_gate_phase
 from .phases.hint_collection import build_hint_collection_phase
@@ -81,16 +80,13 @@ def build_mission_children(context, config):
         children.append(build_lap_gate_phase(context, config))
     # ラップゲート通過後(ET相撲以降)から、ジャイロの倍率補正を有効にする。ラップゲートまでは従来の値。
     children.append(EnableGyroScale())
+    # 正式な工程順: LAPゲート通過後はET相撲を先に行い、そのあとでボトルキャッチ(AT)へ進む。
+    if config.enable_et_sumo:
+        from .phases.et_sumo import build_et_sumo_phase
+        children.append(build_et_sumo_phase(context, config))
     # ボトル取得とヒント読取は同じ走行区間で行うため、一つの準備工程として扱う。
     if config.enable_bottle_delivery or config.enable_et_rally:
         children.append(build_bottle_and_rally_preparation_phase(context, config))
-    if config.enable_et_sumo:
-        children.append(build_sumo_after_delivery(context, config) if config.enable_bottle_delivery
-                        else build_et_sumo_phase(context, config))
-        if config.enable_et_rally and config.et_rally_laps > 0:
-            # 相撲後のラリー開始位置への経路は未実装。走行経路を仮定しない。
-            from .features.sumo_rally_transition import build_move_sumo_to_rally_start
-            children.append(build_move_sumo_to_rally_start(context, config))
     if config.enable_et_rally and config.et_rally_laps > 0:
         children.append(build_et_rally_phase(context, config))
     if config.enable_finish:
