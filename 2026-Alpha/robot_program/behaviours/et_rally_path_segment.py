@@ -33,6 +33,11 @@
   - wheel_log_ticks: 区間の始めからこのtick数だけ、毎tickの出力と実際の車輪の回り(エンコーダの度/tick)・向きのずれを
     ためて、区間の終わりに1行で出す(0なら出さない=従来どおり)。円弧の入り口で内側の車輪が実際にいつ遅くなるかを見るため。
   - ff_scale: 円弧の左右の差(フィードフォワード)の倍率(1.0なら従来どおり 半輪距/半径)。
+  - line_pid_p / line_pid_d: 直進の区間だけ使う向きのPIDのP・D(Noneなら pid_p / pid_d。2026-11-11、試す用)。
+  - line_boost_power / line_boost_sec: 直進の始めの line_boost_sec 秒だけ、出力を line_boost_power まで上げる
+    (円弧のあと 150〜270mm/s から巡航の約420mm/s まで約0.3秒かかり、直進1本あたり約0.1秒遅れていた。2026-11-11、試す用)。
+    長さ BOOST_MIN_LEN_MM 以上の前進の直進で、円弧のあと・止まった状態からのときだけ。終わりの BOOST_END_MARGIN_MM と、
+    次の円弧への先読みで出力が下がり始めたら上げない。左右の差(曲がる分)は、これまでどおり出力を削って残す。
     11/03の車輪のログで、円弧の中の左右の実際の回りの比から逆算した輪距が約146〜158mm(実測の117mmより大きい。
     すべり・こすれのため)で、計算どおりの差では曲がり足りず、残りを向きのPIDが常に埋めていた
     (円弧の中の向きのずれの平均が約3°、入り口の遅れ・出力の急な変化の元)。
@@ -60,6 +65,9 @@ HALF_TREAD_MM = WHEEL_TREAD / 2.0
 # 止まるとき: 左右のエンコーダがこのtick数だけ続けて変わらなければ止まったとみなす(one_shotのpre_stopと同じ)。
 STOP_STABLE_TICKS = 2
 STOP_MAX_TICKS = 25
+# 2026-11-11: 直進の始めの加速の上乗せをする直進の長さの下限と、終わりの手前で上乗せをやめる距離(mm)。
+BOOST_MIN_LEN_MM = 150.0
+BOOST_END_MARGIN_MM = 100.0
 
 # 止まらずに続く区間の受け渡し(次の区間の距離の起点と、引き継ぐPID)。
 _chain_end_dist = None
@@ -150,7 +158,8 @@ class EtRallyPathSegment(Behaviour):
                  next_profile=(), lead_sec: float = 0.0, arc_pid_i: float = 0.6,
                  arc_speed_scale: float = 1.0, lat_gain: float = 0.0, lat_max_deg: float = 8.0,
                  arc_pid_p=None, ramp_mm: float = 0.0, inner_min_power=None, ramp_sec: float = 0.0,
-                 wheel_log_ticks: int = 0, ff_scale: float = 1.0) -> None:
+                 wheel_log_ticks: int = 0, ff_scale: float = 1.0,
+                 line_pid_p=None, line_pid_d=None, line_boost_power=None, line_boost_sec: float = 0.0) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -195,6 +204,10 @@ class EtRallyPathSegment(Behaviour):
         self.wheel_log_ticks = max(0, int(wheel_log_ticks))
         self.ff_scale = float(ff_scale)
         self.inner_min_power = inner_min_power
+        self.line_pid_p = line_pid_p
+        self.line_pid_d = line_pid_d
+        self.line_boost_power = line_boost_power
+        self.line_boost_sec = max(0.0, float(line_boost_sec or 0.0))
         self.prev_shape = None
         self.running = False
         self.stopping = False
@@ -301,8 +314,18 @@ class EtRallyPathSegment(Behaviour):
         line_i = _line_pid_i(self.pid_gains[1])
         self.pid.Ki = self.arc_pid_i if self.kind == "arc" else line_i
         self.pid.Kp = self.arc_pid_p if (self.kind == "arc" and self.arc_pid_p is not None) else self.pid_gains[0]
+        if self.kind == "line" and self.line_pid_p is not None:
+            self.pid.Kp = self.line_pid_p
+        self.pid.Kd = self.line_pid_d if (self.kind == "line" and self.line_pid_d is not None) else self.pid_gains[2]
         self.prev_shape = _chain_shape if self.continue_from_prev else None
         _chain_shape = None
+        # 直進の始めの加速の上乗せ(円弧のあと・止まった状態からの前進の直進だけ。直進から続く直進は既に巡航の速さ)。
+        self.boost_until = None
+        self.boost_ticks = 0
+        if (self.line_boost_power is not None and self.line_boost_sec > 0.0 and self.kind == "line"
+                and not self.reverse and self.length_mm >= BOOST_MIN_LEN_MM
+                and (self.prev_shape is None or self.prev_shape[0] == "arc")):
+            self.boost_until = time.monotonic() + self.line_boost_sec
         self.saturated_ticks = 0
         self.right_residual = 0.0
         self.left_residual = 0.0
@@ -352,6 +375,8 @@ class EtRallyPathSegment(Behaviour):
             end_front += now - getattr(self, "reached_dist", now)
         # along: 自分の位置で測った進み − 走った距離での進み(前後のずれのたまり。1tickの越えを含まない)。
         tag = " end_err=(%+.1f,%+.1f) along=%+.1f%s" % (end_front, end_right, getattr(self, "along_mm", 0.0), tag)
+        if self.boost_until is not None:
+            tag = " boost=%d" % self.boost_ticks + tag
         self.logger.info("%+06d %s.%s summary: dist=%d planned=%d end_heading=%.1f target=%.1f err_mean=%+.2f err_max=%.2f lat=%+.0fmm sat=%d loc=(%d,%d)%s%s" % (
             now, self.__class__.__name__, self.kind, now - self.orig_dist, self.run_length_mm,
             current, self.end_heading, self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm,
@@ -440,6 +465,11 @@ class EtRallyPathSegment(Behaviour):
 
         # 出力: 巡航 → 円弧なら外側が巡航を超えない値 → 発進の加速・止まる前の減速の小さいほう
         power_now = self.power * min(look_scale, here_scale)
+        if (self.boost_until is not None and min(look_scale, here_scale) >= 0.999
+                and s < self.length_mm - BOOST_END_MARGIN_MM and time.monotonic() < self.boost_until):
+            if self.line_boost_power > power_now:
+                power_now = float(self.line_boost_power)
+                self.boost_ticks += 1
         if self.accel_mm > 0.0 and s < self.accel_mm:
             ratio = max(s, 0.0) / self.accel_mm
             power_now = min(power_now, self.accel_min_power + (self.power - self.accel_min_power) * ratio)

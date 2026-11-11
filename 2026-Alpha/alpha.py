@@ -1454,6 +1454,13 @@ def _run_main(argv, startup_cleanup):
                               '50 mm or longer (default 16; shorter ones use --rally-move-short-lead).'))
     parser.add_argument('--rally-path-ff-scale', type=float, default=None,
                         help='Multiply the arc left/right feedforward (half tread / radius) by this (default 1.0).')
+    parser.add_argument('--rally-path-line-pid-p', type=float, default=None,
+                        help='Heading PID P used only on straight path segments (default: --rally-move-pid value).')
+    parser.add_argument('--rally-path-line-pid-d', type=float, default=None,
+                        help='Heading PID D used only on straight path segments (default: --rally-move-pid value).')
+    parser.add_argument('--rally-path-line-boost', type=str, default=None,
+                        help=('POWER,SEC: at the start of forward straights of 150 mm or longer (after an arc or from a stop), '
+                              'raise the power to POWER for SEC seconds (not within 100 mm of the end). Default off.'))
     parser.add_argument('--rally-arm-stop-ticks', type=float, default=None,
                         help='Stop the arm when it has moved slowly for this many consecutive ticks (about 3; default: old ArmUpDownFull).')
     parser.add_argument('--rally-arm-power', type=float, default=None,
@@ -1749,7 +1756,20 @@ def _run_main(argv, startup_cleanup):
         if not 0.0 <= args.rally_path_lat_max_deg <= 30.0:
             parser.error('--rally-path-lat-max-deg must be between 0 and 30')
         mission_config = dataclasses.replace(mission_config, et_rally_path_lat_max_deg=args.rally_path_lat_max_deg)
+    if args.rally_path_line_boost is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-line-boost requires --mission rally-drive, bottle-rally or rally-sumo')
+        try:
+            boost_power, boost_sec = (float(v) for v in args.rally_path_line_boost.split(','))
+        except ValueError:
+            parser.error('--rally-path-line-boost must be POWER,SEC (e.g. 100,0.3)')
+        if not 30.0 <= boost_power <= 100.0 or not 0.0 < boost_sec <= 2.0:
+            parser.error('--rally-path-line-boost: POWER must be 30-100 and SEC 0-2')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_line_boost_power=boost_power,
+                                             et_rally_path_line_boost_sec=boost_sec)
     for opt, attr, lo, hi in (('--rally-path-arc-pid-p', 'rally_path_arc_pid_p', 0.0, 20.0),
+                              ('--rally-path-line-pid-p', 'rally_path_line_pid_p', 0.0, 20.0),
+                              ('--rally-path-line-pid-d', 'rally_path_line_pid_d', 0.0, 2.0),
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),
                               ('--rally-path-ramp-sec', 'rally_path_ramp_sec', 0.0, 1.0),

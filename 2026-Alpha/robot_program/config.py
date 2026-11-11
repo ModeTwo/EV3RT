@@ -197,6 +197,12 @@ class RaceConfig:
     et_rally_path_ff_scale: Optional[float] = 1.2
     # 2026-11-05: 円弧・直進の区間で止まるとき、計画の距離の何mm手前で止め始めるか(Noneなら従来の16mm)。50mm未満は --rally-move-short-lead。
     et_rally_path_stop_lead: Optional[float] = None
+    # 2026-11-11: 直進の区間だけの向きのPIDのP・D(Noneなら従来どおり --rally-move-pid の値)と、
+    # 直進の始めの加速の上乗せ(出力と秒。Noneなら使わない)。どれも試す用で既定では使わない。
+    et_rally_path_line_pid_p: Optional[float] = None
+    et_rally_path_line_pid_d: Optional[float] = None
+    et_rally_path_line_boost_power: Optional[float] = None
+    et_rally_path_line_boost_sec: Optional[float] = None
     # 2026-11-03: アームの止め方(EtRallyArmUpDown)。動きの遅いtickがこの回数連続したら止める(Noneなら従来の ArmUpDownFull)と、押す出力(Noneなら35)。
     et_rally_arm_stop_ticks: Optional[float] = 3.0
     et_rally_arm_power: Optional[float] = 20.0

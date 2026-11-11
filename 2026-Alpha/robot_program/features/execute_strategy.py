@@ -408,6 +408,10 @@ _STRATEGY_KWARGS_FROM_CONFIG = (
     ("path_wheel_log_ticks", "et_rally_path_wheel_log_ticks"),
     ("path_ff_scale", "et_rally_path_ff_scale"),
     ("path_stop_lead_mm", "et_rally_path_stop_lead"),
+    ("path_line_pid_p", "et_rally_path_line_pid_p"),
+    ("path_line_pid_d", "et_rally_path_line_pid_d"),
+    ("path_line_boost_power", "et_rally_path_line_boost_power"),
+    ("path_line_boost_sec", "et_rally_path_line_boost_sec"),
 )
 
 
@@ -628,6 +632,12 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # 2026-11-05: 円弧・直進の区間で止まるとき、計画の距離のこの距離(mm)手前で止め始める(Noneなら move_stop_lead_mm)。
                         # 今日までのログ54回で、止め始めてから惰性で進む距離は速さによらず長い直進で平均約17.5mm(16〜20)。
                         path_stop_lead_mm=None,
+                        # 2026-11-11: 同じ計画で、直進の区間だけの向きのPIDのP・D(Noneなら move_pid の値)と、
+                        # 直進の始めに出力を上乗せする出力・秒(Noneなら使わない)。試す用。
+                        path_line_pid_p=None,
+                        path_line_pid_d=None,
+                        path_line_boost_power=None,
+                        path_line_boost_sec=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -845,6 +855,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 ramp_sec=0.0 if path_ramp_sec is None else path_ramp_sec,
                 wheel_log_ticks=0 if path_wheel_log_ticks is None else int(path_wheel_log_ticks),
                 ff_scale=1.0 if path_ff_scale is None else path_ff_scale,
+                line_pid_p=path_line_pid_p, line_pid_d=path_line_pid_d,
+                line_boost_power=path_line_boost_power,
+                line_boost_sec=0.0 if path_line_boost_sec is None else path_line_boost_sec,
             ))
             if pause_after_move:
                 nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),
