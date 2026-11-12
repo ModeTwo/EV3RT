@@ -462,14 +462,18 @@ def choose_start_fit(cam, dets, mirror=False):
     """2026-11-12: スタートの位置。dets は広い範囲(START_WIDE_X/Y)で見つけたもの。
     今の範囲だけで点1つ以上・見えたもの START_MIN_ITEMS_INNER 以上なら今の範囲の答え(今までと同じ)、
     足りなければ広い範囲も使った答え(結びついたものが多い方)を返す。戻り値: (fit_pose_pitch の結果, 縮尺なしの結果, 広い範囲を使ったか)。"""
+    # 11/12 実機: 当てはめを何度も呼ぶと、ロボットで2秒に4枚しか測れなかった(今までは約12枚)。
+    # 縮尺なしの結果(比べる用)は出さず、外側に何もないときは1回だけ当てはめる。
     inner = _inner_dets(dets)
     r_in = fit_pose_pitch(cam, inner, mirror=mirror)
     if r_in is not None and r_in["n_dots"] >= 1 and r_in["n_dots"] + r_in["n_markers"] >= START_MIN_ITEMS_INNER:
-        return r_in, fit_pose_search(inner, mirror=mirror), False
+        return r_in, None, False
+    if len(inner["markers"]) == len(dets.get("markers", [])) and len(inner["dots"]) == len(dets.get("dots", [])):
+        return r_in, None, False
     r_w = fit_pose_pitch(cam, dets, mirror=mirror)
     if r_w is not None and (r_in is None or (r_w["n_dots"], r_w["n_dots"] + r_w["n_markers"]) > (r_in["n_dots"], r_in["n_dots"] + r_in["n_markers"])):
-        return r_w, fit_pose_search(dets, mirror=mirror), True
-    return r_in, (fit_pose_search(inner, mirror=mirror) if r_in is not None else None), False
+        return r_w, None, True
+    return r_in, None, False
 
 
 def median_pose(results):
