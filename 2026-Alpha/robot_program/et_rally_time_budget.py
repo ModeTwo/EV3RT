@@ -21,6 +21,7 @@ from py_trees.common import Status
 
 _t0 = None
 _marks = {}      # 周 → その周の終わりの時刻
+_drive_t0 = None  # 2026-11-12: 計画の最初の区間を走り出した時刻(1周目の比に使う)
 
 # 見込みの時間の目安(出力100の実測、11/11)。日によって数%変わる分は、実際の周の時間との比で合わせる。
 V_LINE = 460.0            # mm/s
@@ -35,9 +36,15 @@ T_LINE_START = 0.08
 
 
 def start():
-    global _t0
+    global _t0, _drive_t0
     _t0 = time.monotonic()
+    _drive_t0 = None
     _marks.clear()
+
+
+def mark_drive_start():
+    global _drive_t0
+    _drive_t0 = time.monotonic()
 
 
 def elapsed():
@@ -90,6 +97,16 @@ class EtRallyTimeBudgetStart(Behaviour):
         return Status.SUCCESS
 
 
+class EtRallyTimeBudgetDriveStart(Behaviour):
+    """2026-11-12: 計画の最初の区間の直前に置く。1周目の「実際/見込み」の比を、走り出してからの時間で出すため
+    (スタート位置に着いてからのジャイロの測り直し・スタートの取り込みなど約3〜4秒が1周目に入り、比が1.33〜1.35倍に
+    なっていた。持ち時間が短いと1周目の終わりで早めに切り上げてしまう)。経過時間(持ち時間との比べ)は今までどおり。"""
+
+    def update(self):
+        mark_drive_start()
+        return Status.SUCCESS
+
+
 class EtRallyLapDecision(Behaviour):
     """N周目の終わりで、残りを走るか(FAILURE)、ガレージへ切り上げるか(SUCCESS)を決める。
     セレクタの左に [これ, 切り上げのつなぎ] を、右に [残りの周] を置く。"""
@@ -108,7 +125,7 @@ class EtRallyLapDecision(Behaviour):
         now = time.monotonic()
         if _t0 is None:
             start()
-        prev = _marks.get(self.lap - 1, _t0)
+        prev = _marks.get(self.lap - 1, _drive_t0 if _drive_t0 is not None else _t0)
         _marks[self.lap] = now
         lap_time = now - prev
         ratio = lap_time / self.est_this_lap

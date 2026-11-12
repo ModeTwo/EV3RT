@@ -1126,6 +1126,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
             sel.add_children([leave, rest])
             cur = sel
         nodes = nodes[:marks[0][0]] + [cur]
+        from ..et_rally_time_budget import EtRallyTimeBudgetDriveStart
+        nodes = [EtRallyTimeBudgetDriveStart("et_rally time budget drive start")] + nodes
     return nodes
 
 
