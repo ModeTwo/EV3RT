@@ -170,6 +170,14 @@ class EtRallyCameraCorrect(Behaviour):
             if m and m.get("n_dots", 0) >= 1 and abs(m.get("pitch_deg", 0.0)) <= 1.5 and m.get("pitch_deg"):
                 self.proc.send("pitch %.3f" % m["pitch_deg"])
                 self.logger.info("camera correct: using the start pose pitch %+.2f deg while driving" % m["pitch_deg"])
+            else:
+                # 2026-11-12: スタートで点が見えず当てはめられなかったときは、前回床で当てはめた値を使う
+                last = sp.load_last_pitch()
+                if last is not None and abs(last[0]) <= 1.5:
+                    self.proc.send("pitch %.3f" % last[0])
+                    self.logger.info("camera correct: no pitch fit at the start, using the last fitted pitch %+.2f deg (%s)" % last)
+                else:
+                    self.logger.info("camera correct: no pitch fit at the start and no saved pitch, using the calibration file")
         self.proc.send("track 1")
         self.logger.info("camera correct: started gain_pos=%.2f gain_head=%.2f lag=%.3fs far_confirm=%d" % (
             self.gain_pos, self.gain_head, self.lag_sec, self.far_confirm))

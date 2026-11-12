@@ -605,6 +605,42 @@ def measured_start_pose():
     return _measured
 
 
+# 2026-11-12: スタートで床の点から当てはめた下向きを覚えておくファイル。点が見えず当てはめられなかった回は、
+# ここに残っている前回の値を走行中の補正に使う(較正台での下向きは撮るたびに約1°ずれることがあり、較正ファイルの
+# pitch_fix_deg より、直前に床で当てはめた値のほうが確か)。較正ファイルが変わったら使わない。
+LAST_PITCH_FILE = Path(__file__).resolve().parents[1] / "run_logs" / "et_rally_last_pitch.json"
+
+
+def _calib_key(calib_path=None):
+    p = Path(calib_path) if calib_path else DEFAULT_CALIB
+    try:
+        d = json.load(open(p, encoding="utf-8"))
+        return "%s pitch_fix=%.3f" % (p.name, float(d.get("pitch_fix_deg", 0.0)))
+    except Exception:
+        return p.name
+
+
+def save_last_pitch(pitch_deg, calib_path=None):
+    try:
+        LAST_PITCH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        json.dump({"pitch_deg": float(pitch_deg), "calib": _calib_key(calib_path), "time": time.strftime("%Y-%m-%d %H:%M:%S")},
+                  open(LAST_PITCH_FILE, "w", encoding="utf-8"))
+        return True
+    except Exception:
+        return False
+
+
+def load_last_pitch(calib_path=None):
+    """(pitch_deg, 記録した日時) か None(ファイルがない・較正ファイルが違う)。"""
+    try:
+        d = json.load(open(LAST_PITCH_FILE, encoding="utf-8"))
+    except Exception:
+        return None
+    if d.get("calib") != _calib_key(calib_path):
+        return None
+    return float(d["pitch_deg"]), d.get("time", "")
+
+
 def applied_start_pose():
     """取り込んだスタートの姿勢 (x, y, 向き度)。取り込んでいなければ None。
     向きだけを取り込んだとき(計画の座標が分からないとき)は、位置は計画のスタートとする。"""
@@ -727,6 +763,9 @@ class EtRallyStartPoseCapture(Behaviour):
                          pitch_deg=sorted(r.get("pitch_deg", 0.0) for r in self.results)[len(self.results) // 2],
                          resid_mm=sorted(r.get("resid_mm", 0.0) for r in self.results)[len(self.results) // 2],
                          items=sorted(int(r["n_markers"] + r["n_dots"]) for r in self.results)[len(self.results) // 2])
+        if (_measured["n_dots"] >= 1 and _measured["pitch_deg"] and abs(_measured["pitch_deg"]) <= 1.5
+                and save_last_pitch(_measured["pitch_deg"], self.calib_path)):
+            self.logger.info("start pose: saved pitch %+.2f deg for runs without visible dots" % _measured["pitch_deg"])
         self.logger.info("start pose: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f) poses=%d/%d frames "
                          "markers=%d dots=%d spread=%.1fmm/%.2fdeg pitch_fix=%+.2fdeg resid=%.1fmm items=%d" % (
                              pose[0], pose[1], pose[2], pose[0] - START_MM[0], pose[1] - START_MM[1],
