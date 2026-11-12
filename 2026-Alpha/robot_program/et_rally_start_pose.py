@@ -108,6 +108,7 @@ class GroundCamera:
         import cv2
         import numpy as np
         self.cv2, self.np = cv2, np
+        self.calib_path = calib_path
         d = json.load(open(calib_path or DEFAULT_CALIB, encoding="utf-8"))
         K = np.array(d["lens"]["K"]); dist = np.array(d["lens"]["dist"])
         j = d["jig"][0]
@@ -536,11 +537,38 @@ def choose_start_fit(cam, dets, mirror=False):
     if r_in is not None and r_in["n_dots"] >= 1 and r_in["n_dots"] + r_in["n_markers"] >= START_MIN_ITEMS_INNER:
         return r_in, None, False
     if len(inner["markers"]) == len(dets.get("markers", [])) and len(inner["dots"]) == len(dets.get("dots", [])):
-        return r_in, None, False
-    r_w = fit_pose_pitch(cam, dets, mirror=mirror)
-    if r_w is not None and (r_in is None or (r_w["n_dots"], r_w["n_dots"] + r_w["n_markers"]) > (r_in["n_dots"], r_in["n_dots"] + r_in["n_markers"])):
-        return r_w, None, True
-    return r_in, None, False
+        r, used, wide = r_in, inner, False
+    else:
+        r_w = fit_pose_pitch(cam, dets, mirror=mirror)
+        if r_w is not None and (r_in is None or (r_w["n_dots"], r_w["n_dots"] + r_w["n_markers"]) > (r_in["n_dots"], r_in["n_dots"] + r_in["n_markers"])):
+            r, used, wide = r_w, dets, True
+        else:
+            r, used, wide = r_in, inner, False
+    if r is not None and r["n_dots"] == 0 and r["n_markers"] >= 2 and r["n_markers"] < 3:
+        r = _fit_markers_assumed_pitch(cam, used, mirror) or r
+    return r, None, wide
+
+
+START_ASSUMED_PITCH_DEG = 0.45   # 保存した下向きがないときの決め打ち(11/12 のスタートで当てはめた値 +0.12〜+0.65 の真ん中あたり)
+
+
+def _fit_markers_assumed_pitch(cam, dets, mirror=False):
+    """2026-11-12: 点が見えずマーカー2つだけのとき、前回床で当てはめて保存した下向き(なければ START_ASSUMED_PITCH_DEG)で
+    写し直して位置を出す。下向きを当てはめられないと前後を2〜4cm 間違えていたが、+0.45° の決め打ちで、点も見えた8回の画像の
+    答えとの差は前後 ±12mm 以内・左右 ±11mm 以内になった。結果に pitch_assumed を付ける(取り込みでは位置も入れる)。"""
+    last = load_last_pitch(getattr(cam, "calib_path", None))
+    p = last[0] if (last is not None and abs(last[0]) <= 1.5) else START_ASSUMED_PITCH_DEG
+    C = (float(cam.C0[0]), float(cam.C0[1]), float(cam.C0[2]))
+    mk = []
+    for m in dets.get("markers", []):
+        q = repitch(m["xy"], p, C)
+        if q is None:
+            return None
+        mk.append(dict(m, xy=q))
+    r = fit_pose_search({"markers": mk, "dots": []}, mirror=mirror)
+    if r is None or r["n_markers"] < 2:
+        return None
+    return dict(r, pitch_assumed=p)
 
 
 def median_pose(results):
@@ -866,7 +894,8 @@ class EtRallyStartPoseCapture(Behaviour):
                          resid_mm=sorted(r.get("resid_mm", 0.0) for r in self.results)[len(self.results) // 2],
                          items=sorted(int(r["n_markers"] + r["n_dots"]) for r in self.results)[len(self.results) // 2],
                          n_dots_med=sorted(int(r["n_dots"]) for r in self.results)[len(self.results) // 2],
-                         wide=sum(1 for r in self.results if r.get("wide")))
+                         wide=sum(1 for r in self.results if r.get("wide")),
+                         assumed=sum(1 for r in self.results if r.get("pitch_assumed") is not None))
         if (_measured["n_dots"] >= 1 and _measured["pitch_deg"] and abs(_measured["pitch_deg"]) <= 1.5
                 and save_last_pitch(_measured["pitch_deg"], self.calib_path)):
             self.logger.info("start pose: saved pitch %+.2f deg for runs without visible dots" % _measured["pitch_deg"])
@@ -877,6 +906,9 @@ class EtRallyStartPoseCapture(Behaviour):
                              _measured["n_markers"], _measured["n_dots"], _measured["spread_mm"], _measured["spread_deg"],
                              _measured["pitch_deg"], _measured["resid_mm"], _measured["items"],
                              _measured["wide"], len(self.results)))
+        if _measured["assumed"]:
+            self.logger.info("start pose: markers only in %d/%d images, position with the saved/assumed pitch" % (
+                _measured["assumed"], len(self.results)))
         p0 = median_pose(self.results_noscale)
         if p0 is not None:
             self.logger.info("start pose without pitch fit: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f)" % (
@@ -930,7 +962,8 @@ class EtRallyApplyStartPose(Behaviour):
             # 向き(マーカーの辺の傾きから)だけ入れて、計画のスタートにいるとみなす。
             _applied = (START_MM[0], START_MM[1], h)
             how = "heading only (%d items, %d dots)" % (m["items"], m.get("n_dots", -1))
-        elif m.get("n_dots_med", m.get("n_dots", 1)) == 0 and m.get("items", 99) < 3:
+        elif (m.get("n_dots_med", m.get("n_dots", 1)) == 0 and m.get("items", 99) < 3
+              and m.get("assumed", 0) * 2 < m.get("poses", 1)):
             # 2026-11-11: 点が見えずマーカー2つだけのときは、前後を約2〜4cm 間違える(点がないと下向きの当てはめ直しが
             # できないため)。11/12: 同じ画像を広い範囲で点も使って測り直すと、前後は大きく違ったが、左右は数mm で合っていた
             # (配置36の4回)。そこで向きと左右だけを入れ、前後は計画のスタートのままにする。
