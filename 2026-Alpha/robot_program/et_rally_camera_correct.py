@@ -41,10 +41,23 @@ class CameraCorrector:
     FAR_AGREE_MM = 15.0
     FAR_WINDOW_SEC = 2.0
     FAR_ACCEPT_MAX_MM = 100.0
+    # 2026-11-12: 走りながらカメラの下向きを選ぶ。止まって測ったスタートの下向き(+0.3〜+0.65°)は、走っている間に
+    # 合う値(9回中7回は0〜+0.2°)と違い、持ち込むと残差で最大68%の画像を捨てていた(配置36、+0.65°)。下向きが
+    # 違うと前後のずれの見え方も10mm以上変わる。画像ごとに PITCH_GRID の各値で当てはめ、直近 PITCH_WINDOW 枚
+    # (3つ以上結びついたもの)の残差の中央値が一番小さい値を使う。机上(8回の走り): どの回も一番合う固定の値と同じくらい
+    # (捨てた割合 0〜16%、スタートの値を持ち込むと7〜68%)。
+    PITCH_GRID = tuple(round(-0.3 + 0.1 * i, 1) for i in range(13))   # -0.3〜+0.9°(較正ファイルの下向きに足す分)
+    PITCH_WINDOW = 15
+    PITCH_MIN_FRAMES = 5
 
     def __init__(self, gain_pos=0.3, gain_head=0.2, lag_sec=0.0, max_rate_deg=60.0, max_resid_mm=8.0,
                  max_pos_mm=40.0, max_head_deg=3.0, min_items=2, mirror=False,
-                 at=None, apply=None, logger=None, far_confirm=0):
+                 at=None, apply=None, logger=None, far_confirm=0, cam_center=None):
+        # cam_center: カメラの位置(前, 左, 上 mm)。与えたら下向きを走りながら選ぶ(子プロセスは較正ファイルの下向きのまま)。
+        self.cam_center = cam_center
+        self.pitch = 0.0
+        self.pitch_hist = []
+        self.pitch_changes = 0
         self.gain_pos = float(gain_pos)
         self.gain_head = float(gain_head)
         self.lag_sec = float(lag_sec)
@@ -76,7 +89,10 @@ class CameraCorrector:
             self.counts["rate"] += 1
             return None
         dets = {"markers": ev.get("markers", []), "dots": [tuple(d) for d in ev.get("dots", [])]}
-        r = sp.fit_pose(dets, nominal=(p[1], p[2], p[3]), mirror=self.mirror, fit_scale=False)
+        if self.cam_center is not None:
+            r = self._fit_online_pitch(sp, dets, (p[1], p[2], p[3]))
+        else:
+            r = sp.fit_pose(dets, nominal=(p[1], p[2], p[3]), mirror=self.mirror, fit_scale=False)
         if r is None or r["n_dots"] + r["n_markers"] < self.min_items:
             self.counts["items"] += 1
             return None
@@ -103,6 +119,40 @@ class CameraCorrector:
             self.recent_far = []
         self.total = [self.total[0] + dx, self.total[1] + dy, self.total[2] + dh]
         return dx, dy, dh, (ex, ey, eh, r["n_dots"], r["n_markers"], r["resid_mm"])
+
+
+def _fit_online_pitch_impl(self, sp, dets, nominal):
+    """PITCH_GRID の各下向きで当てはめ、使う下向きを選び直して、その下向きでの結果を返す。"""
+    C = self.cam_center
+    fits = []
+    for g in self.PITCH_GRID:
+        mk, ok = [], True
+        for m in dets["markers"]:
+            q = sp.repitch(m["xy"], g, C)
+            if q is None:
+                ok = False; break
+            mk.append(dict(m, xy=q))
+        ds = [sp.repitch(d, g, C) for d in dets["dots"]]
+        if not ok or any(q is None for q in ds):
+            fits.append(None); continue
+        fits.append(sp.fit_pose({"markers": mk, "dots": ds}, nominal=nominal, mirror=self.mirror, fit_scale=False))
+    if all(f is not None and f["n_dots"] + f["n_markers"] >= 3 for f in fits):
+        self.pitch_hist.append([f["resid_mm"] for f in fits])
+        self.pitch_hist = self.pitch_hist[-self.PITCH_WINDOW:]
+        if len(self.pitch_hist) >= self.PITCH_MIN_FRAMES:
+            n = len(self.pitch_hist)
+            med = [sorted(h[k] for h in self.pitch_hist)[n // 2] for k in range(len(self.PITCH_GRID))]
+            best = self.PITCH_GRID[min(range(len(med)), key=lambda k: med[k])]
+            if best != self.pitch:
+                self.pitch = best
+                self.pitch_changes += 1
+                if self.logger is not None:
+                    self.logger.info("camera correct: pitch now %+.1f deg (median resid %.1f mm over %d images)" % (
+                        best, min(med), n))
+    return fits[self.PITCH_GRID.index(self.pitch)]
+
+
+CameraCorrector._fit_online_pitch = _fit_online_pitch_impl
 
 
 def _confirm_far_impl(self, t, ex, ey, eh):
@@ -155,16 +205,27 @@ class EtRallyCameraCorrect(Behaviour):
         from . import et_rally_camera_proc
         from . import et_rally_course_pose as cp
         self.proc = et_rally_camera_proc.current()
+        cam_center = None
+        if getattr(runtime, "et_rally_camera_pitch_online", True):
+            try:
+                from . import et_rally_start_pose as sp
+                cam_center = sp.camera_center(getattr(runtime, "et_rally_camera_calib_path", None))
+            except Exception as error:
+                self.logger.warning("camera correct: camera position not found (%r), pitch from the start pose instead" % (error,))
         self.corrector = CameraCorrector(self.gain_pos, self.gain_head, self.lag_sec,
                                          mirror=getattr(runtime, "course", -1) == 1, at=cp.at, apply=apply_to_robot,
-                                         logger=self.logger, far_confirm=self.far_confirm)
+                                         logger=self.logger, far_confirm=self.far_confirm, cam_center=cam_center)
         if self.proc is None:
             self.logger.warning("camera correct: camera process not running, no correction")
             return
         self.proc.poll()
+        if cam_center is not None:
+            # 2026-11-12: 下向きは走りながら選ぶ(CameraCorrector.PITCH_GRID)。子プロセスは較正ファイルの下向きのまま。
+            self.proc.send("pitch 0")
+            self.logger.info("camera correct: pitch chosen while driving (start at +0.0 deg, camera at %.1f,%.1f,%.1f mm)" % cam_center)
         # 2026-11-11: スタート位置の取り込みで当てはめた下向きを、走行中の補正にも使う(点が見えて当てはめたときだけ)。
         # 右seedの画像で、較正ファイルの下向きのままだと残差が大きく 28/111 枚を捨てていたのが、当てはめた値なら 2/110 枚。
-        if getattr(runtime, "et_rally_camera_pitch_from_start", True):
+        elif getattr(runtime, "et_rally_camera_pitch_from_start", True):
             from . import et_rally_start_pose as sp
             m = sp.measured_start_pose()
             if m and m.get("n_dots", 0) >= 1 and abs(m.get("pitch_deg", 0.0)) <= 1.5 and m.get("pitch_deg"):
@@ -201,5 +262,6 @@ class EtRallyCameraCorrect(Behaviour):
             self.proc.send("track 0")
         if self.corrector is not None:
             ages = sorted(self.ages) or [0.0]
-            self.logger.info("camera correct: finished %s total (%+.1f,%+.1f mm %+.2f deg) image age median %.3fs max %.3fs" % (
-                self.corrector.counts, *self.corrector.total, ages[len(ages) // 2], ages[-1]))
+            self.logger.info("camera correct: finished %s total (%+.1f,%+.1f mm %+.2f deg) image age median %.3fs max %.3fs pitch %+.1f (changed %d)" % (
+                self.corrector.counts, *self.corrector.total, ages[len(ages) // 2], ages[-1],
+                self.corrector.pitch, self.corrector.pitch_changes))

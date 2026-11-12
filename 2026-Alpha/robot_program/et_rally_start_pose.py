@@ -170,6 +170,42 @@ class GroundCamera:
         return np.stack([self.top_x[1] - pts[:, 1] * self.top_s, self.top_y[1] - pts[:, 0] * self.top_s], 1)
 
 
+def camera_center(calib_path=None):
+    """2026-11-12: カメラの位置(車体の座標 mm、前・左・上)を較正ファイルから出す(cv2 を使わない。走行中の補正の親プロセス用)。
+    GroundCamera と同じく、左右の向きの補正 yaw_fix で車軸の真ん中のまわりに回し、lat_fix だけ左右に動かす(下向きの補正では位置は変わらない)。"""
+    import numpy as np
+    d = json.load(open(calib_path or DEFAULT_CALIB, encoding="utf-8"))
+    j = d["jig"][0]
+    rv = np.array(j["rvec"], dtype=float).reshape(3); t = np.array(j["tvec"], dtype=float).reshape(3)
+    th = float(np.linalg.norm(rv))
+    if th < 1e-12:
+        R = np.eye(3)
+    else:
+        k = rv / th
+        K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+        R = np.eye(3) + math.sin(th) * K + (1 - math.cos(th)) * (K @ K)
+    C = -R.T @ t
+    yaw = math.radians(float(d.get("yaw_fix_deg", 0.0)))
+    if yaw:
+        c_, s_ = math.cos(yaw), math.sin(yaw)
+        C = np.array([[c_, s_, 0.0], [-s_, c_, 0.0], [0.0, 0.0, 1.0]]) @ C   # Rz^T C
+    C = C + np.array([0.0, float(d.get("lat_fix_mm", 0.0)), 0.0])
+    return tuple(float(v) for v in C)
+
+
+def repitch(xy, dpitch_deg, C):
+    """下向きの補正なしのカメラで見た床の点 (前, 左) を、下向きを dpitch_deg 度足したカメラで見た位置に直す
+    (GroundCamera の extra_pitch_deg と同じ回し方。画像から作り直した場合と0.3mm以内で一致、11/12)。"""
+    dx, dy, dz = xy[0] - C[0], xy[1] - C[1], -C[2]
+    a = math.radians(dpitch_deg)
+    c_, s_ = math.cos(a), math.sin(a)
+    ex, ez = c_ * dx - s_ * dz, s_ * dx + c_ * dz
+    if ez >= -1e-9:
+        return None
+    k = -C[2] / ez
+    return (C[0] + k * ex, C[1] + k * dy)
+
+
 def _inside(cam, pts):
     """真上から見た画像の点(列, 行)が、すべて元の画像の中(端から少し内側)に入っているか。"""
     hgt, wid = cam.valid.shape
@@ -459,6 +495,25 @@ def fit_pose_pitch(cam, dets, nominal=(START_MM[0], START_MM[1], START_HEADING_D
     out = dict(r0)
     out.update(pose=(float(p[1]), float(p[2]), _nd(float(p[3]))), pitch_deg=math.degrees(p[0]),
                rms_px=float(math.sqrt((r ** 2).mean())), scale=1.0)
+    # 2026-11-12: 食い違い(resid_mm)を、当てはめた下向きで床に写し直して測る。それまでは下向きを直す前の
+    # 位置で測っていて、下向きの補正が大きい回(+0.65°)では、実際は3mm以内でも19mm と出ていた。
+    try:
+        c, s_ = math.cos(p[0]), math.sin(p[0])
+        R = cam.R0 @ np.array([[c, 0, s_], [0, 1, 0], [-s_, 0, c]])
+        und = cv2.undistortPoints(px0.reshape(-1, 1, 2).astype(np.float64), cam.K, cam.dist).reshape(-1, 2)
+        a = math.radians(p[3])
+        res_mm = []
+        for (u, v), w in zip(und, world):
+            d = R.T @ np.array([u, v, 1.0])
+            if abs(d[2]) < 1e-9:
+                raise ValueError
+            k = -cam.C0[2] / d[2]
+            bx, by = cam.C0[0] + k * d[0], sgn * (cam.C0[1] + k * d[1])
+            wx = p[1] + bx * math.cos(a) - by * math.sin(a); wy = p[2] + bx * math.sin(a) + by * math.cos(a)
+            res_mm.append(math.hypot(wx - w[0], wy - w[1]))
+        out["resid_mm"] = float(max(res_mm))
+    except Exception:
+        pass
     return out
 
 
