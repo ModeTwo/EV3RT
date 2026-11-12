@@ -13,8 +13,13 @@
    - 画像ごとにカメラの位置と向きを出し、下向きが真ん中の1枚を先頭(ロボットが使う jig[0])にして保存する。
    - ばらつきが大きければ警告する(置き直しが雑・ボードがずれた・画像がぶれた)。
    - --set-default で、robot_program/et_rally_start_pose.py の DEFAULT_CALIB を新しいファイルに書き換える。
-3. git で commit・push し、ロボットで git pull する。そのあと、スタート位置に置いて1回走らせ、
-   ログの "start pose:" の pitch_fix と items(点が1つ以上見えているか)を見る。
+3. git で commit・push し、ロボットで git pull する。
+4. 床で確かめる(2026-11-12 追加。較正台の下向きは撮るたびに約1°ずれることがあり、床で確かめないと危ない):
+   スタート位置にまっすぐ置いて(ものさしは不要)、アームを動かすだけの計画で取り込みを1回する:
+     python alpha.py right --mission rally-drive --rally-gyro-hub-recal-sec 2 --rally-gyro-drift-settle-sec 1.0 --rally-start-pose on --rally-camera-log 5 --rally-camera-exposure 30 --rally-arm-stop-ticks 3 --rally-arm-power 40 --rally-arm-travel-deg 260 --rally-plan-path robot_program/tests/plan_test_arm_only_1111.json
+   ログの "start pose:" で、点が1つ以上見えていて(dots>=1)、計画のスタートからのずれ(plan start ...)が数mm〜1cm程度なら合格。
+   数cmずれる・位置が出ないときは、較正台を置き直して撮り直す(このときは --set-default で書き換えた分を元に戻す)。
+   合格した回の下向き(pitch_fix)はロボットが run_logs/et_rally_last_pitch.json に覚え、点が見えない回の走行中の補正に使う。
 """
 import argparse
 import glob
