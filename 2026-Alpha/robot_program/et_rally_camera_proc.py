@@ -234,6 +234,18 @@ def _child(cfg):
     done_n = 0
     while not state['quit']:
         if not (state['track'] or state['detect']):
+            if cam_start is None and not state.get('prebuilt'):
+                # 2026-11-12: スタートの広い範囲の対応表(約56万点)は作るのが重く、測り始めの時間を食っていた
+                # (2秒で3〜4枚)。待っている間に先に作っておく。
+                state['prebuilt'] = True
+                try:
+                    from robot_program import et_rally_start_pose as sp
+                    cam_start = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S,
+                                                top_x=sp.START_WIDE_X, top_y=sp.START_WIDE_Y)
+                    sp.set_gate_legs(cfg.get('gates'))
+                except Exception:
+                    cam_start = None
+                continue
             time.sleep(0.01)
             continue
         if not ready_ev.wait(0.1):

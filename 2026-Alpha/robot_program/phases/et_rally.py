@@ -209,7 +209,9 @@ def build_et_rally_phase(context, config):
         ready = None
         if isinstance(arm_up, EtRallyArmUpWithDriftMeasure):
             ready = lambda node=arm_up: getattr(node, "arm_done_time", None) is not None
-        capture = EtRallyStartPoseCapture("et_rally start pose", duration_sec=2.0 if pose_sec is None else pose_sec,
+        # 2026-11-12: 2.0→2.9秒。アームのあとジャイロを測り終わるまで(約3.0秒)は待つので、時間は延びない。
+        # 広い範囲で測るようになり1枚が重くなったため、枚数を増やす。
+        capture = EtRallyStartPoseCapture("et_rally start pose", duration_sec=2.9 if pose_sec is None else pose_sec,
                                           calib_path=getattr(config, "et_rally_camera_calib_path", None), ready=ready)
         if ready is not None:
             both = Parallel(name="et_rally arm/gyro + start pose", policy=ParallelPolicy.SuccessOnAll(synchronise=True))

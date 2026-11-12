@@ -203,10 +203,44 @@ def detect_ground(cam, img):
     out = {"markers": [], "dots": []}
     # マーカー
     dark = (((bg - v) > 25) & low_sat).astype(np.uint8) * 255
-    k = int(round(6.0 / S))
-    blob = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)))
-    n, lab, st, _ = cv2.connectedComponentsWithStats(blob)
     marker_mask = np.zeros(dark.shape, np.uint8)
+    # 2026-11-12: 遠い(約75cm)マーカーは粗い画像で暗い所が細かく割れ、6mm の閉じでは1つにならないことがあった
+    # (配置36のスタートで前へ2cm置いた回)。6mm で見つからなかった所を、10mm の閉じでもう一度探す。
+    for close_mm in (6.0, 10.0):
+        _find_markers(cam, dark, close_mm, out, marker_mask)
+    # 灰色の点: 点(直径44mm)より広い約100mm四方を明るさの基準にする(30mmだと点の中が基準になり縁しか残らない)。
+    # 重いので、4分の1に縮めた画像で中央値をとってから元の大きさに戻す。
+    small = cv2.resize(hsv[..., 2], None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+    k_dot = int(round(100.0 / (S * 4))) | 1
+    bg_dot = cv2.resize(cv2.medianBlur(small, min(k_dot, 255)), (v.shape[1], v.shape[0]), interpolation=cv2.INTER_LINEAR).astype(np.int16)
+    gray = (((bg_dot - v) > 10) & low_sat & (marker_mask == 0)).astype(np.uint8) * 255
+    gray = cv2.morphologyEx(gray, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, ((int(round(2.5 / S)) | 1),) * 2))
+    n, lab, st, cen = cv2.connectedComponentsWithStats(gray)
+    r_lo, r_hi = DOT_DIAM_MM[0] / 2.0 / S, DOT_DIAM_MM[1] / 2.0 / S
+    for i in range(1, n):
+        area = st[i, 4]
+        if not (math.pi * r_lo ** 2 * 0.6 <= area <= math.pi * r_hi ** 2 * 1.2):
+            continue
+        ys, xs = np.nonzero(lab == i)
+        (ccx, ccy), rr = cv2.minEnclosingCircle(np.stack([xs, ys], 1).astype(np.float32))
+        if not (r_lo <= rr <= r_hi) or area / (math.pi * rr * rr) < 0.65:
+            continue
+        ring = [(ccx + (rr + 1.5 / S) * math.cos(a), ccy + (rr + 1.5 / S) * math.sin(a)) for a in np.linspace(0, 2 * math.pi, 16, endpoint=False)]
+        if not _inside(cam, ring):
+            continue
+        out["dots"].append(tuple(float(x) for x in cam.to_mm([(cen[i][0], cen[i][1])])[0]))
+    return out
+
+
+def _find_markers(cam, dark, close_mm, out, marker_mask):
+    """detect_ground のマーカー探し。close_mm の閉じで暗い所をつなぎ、まだ marker_mask にない所だけ out に足す。"""
+    cv2, np = cam.cv2, cam.np
+    S = cam.top_s
+    k = max(1, int(round(close_mm / S)))
+    blob = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)))
+    if marker_mask.any():
+        blob[marker_mask > 0] = 0
+    n, lab, st, _ = cv2.connectedComponentsWithStats(blob)
     for i in range(1, n):
         if not ((35.0 / S) ** 2 <= st[i, 4] <= (62.0 / S) ** 2):
             continue
@@ -236,28 +270,6 @@ def detect_ground(cam, img):
         rot = ((sum(dirs) / 4.0 + 45.0) % 90.0) - 45.0
         out["markers"].append({"xy": tuple(float(x) for x in g.mean(0)), "rot": rot})
         cv2.drawContours(marker_mask, [np.int32(box)], 0, 255, -1)
-    # 灰色の点: 点(直径44mm)より広い約100mm四方を明るさの基準にする(30mmだと点の中が基準になり縁しか残らない)。
-    # 重いので、4分の1に縮めた画像で中央値をとってから元の大きさに戻す。
-    small = cv2.resize(hsv[..., 2], None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
-    k_dot = int(round(100.0 / (S * 4))) | 1
-    bg_dot = cv2.resize(cv2.medianBlur(small, min(k_dot, 255)), (v.shape[1], v.shape[0]), interpolation=cv2.INTER_LINEAR).astype(np.int16)
-    gray = (((bg_dot - v) > 10) & low_sat & (marker_mask == 0)).astype(np.uint8) * 255
-    gray = cv2.morphologyEx(gray, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, ((int(round(2.5 / S)) | 1),) * 2))
-    n, lab, st, cen = cv2.connectedComponentsWithStats(gray)
-    r_lo, r_hi = DOT_DIAM_MM[0] / 2.0 / S, DOT_DIAM_MM[1] / 2.0 / S
-    for i in range(1, n):
-        area = st[i, 4]
-        if not (math.pi * r_lo ** 2 * 0.6 <= area <= math.pi * r_hi ** 2 * 1.2):
-            continue
-        ys, xs = np.nonzero(lab == i)
-        (ccx, ccy), rr = cv2.minEnclosingCircle(np.stack([xs, ys], 1).astype(np.float32))
-        if not (r_lo <= rr <= r_hi) or area / (math.pi * rr * rr) < 0.65:
-            continue
-        ring = [(ccx + (rr + 1.5 / S) * math.cos(a), ccy + (rr + 1.5 / S) * math.sin(a)) for a in np.linspace(0, 2 * math.pi, 16, endpoint=False)]
-        if not _inside(cam, ring):
-            continue
-        out["dots"].append(tuple(float(x) for x in cam.to_mm([(cen[i][0], cen[i][1])])[0]))
-    return out
 
 
 # ---------------- 位置と向きを出す ----------------
