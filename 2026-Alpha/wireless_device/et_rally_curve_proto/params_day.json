@@ -1,0 +1,114 @@
+{
+ "laps": 6,
+ "front": 7.5,
+ "rear": 17.9,
+ "half_width": 7.0,
+ "margin_front": 3.0,
+ "margin_rear": 3.0,
+ "radii": [
+  20.0,
+  15.0,
+  12.0,
+  10.0,
+  8.0
+ ],
+ "tail_cm": 4.0,
+ "ext": [
+  0.0,
+  4.0,
+  8.0,
+  14.0,
+  22.0,
+  35.0
+ ],
+ "offsets": [
+  0.0
+ ],
+ "angles": [
+  -30.0,
+  -20.0,
+  -10.0,
+  0.0,
+  10.0,
+  20.0,
+  30.0
+ ],
+ "oblique_mode": "both",
+ "split_radii": [
+  20.0,
+  15.0,
+  10.0
+ ],
+ "oblique_policy": "all",
+ "angle_scan": [
+  -30.0,
+  30.0,
+  1.0
+ ],
+ "oblique_both": true,
+ "start_at": "goal",
+ "goal_at": "garage",
+ "goal_heading": 0.0,
+ "goal_headings": [
+  0.0,
+  90.0,
+  180.0,
+  -90.0
+ ],
+ "same_laps": true,
+ "join_max_cm": 8.0,
+ "start_any_gate": true,
+ "visit_filter": {},
+ "margin_list": [
+  3.0,
+  2.5,
+  2.0,
+  1.5
+ ],
+ "narrow_safest": true,
+ "candidates_only": false,
+ "start_prelude": true,
+ "keepout_body": true,
+ "start_exempt_cm": 20.0,
+ "keepout": [
+  [
+   -1000000000.0,
+   1000000000.0,
+   138.56,
+   1000000000.0
+  ],
+  [
+   138.56,
+   1000000000.0,
+   73.92,
+   1000000000.0
+  ],
+  [
+   -1000000000.0,
+   -34.0,
+   -1000000000.0,
+   1000000000.0
+  ]
+ ],
+ "allow_reverse": true,
+ "allow_pivot": true,
+ "gate_model": "rect",
+ "leg_len": 7.5,
+ "leg_dia": 2.5,
+ "gate_inner_min": 22.7,
+ "gate_outer_max": 29.5,
+ "arm_front_cm": 5.0,
+ "arm_half_width_cm": 7.0,
+ "pen_stop": 0.0,
+ "pen_pivot": 0.0,
+ "pen_rev_m": 1.0,
+ "pen_arc_100deg": 0.0,
+ "wp_step": 8.0,
+ "wp_headings": 12,
+ "wp_tries": 60,
+ "via_max_tries": 40,
+ "via_always": false,
+ "via_budget_sec": 8.0,
+ "pivot_back_cm": 0.5,
+ "note": "2026-11-12 当日用の1段目(速い設定): 11/11の50配置と同じ探索の設定(斜め±30°・10°刻み、狭い配置は垂直に通れないゲートだけ斜め)。時間の値は hybrid_route.py の既定(実測)を使うので、ここには書かない。"
+}
