@@ -46,6 +46,13 @@ class CameraCorrector:
     # 違うと前後のずれの見え方も10mm以上変わる。画像ごとに PITCH_GRID の各値で当てはめ、直近 PITCH_WINDOW 枚
     # (3つ以上結びついたもの)の残差の中央値が一番小さい値を使う。机上(8回の走り): どの回も一番合う固定の値と同じくらい
     # (捨てた割合 0〜16%、スタートの値を持ち込むと7〜68%)。
+    # 2026-11-12: ずれが大きく(STRONG_MIN_MM 以上)、直前の画像(STRONG_WINDOW_SEC 秒以内、前回入れた分を引いたもの)と
+    # STRONG_AGREE_MM 以内で同じに見えたら、位置は STRONG_GAIN で強く直す。配置36の最後の黄: 大回りの円弧(補正が入らない)の
+    # あと右へ18〜30mm ずれて黄の直進に入り、0.15ずつでは黄までにほとんど戻らなかった(右側が脚に近かった)。
+    STRONG_GAIN = 0.5
+    STRONG_MIN_MM = 10.0
+    STRONG_AGREE_MM = 6.0
+    STRONG_WINDOW_SEC = 0.5
     PITCH_GRID = tuple(round(-0.3 + 0.1 * i, 1) for i in range(13))   # -0.3〜+0.9°(較正ファイルの下向きに足す分)
     PITCH_WINDOW = 15
     PITCH_MIN_FRAMES = 5
@@ -55,6 +62,7 @@ class CameraCorrector:
                  at=None, apply=None, logger=None, far_confirm=0, cam_center=None):
         # cam_center: カメラの位置(前, 左, 上 mm)。与えたら下向きを走りながら選ぶ(子プロセスは較正ファイルの下向きのまま)。
         self.cam_center = cam_center
+        self.last_diff = None   # (t, ex, ey): 直前の画像で見たずれから、そのあと入れた分を引いたもの
         self.pitch = 0.0
         self.pitch_hist = []
         self.pitch_changes = 0
@@ -109,10 +117,18 @@ class CameraCorrector:
             far_ok = True
         else:
             self.recent_far = []
-        dx, dy, dh = self.gain_pos * ex, self.gain_pos * ey, self.gain_head * eh
+        g = self.gain_pos
+        prev, self.last_diff = self.last_diff, (t, ex, ey)
+        if (math.hypot(ex, ey) >= self.STRONG_MIN_MM and prev is not None and 0.0 < t - prev[0] <= self.STRONG_WINDOW_SEC
+                and math.hypot(ex - prev[1], ey - prev[2]) <= self.STRONG_AGREE_MM and not far_ok):
+            g = max(g, self.STRONG_GAIN)
+        dx, dy, dh = g * ex, g * ey, self.gain_head * eh
         if self.apply is not None and self.apply(dx, dy, dh) is False:
             self.counts["not_line"] += 1
             return None
+        self.last_diff = (t, ex - dx, ey - dy)
+        if g > self.gain_pos:
+            self.counts["strong"] = self.counts.get("strong", 0) + 1
         self.counts["used"] += 1
         if far_ok:
             self.counts["far_ok"] += 1
