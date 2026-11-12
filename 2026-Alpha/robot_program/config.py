@@ -176,7 +176,8 @@ class RaceConfig:
     # 2026-10-31: 50mmより短い直進を、この距離(mm)だけ手前で終える(既定None=計画どおりの距離を走る)。
     et_rally_move_short_lead_mm: Optional[float] = None
     # 2026-11-01: 後退・円弧・止まらずに続く区間を含む計画で、目標の向きと曲がり具合を先読みする時間(秒)。Noneなら0.06。
-    et_rally_path_lead_sec: Optional[float] = 0.12
+    # 2026-11-12: 0.12→0.08。seed6周で同じ条件・lead_secだけ変えて、0.08/0.10が向きのずれ約半分・約3秒速い、0.06以下は悪化。
+    et_rally_path_lead_sec: Optional[float] = 0.08
     # 2026-11-01: 同じ計画で、円弧の中だけ使う向きのPIDのI。Noneなら0.6。
     et_rally_path_arc_pid_i: Optional[float] = None
     # 2026-11-02: 同じ計画で、円弧の速さの倍率。1.0なら外側の車輪が直進の出力を超えない速さ(従来)。
@@ -198,6 +199,9 @@ class RaceConfig:
     # 2026-11-11: 0.12→0.1、出力 80→100(C+D+調整)。seedの6周で 59.6→58.2/58.0秒、ゲートの横ずれ 前半2.8〜7.0・後半6.6〜7.9mm。
     et_rally_path_ramp_sec: Optional[float] = 0.1
     et_rally_path_power: Optional[float] = 100.0
+    # 2026-11-12: 直進の区間だけの出力(Noneなら et_rally_path_power と同じ)。出力100の直進は左右の出力が上限に張り付き、
+    # 向きを片方の車輪を遅くすることでしか直せないため、少し下げて揺れが減るかを試す。
+    et_rally_path_line_power: Optional[float] = None
     # 2026-11-03: 円弧・直進の区間の始めから何tick分、毎tickの出力と実際の車輪の回りをログに出すか(Noneなら出さない)。
     et_rally_path_wheel_log_ticks: Optional[float] = None
     # 2026-11-03: 円弧の左右の差(フィードフォワード)の倍率(Noneなら1.0)。円弧では実際の輪距が計算より大きく効くため。

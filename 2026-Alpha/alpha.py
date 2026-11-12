@@ -1447,6 +1447,8 @@ def _run_main(argv, startup_cleanup):
                         help='Like --rally-path-ramp-mm but in seconds x current speed (the larger of the two is used; default 0 = off).')
     parser.add_argument('--rally-path-power', type=float, default=None,
                         help='Cruise power for path-plan segments (arcs / chained moves) only (default 80).')
+    parser.add_argument('--rally-path-line-power', type=float, default=None,
+                        help='Cruise power for straight path segments only (default: same as --rally-path-power).')
     parser.add_argument('--rally-path-wheel-log', type=float, default=None,
                         help='Log commanded power and actual wheel rotation for the first N ticks of each path segment (default 0 = off).')
     parser.add_argument('--rally-path-stop-lead', type=float, default=None,
@@ -1828,6 +1830,7 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),
                               ('--rally-path-ramp-sec', 'rally_path_ramp_sec', 0.0, 1.0),
                               ('--rally-path-power', 'rally_path_power', 30.0, 100.0),
+                              ('--rally-path-line-power', 'rally_path_line_power', 30.0, 100.0),
                               ('--rally-path-wheel-log', 'rally_path_wheel_log', 0.0, 200.0),
                               ('--rally-path-ff-scale', 'rally_path_ff_scale', 0.5, 2.0),
                               ('--rally-path-stop-lead', 'rally_path_stop_lead', 0.0, 40.0),

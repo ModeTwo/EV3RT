@@ -446,6 +446,7 @@ _STRATEGY_KWARGS_FROM_CONFIG = (
     ("path_inner_min_power", "et_rally_path_inner_min_power"),
     ("path_ramp_sec", "et_rally_path_ramp_sec"),
     ("path_power", "et_rally_path_power"),
+    ("path_line_power", "et_rally_path_line_power"),
     ("path_wheel_log_ticks", "et_rally_path_wheel_log_ticks"),
     ("path_ff_scale", "et_rally_path_ff_scale"),
     ("path_stop_lead_mm", "et_rally_path_stop_lead"),
@@ -681,6 +682,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # EtRallyPathSegmentの区間だけの出力(Noneならmove_power=80。従来の直進・旋回には効かない)。
                         path_ramp_sec=None,
                         path_power=None,
+                        path_line_power=None,
                         # 2026-11-03: 区間の始めから何tick分、毎tickの出力と実際の車輪の回りをログに出すか(Noneなら0=出さない)。
                         path_wheel_log_ticks=None,
                         # 2026-11-03: 円弧の左右の差(フィードフォワード)の倍率(Noneなら1.0)。
@@ -914,7 +916,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 kind="arc" if step["type"] == "arc" else "line",
                 end_heading_deg=heading,
                 length_mm=step["distance_mm"],
-                power=move_power if path_power is None else int(path_power),
+                # 2026-11-12: 直進の区間だけ出力を下げて、向きを直す余地(両方の車輪を速くも遅くもできる)を残す試験用。
+                power=(int(path_line_power) if (path_line_power is not None and step["type"] == "move")
+                       else (move_power if path_power is None else int(path_power))),
                 pid_p=active_move_pid[0], pid_i=active_move_pid[1], pid_d=active_move_pid[2],
                 sweep_deg=step.get("sweep_deg", 0.0),
                 radius_mm=step.get("radius_mm", 0.0),
