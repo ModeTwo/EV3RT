@@ -448,10 +448,12 @@ def median_pose(results):
     if not results:
         return None
     xs = sorted(r["pose"][0] for r in results); ys = sorted(r["pose"][1] for r in results)
-    hs = sorted(r["pose"][2] for r in results)
+    # 11/12: スタートの向きは約180°で、+179.9 と -179.9 が混ざると素直に並べた真ん中が0°になっていた
+    # (取り込みが「ずれが大きい」で捨てられた)。スタートの向きからの差(-180〜180)で真ん中を取る。
+    hs = sorted(_nd(r["pose"][2] - START_HEADING_DEG) for r in results)
     mid = len(results) // 2
     pick = (lambda v: v[mid]) if len(results) % 2 else (lambda v: (v[mid - 1] + v[mid]) / 2.0)
-    return (pick(xs), pick(ys), pick(hs))
+    return (pick(xs), pick(ys), _nd(pick(hs) + START_HEADING_DEG))
 
 
 # ---------------- 最初のつなぎの引き直し ----------------
