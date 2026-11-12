@@ -1847,8 +1847,17 @@ def main():
     exit_info = None
     if GOAL_AT == 'garage' and used:
         es = [e for (key, e, s_) in used if key == ('yellow', 'red')]
-        if es and all(x == es[0] for x in es):
-            e0 = es[0]; tab = T[('yellow', 'GOAL')]
+        # 2026-11-12: 1周目だけ黄の抜けが違う配置(50配置のうち13)では、切り上げのつなぎを作っていなかった
+        # (10周で作ると時間で切り上げられず全部走ってしまう)。一番多い抜け(2周目以降の同じ通り方)の周だけで作る。
+        ex_laps = []
+        # スタートのあと赤の前に黄を1回通る形(start_prelude)では、最初の ('yellow','red') は周に数えない
+        if es and used[0][0] == ('START', 'yellow'):
+            es = es[1:]
+        if es:
+            e0 = max(set(es), key=lambda x: (es.count(x), max(i for i, y in enumerate(es) if y == x)))
+            ex_laps = [i + 1 for i, x in enumerate(es) if x == e0]
+        if ex_laps:
+            tab = T[('yellow', 'GOAL')]
             best = None
             for s_ in range(len(tab.starts)):
                 for _ in range(4):
@@ -1862,12 +1871,14 @@ def main():
                         best = (float(tab.C[e0, s_]), s_)
             if best is not None:
                 ep = list(tab.prims[(e0, best[1])])
-                exit_info = dict(cost=round(best[0], 2), laps=list(range(1, LAPS)), prims=[ser(p) for p in ep],
+                exit_info = dict(cost=round(best[0], 2), laps=ex_laps, prims=[ser(p) for p in ep],
                                  arm_down=arm_can_be_down(ep))
-                print('exit: from laps 1..%d yellow to the garage %.1fs (arm down from %.1fcm)' % (
-                    LAPS - 1, best[0], exit_info['arm_down']['cm']), flush=True)
+                print('exit: from laps %s yellow to the garage %.1fs (arm down from %.1fcm)' % (
+                    ex_laps, best[0], exit_info['arm_down']['cm']), flush=True)
+            else:
+                print('exit: NO path from the yellow exit to the garage (no early exit)', flush=True)
         else:
-            print('exit: the yellow exits differ between laps, no early exit to the garage', flush=True)
+            print('exit: no yellow exits, no early exit to the garage', flush=True)
     json.dump(dict(total=total, params=PARAMS, margin=MARGIN_FRONT, narrow=bool(MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]), audit=audit, arm=arm, arm_down=arm_down, exit=exit_info, blocks=blocks), open(sys.argv[2], 'w'))
 
 

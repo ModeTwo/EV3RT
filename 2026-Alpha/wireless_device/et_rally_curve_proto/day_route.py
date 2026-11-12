@@ -70,6 +70,8 @@ def main():
     ap.add_argument('--course', choices=('right', 'left'), default='right')
     ap.add_argument('--full-sec', type=float, default=0.0, help='2段目に使う秒(0なら1段目だけ)')
     ap.add_argument('--first-sec', type=float, default=600.0, help='1段目の打ち切り(秒)')
+    ap.add_argument('--budget-sec', type=float, default=70.0,
+                    help='持ち時間(秒)。切り上げの道が作れなかったとき、全部の周がこれに収まる周回数で作り直す')
     a = ap.parse_args()
 
     work = os.path.join(ROOT, 'run_logs', 'day_route', a.name)
@@ -98,6 +100,21 @@ def main():
             print('2段目: 道具の見込み %.1f秒、すき間 %.1fcm、計算 %.0f秒' % (r2['total'], r2.get('margin') or 0, t2))
             if r2['total'] < r1['total'] - 0.2:
                 best, best_path = r2, os.path.join(work, 'r2.json')
+
+    # 2026-11-12: 途中の周で切り上げる道(exit)がない経路は、ロボットが時間で切り上げられず全部の周を走る。
+    # そのときは、全部の周が持ち時間に収まる周回数まで減らして作り直す(実機は道具の見込みの約1.08倍、余裕3秒)。
+    if not best.get('exit'):
+        print('注意: 途中の周でガレージへ切り上げる道が作れなかった。持ち時間 %.0f 秒に収まる周回数で作り直す' % a.budget_sec)
+        for laps in range(int(base.get('laps', 10)) - 1, 2, -1):
+            p = dict(json.load(open(best_path + '.params.json', encoding='utf-8')), laps=laps)
+            rr, tt = run_tool(gp, p, os.path.join(work, 'r_l%d.json' % laps), os.path.join(work, 'log_l%d.txt' % laps), a.first_sec)
+            if rr is None:
+                continue
+            est = rr['total'] * 1.08
+            print('  %d周: 道具の見込み %.1f秒(実機の目安 %.1f秒)%s' % (laps, rr['total'], est, '、切り上げの道あり' if rr.get('exit') else ''))
+            if rr.get('exit') or est <= a.budget_sec - 3.0:
+                best, best_path = rr, os.path.join(work, 'r_l%d.json' % laps)
+                break
 
     out = os.path.join(TESTS, 'plan_%s.json' % a.name)
     subprocess.run([sys.executable, os.path.join(HERE, 'to_plan.py'), best_path, gp, out],
