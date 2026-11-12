@@ -188,6 +188,7 @@ def _child(cfg):
         os.makedirs(folder, exist_ok=True)
         meta = open(os.path.join(folder, 'meta.jsonl'), 'a', encoding='utf-8')
     cam = None
+    cam_start = None
     cnt = dict(n=0, saved=0, detected=0, tracked=0)
     latest = dict(frame=None, t=0.0, n=0)
     lock = threading.Lock()
@@ -267,12 +268,18 @@ def _child(cfg):
         if state['detect']:
             try:
                 from robot_program import et_rally_start_pose as sp
-                if cam is None:
-                    cam = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S)
+                # 2026-11-12: スタートは広い範囲で見つけ、今の範囲で足りないときだけ外側も使う(choose_start_fit)。
+                # 走行中の補正の cam とは別に持つ(範囲が違うため)。
+                if cam_start is None:
+                    cam_start = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S,
+                                                top_x=sp.START_WIDE_X, top_y=sp.START_WIDE_Y)
                     sp.set_gate_legs(cfg.get('gates'))
-                dets = sp.detect_ground(cam, frame)
-                r = sp.fit_pose_pitch(cam, dets, mirror=state['mirror'])
-                r0 = sp.fit_pose_search(dets, mirror=state['mirror']) if r is not None else None
+                dets = sp.detect_ground(cam_start, frame)
+                r, r0, wide = sp.choose_start_fit(cam_start, dets, mirror=state['mirror'])
+                if r is not None:
+                    r = dict(r, wide=wide)
+                else:
+                    r0 = None
                 say(ev='pose', t=t, n=n, r=_plain(r), r0=_plain(r0))
                 cnt['detected'] += 1
             except Exception as error:   # 較正ファイルがないなど。1回だけ知らせて、位置を出すのはやめる

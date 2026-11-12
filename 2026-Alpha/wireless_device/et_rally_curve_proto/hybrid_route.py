@@ -51,6 +51,12 @@ PARAMS = dict(
     # (平行で隣の列のゲートは間隔24.64cmが車体より短く、抜けきる・手前から入るの条件で数cm戻っていた)。0で無効。
     # start_any_gate: 赤をくぐり始めるまでは、赤以外のゲートをくぐってよい(色の順番は赤から数える)。
     same_laps=True, join_max_cm=8.0, start_any_gate=True,
+    # final_min_clear_cm: 最後の周の黄(そのあとガレージへ向かう)の通り方は、脚とのすき間がこれ以上のものだけにする(0で無効)。
+    # 2026-11-12 実機: 配置36で最後の黄だけ反対向きから25°斜めに通り抜ける計画(すき間1.70cm)になり、その手前で大きく
+    # 回り込む円弧(カメラがほとんど床の点を見ない)の間に約2cm 右にずれて、右側が脚に当たった。ユーザー決定で2cmにする。
+    final_min_clear_cm=2.0,
+    # final_yellow_visits: 最後の周の黄に使ってよい通り方 [sign, mode, angle, angle_out] の一覧(空なら絞らない。比べる用)
+    final_yellow_visits=[],
     # 2段階探索の2段目: 色ごとに使う通り方 [sign, mode, angle, angle_out] だけに絞る(空なら絞らない)
     visit_filter={},
     # 狭い配置の判定(2026-11-09): この順にすき間を試し、3色ともゲートを通る候補がある最初のすき間で探索する。
@@ -940,6 +946,7 @@ def pass_clearance(prims):
 
 
 OBLIQUE_CHOICE = []   # 記録: (色, 側, 通り方, 入り, 抜け, 半径, すき間)
+FINAL_YELLOW_COST = None   # 最後の周の黄の通り方の費用(すき間の足りないものは INF)。main で決める
 
 
 def _retrace(q):
@@ -1522,13 +1529,14 @@ def solve_same_laps(T, vs, ends):
     """2周目〜最後の1つ前の周を同じ通り方にする最短。赤の入りの姿勢 s_r ごとに「s_r から1周して s_r に戻る時間」と
     「s_r から最後の周を走ってゴールする時間」を出し、1周目で s_r に着く時間と合わせて一番短い s_r を選ぶ。
     戻り値: (合計, used, picks)。経路がなければ (INF, None, None)。"""
-    def layer(prev, tab, color):
+    def layer(prev, tab, color, c_over=None):
+        s_arr, e_arr, c_arr = vs[color]
+        if c_over is not None:
+            c_arr = c_over
         if hr_kernels.AVAILABLE:
-            s_arr, e_arr, c_arr = vs[color]
             return hr_kernels.layer(prev, tab.C, s_arr, e_arr, c_arr, len(ends[color]))
         M = prev[:, None] + tab.C
         bs = M.min(0); be = M.argmin(0)
-        s_arr, e_arr, c_arr = vs[color]
         tot = bs[s_arr] + c_arr
         cur = np.full(len(ends[color]), INF); arg = np.full(len(ends[color]), -1)
         order = np.argsort(tot)
@@ -1557,21 +1565,26 @@ def solve_same_laps(T, vs, ends):
     cur = np.full((len(srs), len(ends['red'])), INF)
     keep = kmap[s_arr] >= 0
     np.minimum.at(cur, (kmap[s_arr[keep]], e_arr[keep]), c_arr[keep])
-    for a, b in (('red', 'blue'), ('blue', 'yellow')):
-        s_arr, e_arr, c_arr = vs[b]
+    def batch(cur, a, b, c_arr=None):
+        s_arr, e_arr, c0 = vs[b]
+        c_arr = c0 if c_arr is None else c_arr
         if hr_kernels.AVAILABLE:
             bs = hr_kernels.min_over_e(cur, T[(a, b)].C)
-            cur = np.minimum(hr_kernels.visit_min(bs, s_arr, e_arr, c_arr, len(ends[b])), INF)
-            continue
+            return np.minimum(hr_kernels.visit_min(bs, s_arr, e_arr, c_arr, len(ends[b])), INF)
         bs = (cur[:, :, None] + T[(a, b)].C).min(1)
         tot = bs[:, s_arr] + c_arr
         order = np.argsort(e_arr, kind='stable')
         ue, first = np.unique(e_arr[order], return_index=True)
-        cur = np.full((len(srs), len(ends[b])), INF)
-        cur[:, ue] = np.minimum.reduceat(tot[:, order], first, axis=1)
+        out = np.full((len(srs), len(ends[b])), INF)
+        out[:, ue] = np.minimum.reduceat(tot[:, order], first, axis=1)
+        return out
+    cur_b = batch(cur, 'red', 'blue')
+    cur = batch(cur_b, 'blue', 'yellow')
+    # 最後の周の黄は、すき間の足りない通り方を除いた費用で選ぶ(final_min_clear_cm)
+    cur_f = batch(cur_b, 'blue', 'yellow', FINAL_YELLOW_COST) if FINAL_YELLOW_COST is not None else cur
     cyc = (cur + Tyr[:, srs].T).min(1)
     goal = T[('yellow', 'GOAL')].C.min(1)
-    suf = (cur + goal[None, :]).min(1)
+    suf = (cur_f + goal[None, :]).min(1)
     score = P[srs] + (LAPS - 2) * cyc + suf
     k = int(np.argmin(score)); total = float(score[k])
     if total >= INF / 2:
@@ -1586,13 +1599,18 @@ def solve_same_laps(T, vs, ends):
     cur1[ue] = tot[order[first]]; arg1[ue] = order[first]
     q1, be1, arg2 = layer(cur1, T[('red', 'blue')], 'blue')
     q2, be2, arg3 = layer(q1, T[('blue', 'yellow')], 'yellow')
+    if FINAL_YELLOW_COST is not None:
+        q2f, be2f, arg3f = layer(q1, T[('blue', 'yellow')], 'yellow', FINAL_YELLOW_COST)
+    else:
+        q2f, be2f, arg3f = q2, be2, arg3
 
-    def trace(e_y):
-        vy = int(arg3[e_y]); sy = int(vs['yellow'][0][vy]); eb = int(be2[sy])
+    def trace(e_y, final=False):
+        a3, b2 = (arg3f, be2f) if final else (arg3, be2)
+        vy = int(a3[e_y]); sy = int(vs['yellow'][0][vy]); eb = int(b2[sy])
         vb = int(arg2[eb]); sb = int(vs['blue'][0][vb]); er = int(be1[sb])
         vr = int(arg1[er])
         return vr, er, vb, sb, eb, vy, sy, e_y
-    e_c = int(np.argmin(q2 + Tyr[:, sr])); e_g = int(np.argmin(q2 + goal))
+    e_c = int(np.argmin(q2 + Tyr[:, sr])); e_g = int(np.argmin(q2f + goal))
     # 1周目
     e_y1 = int(P_e[sr]); vy = int(arg_y[e_y1]); sy = int(vs['yellow'][0][vy]); eb = int(be_y[sy])
     vb = int(arg_b[eb]); sb = int(vs['blue'][0][vb]); er = int(be_b[sb])
@@ -1609,7 +1627,7 @@ def solve_same_laps(T, vs, ends):
     picks += [('red', vr), ('blue', vb), ('yellow', vy)]
     for lap in range(LAPS - 1):
         last = lap == LAPS - 2
-        vr, er, vb, sb, eb, vy, sy, ey = trace(e_g if last else e_c)
+        vr, er, vb, sb, eb, vy, sy, ey = trace(e_g, final=True) if last else trace(e_c)
         used += [(('red', 'blue'), er, sb), (('blue', 'yellow'), eb, sy)]
         used.append((('yellow', 'GOAL'), ey, int(np.argmin(T[('yellow', 'GOAL')].C[ey]))) if last else (('yellow', 'red'), ey, sr))
         picks += [('red', vr), ('blue', vb), ('yellow', vy)]
@@ -1681,6 +1699,26 @@ def main():
     seq = ['red', 'blue', 'yellow'] * LAPS
     vs = {c: (np.array([v['s'] for v in cands[c]]), np.array([v['e'] for v in cands[c]]),
               np.array([v['cost'] for v in cands[c]])) for c in cands}
+    global FINAL_YELLOW_COST
+    FINAL_YELLOW_COST = None
+    if FINAL_MIN_CLEAR_CM and FINAL_MIN_CLEAR_CM > 0:
+        if not (SAME_LAPS and LAPS >= 3):
+            print('final_min_clear_cm: used only with same_laps and laps >= 3 (ignored)', flush=True)
+        else:
+            mf, mr = MARGIN_FRONT, MARGIN_REAR
+            MARGIN_FRONT = MARGIN_REAR = 0.0
+            clr = np.array([pass_clearance(v['prims']) for v in cands['yellow']])
+            MARGIN_FRONT, MARGIN_REAR = mf, mr
+            ok = clr >= FINAL_MIN_CLEAR_CM - 1e-9
+            if FINAL_YELLOW_VISITS:
+                allow_f = {tuple(x) for x in FINAL_YELLOW_VISITS}
+                ok &= np.array([(v['sign'], v['mode'], v['angle'], v['angle_out']) in allow_f for v in cands['yellow']])
+            if ok.any():
+                FINAL_YELLOW_COST = np.where(ok, vs['yellow'][2], INF)
+                print('final yellow: %d/%d ways through with clearance >= %.1fcm' % (ok.sum(), len(ok), FINAL_MIN_CLEAR_CM), flush=True)
+            else:
+                print('final yellow: no way through with clearance >= %.1fcm (best %.2fcm), not restricted' % (
+                    FINAL_MIN_CLEAR_CM, clr.max()), flush=True)
     it = 0
     phase = 1
     # 2026-11-09: 狭い配置(最初のすき間では通れなかった配置)は、遠回りなしでは経路がないことが多いので、最初から遠回りも使う

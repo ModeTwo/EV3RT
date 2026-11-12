@@ -78,6 +78,13 @@ TOP_S = 0.5
 FAST_TOP_S = 1.0
 TOP_X = (300.0, 820.0)
 TOP_Y = (-330.0, 330.0)
+# 2026-11-12: スタートで、今の範囲に点が見えない(脚が立っている)ときだけ使う広い範囲。配置36はスタートから見える
+# 4つの点すべてにゲートの脚が立ち、点0個(マーカー2つだけ)になって位置を取り込めなかった。広げると左右37cm・前87cmの
+# 点が入る(スタートの画像で配置36は点0→1〜2個、seed は1→3個)。ただし端の点は左右が数mmずれる癖がある
+# (左の遠い点で約-8mm)ので、今の範囲で足りるときは今の範囲だけを使う(choose_start_fit)。
+START_WIDE_X = (300.0, 950.0)
+START_WIDE_Y = (-430.0, 430.0)
+START_MIN_ITEMS_INNER = 3        # 今の範囲で点1つ以上かつ見えたもの3つ以上なら、今の範囲だけを使う
 QR_SIDE_MM = (44.0, 56.0)        # マーカーの1辺として受け入れる範囲(実物は50〜51mm)
 DOT_DIAM_MM = (34.0, 54.0)       # 灰色の点の直径として受け入れる範囲(実物は約44mm)
 
@@ -443,6 +450,28 @@ def fit_pose_pitch(cam, dets, nominal=(START_MM[0], START_MM[1], START_HEADING_D
     return out
 
 
+def _inner_dets(dets):
+    """広い範囲で見つけたもののうち、今の範囲(TOP_X・TOP_Y)に入るものだけ。"""
+    def ok(xy):
+        return TOP_X[0] <= xy[0] <= TOP_X[1] and TOP_Y[0] <= xy[1] <= TOP_Y[1]
+    return {"markers": [m for m in dets.get("markers", []) if ok(m["xy"])],
+            "dots": [d for d in dets.get("dots", []) if ok(d)]}
+
+
+def choose_start_fit(cam, dets, mirror=False):
+    """2026-11-12: スタートの位置。dets は広い範囲(START_WIDE_X/Y)で見つけたもの。
+    今の範囲だけで点1つ以上・見えたもの START_MIN_ITEMS_INNER 以上なら今の範囲の答え(今までと同じ)、
+    足りなければ広い範囲も使った答え(結びついたものが多い方)を返す。戻り値: (fit_pose_pitch の結果, 縮尺なしの結果, 広い範囲を使ったか)。"""
+    inner = _inner_dets(dets)
+    r_in = fit_pose_pitch(cam, inner, mirror=mirror)
+    if r_in is not None and r_in["n_dots"] >= 1 and r_in["n_dots"] + r_in["n_markers"] >= START_MIN_ITEMS_INNER:
+        return r_in, fit_pose_search(inner, mirror=mirror), False
+    r_w = fit_pose_pitch(cam, dets, mirror=mirror)
+    if r_w is not None and (r_in is None or (r_w["n_dots"], r_w["n_dots"] + r_w["n_markers"]) > (r_in["n_dots"], r_in["n_dots"] + r_in["n_markers"])):
+        return r_w, fit_pose_search(dets, mirror=mirror), True
+    return r_in, (fit_pose_search(inner, mirror=mirror) if r_in is not None else None), False
+
+
 def median_pose(results):
     """何枚分かの fit_pose の結果から、それぞれの真ん中の値(向きは予想まわりで)。"""
     if not results:
@@ -764,16 +793,19 @@ class EtRallyStartPoseCapture(Behaviour):
                          scale=sorted(r.get("scale", 1.0) for r in self.results)[len(self.results) // 2],
                          pitch_deg=sorted(r.get("pitch_deg", 0.0) for r in self.results)[len(self.results) // 2],
                          resid_mm=sorted(r.get("resid_mm", 0.0) for r in self.results)[len(self.results) // 2],
-                         items=sorted(int(r["n_markers"] + r["n_dots"]) for r in self.results)[len(self.results) // 2])
+                         items=sorted(int(r["n_markers"] + r["n_dots"]) for r in self.results)[len(self.results) // 2],
+                         n_dots_med=sorted(int(r["n_dots"]) for r in self.results)[len(self.results) // 2],
+                         wide=sum(1 for r in self.results if r.get("wide")))
         if (_measured["n_dots"] >= 1 and _measured["pitch_deg"] and abs(_measured["pitch_deg"]) <= 1.5
                 and save_last_pitch(_measured["pitch_deg"], self.calib_path)):
             self.logger.info("start pose: saved pitch %+.2f deg for runs without visible dots" % _measured["pitch_deg"])
         self.logger.info("start pose: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f) poses=%d/%d frames "
-                         "markers=%d dots=%d spread=%.1fmm/%.2fdeg pitch_fix=%+.2fdeg resid=%.1fmm items=%d" % (
+                         "markers=%d dots=%d spread=%.1fmm/%.2fdeg pitch_fix=%+.2fdeg resid=%.1fmm items=%d wide=%d/%d" % (
                              pose[0], pose[1], pose[2], pose[0] - START_MM[0], pose[1] - START_MM[1],
                              _nd(pose[2] - START_HEADING_DEG), len(self.results), self.frames,
                              _measured["n_markers"], _measured["n_dots"], _measured["spread_mm"], _measured["spread_deg"],
-                             _measured["pitch_deg"], _measured["resid_mm"], _measured["items"]))
+                             _measured["pitch_deg"], _measured["resid_mm"], _measured["items"],
+                             _measured["wide"], len(self.results)))
         p0 = median_pose(self.results_noscale)
         if p0 is not None:
             self.logger.info("start pose without pitch fit: x=%.1f y=%.1f h=%+.2f deg (plan start %+.1f,%+.1f,%+.1f)" % (
@@ -822,14 +854,26 @@ class EtRallyApplyStartPose(Behaviour):
         if not self.plan_frame_known:
             _applied = (START_MM[0], START_MM[1], h)
             how = "heading only (plan frame unknown)"
-        elif m.get("items", 99) < self.min_items_for_position or (m.get("n_dots", 1) == 0 and m.get("items", 99) < 3):
-            # 2026-11-10: 見えたものが2つ以下(マーカー1つ+点1つなど)だと、位置は測り間違いのおそれがあるので入れない
-            # (実機: 右のタイヤだけ15mm下げた置き方を2回、どちらも前後が約17mm違っていた。3つ以上見えた置き方は合っていた)。
-            # 向き(マーカーの辺の傾きから)だけ入れて、計画のスタートにいるとみなす。残差では見分けられなかった。
+        elif m.get("items", 99) < self.min_items_for_position:
+            # 2026-11-10: 見えたものが1つだけだと、位置は測り間違いのおそれがあるので入れない。
+            # 向き(マーカーの辺の傾きから)だけ入れて、計画のスタートにいるとみなす。
             _applied = (START_MM[0], START_MM[1], h)
-            # 2026-11-11: 点が1つも見えずマーカー2つだけのときも位置は入れない(画像が明るすぎて点が見つからず、
-            # マーカー2つから前後が約18mm違って測れた。点がないと下向きの当てはめ直しができないため)。
             how = "heading only (%d items, %d dots)" % (m["items"], m.get("n_dots", -1))
+        elif m.get("n_dots_med", m.get("n_dots", 1)) == 0 and m.get("items", 99) < 3:
+            # 2026-11-11: 点が見えずマーカー2つだけのときは、前後を約2〜4cm 間違える(点がないと下向きの当てはめ直しが
+            # できないため)。11/12: 同じ画像を広い範囲で点も使って測り直すと、前後は大きく違ったが、左右は数mm で合っていた
+            # (配置36の4回)。そこで向きと左右だけを入れ、前後は計画のスタートのままにする。
+            a = math.radians(START_HEADING_DEG)
+            along = dx * math.cos(a) + dy * math.sin(a)
+            x, y = x - along * math.cos(a), y - along * math.sin(a)
+            _applied = (x, y, h)
+            lat = math.hypot(x - START_MM[0], y - START_MM[1])
+            if lat >= self.rejoin_min_mm:
+                _pending_rejoin = (x, y, h)
+            else:
+                _inject_position((x, y, h), self.logger)
+            how = "heading and sideways only (%d items, %d dots, front/back %+.1f mm not used)" % (
+                m["items"], m.get("n_dots", -1), along)
         elif math.hypot(dx, dy) >= self.rejoin_min_mm:
             _pending_rejoin = (x, y, h)
             how = "rejoin planned"
