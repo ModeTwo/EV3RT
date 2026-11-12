@@ -430,9 +430,9 @@ class EtRallyPathSegment(Behaviour):
             self.saturated_ticks,
             runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(), tag))
         if self.wheel_log:
-            # 1tickごとに 指示した出力R/L:そのtickに実際に回った度R/L:向きのずれ
+            # 1tickごとに 指示した出力R/L:そのtickに実際に回った度R/L:向きのずれ:横のずれmm(11/12追加)
             self.logger.info("WHEELS %s: %s" % (self.kind, " ".join(
-                "%d/%d:%d/%d:%+.1f" % w for w in self.wheel_log)))
+                "%d/%d:%d/%d:%+.1f:%+.1f" % w for w in self.wheel_log)))
 
     def update(self) -> Status:
         global _chain_end_dist, _chain_pid, _chain_lat, _chain_shape, _chain_speed
@@ -568,7 +568,7 @@ class EtRallyPathSegment(Behaviour):
         if len(self.wheel_log) < self.wheel_log_ticks:
             counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
             self.wheel_log.append((right_power, left_power, counts[0] - self.wheel_prev[0],
-                                   counts[1] - self.wheel_prev[1], error))
+                                   counts[1] - self.wheel_prev[1], error, self.lat_mm))
             self.wheel_prev = counts
         return Status.RUNNING
 
