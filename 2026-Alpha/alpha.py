@@ -1447,6 +1447,8 @@ def _run_main(argv, startup_cleanup):
                         help='Like --rally-path-ramp-mm but in seconds x current speed (the larger of the two is used; default 0 = off).')
     parser.add_argument('--rally-path-power', type=float, default=None,
                         help='Cruise power for path-plan segments (arcs / chained moves) only (default 80).')
+    parser.add_argument('--rally-path-small-arc', type=str, default=None,
+                        help='RADIUS,SCALE: arcs with radius <= RADIUS mm use this power scale instead of --rally-path-arc-speed-scale (default: off).')
     parser.add_argument('--rally-path-line-power', type=float, default=None,
                         help='Cruise power for straight path segments only (default: same as --rally-path-power).')
     parser.add_argument('--rally-path-wheel-log', type=float, default=None,
@@ -1763,6 +1765,16 @@ def _run_main(argv, startup_cleanup):
         if not 0.0 <= args.rally_path_arc_pid_i <= 20.0:
             parser.error('--rally-path-arc-pid-i must be between 0 and 20')
         mission_config = dataclasses.replace(mission_config, et_rally_path_arc_pid_i=args.rally_path_arc_pid_i)
+    if args.rally_path_small_arc is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-small-arc requires --mission rally-drive, bottle-rally or rally-sumo')
+        try:
+            small_r, small_s = (float(v) for v in args.rally_path_small_arc.split(','))
+        except ValueError:
+            parser.error('--rally-path-small-arc must be RADIUS,SCALE (e.g. 90,0.85)')
+        if not 20.0 <= small_r <= 500.0 or not 0.5 <= small_s <= 2.0:
+            parser.error('--rally-path-small-arc: RADIUS must be 20-500 mm and SCALE 0.5-2.0')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_small_arc=(small_r, small_s))
     if args.rally_path_arc_speed_scale is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-path-arc-speed-scale requires --mission rally-drive, bottle-rally or rally-sumo')

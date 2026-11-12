@@ -439,6 +439,7 @@ _STRATEGY_KWARGS_FROM_CONFIG = (
     ("path_lead_sec", "et_rally_path_lead_sec"),
     ("path_arc_pid_i", "et_rally_path_arc_pid_i"),
     ("path_arc_speed_scale", "et_rally_path_arc_speed_scale"),
+    ("path_small_arc", "et_rally_path_small_arc"),
     ("path_lat_gain", "et_rally_path_lat_gain"),
     ("path_lat_max_deg", "et_rally_path_lat_max_deg"),
     ("path_arc_pid_p", "et_rally_path_arc_pid_p"),
@@ -668,6 +669,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         path_arc_pid_i=None,
                         # 2026-11-02: 同じ計画で、円弧の速さの倍率(外側の車輪が直進の何倍まで回るか)。Noneなら1.0。
                         path_arc_speed_scale=None,
+                        path_small_arc=None,
                         # 2026-11-03: 同じ計画で、計画の線からの横のずれを戻す強さ(1mmあたりの度)と上限(度)。
                         # Noneなら0(従来どおり向きだけを追う)と8度。
                         path_lat_gain=None,
@@ -936,6 +938,7 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 lead_sec=0.06 if path_lead_sec is None else path_lead_sec,
                 arc_pid_i=0.6 if path_arc_pid_i is None else path_arc_pid_i,
                 arc_speed_scale=1.0 if path_arc_speed_scale is None else path_arc_speed_scale,
+                small_arc=path_small_arc,
                 lat_gain=0.0 if path_lat_gain is None else path_lat_gain,
                 lat_max_deg=8.0 if path_lat_max_deg is None else path_lat_max_deg,
                 arc_pid_p=path_arc_pid_p,

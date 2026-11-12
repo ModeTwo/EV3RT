@@ -67,6 +67,8 @@ from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
 from . import et_rally_drive
 
 HALF_TREAD_MM = WHEEL_TREAD / 2.0
+# 2026-11-12: 前進の区間で、向きを直すために前進の出力を削るときの下限(出力約45のその場旋回は摩擦で止まるため)。
+MIN_FORWARD_POWER = 30.0
 # 止まるとき: 左右のエンコーダがこのtick数だけ続けて変わらなければ止まったとみなす(one_shotのpre_stopと同じ)。
 STOP_STABLE_TICKS = 2
 STOP_MAX_TICKS = 25
@@ -167,7 +169,7 @@ class EtRallyPathSegment(Behaviour):
                  arc_pid_p=None, ramp_mm: float = 0.0, inner_min_power=None, ramp_sec: float = 0.0,
                  wheel_log_ticks: int = 0, ff_scale: float = 1.0,
                  line_pid_p=None, line_pid_d=None, line_boost_power=None, line_boost_sec: float = 0.0,
-                 plan_start=None, stop_stable_ticks=None) -> None:
+                 plan_start=None, stop_stable_ticks=None, small_arc=None) -> None:
         super().__init__(name)
         if kind not in ("line", "arc"):
             raise ValueError("kind must be line or arc")
@@ -202,6 +204,9 @@ class EtRallyPathSegment(Behaviour):
         # 2026-11-02: 円弧の出力の倍率。1.0なら外側の車輪が直進の出力を超えない(従来)。大きくすると円弧が速くなる
         # (左右の出力は ±100 に収める処理で頭打ちになる)。
         self.arc_speed_scale = arc_speed_scale
+        # 2026-11-12: 半径 small_arc[0] mm 以下の円弧だけ、出力の倍率を small_arc[1] にする(Noneなら全部 arc_speed_scale)。
+        # 半径80mmを出力100で走ると外側100・内側ほぼ0で、入りで遅れた向きを取り戻す余地がほとんどないため。
+        self.small_arc = tuple(small_arc) if small_arc else None
         # 2026-11-03: 横のずれ1mmあたり、目標の向きを何度ずらして戻すか(0なら戻さない)と、その上限(度)。
         self.lat_gain = lat_gain
         self.lat_max_deg = lat_max_deg
@@ -223,6 +228,11 @@ class EtRallyPathSegment(Behaviour):
         self.stopping = False
 
     # --- 内部 ---
+    def _arc_scale(self, radius):
+        if self.small_arc is not None and radius <= self.small_arc[0]:
+            return self.small_arc[1]
+        return self.arc_speed_scale
+
     def _profile_at(self, s):
         """この区間の始めから距離sの点の(目標の向き, 左右差の比, 出力の倍率)。続く区間へはみ出してもよい。"""
         if s < 0.0 and self.prev_shape is not None:
@@ -230,7 +240,7 @@ class EtRallyPathSegment(Behaviour):
             if kind == "arc" and radius > 0 and length > 0:
                 ratio = max(0.0, (length + s) / length)
                 return (h0 + sweep * ratio, math.copysign(HALF_TREAD_MM / radius, sweep),
-                        self.arc_speed_scale / (1.0 + HALF_TREAD_MM / radius))
+                        self._arc_scale(radius) / (1.0 + HALF_TREAD_MM / radius))
             return h0 + sweep, 0.0, 1.0
         last = len(self.profile) - 1
         for i, (kind, length, h0, sweep, radius) in enumerate(self.profile):
@@ -243,12 +253,12 @@ class EtRallyPathSegment(Behaviour):
                 # 止まった位置が約1cmずれていた。run_20261101T063540のarc2・arc15)。目標の向きは終わりの向き。
                 if kind == "arc" and radius > 0:
                     return (h0 + sweep, math.copysign(HALF_TREAD_MM / radius, sweep),
-                            self.arc_speed_scale / (1.0 + HALF_TREAD_MM / radius))
+                            self._arc_scale(radius) / (1.0 + HALF_TREAD_MM / radius))
                 return h0 + sweep, 0.0, 1.0
             if kind == "arc" and radius > 0 and length > 0:
                 ratio = max(0.0, s / length)
                 return (h0 + sweep * ratio, math.copysign(HALF_TREAD_MM / radius, sweep),
-                        self.arc_speed_scale / (1.0 + HALF_TREAD_MM / radius))
+                        self._arc_scale(radius) / (1.0 + HALF_TREAD_MM / radius))
             return h0 + sweep, 0.0, 1.0
         return self.end_heading, 0.0, 1.0
 
@@ -337,6 +347,7 @@ class EtRallyPathSegment(Behaviour):
                 and (self.prev_shape is None or self.prev_shape[0] == "arc")):
             self.boost_until = time.monotonic() + self.line_boost_sec
         self.saturated_ticks = 0
+        self.forward_floor_ticks = 0
         self.right_residual = 0.0
         self.left_residual = 0.0
         self.err_sum = 0.0
@@ -411,6 +422,8 @@ class EtRallyPathSegment(Behaviour):
         tag = " end_err=(%+.1f,%+.1f) along=%+.1f%s" % (end_front, end_right, getattr(self, "along_mm", 0.0), tag)
         if self.boost_until is not None:
             tag = " boost=%d" % self.boost_ticks + tag
+        if self.forward_floor_ticks:
+            tag = " floor=%d" % self.forward_floor_ticks + tag
         self.logger.info("%+06d %s.%s summary: dist=%d planned=%d end_heading=%.1f target=%.1f err_mean=%+.2f err_max=%.2f lat=%+.0fmm sat=%d loc=(%d,%d)%s%s" % (
             now, self.__class__.__name__, self.kind, now - self.orig_dist, self.run_length_mm,
             current, self.end_heading, self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm,
@@ -531,6 +544,18 @@ class EtRallyPathSegment(Behaviour):
             limit = max(base - self.inner_min_power, abs(ff))
             if abs(turn) > limit:
                 turn = math.copysign(limit, turn)
+        if not self.reverse and power_now > 0.0:
+            # 2026-11-12: 前進の出力の下限。向きのずれが大きいと、上の「はみ出す分は前進を下げる」で前進が0まで
+            # 削られたあとに左右の差だけ戻され、出力約45のその場旋回になって摩擦で約1秒止まった
+            # (run_20261112T062851 の arc29、半径80の円弧で向きのずれ22°、右-38・左+44で車輪がほぼ回らず)。
+            # 前進を MIN_FORWARD_POWER(止まる前の減速などで巡航がそれより低ければその値)より下げない。
+            # ずれが小さいとき(前進がこれ以上残るとき)の出力は前と同じ。
+            floor = min(MIN_FORWARD_POWER, power_now)
+            if base < floor:
+                base = floor
+                if abs(turn) > 100.0 - base:
+                    turn = math.copysign(100.0 - base, turn)
+                self.forward_floor_ticks += 1
         self.right_residual += base + runtime.course * turn
         self.left_residual += base - runtime.course * turn
         right_power = int(round(self.right_residual))
