@@ -109,6 +109,7 @@ def finalize(steps, main):
 LAPS = c.get('params', {}).get('laps', 4)
 EXIT = c.get('exit') if garage else None
 seq = []
+carry_mark = None
 blocks = c['blocks']
 for bi, b in enumerate(blocks):
     label = f"lap{b['lap']}-{b['color']}" if b['kind'] == 'visit' and b['lap'] >= 1 else None   # lap0 は赤の前に通る黄
@@ -120,6 +121,11 @@ for bi, b in enumerate(blocks):
     if (EXIT and b['kind'] == 'conn' and bi > 0 and blocks[bi - 1]['kind'] == 'visit' and blocks[bi - 1]['color'] == 'yellow'
             and blocks[bi - 1]['lap'] in EXIT.get('laps', []) and bi < len(blocks) - 1):
         mark = 'lap%d-end' % blocks[bi - 1]['lap']
+    # 2026-11-13: 黄を抜けてそのまま赤へ一直線に入る配置(33)では、黄→赤のつなぎが空で印が消えていた
+    # (ロボットが時間で切り上げられず全部の周を走る)。空のときは次の区間の最初へ持ち越す。
+    if carry_mark and not mark:
+        mark = carry_mark
+    carry_mark = mark if (mark and not prims) else None
     for k, p in enumerate(prims):
         seq.append((p, label, mark if k == 0 else None))
 steps, h, max_gap = prims_to_steps(seq, START_H0)
