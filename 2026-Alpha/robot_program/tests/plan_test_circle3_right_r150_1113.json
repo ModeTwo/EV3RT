@@ -1,0 +1,72 @@
+{
+  "note_1113": "2026-11-13: 円弧の向きの確認。半径150mm で右に3周(半円6本)続けて、40mm 直進して止まる。8の字で出たログに出ない後ろへのずれが、ジャイロの読み違い(回り足りない)なら、終わりの向きが3周で約4°ずれる。滑りなら向きは合い、位置だけ後ろへずれる。終わりの位置と向きを測る。場所はスタートの右側に350mm、前後に200mm あける。",
+  "expected_end": {
+    "front_mm": 40.0,
+    "right_mm": 0.0,
+    "heading_deg": 0.0
+  },
+  "steps": [
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 150.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 40.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    }
+  ]
+}
