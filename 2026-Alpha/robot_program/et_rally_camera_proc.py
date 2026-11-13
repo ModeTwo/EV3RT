@@ -166,11 +166,29 @@ def _child(cfg):
         state['quit'] = True   # 親が終わった(標準入力が閉じた)ときも終わる
 
     threading.Thread(target=commands, daemon=True).start()
-    cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 30)
+    # 2026-11-13: 走行中にぶつかってカメラのUSBが一度切れると、つなぎ直したカメラは video1 になる(video0 は
+    # そのとき動いていたプログラムが持っていた)。0 だけを開いていたので、次の走りでカメラなしになった。
+    # 0〜3 を順に試し、開けて1枚読めた番号を使う(10番台はラズパイの変換用でカメラではない)。
+    cap = None
+    for index in (0, 1, 2, 3):
+        c = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        if not c.isOpened():
+            c.release()
+            continue
+        c.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        c.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        c.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        c.set(cv2.CAP_PROP_FPS, 30)
+        ok, _ = c.read()
+        state['device'] = index
+        if ok:
+            cap = c
+            if index != 0:
+                say(ev='note', what='camera opened as video%d (not video0)' % index)
+            break
+        c.release()
+    if cap is None:
+        cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
     def set_exposure():
         if cfg.get('exposure') is not None:
             cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
@@ -214,7 +232,7 @@ def _child(cfg):
                 continue
             if first and n >= 10:
                 first = False
-                say(ev='ready', t=t, auto=cap.get(cv2.CAP_PROP_AUTO_EXPOSURE), exposure=cap.get(cv2.CAP_PROP_EXPOSURE),
+                say(ev='ready', t=t, device=state.get('device'), auto=cap.get(cv2.CAP_PROP_AUTO_EXPOSURE), exposure=cap.get(cv2.CAP_PROP_EXPOSURE),
                     gain=cap.get(cv2.CAP_PROP_GAIN), shape=list(frame.shape), brightness=round(float(frame[::8, ::8].mean()), 1))
             if first:
                 continue
