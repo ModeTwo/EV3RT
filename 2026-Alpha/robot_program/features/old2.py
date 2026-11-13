@@ -353,7 +353,7 @@ def build_tantou_tree(context, config, include_exit=True):
         IsQRDecoded(
             # 【統合差分】QR1成功直後にカメラをLINEモードへ戻し、直進・旋回中に
             # カメラ切替(約3.4秒)を隠す。QR2向けの再準備は後段のカメラ復帰後に行う。
-            name="read_qr1", context=context, hint_number=1, keep_qr_ready=False
+            name="read_qr1", context=context, hint_number=1, keep_qr_ready=True
         ),
     ])
 
@@ -709,7 +709,7 @@ def build_tantou_tree(context, config, include_exit=True):
         SpinAround(
             context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="right 25 for qr2",
-            target=115,  # 【統合差分】添付25。共通方位の既存値を維持
+            target=107,  # 【統合差分】添付25。共通方位の既存値を維持
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
             pid_p=0.2,
@@ -775,7 +775,7 @@ def build_tantou_tree(context, config, include_exit=True):
     run_to_black_2_first = RunByGyro(
         context=context,
         name="run_to_black_2_first",
-        target=115,
+        target=107,
         power=70,
         pid_p=1.1,
         pid_i=0.00075,
@@ -801,7 +801,7 @@ def build_tantou_tree(context, config, include_exit=True):
     run_to_black_2 = RunByGyro(
         context=context,
         name="run_to_black_2",
-        target=115,
+        target=107,
         power=60,
         pid_p=1.1,
         pid_i=0.00075,
