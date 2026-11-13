@@ -672,7 +672,7 @@ def build_tantou_tree(context, config, include_exit=True):
     
     IsDistanceEarned(
         name="run_to_black_limit",
-        delta_dist=100  # tantou4: 550
+        delta_dist=300  # tantou4: 550
     ),
     ])
 
