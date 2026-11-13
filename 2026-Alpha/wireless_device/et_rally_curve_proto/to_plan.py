@@ -174,6 +174,12 @@ if EXIT and EXIT.get('prims'):
         ep = _split_prims(ep, float(EXIT['arm_down']['cm']))
     exit_steps, _, _ = prims_to_steps([(p, None, None) for p in ep], START_H0)
     exit_steps = finalize(exit_steps, False)
+    # 2026-11-13: 黄を後退で戻る切り上げでは、後退で黄を通っている間はアームを動かさない(下げ始めは後退を終えてから)
+    if exit_steps and exit_steps[0].get('reverse') and exit_steps[0].get('label') == 'garage-arm-down':
+        exit_steps[0]['label'] = None
+        nxt = next((st for st in exit_steps[1:] if st['type'] in ('move', 'arc')), None)
+        if nxt is not None:
+            nxt['label'] = 'garage-arm-down'
 # 2026-11-11(ユーザー): ガレージで終わる計画では、最後の黄ゲートを通ったあとの最後の長い直進(150mm以上)に印を付ける。
 # ロボットはこの直進からアームを下げ始める(下げたアームの分、ガレージエリアにかかる所が増える)。
 # 下げたアームは車体の前に約5cm出る(経路を作る道具は、アームを下げた状態の当たり判定をしていない)ので、下げ始めるのは

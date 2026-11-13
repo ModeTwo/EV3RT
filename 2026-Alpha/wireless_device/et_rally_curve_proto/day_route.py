@@ -120,6 +120,16 @@ def main():
     subprocess.run([sys.executable, os.path.join(HERE, 'to_plan.py'), best_path, gp, out],
                    env=dict(os.environ, PYTHONUTF8='1'), check=True)
     print('計画: %s(%s を使用)' % (out, os.path.basename(best_path)))
+    # 2026-11-13: 計画ファイルを道具とは別に検査する(切り上げの道・コースの外・脚とのすき間・ガレージ・持ち時間)。
+    chk = subprocess.run([sys.executable, os.path.join(HERE, 'check_plan.py'), out, os.path.join(HERE, 'params_day.json'),
+                          '--budget', str(a.budget_sec)], env=dict(os.environ, PYTHONUTF8='1', HR_NO_NUMBA='1'),
+                         capture_output=True, text=True)
+    print(chk.stdout.rstrip())
+    first_line = chk.stdout.splitlines()[0] if chk.stdout.strip() else ''
+    if chk.returncode != 0 or not first_line.endswith(': OK'):
+        print('!!! 検査で NG(または検査が動かなかった)。この計画は走らせないこと。上の NG の行を確認する !!!')
+        if chk.stderr:
+            print(chk.stderr[-1500:])
     rel = os.path.relpath(out, ROOT).replace('\\', '/')
     print('走らせるコマンド(ロボットで git pull のあと。持ち時間は 120 - ETラリー開始までの秒):')
     print('python alpha.py %s --mission rally-drive --rally-gyro-hub-recal-sec 2 --rally-gyro-drift-settle-sec 1.0 '

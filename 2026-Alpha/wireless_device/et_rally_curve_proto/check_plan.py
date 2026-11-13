@@ -9,7 +9,7 @@
      終わりがガレージに入る(x・y とも食い込み量が道具の決まり以上)。
   2. 周の終わりの印 lapN-end が、計画の exit.laps の周すべてに1つずつある(切り上げられない周がない)。
   3. 各周の印から exit を走った場合: 1 と同じ(ゲートの順は、その周の黄のあとから数える)。
-  4. アームを下げたあと(印 garage-arm-down から)は、車体の前をアームの分だけ伸ばしてすき間を見る。
+  4. 本線にも exit にもアームを下げる印 garage-arm-down がある。下げたあとは、車体の前をアームの分だけ伸ばしてすき間を見る。
   5. 持ち時間(--budget 秒)での切り上げ: ロボットと同じ式(estimate_steps と余裕2秒)で、何周目で切り上げ、何秒でガレージに着くか。
      着く時刻が持ち時間を超えたら NG。見込みには --ratio(実機の速さ/見込み、既定0.93)を掛ける。すき間が基準より1mm 以内だけ足りないときは NG でなく注意(形の計算の細かさより小さい差)。
      その場の旋回は、道具と同じく車軸より PIVOT_BACK_CM 後ろを中心に回す。
@@ -167,6 +167,8 @@ def check(plan_path, params_path, budget, min_clear, ratio=0.93, tol=0.1):
     pb = float(getattr(hr, 'PIVOT_BACK_CM', 0.0))
     pts = sample(steps, start, pivot_back_cm=pb)
     arm_i = next((i for i, s in enumerate(steps) if s.get('label') == 'garage-arm-down'), None)
+    if arm_i is None:
+        res['ng'].append('main: no garage-arm-down label (the arm never goes down before the garage)')
     m = check_path(hr, pts, steps, min_clear, arm_from=arm_i)
     seq = gate_crossings(hr, pts)
     bad = order_ok(seq)
@@ -211,6 +213,8 @@ def check(plan_path, params_path, budget, min_clear, ratio=0.93, tol=0.1):
     if ex and ex.get('steps'):
         exs = ex['steps']
         ex_arm = next((i for i, s in enumerate(exs) if s.get('label') == 'garage-arm-down'), None)
+        if ex_arm is None:
+            res['ng'].append('exit: no garage-arm-down label (the arm never goes down before the garage)')
         for k in sorted(marks):
             mi = marks[k]
             p0 = sample(steps[:mi], start, pivot_back_cm=pb)[-1]

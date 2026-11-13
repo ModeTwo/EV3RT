@@ -38,7 +38,7 @@
  "note_1101": "2026-11-01 試作: 往復・後退でのゲート通過を許した経路(4周)のつなぎ区間を、円弧+直進+円弧などに置き換えたもの(検討セッションのスクラッチパッドの shuttle_plan2.py / curve_route.py で作成)。近似式の見積もりで走行部分 140.5 秒。",
  "laps": 10,
  "goal_at": "garage",
- "total_distance_mm": 35916.2,
+ "total_distance_mm": 35898.2,
  "move_count": 96,
  "arc_count": 55,
  "turn_count": 9,
@@ -201,8 +201,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 430.0,
+   "target_heading_deg": 89.46,
+   "distance_mm": 428.0,
    "reverse": false,
    "stop": false,
    "label": "lap1-yellow"
@@ -326,8 +326,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 430.0,
+   "target_heading_deg": 89.46,
+   "distance_mm": 428.0,
    "reverse": false,
    "stop": false,
    "label": "lap2-yellow"
@@ -451,8 +451,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 430.0,
+   "target_heading_deg": 89.46,
+   "distance_mm": 428.0,
    "reverse": false,
    "stop": false,
    "label": "lap3-yellow"
@@ -576,8 +576,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 430.0,
+   "target_heading_deg": 89.46,
+   "distance_mm": 428.0,
    "reverse": false,
    "stop": false,
    "label": "lap4-yellow"
@@ -701,8 +701,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 430.0,
+   "target_heading_deg": 89.46,
+   "distance_mm": 428.0,
    "reverse": false,
    "stop": false,
    "label": "lap5-yellow"
@@ -826,8 +826,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 430.0,
+   "target_heading_deg": 89.46,
+   "distance_mm": 428.0,
    "reverse": false,
    "stop": false,
    "label": "lap6-yellow"
@@ -951,8 +951,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 430.0,
+   "target_heading_deg": 89.46,
+   "distance_mm": 428.0,
    "reverse": false,
    "stop": false,
    "label": "lap7-yellow"
@@ -1076,8 +1076,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 430.0,
+   "target_heading_deg": 89.46,
+   "distance_mm": 428.0,
    "reverse": false,
    "stop": false,
    "label": "lap8-yellow"
@@ -1201,8 +1201,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 430.0,
+   "target_heading_deg": 89.46,
+   "distance_mm": 428.0,
    "reverse": false,
    "stop": false,
    "label": "lap9-yellow"
@@ -1478,5 +1478,6 @@
   "arm_front_cm": 5.0,
   "arm_half_width_cm": 7.0,
   "note": "must_be_up_* が null なら最後まで当たらない。時間は経路を作る道具の近似式(止まる時間を入れない短めの見込み)。"
- }
+ },
+ "note_1113b": "2026-11-13 夜: 新しい変換と、切り上げを3通りから一番速いものを選ぶ道具で作り直し(黄を後退で戻る)。check_plan.py で OK。"
 }
