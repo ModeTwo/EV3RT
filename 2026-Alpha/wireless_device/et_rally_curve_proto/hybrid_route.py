@@ -1857,6 +1857,9 @@ def main():
             e0 = max(set(es), key=lambda x: (es.count(x), max(i for i, y in enumerate(es) if y == x)))
             ex_laps = [i + 1 for i, x in enumerate(es) if x == e0]
         if ex_laps:
+            # 2026-11-13 ユーザー: 切り上げは速いものを優先。今までは「黄からまっすぐ → 赤を抜けて → 黄を後退で戻って」の順に試し、
+            # 最初に見つかったものを使っていた。3つとも作り、道具の見込みが一番短いものを使う(どれも脚とのすき間は本線と同じ基準)。
+            cands = []
             tab = T[('yellow', 'GOAL')]
             best = None
             for s_ in range(len(tab.starts)):
@@ -1870,72 +1873,65 @@ def main():
                     if best is None or tab.C[e0, s_] < best[0]:
                         best = (float(tab.C[e0, s_]), s_)
             if best is not None:
-                ep = list(tab.prims[(e0, best[1])])
-                exit_info = dict(cost=round(best[0], 2), laps=ex_laps, prims=[ser(p) for p in ep],
-                                 arm_down=arm_can_be_down(ep))
-                print('exit: from laps %s yellow to the garage %.1fs (arm down from %.1fcm)' % (
-                    ex_laps, best[0], exit_info['arm_down']['cm']), flush=True)
+                cands.append((best[0], 'direct', list(tab.prims[(e0, best[1])]), {}))
+            # 2026-11-13 ユーザー: 黄を抜けたら、そのまま次の赤も抜けてからガレージへ向かう
+            # (配置33: 黄を下から上へ抜けると赤との間の狭い所に出るが、赤まで一直線に抜ければ外へ出られる)。
+            # 切り上げの印は黄の抜けのまま(ロボットの判断の場所は変えない)。つなぎ = 黄→赤のつなぎ + 赤の通り方 + 赤→ガレージ。
+            ir = next((i for i, (key, e, s_) in enumerate(used) if key == ('yellow', 'red') and e == e0 and i < len(visits)), None)
+            if ir is not None:
+                key, e, s_ = used[ir]
+                vr = visits[ir]
+                head = list(T[key].prims[(e, s_)]) + list(vr['prims'])
+                tr = Table(ends['red'], goal_pose, via_first=True)
+                er = vr['e']; best_r = None
+                for g in range(len(tr.starts)):
+                    for _ in range(4):
+                        if tr.done[er, g]:
+                            break
+                        tr.resolve(er, g)
+                        if not tr.done[er, g] or (er, g) in tr.pending:
+                            tr.open_via()
+                    if tr.done[er, g] and tr.C[er, g] < INF / 2 and (er, g) in tr.prims:
+                        if best_r is None or tr.C[er, g] < best_r[0]:
+                            best_r = (float(tr.C[er, g]), g)
+                if best_r is not None:
+                    cost = float(T[key].C[e, s_]) + float(vr['cost']) + best_r[0]
+                    cands.append((cost, 'via_red', head + list(tr.prims[(er, best_r[1])]), dict(via_red=True)))
+            # 2026-11-13 ユーザー(配置33): 黄を抜けた所から、そのまま後退して黄の手前側へ戻り(黄を逆向きにもう一度通る。
+            # 同じ色の重複はよい)、そこからガレージへ向かう。最後の周の「黄で戻ってからガレージ」と同じ考え方。
+            pt0, h0 = np.asarray(ends['yellow'][e0][0], float), float(ends['yellow'][e0][1])
+            u = np.array([math.cos(math.radians(h0)), math.sin(math.radians(h0))])
+            best_b = None
+            for L in (35.0, 45.0, 55.0, 70.0):
+                back = ('line', pt0, pt0 - L * u, -1)
+                if pass_clearance([back]) < 0.0 or body_keepout(*[np.array(v) for v in zip(pt0, pt0 - L * u)], np.array([h0, h0])):
+                    continue
+                tb = Table([(pt0 - L * u, h0, -1)], goal_pose, via_first=True)
+                for g in range(len(tb.starts)):
+                    for _ in range(4):
+                        if tb.done[0, g]:
+                            break
+                        tb.resolve(0, g)
+                        if not tb.done[0, g] or (0, g) in tb.pending:
+                            tb.open_via()
+                    if tb.done[0, g] and tb.C[0, g] < INF / 2 and (0, g) in tb.prims:
+                        c = L / (V_LINE * REV_SPEED_SCALE) + 2 * T_STOP + float(tb.C[0, g])
+                        if best_b is None or c < best_b[0]:
+                            best_b = (c, L, list(tb.prims[(0, g)]))
+            if best_b is not None:
+                c, L, tail = best_b
+                cands.append((c, 'back_through_yellow', [('line', pt0, pt0 - L * u, -1)] + tail, dict(back_through_yellow=L)))
+            for c, kind, _ep, _x in sorted(cands, key=lambda v: v[0]):
+                print('exit candidate: %s %.1fs' % (kind, c), flush=True)
+            if cands:
+                c, kind, ep, extra = min(cands, key=lambda v: v[0])
+                exit_info = dict(cost=round(c, 2), laps=ex_laps, prims=[ser(p) for p in ep], arm_down=arm_can_be_down(ep), kind=kind, **extra)
+                print('exit: from laps %s yellow, %s, to the garage %.1fs (arm down from %.1fcm)' % (
+                    ex_laps, kind, c, exit_info['arm_down']['cm']), flush=True)
             else:
-                # 2026-11-13 ユーザー: 黄を抜けた所からガレージへの道がなければ、そのまま次の赤も抜けてからガレージへ向かう
-                # (配置33: 黄を下から上へ抜けると赤との間の狭い所に出るが、赤まで一直線に抜ければ外へ出られる)。
-                # 切り上げの印は黄の抜けのまま(ロボットの判断の場所は変えない)。つなぎ = 黄→赤のつなぎ + 赤の通り方 + 赤→ガレージ。
-                ir = next((i for i, (key, e, s_) in enumerate(used) if key == ('yellow', 'red') and e == e0 and i < len(visits)), None)
-                if ir is not None:
-                    key, e, s_ = used[ir]
-                    vr = visits[ir]
-                    head = list(T[key].prims[(e, s_)]) + list(vr['prims'])
-                    tr = Table(ends['red'], goal_pose, via_first=True)
-                    er = vr['e']; best_r = None
-                    for g in range(len(tr.starts)):
-                        for _ in range(4):
-                            if tr.done[er, g]:
-                                break
-                            tr.resolve(er, g)
-                            if not tr.done[er, g] or (er, g) in tr.pending:
-                                tr.open_via()
-                        if tr.done[er, g] and tr.C[er, g] < INF / 2 and (er, g) in tr.prims:
-                            if best_r is None or tr.C[er, g] < best_r[0]:
-                                best_r = (float(tr.C[er, g]), g)
-                    if best_r is not None:
-                        ep = head + list(tr.prims[(er, best_r[1])])
-                        cost = float(T[key].C[e, s_]) + float(vr['cost']) + best_r[0]
-                        exit_info = dict(cost=round(cost, 2), laps=ex_laps, prims=[ser(p) for p in ep],
-                                         arm_down=arm_can_be_down(ep), via_red=True)
-                        print('exit: from laps %s yellow, through red, to the garage %.1fs (arm down from %.1fcm)' % (
-                            ex_laps, cost, exit_info['arm_down']['cm']), flush=True)
-                if exit_info is None:
-                    # 2026-11-13 ユーザー(配置33): 黄を抜けた所から、そのまま後退して黄の手前側へ戻り(黄を逆向きにもう一度通る。
-                    # 同じ色の重複はよい)、そこからガレージへ向かう。最後の周の「黄で戻ってからガレージ」と同じ考え方。
-                    pt0, h0 = np.asarray(ends['yellow'][e0][0], float), float(ends['yellow'][e0][1])
-                    u = np.array([math.cos(math.radians(h0)), math.sin(math.radians(h0))])
-                    best_b = None
-                    for L in (35.0, 45.0, 55.0, 70.0):
-                        back = ('line', pt0, pt0 - L * u, -1)
-                        if pass_clearance([back]) < 0.0:
-                            continue
-                        tb = Table([(pt0 - L * u, h0, -1)], goal_pose, via_first=True)
-                        for g in range(len(tb.starts)):
-                            for _ in range(4):
-                                if tb.done[0, g]:
-                                    break
-                                tb.resolve(0, g)
-                                if not tb.done[0, g] or (0, g) in tb.pending:
-                                    tb.open_via()
-                            if tb.done[0, g] and tb.C[0, g] < INF / 2 and (0, g) in tb.prims:
-                                c = L / (V_LINE * REV_SPEED_SCALE) + 2 * T_STOP + float(tb.C[0, g])
-                                if best_b is None or c < best_b[0]:
-                                    best_b = (c, L, list(tb.prims[(0, g)]))
-                    if best_b is not None:
-                        c, L, tail = best_b
-                        ep = [('line', pt0, pt0 - L * u, -1)] + tail
-                        exit_info = dict(cost=round(c, 2), laps=ex_laps, prims=[ser(p) for p in ep],
-                                         arm_down=arm_can_be_down(ep), back_through_yellow=L)
-                        print('exit: from laps %s yellow, back %.0fcm through yellow, to the garage %.1fs (arm down from %.1fcm)' % (
-                            ex_laps, L, c, exit_info['arm_down']['cm']), flush=True)
-                if exit_info is None:
-                    print('exit: NO path from the yellow exit to the garage (no early exit)%s' % (
-                        '' if ir is None else ' (also none through red: red exit %s)' % (
-                            [round(float(v), 1) for v in ends['red'][visits[ir]['e']][0]] + [round(float(ends['red'][visits[ir]['e']][1]), 1)],)), flush=True)
+                print('exit: NO path from the yellow exit to the garage (no early exit)%s' % (
+                    '' if ir is None else ' (also none through red: red exit %s)' % (
+                        [round(float(v), 1) for v in ends['red'][visits[ir]['e']][0]] + [round(float(ends['red'][visits[ir]['e']][1]), 1)],)), flush=True)
         else:
             print('exit: no yellow exits, no early exit to the garage', flush=True)
     json.dump(dict(total=total, params=PARAMS, margin=MARGIN_FRONT, narrow=bool(MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]), audit=audit, arm=arm, arm_down=arm_down, exit=exit_info, blocks=blocks), open(sys.argv[2], 'w'))

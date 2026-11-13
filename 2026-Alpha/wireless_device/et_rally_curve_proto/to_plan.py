@@ -10,6 +10,7 @@ nd = lambda a: (a + 180.0) % 360.0 - 180.0
 # 2026-11-09: スタートの向き(planner角)を基準に gyro 目標を出す(新スタートは向き180)。ジャイロはスタートで0。
 START_H0 = 180.0 if c.get('params', {}).get('start_at') in ('goal', 'goal_mid') else 0.0
 garage = c.get('params', {}).get('goal_at') == 'garage'
+PIVOT_BACK = float(c.get('params', {}).get('pivot_back_cm', 0.0) or 0.0)   # 2026-11-13: その場の旋回の中心が車軸より後ろの量(cm)
 g = lambda h: round(nd(-(h - START_H0)), 2)
 
 steps = []
@@ -44,11 +45,33 @@ def _split_prims(prims, d0):
     return out
 
 
+def _start_point(p):
+    if p['t'] == 'line':
+        return list(p['a'])
+    if p['t'] == 'arc':
+        return list(p['pts'][0])
+    return list(p['p'])   # その場の旋回: 回り始める車軸の位置
+
+
 def prims_to_steps(seq, h):
     """seq: [(prim, label, mark)]。mark(周の終わりの印など)は、そのプリミティブから最初にできたステップに付ける
-    (できなければ次にできたステップへ)。戻り値 (steps, h, max_gap)。"""
+    (できなければ次にできたステップへ)。戻り値 (steps, h, max_gap)。
+    2026-11-13: 道具の出力は区間のつなぎ目で向きが最大3.4°とぶ(1周に2回ほど)。以前は直進を道具の向き、円弧を道具の角度のまま
+    並べていたので、とびのたびに位置が約2mm ずれ、10周で約1cm たまっていた(ロボットは計画の座標をめがけて走るので、当たり判定を
+    した経路から離れる)。いまの位置と向きを積算しながら、円弧は「いまの向き → 道具の円弧の終わりの向き」を回る角度にし、
+    直進は「いまの位置 → 道具の直進の終わりの点」へ向かう向きと長さにする(直進のたびに道具の経路に戻る)。"""
     out = []; gap = 0.0; pending = None
+    pos = None
     for p, label, mark in seq:
+        if pos is None:
+            pos = _start_point(p)
+            # 始めの向きは、最初の区間の向き(切り上げのつなぎは、黄の抜けの向きから始まる)
+            if p['t'] == 'line':
+                h = math.degrees(math.atan2(p['b'][1] - p['a'][1], p['b'][0] - p['a'][0])) + (0 if p['m'] > 0 else 180)
+            elif p['t'] == 'arc':
+                h = p['th0'] + (0 if p['m'] > 0 else 180)
+            else:
+                h = p['h_from']
         if mark:
             pending = mark
         n0 = len(out)
@@ -56,25 +79,39 @@ def prims_to_steps(seq, h):
             if p['deg'] >= 0.3:
                 gap = max(gap, abs(nd(p['h_from'] - h)))
                 out.append({'type': 'turn', 'target_heading_deg': g(p['h_to']), 'label': None})
+                # その場の旋回では、回る中心が車軸の PIVOT_BACK 後ろにあり、車軸も動く(実測。経路を作る道具も同じ形)。
+                # 次の直進を道具の点へ向けるとき、動いたあとの位置から数える。
+                qx, qy = pos[0] - PIVOT_BACK * math.cos(math.radians(h)), pos[1] - PIVOT_BACK * math.sin(math.radians(h))
+                pos = [qx + PIVOT_BACK * math.cos(math.radians(p['h_to'])), qy + PIVOT_BACK * math.sin(math.radians(p['h_to']))]
             h = p['h_to']
         elif p['t'] == 'line':
-            a, e = p['a'], p['b']
-            L = math.hypot(e[0] - a[0], e[1] - a[1]) * 10
+            e = p['b']
+            dx, dy = e[0] - pos[0], e[1] - pos[1]
+            L = math.hypot(dx, dy) * 10
             if L >= 0.5:
-                hh = math.degrees(math.atan2(e[1] - a[1], e[0] - a[0])) + (0 if p['m'] > 0 else 180)
+                hh = math.degrees(math.atan2(dy, dx)) + (0 if p['m'] > 0 else 180)
                 gap = max(gap, abs(nd(hh - h)))
                 out.append({'type': 'move', 'target_heading_deg': g(hh), 'distance_mm': round(L, 1), 'reverse': p['m'] < 0,
                             'stop': False, 'label': 'garage-arm-down' if p.get('arm_down') else label})
                 h = hh
+                pos = [pos[0] + dx, pos[1] + dy]
         else:
             if p['deg'] >= 0.05:
                 h0 = p['th0'] + (0 if p['m'] > 0 else 180)
                 gap = max(gap, abs(nd(h0 - h)))
                 h1 = h0 + p['s'] * p['deg']
-                out.append({'type': 'arc', 'target_heading_deg': g(h1), 'sweep_deg': round(-p['s'] * p['deg'], 2),
-                            'radius_mm': round(p['r'] * 10, 1), 'reverse': p['m'] < 0, 'stop': False,
+                sw = p['s'] * p['deg'] + nd(h0 - h)        # いまの向き h から h1 まで(向きのとびを円弧で吸収する)
+            if p['deg'] >= 0.05 and abs(sw) >= 0.05:
+                r = p['r']
+                sg = 1.0 if sw > 0 else -1.0
+                th0 = math.radians(h + (0 if p['m'] > 0 else 180))
+                cx, cy = pos[0] - sg * r * math.sin(th0), pos[1] + sg * r * math.cos(th0)
+                th1 = th0 + math.radians(sw)
+                pos = [cx + sg * r * math.sin(th1), cy - sg * r * math.cos(th1)]
+                out.append({'type': 'arc', 'target_heading_deg': g(h1), 'sweep_deg': round(-sw, 2),
+                            'radius_mm': round(r * 10, 1), 'reverse': p['m'] < 0, 'stop': False,
                             'label': 'garage-arm-down' if p.get('arm_down') else None})
-                h = h1
+                h = h + sw
         if pending and len(out) > n0:
             out[n0]['marks'] = [pending]; pending = None
     return out, h, gap
