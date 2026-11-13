@@ -122,7 +122,7 @@ def main():
     out = a.out or ('calib_%s.json' % datetime.now().strftime('%m%d%H%M'))
     path = out if os.path.isabs(out) else os.path.join(HERE, out)
     d = {'lens': base['lens'], 'jig': J, 'jig_setup': base.get('jig_setup'),
-         'pitch_fix_deg': base.get('pitch_fix_deg', 0.0), 'lat_fix_mm': base.get('lat_fix_mm', 0.0),
+         'pitch_fix_deg': base.get('pitch_fix_deg', 0.0), 'lat_fix_mm': base.get('lat_fix_mm', 0.0), 'front_fix_mm': base.get('front_fix_mm', 0.0),
          'note': '%s recalibrate_day.py: 較正台 %d 枚(下向きが真ん中の %s を先頭)、レンズ・置き方・補正は %s から引き継ぎ。%s' % (
              datetime.now().strftime('%Y-%m-%d %H:%M'), len(J), J[0]['file'], os.path.basename(base_path),
              ('警告: ' + '; '.join(warn)) if warn else '')}
