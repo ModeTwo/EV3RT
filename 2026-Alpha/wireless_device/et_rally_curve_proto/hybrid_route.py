@@ -1904,6 +1904,35 @@ def main():
                         print('exit: from laps %s yellow, through red, to the garage %.1fs (arm down from %.1fcm)' % (
                             ex_laps, cost, exit_info['arm_down']['cm']), flush=True)
                 if exit_info is None:
+                    # 2026-11-13 ユーザー(配置33): 黄を抜けた所から、そのまま後退して黄の手前側へ戻り(黄を逆向きにもう一度通る。
+                    # 同じ色の重複はよい)、そこからガレージへ向かう。最後の周の「黄で戻ってからガレージ」と同じ考え方。
+                    pt0, h0 = np.asarray(ends['yellow'][e0][0], float), float(ends['yellow'][e0][1])
+                    u = np.array([math.cos(math.radians(h0)), math.sin(math.radians(h0))])
+                    best_b = None
+                    for L in (35.0, 45.0, 55.0, 70.0):
+                        back = ('line', pt0, pt0 - L * u, -1)
+                        if pass_clearance([back]) < 0.0:
+                            continue
+                        tb = Table([(pt0 - L * u, h0, -1)], goal_pose, via_first=True)
+                        for g in range(len(tb.starts)):
+                            for _ in range(4):
+                                if tb.done[0, g]:
+                                    break
+                                tb.resolve(0, g)
+                                if not tb.done[0, g] or (0, g) in tb.pending:
+                                    tb.open_via()
+                            if tb.done[0, g] and tb.C[0, g] < INF / 2 and (0, g) in tb.prims:
+                                c = L / (V_LINE * REV_SPEED_SCALE) + 2 * T_STOP + float(tb.C[0, g])
+                                if best_b is None or c < best_b[0]:
+                                    best_b = (c, L, list(tb.prims[(0, g)]))
+                    if best_b is not None:
+                        c, L, tail = best_b
+                        ep = [('line', pt0, pt0 - L * u, -1)] + tail
+                        exit_info = dict(cost=round(c, 2), laps=ex_laps, prims=[ser(p) for p in ep],
+                                         arm_down=arm_can_be_down(ep), back_through_yellow=L)
+                        print('exit: from laps %s yellow, back %.0fcm through yellow, to the garage %.1fs (arm down from %.1fcm)' % (
+                            ex_laps, L, c, exit_info['arm_down']['cm']), flush=True)
+                if exit_info is None:
                     print('exit: NO path from the yellow exit to the garage (no early exit)%s' % (
                         '' if ir is None else ' (also none through red: red exit %s)' % (
                             [round(float(v), 1) for v in ends['red'][visits[ir]['e']][0]] + [round(float(ends['red'][visits[ir]['e']][1]), 1)],)), flush=True)
