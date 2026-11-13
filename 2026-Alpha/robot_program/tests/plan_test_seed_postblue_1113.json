@@ -1,0 +1,149 @@
+{
+ "note_1113": "2026-11-13: seed 9392783 の1周目を、青を抜けて60mm 進んだ所で止まる。赤のあとのUターンを回り終えて青へ向かう直進で、カメラが X2 側へ約20mm と見て強い補正を入れることがある。止まった位置を定規で測り、その補正が正しいかを見る。",
+ "gates": {
+  "mode": "random",
+  "seed": null,
+  "course": "right",
+  "red": {
+   "a": [
+    2,
+    2
+   ],
+   "b": [
+    1,
+    2
+   ]
+  },
+  "blue": {
+   "a": [
+    3,
+    2
+   ],
+   "b": [
+    3,
+    1
+   ]
+  },
+  "yellow": {
+   "a": [
+    3,
+    4
+   ],
+   "b": [
+    2,
+    4
+   ]
+  }
+ },
+ "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution (gyro = -planner angle), same as plan_seed9392783_right_1031b.json. arc: target_heading_deg is the end heading, sweep_deg the signed heading change in the same frame (start = end - sweep), radius_mm the radius of the robot-centre path.",
+ "et_rally_arm": {
+  "must_be_up_mm": 781.0,
+  "must_be_up_sec": 2.04,
+  "arm_front_cm": 5.0,
+  "arm_half_width_cm": 7.0,
+  "note": "must_be_up_* が null なら最後まで当たらない。時間は経路を作る道具の近似式(止まる時間を入れない短めの見込み)。"
+ },
+ "steps": [
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 40.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -18.63,
+   "sweep_deg": -18.63,
+   "radius_mm": 80.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -18.63,
+   "distance_mm": 665.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -80.0,
+   "sweep_deg": -61.37,
+   "radius_mm": 80.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -80.0,
+   "distance_mm": 92.4,
+   "reverse": false,
+   "stop": false,
+   "label": "lap1-red"
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -90.0,
+   "sweep_deg": -10.0,
+   "radius_mm": 100.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -90.0,
+   "distance_mm": 203.6,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": 130.82,
+   "sweep_deg": -139.18,
+   "radius_mm": 80.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 130.82,
+   "distance_mm": 142.1,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": 170.0,
+   "sweep_deg": 39.18,
+   "radius_mm": 80.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 170.0,
+   "distance_mm": 92.4,
+   "reverse": false,
+   "stop": false,
+   "label": "lap1-blue"
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 170.0,
+   "distance_mm": 60.0,
+   "reverse": false,
+   "stop": true,
+   "label": null
+  }
+ ]
+}
