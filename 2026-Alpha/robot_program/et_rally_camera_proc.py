@@ -179,6 +179,12 @@ def _child(cfg):
         c.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         c.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         c.set(cv2.CAP_PROP_FPS, 30)
+        # 露出は最初の1枚を読む前に決める(元の順番。読んだあとに変えると遅くなるカメラがあるかもしれないため)
+        if cfg.get('exposure') is not None:
+            c.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+            c.set(cv2.CAP_PROP_EXPOSURE, float(cfg['exposure']))
+        else:
+            c.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
         ok, _ = c.read()
         state['device'] = index
         if ok:
