@@ -263,6 +263,11 @@ class EtRallyCameraCorrect(Behaviour):
         if self.proc is None:
             return Status.RUNNING
         for ev in self.proc.poll():
+            if ev.get("ev") == "reopened":
+                # 2026-11-13: カメラのUSBが切れてつながり直した(子プロセスが開き直した)
+                self.logger.warning("camera correct: camera reopened as video%s (no images for %.1fs, search %.1fs)" % (
+                    ev.get("device"), ev.get("lost_sec", 0.0), ev.get("search_sec", 0.0)))
+                continue
             if ev.get("ev") != "dets":
                 continue
             res = self.corrector.process(ev)

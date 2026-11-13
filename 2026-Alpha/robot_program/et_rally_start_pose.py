@@ -821,6 +821,7 @@ class EtRallyStartPoseCapture(Behaviour):
     カメラがない・何も見えないときは、結果なし(走り出しは今までどおり計画のスタートにいるとみなす)。"""
 
     MAX_WAIT_SEC = 15.0   # ready を待つ上限(念のため)
+    EXTRA_WAIT_SEC = 4.0   # 2026-11-13: 撮れた枚数が足りないとき、開き直しを待つ上限
 
     def __init__(self, name, duration_sec=2.0, calib_path=None, min_frames=3, ready=None):
         super().__init__(name)
@@ -864,6 +865,8 @@ class EtRallyStartPoseCapture(Behaviour):
         for ev in self.proc.poll():
             if ev.get("ev") == "error":
                 self.logger.warning("start pose: camera process: %s" % ev.get("what"))
+            if ev.get("ev") == "reopened":
+                self.logger.warning("start pose: camera reopened as video%s (no images for %.1fs)" % (ev.get("device"), ev.get("lost_sec", 0.0)))
             if ev.get("ev") != "pose" or ev.get("t", 0.0) < self.counting_since:
                 continue
             self.frames += 1
@@ -873,6 +876,10 @@ class EtRallyStartPoseCapture(Behaviour):
             if ev.get("r0"):
                 self.results_noscale.append(ev["r0"])
         if now - self.counting_since < self.duration_sec:
+            return Status.RUNNING
+        # 2026-11-13: カメラのUSBが切れて開き直している間は画像が来ない。足りなければ最大 EXTRA_WAIT_SEC まで待つ
+        # (本番は止まると終わりなので、少し待ってでも位置を取り込むほうがよい)。
+        if len(self.results) < self.min_frames and now - self.counting_since < self.duration_sec + self.EXTRA_WAIT_SEC:
             return Status.RUNNING
         return self._finish()
 

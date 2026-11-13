@@ -195,17 +195,48 @@ def _child(cfg):
         c.release()
     if cap is None:
         cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+    holder = dict(cap=cap)   # 2026-11-13: 走行中に開き直したとき差し替える
+
     def set_exposure():
+        c = holder['cap']
         if cfg.get('exposure') is not None:
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-            cap.set(cv2.CAP_PROP_EXPOSURE, float(cfg['exposure']))
+            c.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+            c.set(cv2.CAP_PROP_EXPOSURE, float(cfg['exposure']))
         else:
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+            c.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+
+    def reopen():
+        """2026-11-13: カメラのUSBが切れて(接触不良・ぶつかった衝撃)つながり直すと、別の番号(video1 など)になり、
+        開いたままの古い番号からは二度と画像が来なかった(スタートで0枚、補正なしで走ってゲートに当たった)。
+        画像が来なくなったら閉じて、video0〜3 から開けて1枚読める番号を探し直す。見つかるまで繰り返す。"""
+        try:
+            holder['cap'].release()
+        except Exception:
+            pass
+        while not state['quit']:
+            for index in (0, 1, 2, 3):
+                c = cv2.VideoCapture(index, cv2.CAP_V4L2)
+                if not c.isOpened():
+                    c.release()
+                    continue
+                c.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                c.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                c.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                c.set(cv2.CAP_PROP_FPS, 30)
+                holder['cap'] = c
+                set_exposure()
+                ok, _ = c.read()
+                if ok:
+                    state['device'] = index
+                    return True
+                c.release()
+            time.sleep(0.2)
+        return False
 
     set_exposure()
     if not cap.isOpened():
-        say(ev='error', what='camera not opened')
-        return
+        # 2026-11-13: 開けなくても終わらない。読む側が0.5秒ごとに開き直しを試す(つながり直すのを待つ)
+        say(ev='error', what='camera not opened (will keep trying)')
     folder = cfg.get('folder')
     meta = None
     if folder:
@@ -223,14 +254,29 @@ def _child(cfg):
         カメラにたまった古い画像を読み、読んだ時刻を撮った時刻としてしまっていた(走行中の補正が実機でほとんど入らなかった原因)。
         保存もここで行う(保存する画像の時刻も正しくなる)。"""
         first = True
+        last_ok = time.monotonic()
+        skip_until = 0
         while not state['quit']:
-            ok, frame = cap.read()
+            ok, frame = holder['cap'].read()
             t = time.monotonic()
             if not ok or frame is None:
+                if t - last_ok > 0.5:
+                    t0 = t
+                    if reopen():
+                        say(ev='reopened', device=state.get('device'), lost_sec=round(time.monotonic() - last_ok, 2),
+                            search_sec=round(time.monotonic() - t0, 2))
+                        last_ok = time.monotonic()
+                        skip_until = cnt['n'] + 5   # 露出が効くまで数枚捨てる
+                    continue
                 time.sleep(0.005)
                 continue
+            last_ok = t
             cnt['n'] += 1
             n = cnt['n']
+            if n <= skip_until:
+                if n == skip_until:
+                    set_exposure()
+                continue
             if n in (1, 5):
                 # 撮り始める前に設定した露出は効かないことがある(ロボットで、露出50の指定なのに真っ白)。
                 # 撮り始めてからもう一度設定し、効くまで数枚待ってから「使える」と知らせる。
@@ -238,8 +284,8 @@ def _child(cfg):
                 continue
             if first and n >= 10:
                 first = False
-                say(ev='ready', t=t, device=state.get('device'), auto=cap.get(cv2.CAP_PROP_AUTO_EXPOSURE), exposure=cap.get(cv2.CAP_PROP_EXPOSURE),
-                    gain=cap.get(cv2.CAP_PROP_GAIN), shape=list(frame.shape), brightness=round(float(frame[::8, ::8].mean()), 1))
+                say(ev='ready', t=t, device=state.get('device'), auto=holder["cap"].get(cv2.CAP_PROP_AUTO_EXPOSURE), exposure=holder["cap"].get(cv2.CAP_PROP_EXPOSURE),
+                    gain=holder["cap"].get(cv2.CAP_PROP_GAIN), shape=list(frame.shape), brightness=round(float(frame[::8, ::8].mean()), 1))
             if first:
                 continue
             with lock:
@@ -322,7 +368,7 @@ def _child(cfg):
                 say(ev='error', what='detect failed: %r' % (error,))
                 state['detect'] = False
     rt.join(1.0)
-    cap.release()
+    holder["cap"].release()
     if meta is not None:
         meta.close()
     say(ev='stopped', frames=cnt['n'], saved=cnt['saved'], detected=cnt['detected'], tracked=cnt['tracked'])
