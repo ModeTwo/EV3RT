@@ -45,6 +45,7 @@ def main():
     ap.add_argument('samples')
     ap.add_argument('--calib', default=None)
     ap.add_argument('--write', default=None)
+    ap.add_argument('--dump', default=None, help='点ごとの食い違い(画素の位置、車体から見た前・右 mm)を CSV に書く(補正なし・補正ありの両方)')
     ap.add_argument('--fix', default='', help='求めない全体の補正(カンマ区切り: front,lat,height,roll,yaw)')
     a = ap.parse_args()
     import cv2
@@ -103,7 +104,8 @@ def main():
             # 床の点(車体の座標)を、いまの較正で画素へ戻す(検出した点の画素の位置)
             pc = R0 @ (np.array([b[0], b[1], 0.0]) - C0)
             uvn = pc[:2] / pc[2]
-            obs.append((len(imgs), uvn, best))
+            pix = cv2.projectPoints(np.array([[b[0], b[1], 0.0]]), cam.rvec, cam.tvec, K, dist)[0].reshape(2)
+            obs.append((len(imgs), uvn, best, (float(pix[0]), float(pix[1])), (float(b[0]), float(b[1]))))
         imgs.append(dict(name=os.path.basename(os.path.dirname(smp['image'])) + '/' + os.path.basename(smp['image']),
                          pose=(x0, y0, h0), known=bool(smp.get('heading_known')), n=len(obs) - n0))
     print('images %d, observations %d' % (len(imgs), len(obs)))
@@ -120,7 +122,7 @@ def main():
         pitch = p[len(free):len(free) + nI]
         dh = dict(zip(unk, p[len(free) + nI:]))
         res = []
-        for i, uvn, w in obs:
+        for i, uvn, w, _pix, _b in obs:
             # 補正を入れたカメラ: 位置 C0 + (front, lat, height)、向き = R0 を 車体の軸まわりに yaw(上下軸)・roll(前後軸)・pitch(左右軸)で回す
             C = C0 + np.array([g.get('front', 0.0), g.get('lat', 0.0), g.get('height', 0.0)])
             Rb = rot_z(math.radians(g.get('yaw', 0.0))) @ rot_x(math.radians(g.get('roll', 0.0))) @ rot_y(math.radians(pitch[i]))
@@ -142,6 +144,7 @@ def main():
     free = []
     pb = least_squares(model, np.zeros(nI + len(unk)), f_scale=5.0).x
     r0 = model(pb)
+    pb_dh = dict(zip(unk, pb[nI:]))
     free = free_all
     sol = least_squares(model, p0, f_scale=5.0)
     r1 = model(sol.x)
@@ -165,6 +168,20 @@ def main():
             im['name'][-48:], im['n'], b0[i], b1[i], pitch[i], ' (固定)' if im['known'] else ' %+.2f°' % dh.get(i, 0.0)))
     print('全体の食い違い(点ごとの距離の真ん中): %.1f → %.1f mm' % (
         float(np.median(np.hypot(r0[0::2], r0[1::2]))), float(np.median(np.hypot(r1[0::2], r1[1::2])))))
+    if a.dump:
+        with open(a.dump, 'w', encoding='utf-8') as f:
+            f.write('image,u,v,body_front,body_left,front0,right0,front1,right1\n')
+            k = 0
+            for (i, uvn, w, pix, b) in obs:
+                x0, y0, h0 = imgs[i]['pose']
+                out = []
+                for r, hh in ((r0, pb_dh.get(i, 0.0)), (r1, dh.get(i, 0.0))):
+                    ex, ey = r[2 * k], r[2 * k + 1]
+                    hr = math.radians(h0 + hh)
+                    out += [ex * math.cos(hr) + ey * math.sin(hr), ex * math.sin(hr) - ey * math.cos(hr)]
+                f.write('%s,%.1f,%.1f,%.1f,%.1f,%.2f,%.2f,%.2f,%.2f\n' % ((imgs[i]['name'], pix[0], pix[1], b[0], b[1]) + tuple(out)))
+                k += 1
+        print('書いた:', a.dump)
     if a.write:
         d = json.load(open(a.calib or sp.DEFAULT_CALIB, encoding='utf-8'))
         d['front_fix_mm'] = round(float(d.get('front_fix_mm', 0.0)) + g.get('front', 0.0), 2)
