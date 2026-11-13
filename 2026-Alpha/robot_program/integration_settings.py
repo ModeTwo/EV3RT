@@ -92,7 +92,7 @@ class IntegrationSettings:
     delivery_marker_full_width_mm: float = 120.0
     delivery_marker_half_width_mm: float = 60.0
     delivery_drop_distance_first_mm: float = 100.0
-    delivery_drive_first_power: int = 50
+    delivery_drive_first_power: int = 90
     delivery_drop_distance_second_mm: float = 100.0
     delivery_drive_second_power: int = 50
     # ドロップゾーン進入・退出をDeliveryEtRun(方位保持、power<0で後退)で行うためのPID。
