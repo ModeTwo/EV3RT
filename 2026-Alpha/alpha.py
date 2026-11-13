@@ -1396,6 +1396,9 @@ def _run_main(argv, startup_cleanup):
                         help=('For the modified hub firmware: after raising the arm and waiting for it to '
                               'settle, stand still with brakes this many seconds so the hub recalibrates '
                               'the gyro bias. Default (unset) = none.'))
+    parser.add_argument('--rally-camera-tail-sec', type=float, default=None,
+                        help=('After the last ET rally segment stops, keep measuring the pose with the camera this many '
+                              'seconds and log it without correcting (needs --rally-camera-correct on). Default (unset) = none.'))
     parser.add_argument('--rally-gyro-post-measure-sec', type=float, default=None,
                         help=('After the last ET rally segment stops, stand still with brakes this many seconds and '
                               'log the gyro rate and heading change (measure only). Default (unset) = none.'))
@@ -1871,6 +1874,13 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-gyro-hub-recal-sec must be between 1 and 30')
         mission_config = dataclasses.replace(
             mission_config, et_rally_gyro_hub_recal_sec=args.rally_gyro_hub_recal_sec)
+    if args.rally_camera_tail_sec is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-camera-tail-sec requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.5 <= args.rally_camera_tail_sec <= 10.0:
+            parser.error('--rally-camera-tail-sec must be between 0.5 and 10')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_camera_tail_sec=args.rally_camera_tail_sec)
     if args.rally_gyro_post_measure_sec is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-gyro-post-measure-sec requires --mission rally-drive, bottle-rally or rally-sumo')

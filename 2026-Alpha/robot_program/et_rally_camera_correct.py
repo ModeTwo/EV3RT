@@ -231,6 +231,8 @@ class EtRallyCameraCorrect(Behaviour):
         self.corrector = CameraCorrector(self.gain_pos, self.gain_head, self.lag_sec,
                                          mirror=getattr(runtime, "course", -1) == 1, at=cp.at, apply=apply_to_robot,
                                          logger=self.logger, far_confirm=self.far_confirm, cam_center=cam_center)
+        global _last_corrector
+        _last_corrector = self.corrector
         if self.proc is None:
             self.logger.warning("camera correct: camera process not running, no correction")
             return
@@ -286,3 +288,77 @@ class EtRallyCameraCorrect(Behaviour):
             self.logger.info("camera correct: finished %s total (%+.1f,%+.1f mm %+.2f deg) image age median %.3fs max %.3fs pitch %+.1f (changed %d)" % (
                 self.corrector.counts, *self.corrector.total, ages[len(ages) // 2], ages[-1],
                 self.corrector.pitch, self.corrector.pitch_changes))
+
+
+_last_corrector = None   # 2026-11-13: 走行中の補正の CameraCorrector(止まったあとの測定 EtRallyCameraTail が同じ下向きの選び方で使う)
+
+
+class EtRallyCameraTail(Behaviour):
+    """2026-11-13: 最後に止まったあと duration_sec 秒、カメラで位置を測り続けてログに出す(補正はかけない)。
+    円弧を回り終えた直後などに、走っている間だけカメラが決まった向きにずれて見えるかを、止まったあとの読みと同じ回の中で比べるため。
+    ログ: "camera tail: diff (前, 右 mm 向き deg) items ... resid ..."(コースの座標ではなく車体の前・右)。終わりに真ん中の値。"""
+
+    def __init__(self, name, duration_sec):
+        super().__init__(name)
+        self.duration_sec = float(duration_sec)
+        self.proc = None
+        self.start = None
+        self.rows = []
+        self.saved = None
+
+    def initialise(self):
+        from . import et_rally_camera_proc
+        self.proc = et_rally_camera_proc.current()
+        self.start = time.monotonic()
+        self.rows = []
+        self.saved = None
+        c = _last_corrector
+        if self.proc is None or c is None:
+            self.logger.warning("camera tail: camera process or corrector not running, skipped")
+            return
+        self.saved = (c.apply, list(c.total), dict(c.counts), c.last_diff)
+        c.apply = None          # 測るだけ(位置は直さない)
+        c.last_diff = None
+        self.proc.poll()        # 走っている間の古い画像は捨てる
+        self.proc.send("track 1")
+        self.logger.info("camera tail: measuring %.1fs after the stop (no correction)" % self.duration_sec)
+
+    def update(self):
+        if self.saved is None:
+            return Status.SUCCESS
+        try:
+            runtime.gyro_sensor.get_angle()   # 止まっている間も位置の記録を進める(画像の時刻の姿勢を引けるように)
+        except Exception:
+            pass
+        c = _last_corrector
+        for ev in self.proc.poll():
+            if ev.get("ev") != "dets" or float(ev.get("t", 0.0)) < self.start + 0.1:
+                continue
+            res = c.process(ev)
+            if res is None:
+                continue
+            _dx, _dy, _dh, (ex, ey, eh, nd, nm, resid) = res
+            from . import et_rally_course_pose as cp
+            p = cp.at(float(ev.get("t", 0.0)))
+            h = math.radians(p[3]) if p is not None else 0.0
+            front = ex * math.cos(h) + ey * math.sin(h)
+            right = ex * math.sin(h) - ey * math.cos(h)
+            self.rows.append((front, right, eh))
+            self.logger.info("camera tail: diff (front %+.1f, right %+.1f mm %+.2f deg) items D%d M%d resid %.1f" % (
+                front, right, eh, nd, nm, resid))
+        if time.monotonic() - self.start < self.duration_sec:
+            return Status.RUNNING
+        return Status.SUCCESS
+
+    def terminate(self, new_status):
+        if self.proc is not None and self.saved is not None:
+            self.proc.send("track 0")
+        c = _last_corrector
+        if c is not None and self.saved is not None:
+            c.apply, c.total, c.counts, c.last_diff = self.saved[0], self.saved[1], self.saved[2], self.saved[3]
+        if self.rows:
+            mid = lambda v: sorted(v)[len(v) // 2]
+            self.logger.info("camera tail: finished %d images, median front %+.1f right %+.1f mm heading %+.2f deg" % (
+                len(self.rows), mid([r[0] for r in self.rows]), mid([r[1] for r in self.rows]), mid([r[2] for r in self.rows])))
+        elif self.saved is not None:
+            self.logger.info("camera tail: finished, no usable images")

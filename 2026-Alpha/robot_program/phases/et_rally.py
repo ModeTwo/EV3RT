@@ -20,7 +20,7 @@ from ..et_rally_heading import (EtRallyArmUpWithDriftMeasure, EtRallyPostStopGyr
                                 RestoreEtRallyHeading)
 from ..runtime import runtime
 from ..et_rally_start_pose import EtRallyApplyStartPose, EtRallyStartPoseCapture
-from ..et_rally_camera_correct import EtRallyCameraCorrect
+from ..et_rally_camera_correct import EtRallyCameraCorrect, EtRallyCameraTail
 from ..et_rally_course_pose import (EtRallyAnchorCoursePose, EtRallyCameraLogStart, EtRallyCameraLogStop,
                                     EtRallyCameraProcessStart, EtRallyCameraProcessStop, EtRallyReleaseCoursePose)
 
@@ -268,6 +268,10 @@ def build_et_rally_phase(context, config):
     # 最後の区間の後は、ここで明示的に停止する(単体テストでは、この後は何も動かさないため必須)。
     children.append(StopNow(name="et_rally final stop"))
     children.append(EtRallyBatteryLog("et_rally battery drive end", "end"))
+    tail_sec = getattr(config, "et_rally_camera_tail_sec", None)
+    if tail_sec and camera_correct and track_course:
+        # 2026-11-13: 止まったあともカメラで測り続けてログに出す(補正はかけない)。走行中の読みと比べる試験用。
+        children.append(EtRallyCameraTail("et_rally camera tail", tail_sec))
     if camera_log_every or camera_correct:
         children.append(EtRallyCameraLogStop("et_rally camera log stop"))
     if track_course:
