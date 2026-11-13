@@ -147,6 +147,19 @@ class GroundCamera:
             t = -R @ (C + np.array([front_fix, lat_fix, 0.0]))
         self.lat_fix = lat_fix
         self.front_fix = front_fix
+        # 2026-11-13: 床での較正(wireless_device/et_rally_camera_calib/floor_calib.py)で求めた補正。カメラの高さ(mm、上が+)と、
+        # カメラの向きを車体の軸まわりに回す量(前後の軸まわり roll、上下の軸まわり cam_yaw、度)。カメラの位置は高さ以外変えない。
+        h_fix = float(d.get("height_fix_mm", 0.0)); roll = float(d.get("roll_fix_deg", 0.0)); cyaw = float(d.get("cam_yaw_fix_deg", 0.0))
+        if h_fix or roll or cyaw:
+            R = cv2.Rodrigues(np.asarray(rv, float).reshape(3, 1))[0]
+            C = -R.T @ t + np.array([0.0, 0.0, h_fix])
+            cr, sr = math.cos(math.radians(roll)), math.sin(math.radians(roll))
+            cz, sz = math.cos(math.radians(cyaw)), math.sin(math.radians(cyaw))
+            Rb = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]]) @ np.array([[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]])
+            R = R @ Rb.T
+            rv = cv2.Rodrigues(R)[0].ravel()
+            t = -R @ C
+        self.floor_fix = (h_fix, roll, cyaw)
         self.top_x, self.top_y, self.top_s = top_x, top_y, top_s
         # 下向きも当てはめる位置の出し方(fit_pose_pitch)で使う
         self.K, self.dist, self.rvec, self.tvec = K, dist, rv, t
@@ -194,7 +207,7 @@ def camera_center(calib_path=None):
     if yaw:
         c_, s_ = math.cos(yaw), math.sin(yaw)
         C = np.array([[c_, s_, 0.0], [-s_, c_, 0.0], [0.0, 0.0, 1.0]]) @ C   # Rz^T C
-    C = C + np.array([float(d.get("front_fix_mm", 0.0)), float(d.get("lat_fix_mm", 0.0)), 0.0])
+    C = C + np.array([float(d.get("front_fix_mm", 0.0)), float(d.get("lat_fix_mm", 0.0)), float(d.get("height_fix_mm", 0.0))])
     return tuple(float(v) for v in C)
 
 

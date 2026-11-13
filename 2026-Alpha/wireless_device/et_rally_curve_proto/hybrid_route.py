@@ -1769,6 +1769,10 @@ def main():
                 print(f'phase 2 (detours)  {time.time() - t0:.1f}s', flush=True)
                 continue
             print(f'NO ROUTE (stopped at {bad})  checks={sum(t.checks for t in T.values())} {time.time() - t0:.1f}s')
+            # 2026-11-13: same_laps では bad がいつも 'goal' になり、どこで行き詰まったか分からなかった。区間ごとに、
+            # つながる(当たらない)組み合わせの数を出す(0 の区間が原因)。
+            for k_, t_ in T.items():
+                print('  table %s->%s: %d of %d connections possible' % (k_[0], k_[1], int(np.sum(t_.C < INF / 2)), t_.C.size), flush=True)
             return
         # 経路を復元して、使ったつなぎ区間を厳密に判定する
         if used is None:
