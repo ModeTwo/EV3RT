@@ -79,11 +79,14 @@ def prims_to_steps(seq, h):
             if p['deg'] >= 0.3:
                 gap = max(gap, abs(nd(p['h_from'] - h)))
                 out.append({'type': 'turn', 'target_heading_deg': g(p['h_to']), 'label': None})
+                h_to_r = START_H0 - out[-1]['target_heading_deg']   # 丸めた向き
                 # その場の旋回では、回る中心が車軸の PIVOT_BACK 後ろにあり、車軸も動く(実測。経路を作る道具も同じ形)。
                 # 次の直進を道具の点へ向けるとき、動いたあとの位置から数える。
                 qx, qy = pos[0] - PIVOT_BACK * math.cos(math.radians(h)), pos[1] - PIVOT_BACK * math.sin(math.radians(h))
-                pos = [qx + PIVOT_BACK * math.cos(math.radians(p['h_to'])), qy + PIVOT_BACK * math.sin(math.radians(p['h_to']))]
-            h = p['h_to']
+                pos = [qx + PIVOT_BACK * math.cos(math.radians(h_to_r)), qy + PIVOT_BACK * math.sin(math.radians(h_to_r))]
+                h = h_to_r
+            else:
+                h = p['h_to']
         elif p['t'] == 'line':
             e = p['b']
             dx, dy = e[0] - pos[0], e[1] - pos[1]
@@ -91,10 +94,13 @@ def prims_to_steps(seq, h):
             if L >= 0.5:
                 hh = math.degrees(math.atan2(dy, dx)) + (0 if p['m'] > 0 else 180)
                 gap = max(gap, abs(nd(hh - h)))
-                out.append({'type': 'move', 'target_heading_deg': g(hh), 'distance_mm': round(L, 1), 'reverse': p['m'] < 0,
-                            'stop': False, 'label': 'garage-arm-down' if p.get('arm_down') else label})
-                h = hh
-                pos = [pos[0] + dx, pos[1] + dy]
+                st_ = {'type': 'move', 'target_heading_deg': g(hh), 'distance_mm': round(L, 1), 'reverse': p['m'] < 0,
+                       'stop': False, 'label': 'garage-arm-down' if p.get('arm_down') else label}
+                out.append(st_)
+                # 2026-11-13: ロボットが積算するのと同じく、丸めた向き・距離で位置を進める(丸めの誤差が周を重ねてたまらないように)
+                h = START_H0 - st_['target_heading_deg']
+                th_ = math.radians(h + (0 if p['m'] > 0 else 180))
+                pos = [pos[0] + st_['distance_mm'] / 10 * math.cos(th_), pos[1] + st_['distance_mm'] / 10 * math.sin(th_)]
         else:
             if p['deg'] >= 0.05:
                 h0 = p['th0'] + (0 if p['m'] > 0 else 180)
@@ -102,15 +108,17 @@ def prims_to_steps(seq, h):
                 h1 = h0 + p['s'] * p['deg']
                 sw = p['s'] * p['deg'] + nd(h0 - h)        # いまの向き h から h1 まで(向きのとびを円弧で吸収する)
             if p['deg'] >= 0.05 and abs(sw) >= 0.05:
-                r = p['r']
+                st_ = {'type': 'arc', 'target_heading_deg': g(h1), 'sweep_deg': round(-sw, 2),
+                       'radius_mm': round(p['r'] * 10, 1), 'reverse': p['m'] < 0, 'stop': False,
+                       'label': 'garage-arm-down' if p.get('arm_down') else None}
+                out.append(st_)
+                # ロボットと同じく、丸めた半径・角度で、いまの向きから積算する
+                sw = -st_['sweep_deg']; r = st_['radius_mm'] / 10
                 sg = 1.0 if sw > 0 else -1.0
                 th0 = math.radians(h + (0 if p['m'] > 0 else 180))
                 cx, cy = pos[0] - sg * r * math.sin(th0), pos[1] + sg * r * math.cos(th0)
                 th1 = th0 + math.radians(sw)
                 pos = [cx + sg * r * math.sin(th1), cy - sg * r * math.cos(th1)]
-                out.append({'type': 'arc', 'target_heading_deg': g(h1), 'sweep_deg': round(-sw, 2),
-                            'radius_mm': round(r * 10, 1), 'reverse': p['m'] < 0, 'stop': False,
-                            'label': 'garage-arm-down' if p.get('arm_down') else None})
                 h = h + sw
         if pending and len(out) > n0:
             out[n0]['marks'] = [pending]; pending = None

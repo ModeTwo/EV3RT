@@ -38,7 +38,7 @@
  "note_1101": "2026-11-01 試作: 往復・後退でのゲート通過を許した経路(4周)のつなぎ区間を、円弧+直進+円弧などに置き換えたもの(検討セッションのスクラッチパッドの shuttle_plan2.py / curve_route.py で作成)。近似式の見積もりで走行部分 84.7 秒。",
  "laps": 10,
  "goal_at": "garage",
- "total_distance_mm": 26253.3,
+ "total_distance_mm": 26252.9,
  "move_count": 104,
  "arc_count": 113,
  "turn_count": 0,
@@ -148,8 +148,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 143.5,
-   "distance_mm": 111.0,
+   "target_heading_deg": 143.51,
+   "distance_mm": 110.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -157,7 +157,7 @@
   {
    "type": "arc",
    "target_heading_deg": 0.0,
-   "sweep_deg": -143.5,
+   "sweep_deg": -143.51,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -165,7 +165,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 0.0,
+   "target_heading_deg": 0.01,
    "distance_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -174,7 +174,7 @@
   {
    "type": "arc",
    "target_heading_deg": -10.0,
-   "sweep_deg": -10.0,
+   "sweep_deg": -10.01,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -183,7 +183,7 @@
   {
    "type": "move",
    "target_heading_deg": -10.0,
-   "distance_mm": 216.4,
+   "distance_mm": 216.3,
    "reverse": false,
    "stop": false,
    "label": null
@@ -199,7 +199,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 39.45,
+   "target_heading_deg": 39.4,
    "distance_mm": 18.0,
    "reverse": false,
    "stop": false,
@@ -208,7 +208,7 @@
   {
    "type": "arc",
    "target_heading_deg": 70.0,
-   "sweep_deg": 30.55,
+   "sweep_deg": 30.6,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -216,7 +216,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 70.0,
+   "target_heading_deg": 70.01,
    "distance_mm": 105.8,
    "reverse": false,
    "stop": false,
@@ -225,7 +225,7 @@
   {
    "type": "arc",
    "target_heading_deg": 90.0,
-   "sweep_deg": 20.0,
+   "sweep_deg": 19.99,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -250,7 +250,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 164.12,
+   "target_heading_deg": 164.14,
    "distance_mm": 88.6,
    "reverse": false,
    "stop": false,
@@ -259,7 +259,7 @@
   {
    "type": "arc",
    "target_heading_deg": -95.0,
-   "sweep_deg": 100.88,
+   "sweep_deg": 100.86,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -267,7 +267,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": -95.0,
+   "target_heading_deg": -95.03,
    "distance_mm": 86.1,
    "reverse": false,
    "stop": false,
@@ -276,7 +276,7 @@
   {
    "type": "arc",
    "target_heading_deg": -90.0,
-   "sweep_deg": 5.0,
+   "sweep_deg": 5.03,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -328,7 +328,7 @@
   {
    "type": "move",
    "target_heading_deg": 143.5,
-   "distance_mm": 111.0,
+   "distance_mm": 110.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -344,7 +344,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 0.0,
+   "target_heading_deg": 0.03,
    "distance_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -356,7 +356,7 @@
   {
    "type": "arc",
    "target_heading_deg": -10.0,
-   "sweep_deg": -10.0,
+   "sweep_deg": -10.03,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -364,8 +364,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": -10.0,
-   "distance_mm": 216.4,
+   "target_heading_deg": -10.01,
+   "distance_mm": 216.3,
    "reverse": false,
    "stop": false,
    "label": null
@@ -373,7 +373,7 @@
   {
    "type": "arc",
    "target_heading_deg": 39.45,
-   "sweep_deg": 49.45,
+   "sweep_deg": 49.46,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -381,7 +381,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 39.45,
+   "target_heading_deg": 39.59,
    "distance_mm": 18.0,
    "reverse": false,
    "stop": false,
@@ -390,7 +390,7 @@
   {
    "type": "arc",
    "target_heading_deg": 70.0,
-   "sweep_deg": 30.55,
+   "sweep_deg": 30.41,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -398,8 +398,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 70.0,
-   "distance_mm": 105.8,
+   "target_heading_deg": 69.95,
+   "distance_mm": 106.0,
    "reverse": false,
    "stop": false,
    "label": "lap2-yellow"
@@ -407,7 +407,7 @@
   {
    "type": "arc",
    "target_heading_deg": 90.0,
-   "sweep_deg": 20.0,
+   "sweep_deg": 20.05,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -415,8 +415,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 266.8,
+   "target_heading_deg": 90.01,
+   "distance_mm": 266.7,
    "reverse": false,
    "stop": false,
    "label": null
@@ -424,7 +424,7 @@
   {
    "type": "arc",
    "target_heading_deg": 164.12,
-   "sweep_deg": 74.12,
+   "sweep_deg": 74.11,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -484,7 +484,7 @@
   {
    "type": "move",
    "target_heading_deg": -88.75,
-   "distance_mm": 289.4,
+   "distance_mm": 289.5,
    "reverse": false,
    "stop": false,
    "label": null
@@ -509,7 +509,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 143.5,
+   "target_heading_deg": 143.48,
    "distance_mm": 111.0,
    "reverse": false,
    "stop": false,
@@ -518,7 +518,7 @@
   {
    "type": "arc",
    "target_heading_deg": 0.0,
-   "sweep_deg": -143.5,
+   "sweep_deg": -143.48,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -547,7 +547,7 @@
   {
    "type": "move",
    "target_heading_deg": -10.0,
-   "distance_mm": 216.4,
+   "distance_mm": 216.3,
    "reverse": false,
    "stop": false,
    "label": null
@@ -563,7 +563,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 39.45,
+   "target_heading_deg": 39.35,
    "distance_mm": 18.0,
    "reverse": false,
    "stop": false,
@@ -572,7 +572,7 @@
   {
    "type": "arc",
    "target_heading_deg": 70.0,
-   "sweep_deg": 30.55,
+   "sweep_deg": 30.65,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -580,8 +580,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 70.0,
-   "distance_mm": 105.8,
+   "target_heading_deg": 70.03,
+   "distance_mm": 105.7,
    "reverse": false,
    "stop": false,
    "label": "lap3-yellow"
@@ -589,7 +589,7 @@
   {
    "type": "arc",
    "target_heading_deg": 90.0,
-   "sweep_deg": 20.0,
+   "sweep_deg": 19.97,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -597,8 +597,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 266.8,
+   "target_heading_deg": 89.99,
+   "distance_mm": 266.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -606,7 +606,7 @@
   {
    "type": "arc",
    "target_heading_deg": 164.12,
-   "sweep_deg": 74.12,
+   "sweep_deg": 74.13,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -614,7 +614,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 164.12,
+   "target_heading_deg": 164.16,
    "distance_mm": 88.6,
    "reverse": false,
    "stop": false,
@@ -623,7 +623,7 @@
   {
    "type": "arc",
    "target_heading_deg": -95.0,
-   "sweep_deg": 100.88,
+   "sweep_deg": 100.84,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -631,7 +631,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": -95.0,
+   "target_heading_deg": -95.04,
    "distance_mm": 86.1,
    "reverse": false,
    "stop": false,
@@ -640,7 +640,7 @@
   {
    "type": "arc",
    "target_heading_deg": -90.0,
-   "sweep_deg": 5.0,
+   "sweep_deg": 5.04,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -649,7 +649,7 @@
   {
    "type": "move",
    "target_heading_deg": -90.0,
-   "distance_mm": 212.3,
+   "distance_mm": 212.2,
    "reverse": false,
    "stop": false,
    "label": null
@@ -666,7 +666,7 @@
   {
    "type": "move",
    "target_heading_deg": -88.75,
-   "distance_mm": 289.4,
+   "distance_mm": 289.5,
    "reverse": false,
    "stop": false,
    "label": null
@@ -691,7 +691,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 143.5,
+   "target_heading_deg": 143.49,
    "distance_mm": 111.0,
    "reverse": false,
    "stop": false,
@@ -700,7 +700,7 @@
   {
    "type": "arc",
    "target_heading_deg": 0.0,
-   "sweep_deg": -143.5,
+   "sweep_deg": -143.49,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -708,7 +708,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 0.0,
+   "target_heading_deg": -0.0,
    "distance_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -745,7 +745,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 39.45,
+   "target_heading_deg": 39.51,
    "distance_mm": 18.0,
    "reverse": false,
    "stop": false,
@@ -754,7 +754,7 @@
   {
    "type": "arc",
    "target_heading_deg": 70.0,
-   "sweep_deg": 30.55,
+   "sweep_deg": 30.49,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -762,8 +762,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 70.0,
-   "distance_mm": 105.8,
+   "target_heading_deg": 69.98,
+   "distance_mm": 105.9,
    "reverse": false,
    "stop": false,
    "label": "lap4-yellow"
@@ -771,7 +771,7 @@
   {
    "type": "arc",
    "target_heading_deg": 90.0,
-   "sweep_deg": 20.0,
+   "sweep_deg": 20.02,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -780,7 +780,7 @@
   {
    "type": "move",
    "target_heading_deg": 90.0,
-   "distance_mm": 266.8,
+   "distance_mm": 266.7,
    "reverse": false,
    "stop": false,
    "label": null
@@ -796,7 +796,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 164.12,
+   "target_heading_deg": 164.1,
    "distance_mm": 88.6,
    "reverse": false,
    "stop": false,
@@ -805,7 +805,7 @@
   {
    "type": "arc",
    "target_heading_deg": -95.0,
-   "sweep_deg": 100.88,
+   "sweep_deg": 100.9,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -813,7 +813,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": -95.0,
+   "target_heading_deg": -95.01,
    "distance_mm": 86.1,
    "reverse": false,
    "stop": false,
@@ -822,7 +822,7 @@
   {
    "type": "arc",
    "target_heading_deg": -90.0,
-   "sweep_deg": 5.0,
+   "sweep_deg": 5.01,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -873,8 +873,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 143.5,
-   "distance_mm": 111.0,
+   "target_heading_deg": 143.52,
+   "distance_mm": 110.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -882,7 +882,7 @@
   {
    "type": "arc",
    "target_heading_deg": 0.0,
-   "sweep_deg": -143.5,
+   "sweep_deg": -143.52,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -890,7 +890,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 0.0,
+   "target_heading_deg": -0.0,
    "distance_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -927,7 +927,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 39.45,
+   "target_heading_deg": 39.52,
    "distance_mm": 18.0,
    "reverse": false,
    "stop": false,
@@ -936,7 +936,7 @@
   {
    "type": "arc",
    "target_heading_deg": 70.0,
-   "sweep_deg": 30.55,
+   "sweep_deg": 30.48,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -944,8 +944,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 70.0,
-   "distance_mm": 105.8,
+   "target_heading_deg": 69.98,
+   "distance_mm": 105.9,
    "reverse": false,
    "stop": false,
    "label": "lap5-yellow"
@@ -953,7 +953,7 @@
   {
    "type": "arc",
    "target_heading_deg": 90.0,
-   "sweep_deg": 20.0,
+   "sweep_deg": 20.02,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -962,7 +962,7 @@
   {
    "type": "move",
    "target_heading_deg": 90.0,
-   "distance_mm": 266.8,
+   "distance_mm": 266.7,
    "reverse": false,
    "stop": false,
    "label": null
@@ -978,7 +978,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 164.12,
+   "target_heading_deg": 164.1,
    "distance_mm": 88.6,
    "reverse": false,
    "stop": false,
@@ -987,7 +987,7 @@
   {
    "type": "arc",
    "target_heading_deg": -95.0,
-   "sweep_deg": 100.88,
+   "sweep_deg": 100.9,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1030,7 +1030,7 @@
   {
    "type": "move",
    "target_heading_deg": -88.75,
-   "distance_mm": 289.4,
+   "distance_mm": 289.5,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1055,7 +1055,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 143.5,
+   "target_heading_deg": 143.48,
    "distance_mm": 111.0,
    "reverse": false,
    "stop": false,
@@ -1064,7 +1064,7 @@
   {
    "type": "arc",
    "target_heading_deg": 0.0,
-   "sweep_deg": -143.5,
+   "sweep_deg": -143.48,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1072,7 +1072,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 0.0,
+   "target_heading_deg": 0.01,
    "distance_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1084,7 +1084,7 @@
   {
    "type": "arc",
    "target_heading_deg": -10.0,
-   "sweep_deg": -10.0,
+   "sweep_deg": -10.01,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1093,7 +1093,7 @@
   {
    "type": "move",
    "target_heading_deg": -10.0,
-   "distance_mm": 216.4,
+   "distance_mm": 216.3,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1109,7 +1109,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 39.45,
+   "target_heading_deg": 39.37,
    "distance_mm": 18.0,
    "reverse": false,
    "stop": false,
@@ -1118,7 +1118,7 @@
   {
    "type": "arc",
    "target_heading_deg": 70.0,
-   "sweep_deg": 30.55,
+   "sweep_deg": 30.63,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1126,8 +1126,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 70.0,
-   "distance_mm": 105.8,
+   "target_heading_deg": 70.03,
+   "distance_mm": 105.7,
    "reverse": false,
    "stop": false,
    "label": "lap6-yellow"
@@ -1135,7 +1135,7 @@
   {
    "type": "arc",
    "target_heading_deg": 90.0,
-   "sweep_deg": 20.0,
+   "sweep_deg": 19.97,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1143,8 +1143,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 90.0,
-   "distance_mm": 266.8,
+   "target_heading_deg": 89.99,
+   "distance_mm": 266.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1152,7 +1152,7 @@
   {
    "type": "arc",
    "target_heading_deg": 164.12,
-   "sweep_deg": 74.12,
+   "sweep_deg": 74.13,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1160,7 +1160,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 164.12,
+   "target_heading_deg": 164.15,
    "distance_mm": 88.6,
    "reverse": false,
    "stop": false,
@@ -1169,7 +1169,7 @@
   {
    "type": "arc",
    "target_heading_deg": -95.0,
-   "sweep_deg": 100.88,
+   "sweep_deg": 100.85,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1177,7 +1177,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": -95.0,
+   "target_heading_deg": -95.03,
    "distance_mm": 86.1,
    "reverse": false,
    "stop": false,
@@ -1186,7 +1186,7 @@
   {
    "type": "arc",
    "target_heading_deg": -90.0,
-   "sweep_deg": 5.0,
+   "sweep_deg": 5.03,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1238,7 +1238,7 @@
   {
    "type": "move",
    "target_heading_deg": 143.5,
-   "distance_mm": 111.0,
+   "distance_mm": 110.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1254,7 +1254,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 0.0,
+   "target_heading_deg": 0.02,
    "distance_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1266,7 +1266,7 @@
   {
    "type": "arc",
    "target_heading_deg": -10.0,
-   "sweep_deg": -10.0,
+   "sweep_deg": -10.02,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1275,7 +1275,7 @@
   {
    "type": "move",
    "target_heading_deg": -10.0,
-   "distance_mm": 216.4,
+   "distance_mm": 216.3,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1291,7 +1291,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 39.45,
+   "target_heading_deg": 39.47,
    "distance_mm": 18.0,
    "reverse": false,
    "stop": false,
@@ -1300,7 +1300,7 @@
   {
    "type": "arc",
    "target_heading_deg": 70.0,
-   "sweep_deg": 30.55,
+   "sweep_deg": 30.53,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1342,7 +1342,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 164.12,
+   "target_heading_deg": 164.11,
    "distance_mm": 88.6,
    "reverse": false,
    "stop": false,
@@ -1351,7 +1351,7 @@
   {
    "type": "arc",
    "target_heading_deg": -95.0,
-   "sweep_deg": 100.88,
+   "sweep_deg": 100.89,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1359,8 +1359,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": -95.0,
-   "distance_mm": 86.1,
+   "target_heading_deg": -94.99,
+   "distance_mm": 86.2,
    "reverse": false,
    "stop": false,
    "label": "lap8-red"
@@ -1368,7 +1368,7 @@
   {
    "type": "arc",
    "target_heading_deg": -90.0,
-   "sweep_deg": 5.0,
+   "sweep_deg": 4.99,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1419,7 +1419,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 143.5,
+   "target_heading_deg": 143.49,
    "distance_mm": 111.0,
    "reverse": false,
    "stop": false,
@@ -1428,7 +1428,7 @@
   {
    "type": "arc",
    "target_heading_deg": 0.0,
-   "sweep_deg": -143.5,
+   "sweep_deg": -143.49,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1436,7 +1436,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 0.0,
+   "target_heading_deg": -0.01,
    "distance_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1448,7 +1448,7 @@
   {
    "type": "arc",
    "target_heading_deg": -10.0,
-   "sweep_deg": -10.0,
+   "sweep_deg": -9.99,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1473,7 +1473,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 39.45,
+   "target_heading_deg": 39.48,
    "distance_mm": 18.0,
    "reverse": false,
    "stop": false,
@@ -1482,7 +1482,7 @@
   {
    "type": "arc",
    "target_heading_deg": 70.0,
-   "sweep_deg": 30.55,
+   "sweep_deg": 30.52,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1490,7 +1490,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 70.0,
+   "target_heading_deg": 69.98,
    "distance_mm": 105.8,
    "reverse": false,
    "stop": false,
@@ -1499,7 +1499,7 @@
   {
    "type": "arc",
    "target_heading_deg": 90.0,
-   "sweep_deg": 20.0,
+   "sweep_deg": 20.02,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1524,7 +1524,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 164.12,
+   "target_heading_deg": 164.11,
    "distance_mm": 88.6,
    "reverse": false,
    "stop": false,
@@ -1533,7 +1533,7 @@
   {
    "type": "arc",
    "target_heading_deg": -95.0,
-   "sweep_deg": 100.88,
+   "sweep_deg": 100.89,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1542,7 +1542,7 @@
   {
    "type": "move",
    "target_heading_deg": -95.0,
-   "distance_mm": 86.1,
+   "distance_mm": 86.2,
    "reverse": false,
    "stop": false,
    "label": "lap9-red"
@@ -1559,7 +1559,7 @@
   {
    "type": "move",
    "target_heading_deg": -90.0,
-   "distance_mm": 212.3,
+   "distance_mm": 212.2,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1576,7 +1576,7 @@
   {
    "type": "move",
    "target_heading_deg": -88.75,
-   "distance_mm": 289.4,
+   "distance_mm": 289.5,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1601,7 +1601,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 143.5,
+   "target_heading_deg": 143.49,
    "distance_mm": 111.0,
    "reverse": false,
    "stop": false,
@@ -1610,7 +1610,7 @@
   {
    "type": "arc",
    "target_heading_deg": 0.0,
-   "sweep_deg": -143.5,
+   "sweep_deg": -143.49,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1655,7 +1655,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 39.45,
+   "target_heading_deg": 39.53,
    "distance_mm": 18.0,
    "reverse": false,
    "stop": false,
@@ -1664,7 +1664,7 @@
   {
    "type": "arc",
    "target_heading_deg": 70.0,
-   "sweep_deg": 30.55,
+   "sweep_deg": 30.47,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1672,8 +1672,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 70.0,
-   "distance_mm": 105.8,
+   "target_heading_deg": 69.97,
+   "distance_mm": 105.9,
    "reverse": false,
    "stop": false,
    "label": "lap9-yellow"
@@ -1681,7 +1681,7 @@
   {
    "type": "arc",
    "target_heading_deg": 90.0,
-   "sweep_deg": 20.0,
+   "sweep_deg": 20.03,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1690,7 +1690,7 @@
   {
    "type": "move",
    "target_heading_deg": 90.0,
-   "distance_mm": 266.8,
+   "distance_mm": 266.7,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1706,7 +1706,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 164.12,
+   "target_heading_deg": 164.1,
    "distance_mm": 88.6,
    "reverse": false,
    "stop": false,
@@ -1715,7 +1715,7 @@
   {
    "type": "arc",
    "target_heading_deg": -95.0,
-   "sweep_deg": 100.88,
+   "sweep_deg": 100.9,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1723,7 +1723,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": -95.0,
+   "target_heading_deg": -95.01,
    "distance_mm": 86.1,
    "reverse": false,
    "stop": false,
@@ -1732,7 +1732,7 @@
   {
    "type": "arc",
    "target_heading_deg": -90.0,
-   "sweep_deg": 5.0,
+   "sweep_deg": 5.01,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1783,8 +1783,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": 143.5,
-   "distance_mm": 111.0,
+   "target_heading_deg": 143.51,
+   "distance_mm": 110.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1792,7 +1792,7 @@
   {
    "type": "arc",
    "target_heading_deg": 0.0,
-   "sweep_deg": -143.5,
+   "sweep_deg": -143.51,
    "radius_mm": 100.0,
    "reverse": false,
    "stop": false,
@@ -1851,7 +1851,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": -113.73,
+   "target_heading_deg": -113.88,
    "distance_mm": 20.5,
    "reverse": false,
    "stop": false,
@@ -1860,7 +1860,7 @@
   {
    "type": "arc",
    "target_heading_deg": -110.0,
-   "sweep_deg": 3.73,
+   "sweep_deg": 3.88,
    "radius_mm": 80.0,
    "reverse": false,
    "stop": false,
@@ -1868,8 +1868,8 @@
   },
   {
    "type": "move",
-   "target_heading_deg": -110.0,
-   "distance_mm": 105.8,
+   "target_heading_deg": -109.99,
+   "distance_mm": 105.6,
    "reverse": false,
    "stop": false,
    "label": "lap10-yellow"
@@ -1877,7 +1877,7 @@
   {
    "type": "move",
    "target_heading_deg": -110.0,
-   "distance_mm": 249.2,
+   "distance_mm": 249.1,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1894,7 +1894,7 @@
   {
    "type": "move",
    "target_heading_deg": -149.15,
-   "distance_mm": 1170.1,
+   "distance_mm": 1170.2,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1910,7 +1910,7 @@
   },
   {
    "type": "move",
-   "target_heading_deg": -180.0,
+   "target_heading_deg": 179.99,
    "distance_mm": 40.0,
    "reverse": false,
    "stop": true,
@@ -1982,7 +1982,7 @@
    },
    {
     "type": "move",
-    "target_heading_deg": -113.73,
+    "target_heading_deg": -113.84,
     "distance_mm": 20.5,
     "reverse": false,
     "stop": false,
@@ -1991,7 +1991,7 @@
    {
     "type": "arc",
     "target_heading_deg": -110.0,
-    "sweep_deg": 3.73,
+    "sweep_deg": 3.84,
     "radius_mm": 80.0,
     "reverse": false,
     "stop": false,
@@ -1999,8 +1999,8 @@
    },
    {
     "type": "move",
-    "target_heading_deg": -110.0,
-    "distance_mm": 105.8,
+    "target_heading_deg": -109.99,
+    "distance_mm": 105.6,
     "reverse": false,
     "stop": false,
     "label": null
@@ -2025,7 +2025,7 @@
    {
     "type": "move",
     "target_heading_deg": -149.15,
-    "distance_mm": 1170.1,
+    "distance_mm": 1170.2,
     "reverse": false,
     "stop": false,
     "label": null
@@ -2041,7 +2041,7 @@
    },
    {
     "type": "move",
-    "target_heading_deg": -180.0,
+    "target_heading_deg": 179.92,
     "distance_mm": 40.0,
     "reverse": false,
     "stop": true,
@@ -2059,5 +2059,6 @@
   "arm_half_width_cm": 7.0,
   "note": "must_be_up_* が null なら最後まで当たらない。時間は経路を作る道具の近似式(止まる時間を入れない短めの見込み)。"
  },
- "note_1113c": "2026-11-13 夜(2): 切り上げに特別な道を作らず、本線の最後の周の道を使う形に変えた(周ごとに最後の周と経路が分かれる所で判断し、切り上げるならその周を最後の周と同じ通り方で完了してガレージへ)。check_plan.py で OK。"
+ "note_1113c": "2026-11-13 夜(2): 切り上げに特別な道を作らず、本線の最後の周の道を使う形に変えた(周ごとに最後の周と経路が分かれる所で判断し、切り上げるならその周を最後の周と同じ通り方で完了してガレージへ)。check_plan.py で OK。",
+ "note_1113d": "2026-11-13 夜(3): 変換で丸めたあとの向き・距離で位置を積算するように直して作り直し(周を重ねてもずれがたまらない)。"
 }

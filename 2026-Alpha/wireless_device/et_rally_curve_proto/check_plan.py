@@ -5,7 +5,7 @@
 消えていた)を机上で見つけるため。
 
 検査すること(どれか1つでも満たさなければ NG):
-  1. 本線: 進入禁止に入らない、脚とのすき間が --min-clear 以上、ゲートを決まった順(赤→青→黄、同じ色の重複はよい)で通る、
+  1. 本線: 進入禁止に入らない(はみ出しが KEEPOUT_TOL_CM 以内なら注意)、脚とのすき間が --min-clear 以上、ゲートを決まった順(赤→青→黄、同じ色の重複はよい)で通る、
      終わりがガレージに入る(x・y とも食い込み量が道具の決まり以上)。
   2. 周の終わりの印 lapN-end が、計画の exit.laps の周すべてに1つずつある(切り上げられない周がない)。
   3. 各周の印から exit を走った場合: 1 と同じ(ゲートの順は、その周の黄のあとから数える)。
@@ -26,6 +26,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
+KEEPOUT_TOL_CM = 0.5       # 進入禁止へのはみ出しが、この深さ以内なら注意(NG にしない)。変換で車体の角が数mm 振れる分
 START_OVERHEAD_SEC = 3.2   # スタート位置に着いてから走り出すまで(取り込み・ジャイロ)。11/13 の実機で約3.2秒
 
 
@@ -148,10 +149,19 @@ def check_path(hr, pts, steps, min_clear, arm_from=None):
             clear = clear.copy(); clear[m] = np.minimum(clear[m], ca)
     hr._EXEMPT_ON = True     # スタートの近くだけ、置いた時点でかかっている進入禁止を外す(道具と同じ)
     ko = hr.body_keepout_mask(P[:, 0], P[:, 1], np.degrees(H))
+    ko_deep = ko
+    if ko.any():
+        # 2026-11-13: はみ出しの深さ。進入禁止の長方形を KEEPOUT_TOL_CM だけ内側へ縮めても当たるなら、深いはみ出し
+        saved = hr.KEEPOUT, hr._KO_CORNERS, hr._START_EXEMPT
+        t = KEEPOUT_TOL_CM
+        hr.KEEPOUT = [(x0 + t, x1 - t, y0 + t, y1 - t) for x0, x1, y0, y1 in saved[0]]
+        hr._KO_CORNERS = None; hr._START_EXEMPT = None
+        ko_deep = hr.body_keepout_mask(P[:, 0], P[:, 1], np.degrees(H))
+        hr.KEEPOUT, hr._KO_CORNERS, hr._START_EXEMPT = saved
     hr._EXEMPT_ON = False
     k = int(np.argmin(clear))
     return dict(min_clear=round(float(clear[k]), 2), min_clear_at=(round(float(P[k, 0]), 1), round(float(P[k, 1]), 1), int(I[k])),
-                keepout_hits=int(ko.sum()), keepout_first=(None if not ko.any() else (round(float(P[ko][0, 0]), 1), round(float(P[ko][0, 1]), 1), int(I[ko][0]))),
+                keepout_hits=int(ko_deep.sum()), keepout_shallow=int(ko.sum() - ko_deep.sum()), keepout_first=(None if not ko.any() else (round(float(P[ko][0, 0]), 1), round(float(P[ko][0, 1]), 1), int(I[ko][0]))),
                 max_x=round(float(P[:, 0].max()), 1), min_y=round(float(P[:, 1].min()), 1))
 
 
@@ -182,6 +192,8 @@ def check(plan_path, params_path, budget, min_clear, ratio=0.93, tol=0.1):
         res['warn'].append('main: clearance %.2fcm (within %.1fmm below %.1f) at %s' % (m['min_clear'], tol * 10, min_clear, m['min_clear_at']))
     if m['keepout_hits']:
         res['ng'].append('main: keepout %d samples, first %s' % (m['keepout_hits'], m['keepout_first']))
+    elif m['keepout_shallow']:
+        res['warn'].append('main: keepout within %.0fmm (%d samples) at %s' % (KEEPOUT_TOL_CM * 10, m['keepout_shallow'], m['keepout_first']))
     if bad:
         res['ng'].append('main: gate order %s' % res['main']['gates'])
     need_x, need_y = float(hr.PARAMS.get('garage_overlap_cm', 6.0)), float(hr.PARAMS.get('garage_overlap_y_cm', 8.0))
@@ -232,6 +244,8 @@ def check(plan_path, params_path, budget, min_clear, ratio=0.93, tol=0.1):
                 res['ng'].append('exit lap%d: clearance %.2fcm at %s' % (k, em['min_clear'], em['min_clear_at']))
             elif em['min_clear'] < min_clear:
                 res['warn'].append('exit lap%d: clearance %.2fcm (within %.1fmm below %.1f)' % (k, em['min_clear'], tol * 10, min_clear))
+            if em['keepout_shallow'] and not em['keepout_hits']:
+                res['warn'].append('exit lap%d: keepout within %.0fmm' % (k, KEEPOUT_TOL_CM * 10))
             if em['keepout_hits']:
                 res['ng'].append('exit lap%d: keepout %d samples, first %s (max x %.1f, min y %.1f)' % (k, em['keepout_hits'], em['keepout_first'], em['max_x'], em['min_y']))
             if ebad:
