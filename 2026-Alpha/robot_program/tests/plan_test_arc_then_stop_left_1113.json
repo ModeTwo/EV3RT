@@ -1,0 +1,30 @@
+{
+ "note_1113": "2026-11-13: 円弧を回り終えた直後の見え方の確認(左回り)。スタートから進み、最後に半径150mm で左 へ90°回って80mm 直進して止まる。--rally-camera-tail-sec 2 を付けて、止まったあとのカメラの読み(camera tail)と、回り終えた直後の読み(camera correct: diff)を比べる。ゲートは置かない(点とマーカーが見える床ならよい)。終わりの車軸の位置: コースの (685, 632)、向き 270°。",
+ "steps": [
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 300.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -90.0,
+   "sweep_deg": -90.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -90.0,
+   "distance_mm": 80.0,
+   "reverse": false,
+   "stop": true,
+   "label": null
+  }
+ ]
+}
