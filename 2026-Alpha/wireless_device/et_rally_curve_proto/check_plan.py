@@ -217,14 +217,16 @@ def check(plan_path, params_path, budget, min_clear, ratio=0.93, tol=0.1):
             res['ng'].append('exit: no garage-arm-down label (the arm never goes down before the garage)')
         for k in sorted(marks):
             mi = marks[k]
-            p0 = sample(steps[:mi], start, pivot_back_cm=pb)[-1]
+            pre = sample(steps[:mi], start, pivot_back_cm=pb)
+            p0 = pre[-1]
+            pre_seq = gate_crossings(hr, pre)
             e_pts = sample(exs, (p0[0], p0[1], p0[2]), pivot_back_cm=pb)
             em = check_path(hr, e_pts, exs, min_clear, arm_from=ex_arm)
             eseq = gate_crossings(hr, e_pts)
-            ebad = order_ok(eseq, prev='yellow')
+            ebad = order_ok(eseq, prev=(pre_seq[-1] if pre_seq else None))   # 印の手前で最後にくぐった色から数える
             ee = e_pts[-1]
             eov = garage_overlap(hr, ee[0], ee[1], ee[2])
-            res['exits'][k] = dict(em, gates=''.join(c[0].upper() for c in eseq), order_bad=ebad, end=(round(ee[0], 1), round(ee[1], 1), round(ee[2] % 360, 1)),
+            res['exits'][k] = dict(em, before=(pre_seq[-1][0].upper() if pre_seq else '-'), gates=''.join(c[0].upper() for c in eseq), order_bad=ebad, end=(round(ee[0], 1), round(ee[1], 1), round(ee[2] % 360, 1)),
                                    garage_overlap=(round(eov[0], 1), round(eov[1], 1)))
             if em['min_clear'] < min_clear - tol:
                 res['ng'].append('exit lap%d: clearance %.2fcm at %s' % (k, em['min_clear'], em['min_clear_at']))
@@ -233,7 +235,7 @@ def check(plan_path, params_path, budget, min_clear, ratio=0.93, tol=0.1):
             if em['keepout_hits']:
                 res['ng'].append('exit lap%d: keepout %d samples, first %s (max x %.1f, min y %.1f)' % (k, em['keepout_hits'], em['keepout_first'], em['max_x'], em['min_y']))
             if ebad:
-                res['ng'].append('exit lap%d: gate order Y>%s' % (k, res['exits'][k]['gates']))
+                res['ng'].append('exit lap%d: gate order %s>%s' % (k, (pre_seq[-1][0].upper() if pre_seq else '-'), res['exits'][k]['gates']))
             if eov[0] < need_x - 0.5 or eov[1] < need_y - 0.5:
                 res['ng'].append('exit lap%d: garage overlap %.1f/%.1f' % (k, eov[0], eov[1]))
     # 5. 持ち時間での切り上げ(ロボットの式: 経過 + 次の周 + そこからの切り上げ(最後の周の前は最後の周 + ガレージ) + 余裕 <= 持ち時間)
@@ -278,8 +280,8 @@ def main():
     print('  main: gates %s, min clear %.2fcm, keepout %d, end %s, garage overlap %s' % (mm['gates'], mm['min_clear'], mm['keepout_hits'], mm['end'], mm['garage_overlap']))
     print('  laps %d, exit laps %s, marks %s' % (r['laps'], r['exit_laps'], r['marks']))
     for k, e in r['exits'].items():
-        print('  exit lap%d: gates Y>%s, min clear %.2fcm, keepout %d, max x %.1f, end %s, garage overlap %s' % (
-            k, e['gates'], e['min_clear'], e['keepout_hits'], e['max_x'], e['end'], e['garage_overlap']))
+        print('  exit lap%d: gates %s>%s, min clear %.2fcm, keepout %d, max x %.1f, end %s, garage overlap %s' % (
+            k, e['before'], e['gates'], e['min_clear'], e['keepout_hits'], e['max_x'], e['end'], e['garage_overlap']))
     b = r['budget']
     print('  budget %.0fs: %d laps, garage at %.1fs (exit %.1fs)' % (b['budget'], b['laps'], b['finish'], b['exit_sec'] or 0))
     for s in r['ng']:

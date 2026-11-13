@@ -184,7 +184,10 @@
    "radius_mm": 100.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "marks": [
+    "lap1-end"
+   ]
   },
   {
    "type": "move",
@@ -221,10 +224,7 @@
    "distance_mm": 25.4,
    "reverse": false,
    "stop": false,
-   "label": "lap2-red",
-   "marks": [
-    "lap1-end"
-   ]
+   "label": "lap2-red"
   },
   {
    "type": "move",
@@ -309,7 +309,10 @@
    "radius_mm": 100.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "marks": [
+    "lap2-end"
+   ]
   },
   {
    "type": "move",
@@ -346,10 +349,7 @@
    "distance_mm": 25.4,
    "reverse": false,
    "stop": false,
-   "label": "lap3-red",
-   "marks": [
-    "lap2-end"
-   ]
+   "label": "lap3-red"
   },
   {
    "type": "move",
@@ -434,7 +434,10 @@
    "radius_mm": 100.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "marks": [
+    "lap3-end"
+   ]
   },
   {
    "type": "move",
@@ -471,10 +474,7 @@
    "distance_mm": 25.4,
    "reverse": false,
    "stop": false,
-   "label": "lap4-red",
-   "marks": [
-    "lap3-end"
-   ]
+   "label": "lap4-red"
   },
   {
    "type": "move",
@@ -559,7 +559,10 @@
    "radius_mm": 100.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "marks": [
+    "lap4-end"
+   ]
   },
   {
    "type": "move",
@@ -596,10 +599,7 @@
    "distance_mm": 25.4,
    "reverse": false,
    "stop": false,
-   "label": "lap5-red",
-   "marks": [
-    "lap4-end"
-   ]
+   "label": "lap5-red"
   },
   {
    "type": "move",
@@ -684,7 +684,10 @@
    "radius_mm": 100.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "marks": [
+    "lap5-end"
+   ]
   },
   {
    "type": "move",
@@ -721,10 +724,7 @@
    "distance_mm": 25.4,
    "reverse": false,
    "stop": false,
-   "label": "lap6-red",
-   "marks": [
-    "lap5-end"
-   ]
+   "label": "lap6-red"
   },
   {
    "type": "move",
@@ -809,7 +809,10 @@
    "radius_mm": 100.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "marks": [
+    "lap6-end"
+   ]
   },
   {
    "type": "move",
@@ -846,10 +849,7 @@
    "distance_mm": 25.4,
    "reverse": false,
    "stop": false,
-   "label": "lap7-red",
-   "marks": [
-    "lap6-end"
-   ]
+   "label": "lap7-red"
   },
   {
    "type": "move",
@@ -934,7 +934,10 @@
    "radius_mm": 100.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "marks": [
+    "lap7-end"
+   ]
   },
   {
    "type": "move",
@@ -971,10 +974,7 @@
    "distance_mm": 25.4,
    "reverse": false,
    "stop": false,
-   "label": "lap8-red",
-   "marks": [
-    "lap7-end"
-   ]
+   "label": "lap8-red"
   },
   {
    "type": "move",
@@ -1059,7 +1059,10 @@
    "radius_mm": 100.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "marks": [
+    "lap8-end"
+   ]
   },
   {
    "type": "move",
@@ -1096,10 +1099,7 @@
    "distance_mm": 25.4,
    "reverse": false,
    "stop": false,
-   "label": "lap9-red",
-   "marks": [
-    "lap8-end"
-   ]
+   "label": "lap9-red"
   },
   {
    "type": "move",
@@ -1184,7 +1184,10 @@
    "radius_mm": 100.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "marks": [
+    "lap9-end"
+   ]
   },
   {
    "type": "move",
@@ -1221,10 +1224,7 @@
    "distance_mm": 25.4,
    "reverse": false,
    "stop": false,
-   "label": "lap10-red",
-   "marks": [
-    "lap9-end"
-   ]
+   "label": "lap10-red"
   },
   {
    "type": "move",
@@ -1393,26 +1393,51 @@
   ],
   "steps": [
    {
+    "type": "arc",
+    "target_heading_deg": 35.26,
+    "sweep_deg": -144.74,
+    "radius_mm": 100.0,
+    "reverse": true,
+    "stop": false,
+    "label": null
+   },
+   {
     "type": "move",
-    "target_heading_deg": 90.0,
-    "distance_mm": 450.0,
+    "target_heading_deg": 35.26,
+    "distance_mm": 428.2,
+    "reverse": true,
+    "stop": false,
+    "label": null
+   },
+   {
+    "type": "arc",
+    "target_heading_deg": -90.0,
+    "sweep_deg": -125.26,
+    "radius_mm": 100.0,
+    "reverse": true,
+    "stop": false,
+    "label": null
+   },
+   {
+    "type": "move",
+    "target_heading_deg": -90.0,
+    "distance_mm": 341.0,
     "reverse": true,
     "stop": true,
     "label": null
    },
    {
-    "type": "arc",
-    "target_heading_deg": 170.93,
-    "sweep_deg": 80.93,
-    "radius_mm": 80.0,
+    "type": "move",
+    "target_heading_deg": -90.0,
+    "distance_mm": 341.0,
     "reverse": false,
     "stop": false,
     "label": null
    },
    {
     "type": "arc",
-    "target_heading_deg": -143.5,
-    "sweep_deg": 45.57,
+    "target_heading_deg": -151.76,
+    "sweep_deg": -61.76,
     "radius_mm": 80.0,
     "reverse": false,
     "stop": false,
@@ -1420,34 +1445,8 @@
    },
    {
     "type": "move",
-    "target_heading_deg": -143.5,
-    "distance_mm": 1175.9,
-    "reverse": false,
-    "stop": false,
-    "label": null
-   },
-   {
-    "type": "arc",
-    "target_heading_deg": -150.0,
-    "sweep_deg": -6.5,
-    "radius_mm": 80.0,
-    "reverse": false,
-    "stop": false,
-    "label": null
-   },
-   {
-    "type": "arc",
-    "target_heading_deg": -171.23,
-    "sweep_deg": -21.23,
-    "radius_mm": 80.0,
-    "reverse": false,
-    "stop": false,
-    "label": null
-   },
-   {
-    "type": "move",
-    "target_heading_deg": -171.23,
-    "distance_mm": 45.1,
+    "target_heading_deg": -151.76,
+    "distance_mm": 1231.6,
     "reverse": false,
     "stop": false,
     "label": null
@@ -1455,7 +1454,7 @@
    {
     "type": "arc",
     "target_heading_deg": -180.0,
-    "sweep_deg": -8.77,
+    "sweep_deg": -28.24,
     "radius_mm": 80.0,
     "reverse": false,
     "stop": false,
@@ -1470,7 +1469,9 @@
     "label": null
    }
   ],
-  "tool_cost_sec": 7.7
+  "tool_cost_sec": null,
+  "kind": "final_tail",
+  "switch_block": 4
  },
  "et_rally_arm": {
   "must_be_up_mm": 827.0,
@@ -1479,5 +1480,5 @@
   "arm_half_width_cm": 7.0,
   "note": "must_be_up_* が null なら最後まで当たらない。時間は経路を作る道具の近似式(止まる時間を入れない短めの見込み)。"
  },
- "note_1113b": "2026-11-13 夜: 新しい変換と、切り上げを3通りから一番速いものを選ぶ道具で作り直し(黄を後退で戻る)。check_plan.py で OK。"
+ "note_1113c": "2026-11-13 夜(2): 切り上げに特別な道を作らず、本線の最後の周の道を使う形に変えた(周ごとに最後の周と経路が分かれる所で判断し、切り上げるならその周を最後の周と同じ通り方で完了してガレージへ)。check_plan.py で OK。"
 }

@@ -148,6 +148,73 @@ EXIT = c.get('exit') if garage else None
 seq = []
 carry_mark = None
 blocks = c['blocks']
+
+
+def _sig(b):
+    """区間の形の比べ用(座標を丸めたもの)。"""
+    out = []
+    for p in b['prims']:
+        if p['t'] == 'line':
+            out.append(('l', round(p['a'][0], 2), round(p['a'][1], 2), round(p['b'][0], 2), round(p['b'][1], 2), p['m']))
+        elif p['t'] == 'arc':
+            out.append(('a', round(p['pts'][0][0], 2), round(p['pts'][0][1], 2), round(p['pts'][-1][0], 2), round(p['pts'][-1][1], 2), p['m']))
+        else:
+            out.append(('p', round(p['h_from'], 2), round(p['h_to'], 2)))
+    return tuple(out)
+
+
+# 2026-11-13 ユーザー: 切り上げに特別な道を作らず、本線の最後の周の道でガレージへ向かう。周ごとに、最後の周と同じ経路を走っている
+# 区間(赤の前のつなぎ → 赤 → つなぎ → 青 → つなぎ → 黄)を前から比べ、分かれる区間の始めで判断する(印 lapN-end)。切り上げると
+# 決めたら、その区間から先は最後の周と同じ(黄も最後の周と同じ通り方で抜けて、その周を完了してからガレージへ)。
+FINAL_TAIL = None   # (区間の番号 J, 切り上げられる周のリスト, 最後の周のその区間の番号)
+
+
+def _first(bi):
+    """区間 bi の始まりの車軸の位置。空の区間(つなぎなし)は、次の区間の始まり。"""
+    for k in range(bi, len(blocks)):
+        for p_ in blocks[k]['prims']:
+            sp_ = _start_point(p_)
+            if sp_ is not None:
+                return (round(sp_[0], 2), round(sp_[1], 2))
+    return None
+if garage:
+    groups = {}
+    for bi, b in enumerate(blocks):
+        if b['kind'] == 'visit' and b['lap'] >= 1:
+            g_ = groups.setdefault(b['lap'], [])
+            if b['color'] == 'red' and bi > 0 and blocks[bi - 1]['kind'] == 'conn':
+                g_.append(bi - 1)
+            g_.append(bi)
+            if b['color'] in ('red', 'blue') and bi + 1 < len(blocks) and blocks[bi + 1]['kind'] == 'conn':
+                g_.append(bi + 1)
+    F = max(groups) if groups else 0
+    if F >= 2 and len(groups[F]) == 6:
+        fs = [_sig(blocks[i]) for i in groups[F]]
+        jn = {}
+        for n in range(1, F):
+            gn = groups.get(n, [])
+            if len(gn) != 6:
+                continue
+            # 周の始め(赤の前のつなぎの始め)が最後の周と同じ位置か。違えば(1周目はスタートから始まる)、その周は切り上げられない
+            start_same = _first(gn[0]) == _first(groups[F][0])
+            # 赤の前のつなぎは、1周目だけスタートから始まるので違うことが多い。その場合は赤から先を比べる(分かれ目は赤より後)
+            j = 0 if start_same else 1
+            if not start_same and _first(gn[1]) != _first(groups[F][1]):
+                continue
+            # 区間の形に加えて、始まりの位置も同じ(空のつなぎどうしは形が同じでも、前後の位置が違うことがある)
+            while j < 6 and _sig(blocks[gn[j]]) == fs[j] and _first(gn[j]) == _first(groups[F][j]):
+                j += 1
+            if not start_same and j < 1:
+                continue
+            jn[n] = j   # 0..6: 前から j 区間が最後の周と同じ(6 なら1周まるごと同じ)。赤の前が違う周は1以上
+        best = None
+        for J in range(0, 7):
+            cov = [n for n, j in jn.items() if j >= J and (J >= 1 or _first(groups[n][0]) == _first(groups[F][0]))
+                   and (J >= 6 or _first(groups[n][J]) == _first(groups[F][J]))]
+            if cov and (best is None or (len(cov), J) > (len(best[1]), best[0])):
+                best = (J, sorted(cov))
+        if best is not None:
+            FINAL_TAIL = best
 for bi, b in enumerate(blocks):
     label = f"lap{b['lap']}-{b['color']}" if b['kind'] == 'visit' and b['lap'] >= 1 else None   # lap0 は赤の前に通る黄
     prims = b['prims']
@@ -155,7 +222,15 @@ for bi, b in enumerate(blocks):
         prims = _split_prims(prims, float(ARM_DOWN['cm']))
     # 2026-11-11: 途中で切り上げてガレージへ向かえる周の終わり(N周目の黄ゲートのあとの、赤へのつなぎの始め)に印 'lapN-end'
     mark = None
-    if (EXIT and b['kind'] == 'conn' and bi > 0 and blocks[bi - 1]['kind'] == 'visit' and blocks[bi - 1]['color'] == 'yellow'
+    if FINAL_TAIL is not None:
+        J, cov = FINAL_TAIL
+        for n in cov:
+            gn = groups[n]
+            # J == 6: 1周まるごと同じ → その周の黄のあとのつなぎ(次の周の赤の前、または最後のつなぎ)の始め
+            at = gn[J] if J < 6 else gn[5] + 1
+            if bi == at:
+                mark = 'lap%d-end' % n
+    elif (EXIT and b['kind'] == 'conn' and bi > 0 and blocks[bi - 1]['kind'] == 'visit' and blocks[bi - 1]['color'] == 'yellow'
             and blocks[bi - 1]['lap'] in EXIT.get('laps', []) and bi < len(blocks) - 1):
         mark = 'lap%d-end' % blocks[bi - 1]['lap']
     # 2026-11-13: 黄を抜けてそのまま赤へ一直線に入る配置(33)では、黄→赤のつなぎが空で印が消えていた
@@ -168,7 +243,19 @@ for bi, b in enumerate(blocks):
 steps, h, max_gap = prims_to_steps(seq, START_H0)
 steps = finalize(steps, True)
 exit_steps = None
-if EXIT and EXIT.get('prims'):
+if FINAL_TAIL is not None:
+    J, cov = FINAL_TAIL
+    start_b = groups[F][J] if J < 6 else groups[F][5] + 1
+    ep = []
+    for bi in range(start_b, len(blocks)):
+        pr = blocks[bi]['prims']
+        if ARM_DOWN is not None and bi == len(blocks) - 1 and blocks[bi]['kind'] == 'conn':
+            pr = _split_prims(pr, float(ARM_DOWN['cm']))
+        ep += list(pr)
+    exit_steps, _, _ = prims_to_steps([(p, None, None) for p in ep], START_H0)
+    exit_steps = finalize(exit_steps, False)
+    EXIT = dict(laps=cov, kind='final_tail', switch_block=J, cost=None)
+elif EXIT and EXIT.get('prims'):
     ep = EXIT['prims']
     if EXIT.get('arm_down') is not None:
         ep = _split_prims(ep, float(EXIT['arm_down']['cm']))
@@ -240,7 +327,8 @@ plan = {
 }
 if exit_steps:
     # 2026-11-11: 途中の周(印 lapN-end)で切り上げるときに、そこから走るガレージまでのつなぎ(--rally-time-budget)
-    plan['exit'] = {'laps': EXIT.get('laps', []), 'steps': exit_steps, 'tool_cost_sec': EXIT.get('cost')}
+    plan['exit'] = {'laps': EXIT.get('laps', []), 'steps': exit_steps, 'tool_cost_sec': EXIT.get('cost'),
+                    'kind': EXIT.get('kind'), 'switch_block': EXIT.get('switch_block')}
 # 2026-11-06: アームを下げたままだと脚に当たる最初の点(hybrid_route.py の arm、なければ書かない)。
 # ロボットは、ここまでに上げ終わる見込みなら走りながら上げ、間に合わなければスタートで止まっている間に上げる。
 if c.get('arm') is not None or 'arm' in c:
