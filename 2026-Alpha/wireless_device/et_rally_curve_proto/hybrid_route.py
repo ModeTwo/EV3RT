@@ -1876,7 +1876,37 @@ def main():
                 print('exit: from laps %s yellow to the garage %.1fs (arm down from %.1fcm)' % (
                     ex_laps, best[0], exit_info['arm_down']['cm']), flush=True)
             else:
-                print('exit: NO path from the yellow exit to the garage (no early exit)', flush=True)
+                # 2026-11-13 ユーザー: 黄を抜けた所からガレージへの道がなければ、そのまま次の赤も抜けてからガレージへ向かう
+                # (配置33: 黄を下から上へ抜けると赤との間の狭い所に出るが、赤まで一直線に抜ければ外へ出られる)。
+                # 切り上げの印は黄の抜けのまま(ロボットの判断の場所は変えない)。つなぎ = 黄→赤のつなぎ + 赤の通り方 + 赤→ガレージ。
+                ir = next((i for i, (key, e, s_) in enumerate(used) if key == ('yellow', 'red') and e == e0 and i < len(visits)), None)
+                if ir is not None:
+                    key, e, s_ = used[ir]
+                    vr = visits[ir]
+                    head = list(T[key].prims[(e, s_)]) + list(vr['prims'])
+                    tr = Table(ends['red'], goal_pose, via_first=True)
+                    er = vr['e']; best_r = None
+                    for g in range(len(tr.starts)):
+                        for _ in range(4):
+                            if tr.done[er, g]:
+                                break
+                            tr.resolve(er, g)
+                            if not tr.done[er, g] or (er, g) in tr.pending:
+                                tr.open_via()
+                        if tr.done[er, g] and tr.C[er, g] < INF / 2 and (er, g) in tr.prims:
+                            if best_r is None or tr.C[er, g] < best_r[0]:
+                                best_r = (float(tr.C[er, g]), g)
+                    if best_r is not None:
+                        ep = head + list(tr.prims[(er, best_r[1])])
+                        cost = float(T[key].C[e, s_]) + float(vr['cost']) + best_r[0]
+                        exit_info = dict(cost=round(cost, 2), laps=ex_laps, prims=[ser(p) for p in ep],
+                                         arm_down=arm_can_be_down(ep), via_red=True)
+                        print('exit: from laps %s yellow, through red, to the garage %.1fs (arm down from %.1fcm)' % (
+                            ex_laps, cost, exit_info['arm_down']['cm']), flush=True)
+                if exit_info is None:
+                    print('exit: NO path from the yellow exit to the garage (no early exit)%s' % (
+                        '' if ir is None else ' (also none through red: red exit %s)' % (
+                            [round(float(v), 1) for v in ends['red'][visits[ir]['e']][0]] + [round(float(ends['red'][visits[ir]['e']][1]), 1)],)), flush=True)
         else:
             print('exit: no yellow exits, no early exit to the garage', flush=True)
     json.dump(dict(total=total, params=PARAMS, margin=MARGIN_FRONT, narrow=bool(MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]), audit=audit, arm=arm, arm_down=arm_down, exit=exit_info, blocks=blocks), open(sys.argv[2], 'w'))
