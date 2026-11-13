@@ -1,0 +1,81 @@
+{
+ "note_1113": "2026-11-13: 配置36の最後の周の回り込み(赤を抜けたあと: 直進300 → 右180°(半径150) → 右66°(半径80) → 直進20 → 右4° → 黄を抜ける直進106)を、ゲートなしでスタートから切り出して走り、止まる。毎回この回り込みのあと黄の手前で右へ15〜33mm 寄るので、止まった位置を定規で測り、ログ・止まったあとのカメラと比べる。--rally-camera-tail-sec 2 を付ける。終わりの車軸の位置: コースの (685, 986)、点 G2-1 から 図の左へ54mm・下へ0mm、向きは図の290°(右が0°、上が90°)。",
+ "steps": [
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 80.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 221.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -1.3,
+   "sweep_deg": -1.3,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -1.3,
+   "distance_mm": 261.5,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -180.0,
+   "sweep_deg": 181.3,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -113.73,
+   "sweep_deg": 66.27,
+   "radius_mm": 80.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -113.73,
+   "distance_mm": 20.5,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -110.0,
+   "sweep_deg": 3.73,
+   "radius_mm": 80.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -110.0,
+   "distance_mm": 105.8,
+   "reverse": false,
+   "stop": true,
+   "label": null
+  }
+ ]
+}
