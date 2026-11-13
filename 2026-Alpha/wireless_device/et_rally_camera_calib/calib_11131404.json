@@ -204,7 +204,7 @@
   "sq": 25.0,
   "h": -2.0
  },
- "pitch_fix_deg": 0.35,
+ "pitch_fix_deg": -0.82,
  "lat_fix_mm": 4.0,
  "note": "2026-11-13 14:04 recalibrate_day.py: 較正台 3 枚(下向きが真ん中の 20261113_140248_jig_jig_001.png を先頭)、レンズ・置き方・補正は calib_1112.json から引き継ぎ。"
 }
