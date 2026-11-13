@@ -1,6 +1,7 @@
 """Robot-side race program entry point."""
 import sys
 import argparse
+import dataclasses
 import time
 import threading
 import signal
@@ -1210,6 +1211,14 @@ def _run_main(argv, startup_cleanup):
         default=None,
         help='Decoded Hint 2 coordinates for rally-drive, bottle-rally or rally-sumo',
     )
+    parser.add_argument(
+        '--rally-plan-path',
+        default=None,
+        help=('Run a fixed local plan.json ({"steps": [...]}) instead of the calculated '
+              'route: no PC connection or hints are used to build the route (rally-drive '
+              'test calibration, e.g. straight/spin runs). --rally-hint1/--rally-hint2-gate-info '
+              'are still required by the argument checks but their values are ignored.'),
+    )
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
     args = parser.parse_args(argv)
@@ -1233,6 +1242,13 @@ def _run_main(argv, startup_cleanup):
     # 未実装ノードは明示警告するが、PendingFeature自身のSUCCESSで後続工程へ進める。
     print(" -- shutdown-v8 control interval=%.3fs mission=%s" % (EXEC_INTERVAL, args.mission))
     mission_config = config_for_mission(args.mission)
+    if args.rally_plan_path is not None:
+        # PC接続・Hint計算を一切使わず、指定したplan.json(steps形式)をそのまま実行する
+        # (直進距離やキャスター引きずりの実機較正など、固定動作だけを試したいときに使う)。
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-plan-path requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_strategy_source='file', et_rally_plan_path=args.rally_plan_path)
     try:
         bottle_color = read_bottle_color_for_final_mission(
             mission=args.mission,

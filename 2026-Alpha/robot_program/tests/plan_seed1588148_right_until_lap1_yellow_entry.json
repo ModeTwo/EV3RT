@@ -1,0 +1,104 @@
+{
+ "note": "seed=1588148 right course, until lap1_yellow_entry (calibration: check stop position against the gate)",
+ "steps": [
+  {
+   "type": "turn",
+   "target_heading_deg": -37.78,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -37.78,
+   "distance_mm": 843.9,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 39.11,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 39.11,
+   "distance_mm": 158.5,
+   "label": "lap1-red-entry"
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 90.0,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 90.0,
+   "distance_mm": 295.0,
+   "label": "lap1-red-exit"
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 29.36,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 29.36,
+   "distance_mm": 183.6,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 23.76,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 23.76,
+   "distance_mm": 146.4,
+   "label": "lap1-blue-entry"
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 0.0,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 295.0,
+   "label": "lap1-blue-exit"
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": -90.0,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -90.0,
+   "distance_mm": 250.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": -180.0,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -180.0,
+   "distance_mm": 1081.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": -90.0,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -90.0,
+   "distance_mm": 290.0,
+   "label": "lap1-yellow-entry"
+  }
+ ]
+}

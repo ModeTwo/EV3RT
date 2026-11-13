@@ -14,9 +14,12 @@ def _parse_position(value):
     if len(value) != 2 or any(character not in "12345" for character in value):
         raise ValueError("Gate positions must be two digits from 1 to 5")
     x, y = int(value[0]), int(value[1])
-    # 公式表記(X,Yとも1〜5)を、計算ロジックのグリッド(左コースのplanner座標、X,Yとも0〜4)へ
-    # 1ずつずらして変換する。右コースのX反転はcalculate()側で行う。
-    return x - 1, y - 1
+    # 公式表記(X,Yとも1〜5)を、計算ロジックのグリッド(左コースのplanner座標、X,Yとも0〜4)へ変換する。
+    # Xは1ずらすだけ(X=5がスタート側)。右コースのX反転はcalculate()側で行う。
+    # Yは上下を逆にする: 公式のY=1がスタート位置と同じ高さの行で、plannerのY(0〜4)は、
+    # スタートの高さの行が3.5、ゴール側へ下がるほど小さくなる。したがって、planner側のY = 5 - 公式のY。
+    # (2026-09-21、実際のコースの確認に基づく変更: 「11のポイントはスタート位置と同じ高さにある」)
+    return x - 1, 5 - y
 
 
 def _parse_gate_text(value):
@@ -84,6 +87,13 @@ def calculate(payload):
         config.GOAL_POS_CM = (mirror_x(config.GOAL_POS_CM[0]), config.GOAL_POS_CM[1])
         config.START_HEADING_DEG = mirror_heading(config.START_HEADING_DEG)
         config.GOAL_HEADING_DEG = mirror_heading(config.GOAL_HEADING_DEG)
+        # 進入禁止エリアと、ゴールへの中継点も、同じ軸で左右反転する(xの範囲は大小が入れ替わる)。
+        config.KEEP_OUT_RECTS_CM = tuple(
+            (mirror_x(xmax), mirror_x(xmin), ymin, ymax)
+            for xmin, xmax, ymin, ymax in config.KEEP_OUT_RECTS_CM
+        )
+        config.KEEP_OUT_GOAL_LANE_POINT_CM = (
+            mirror_x(config.KEEP_OUT_GOAL_LANE_POINT_CM[0]), config.KEEP_OUT_GOAL_LANE_POINT_CM[1])
 
     from commands import waypoints_to_plan
     from planner import Gate

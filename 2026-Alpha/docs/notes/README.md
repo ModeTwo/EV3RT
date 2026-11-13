@@ -1,5 +1,7 @@
 # 走行関連の補足資料・変更履歴
 
+2026-09-26追記: モデル審査(CS大会)向けに、ETラリー関連の設計判断・実装・検証記録を横断調査した資料を追加した。[ET_RALLY_MODEL_SURVEY_v1.md](ET_RALLY_MODEL_SURVEY_v1.md)。コード変更は伴わない調査結果であり、既存資料との不一致・未確認事項も明記している。
+
 2026-09-15更新: ETラリーの絶対方位が360度境界をまたぐとき、`SpinAround`の終了判定だけでなく、`SpinAround`と固定角度`RunByGyro`のPID目標も現在方位に最も近い等価角へ変換するよう修正した。たとえば現在314度・受信目標-44度はPID目標316度となり、-358度方向の大回転を指示しない。開始ログへ`requested`、`resolved`、`delta`を追加。経路計算、相対旋回、距離プロファイル走行は変更していない。PC上で構文と境界値を確認済み、実機未検証。
 
 2026-09-14更新: devREコミット`334b33d`「9月13日スタート～LAPの完成版プロファイルです」を正としてLAP走行を復元。`start_lap_profile_v1.py`はpull後すでに同一。RunByGyro一つ、相対方位、青検知開始・見逃し上限、LAP単体距離終了を同コミットへ合わせ、P=1.8/I=0/D=0.03、FF=1、横ずれlookahead=300、power=80を採用。5100mmライントレース切替と未使用の個別カーブ調整設定を撤去。構文、完成版との差分、実効距離を確認。実機未検証。
@@ -576,3 +578,13 @@ LAP青検知で方位安定を待たずATへ引渡し、青検知起点の最初
 検証はETロボコン側`work/drop-bottle-etrun-v1/verify_drop_bottle_etrun.py`で、後退時の不具合再現→修正確認、DeliveryEtRunの前進/後退の符号確認、drop_bottle.pyの木構造で後退レグが正しい向き・距離で対応していることを確認。全8チェック成功。実機・実カメラでの再現テストは未実施。
 
 全変更ファイル（修正）: `robot_program/behaviours/et_rally_drive.py`、`robot_program/behaviours/gyro_drive.py`、`robot_program/behaviours/corrected_run.py`、`robot_program/features/drop_bottle.py`、`robot_program/integration_settings.py`。ETロボコン側HANDOFF.mdおよび新規work/drop-bottle-etrun-v1/verify_drop_bottle_etrun.pyにも記録。`behaviours/delivery_turn.py`(旧`delivery_turn`/`DeliveryPulseTurn`)は`move_to_rally_ready.py`が今も使うため無変更。既存の未コミット変更は保持。
+
+## 2026-09-21 LAPゲート後の相撲位置補正をstart_to_lap_gate.pyからmove_to_sumo_start.py(相撲側)へ移動
+
+ユーザー指示「LAPゲートの停止後のバックからの動作をレガシーでも使えるように外だししたい あるいは、相撲の責務にしたい」により調査した結果、レガシー側・アーカイブにこの後退・旋回シーケンスの既存呼び出し元は無く、一方でET相撲側(`move_to_sumo_start.py`のNo.15)には目的が重なる別実装(直進→土俵方位旋回→後退)が既に存在することを確認した(2026-09-19分の残課題として既に記録されていた重複懸念)。ユーザーからの補足「この処理は、相撲位置に移動するための処理で、もともとの初期位置と変わっているために追加している処理です」により、この後退→+90度旋回→前進→180度旋回のシーケンスは「LAPゲート終了直後の実際の停止位置を、No.15が前提とする初期位置へ合わせ直す補正」であることが確定し、相撲側の責務として`move_to_sumo_start.py`へ移動した。
+
+`start_to_lap_gate.py`にあった`RunByGyroMinusBack`クラスと関連シーケンス構築、6個のモジュール定数を`move_to_sumo_start.py`へ移し、6個の定数は`SumoSettings`(`sumo_types.py`)へ`reposition_backward_*`/`reposition_turn_*`/`reposition_advance_*`フィールドとして追加した(値は変更なし)。`build_move_to_sumo_start`のroot先頭にこの補正シーケンスを追加し、既存のNo.15本体はそのまま後に続く。`start_to_lap_gate.py`側は元の形(`run_to_line_trace`のみ)へ戻し、不要になったimport・ヘルパーも削除した。
+
+検証はETロボコン側`work/start-to-lap-turn90-v1/verify_start_to_lap_turn90.py`を全面更新し、両ファイルの新しい構造とパラメータの出所を確認。全8件成功。副次的に、`to_hint_route.py`が本セッション外で`RunByGyro`/`SpinAround`の実装元を`corrected_run.py`/`encoder_spin.py`へ切り替えていたのを確認し、無関係に失敗するようになっていた`work/sumo-style-hint1-recovery-v1/verify_hint1_black_recovery.py`のスタブを追随修正した(全5件成功に復帰)。
+
+全変更ファイル（修正）: `robot_program/features/start_to_lap_gate.py`、`robot_program/features/move_to_sumo_start.py`、`robot_program/sumo_types.py`。ETロボコン側HANDOFF.mdおよび`work/start-to-lap-turn90-v1/verify_start_to_lap_turn90.py`、`work/sumo-style-hint1-recovery-v1/verify_hint1_black_recovery.py`にも記録。既存の未コミット変更は保持。

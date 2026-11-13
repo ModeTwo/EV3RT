@@ -30,6 +30,8 @@ class RaceContext:
     strategy_requests_enabled: bool = True
     strategy_status: str = "idle"
     strategy_error: Optional[str] = None
+    # ETラリー開始時のエラーで、PCの経路ではなく固定ルートを使うことにしたか。
+    strategy_fallback_used: bool = False
     rally_lap: int = 0
     timer: RaceTimer = field(default_factory=RaceTimer)
     sumo: SumoState = field(default_factory=SumoState)

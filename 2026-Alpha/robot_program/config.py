@@ -15,8 +15,10 @@ class RaceConfig:
     mission_mode: str = 'configured'
     lapgate : bool = True
     # profile: PDF距離-方位表。legacy: 従来の固定方位+ライントレース。
+    # profile: 谷口さんベースコードでSTART-LAPまで全部ライントレース
     start_lap_mode: str = 'profile'
     #start_lap_mode: str = 'legacy'
+    #start_lap_mode: str = 'alltrace'
     start_lap_power: int = 85
     # 車軸中心から最初のカーブまで。アーム先端から500mm＋前方100mm。
     start_lap_first_straight_mm: float = 600.0
@@ -74,6 +76,9 @@ class RaceConfig:
     et_rally_laps: int = 3
     # received: PCから受信したSEQ、file: 従来の固定plan JSONを実行する。
     et_rally_strategy_source: str = "received"
+    # ETラリー開始時にエラー(経路の受信失敗、Hint不足、経路の変換失敗)が出たとき、ミッションを失敗にせず、
+    # 固定ルートでゴール(ガレージ)へ向かう(et_rally_fallback.py)。Falseなら、従来どおり失敗で止まる。
+    et_rally_fallback_enabled: bool = True
     # Noneならtests/plan_seed9392783.json。相対パスは2026-Alpha直下を基準にする。
     et_rally_plan_path: Optional[str] = None
     enable_et_sumo: bool = True
@@ -86,7 +91,7 @@ class RaceConfig:
     # 直接TCP接続用。SSHポート転送だけならhostを127.0.0.1へ変更する。
     strategy_host: str = "0.0.0.0"
     strategy_port: int = 50000
-    strategy_timeout_s: float = 5.0
+    strategy_timeout_s: float = 20.0
     sumo: SumoSettings = SumoSettings()
     integration: IntegrationSettings = IntegrationSettings()
 
@@ -111,6 +116,7 @@ MISSION_CHOICES = (
     'full',
     'hint2',
     'hint2-return',
+    'et-rally-lqi-calibration',
 )
 
 
@@ -145,6 +151,9 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'bottle-final':
         # Hint2後移動の終了位置から、Bottle Delivery後半だけを単体実行する。
+        return replace(config, mission_mode=mission, **disabled)
+    if mission == 'et-rally-lqi-calibration':
+        # ETラリー旋回のLQI設計に使う実測データ収集専用。準備工程・PC通信は一切実行しない。
         return replace(config, mission_mode=mission, **disabled)
     if mission == 'rally-drive':
         # 復号済みHintを外部入力し、準備工程なしでPC受信と周回走行だけを試す。
