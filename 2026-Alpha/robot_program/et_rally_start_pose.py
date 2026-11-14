@@ -59,6 +59,10 @@ def set_gate_legs(gates):
                     legs.append((float(g[key][0]) * P_MM, float(g[key][1]) * P_MM))
     _legs = legs
     _dots_visible = [d for d in DOTS if all(math.hypot(d[0] - l[0], d[1] - l[1]) > 1.0 for l in legs)]
+    try:
+        import numpy  # noqa: F401  2026-11-14: 引き直しのすき間の計算で初めて読み込むと、ロボットで約1秒かかった。準備のうちに読み込む
+    except Exception:
+        pass
     # 2026-11-14: 脚の T字の部品の長方形(経路を作る道具 hybrid_route._make_legs と同じ決まり)。スタートのつなぎの引き直しで、
     # 脚とのすき間を見るのに使う。(中心 x, y, ゲートの線の外向き u, 直角 v, u 方向の半分, v 方向の半分) mm
     global _leg_rects
@@ -758,28 +762,23 @@ def body_leg_clearance(poses):
     if not _leg_rects or not poses:
         return 1e9
     import numpy as np
+    # 2026-11-14: 脚6本をまとめて numpy で計算する(1本ずつだと、ロボットで1回約8ms かかり、引き直しの探索が間に合わなかった)
+    C = np.array([r[0] for r in _leg_rects], float); U = np.array([r[1] for r in _leg_rects], float); V = np.array([r[2] for r in _leg_rects], float)
+    HU = np.array([r[3] for r in _leg_rects], float); HV = np.array([r[4] for r in _leg_rects], float)
+    Q = np.concatenate([C + U * (a * HU)[:, None] + V * (b * HV)[:, None] for a in (-1, 1) for b in (-1, 1)])   # 脚の角 (4n, 2)
     P = np.array(poses, float)
-    px, py, ph = P[:, 0], P[:, 1], P[:, 2]
+    px, py, ph = P[:, 0:1], P[:, 1:2], P[:, 2:3]
     c, s = np.cos(ph), np.sin(ph)
+    # 脚の角 → 車体の箱
+    dx = Q[None, :, 0] - px; dy = Q[None, :, 1] - py
+    lx = dx * c + dy * s; ly = -dx * s + dy * c
+    d1 = np.hypot(np.maximum(np.maximum(-BODY_REAR_MM - lx, lx - BODY_FRONT_MM), 0.0), np.maximum(np.abs(ly) - BODY_HALF_W_MM, 0.0)).min()
+    # 車体の角 → 脚の長方形
     bx = np.array([BODY_FRONT_MM, BODY_FRONT_MM, -BODY_REAR_MM, -BODY_REAR_MM]); by = np.array([BODY_HALF_W_MM, -BODY_HALF_W_MM, -BODY_HALF_W_MM, BODY_HALF_W_MM])
-    wx = px[:, None] + bx[None, :] * c[:, None] - by[None, :] * s[:, None]
-    wy = py[:, None] + bx[None, :] * s[:, None] + by[None, :] * c[:, None]
-    best = 1e9
-    for (cc, u, v, hu, hv) in _leg_rects:
-        corners = [(cc[0] + u[0] * a * hu + v[0] * b * hv, cc[1] + u[1] * a * hu + v[1] * b * hv) for a in (-1, 1) for b in (-1, 1)]
-        # 脚の角 → 車体の箱
-        d1 = None
-        for qx, qy in corners:
-            lx = (qx - px) * c + (qy - py) * s; ly = -(qx - px) * s + (qy - py) * c
-            dx = np.maximum(np.maximum(-BODY_REAR_MM - lx, lx - BODY_FRONT_MM), 0.0); dy = np.maximum(np.abs(ly) - BODY_HALF_W_MM, 0.0)
-            dd = np.hypot(dx, dy)
-            d1 = dd if d1 is None else np.minimum(d1, dd)
-        # 車体の角 → 脚の長方形
-        rx = wx - cc[0]; ry = wy - cc[1]
-        du = np.abs(rx * u[0] + ry * u[1]) - hu; dv = np.abs(rx * v[0] + ry * v[1]) - hv
-        d2 = np.hypot(np.maximum(du, 0.0), np.maximum(dv, 0.0)).min(1)
-        best = min(best, float(np.minimum(d1, d2).min()))
-    return best
+    wx = (px + bx * c - by * s)[:, :, None] - C[None, None, :, 0]; wy = (py + bx * s + by * c)[:, :, None] - C[None, None, :, 1]
+    du = np.abs(wx * U[:, 0] + wy * U[:, 1]) - HU; dv = np.abs(wx * V[:, 0] + wy * V[:, 1]) - HV
+    d2 = np.hypot(np.maximum(du, 0.0), np.maximum(dv, 0.0)).min()
+    return float(min(d1, d2))
 
 
 REJOIN_CLEAR_MM = 30.0   # 2026-11-14: 引き直したつなぎで、脚とのすき間をこれ以上にしたい(計画そのものがこれより狭いときは計画のすき間まで)
@@ -864,7 +863,7 @@ def rejoin_steps(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
             for ci, (B, old, tail) in enumerate(cands):
                 if tail_clr[ci] < need and tail_clr[ci] < best_tail - 1e-6:
                     continue   # 合流点から先がすでに目標より狭く、一番よい合流点でもない
-                for r in (radius_mm, 80.0, 150.0, 200.0):
+                for r in ((radius_mm, 80.0, 150.0, 200.0) if not (back or pv) else (80.0, 150.0)):
                     db = _dubins(A, (B[0], B[1], math.radians(B[2])), r)
                     if db is None:
                         continue
