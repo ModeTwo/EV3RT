@@ -38,7 +38,7 @@
  "note_1101": "2026-11-01 試作: 往復・後退でのゲート通過を許した経路(4周)のつなぎ区間を、円弧+直進+円弧などに置き換えたもの(検討セッションのスクラッチパッドの shuttle_plan2.py / curve_route.py で作成)。近似式の見積もりで走行部分 90.2 秒。",
  "laps": 10,
  "goal_at": "garage",
- "total_distance_mm": 29182.2,
+ "total_distance_mm": 29182.0,
  "move_count": 94,
  "arc_count": 75,
  "turn_count": 0,
@@ -80,7 +80,7 @@
   {
    "type": "move",
    "target_heading_deg": -80.0,
-   "distance_mm": 92.5,
+   "distance_mm": 89.8,
    "reverse": false,
    "stop": false,
    "label": "lap1-red"
@@ -89,15 +89,16 @@
    "type": "arc",
    "target_heading_deg": -90.0,
    "sweep_deg": -10.0,
-   "radius_mm": 100.0,
+   "radius_mm": 131.3,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -90.0,
-   "distance_mm": 203.6,
+   "distance_mm": 200.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -218,7 +219,7 @@
   {
    "type": "move",
    "target_heading_deg": -79.97,
-   "distance_mm": 92.5,
+   "distance_mm": 89.8,
    "reverse": false,
    "stop": false,
    "label": "lap2-red"
@@ -227,15 +228,16 @@
    "type": "arc",
    "target_heading_deg": -90.0,
    "sweep_deg": -10.03,
-   "radius_mm": 100.0,
+   "radius_mm": 130.5,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -90.01,
-   "distance_mm": 203.5,
+   "distance_mm": 200.8,
    "reverse": false,
    "stop": false,
    "label": null
@@ -356,7 +358,7 @@
   {
    "type": "move",
    "target_heading_deg": -80.01,
-   "distance_mm": 92.4,
+   "distance_mm": 89.6,
    "reverse": false,
    "stop": false,
    "label": "lap3-red"
@@ -365,15 +367,16 @@
    "type": "arc",
    "target_heading_deg": -90.0,
    "sweep_deg": -9.99,
-   "radius_mm": 100.0,
+   "radius_mm": 131.6,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -90.0,
-   "distance_mm": 203.7,
+   "distance_mm": 200.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -494,7 +497,7 @@
   {
    "type": "move",
    "target_heading_deg": -80.02,
-   "distance_mm": 92.4,
+   "distance_mm": 89.6,
    "reverse": false,
    "stop": false,
    "label": "lap4-red"
@@ -503,15 +506,16 @@
    "type": "arc",
    "target_heading_deg": -90.0,
    "sweep_deg": -9.98,
-   "radius_mm": 100.0,
+   "radius_mm": 131.8,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -90.0,
-   "distance_mm": 203.7,
+   "distance_mm": 200.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -632,7 +636,7 @@
   {
    "type": "move",
    "target_heading_deg": -79.99,
-   "distance_mm": 92.4,
+   "distance_mm": 89.7,
    "reverse": false,
    "stop": false,
    "label": "lap5-red"
@@ -641,15 +645,16 @@
    "type": "arc",
    "target_heading_deg": -90.0,
    "sweep_deg": -10.01,
-   "radius_mm": 100.0,
+   "radius_mm": 131.1,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -90.0,
-   "distance_mm": 203.6,
+   "distance_mm": 200.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -770,7 +775,7 @@
   {
    "type": "move",
    "target_heading_deg": -79.96,
-   "distance_mm": 92.5,
+   "distance_mm": 89.8,
    "reverse": false,
    "stop": false,
    "label": "lap6-red"
@@ -779,15 +784,16 @@
    "type": "arc",
    "target_heading_deg": -90.0,
    "sweep_deg": -10.04,
-   "radius_mm": 100.0,
+   "radius_mm": 130.3,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -90.01,
-   "distance_mm": 203.5,
+   "distance_mm": 200.8,
    "reverse": false,
    "stop": false,
    "label": null
@@ -908,7 +914,7 @@
   {
    "type": "move",
    "target_heading_deg": -80.01,
-   "distance_mm": 92.4,
+   "distance_mm": 89.6,
    "reverse": false,
    "stop": false,
    "label": "lap7-red"
@@ -917,15 +923,16 @@
    "type": "arc",
    "target_heading_deg": -90.0,
    "sweep_deg": -9.99,
-   "radius_mm": 100.0,
+   "radius_mm": 131.6,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -90.0,
-   "distance_mm": 203.7,
+   "distance_mm": 200.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1046,7 +1053,7 @@
   {
    "type": "move",
    "target_heading_deg": -80.0,
-   "distance_mm": 92.4,
+   "distance_mm": 89.7,
    "reverse": false,
    "stop": false,
    "label": "lap8-red"
@@ -1055,15 +1062,16 @@
    "type": "arc",
    "target_heading_deg": -90.0,
    "sweep_deg": -10.0,
-   "radius_mm": 100.0,
+   "radius_mm": 131.3,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -90.0,
-   "distance_mm": 203.7,
+   "distance_mm": 201.0,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1184,7 +1192,7 @@
   {
    "type": "move",
    "target_heading_deg": -80.0,
-   "distance_mm": 92.4,
+   "distance_mm": 89.7,
    "reverse": false,
    "stop": false,
    "label": "lap9-red"
@@ -1193,15 +1201,16 @@
    "type": "arc",
    "target_heading_deg": -90.0,
    "sweep_deg": -10.0,
-   "radius_mm": 100.0,
+   "radius_mm": 131.3,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -90.0,
-   "distance_mm": 203.7,
+   "distance_mm": 201.0,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1322,7 +1331,7 @@
   {
    "type": "move",
    "target_heading_deg": -79.99,
-   "distance_mm": 92.4,
+   "distance_mm": 89.7,
    "reverse": false,
    "stop": false,
    "label": "lap10-red"
@@ -1331,15 +1340,16 @@
    "type": "arc",
    "target_heading_deg": -90.0,
    "sweep_deg": -10.01,
-   "radius_mm": 100.0,
+   "radius_mm": 131.1,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -90.0,
-   "distance_mm": 203.6,
+   "distance_mm": 200.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1415,7 +1425,7 @@
   {
    "type": "move",
    "target_heading_deg": -90.02,
-   "distance_mm": 80.0,
+   "distance_mm": 61.3,
    "reverse": false,
    "stop": false,
    "label": "lap10-yellow"
@@ -1424,15 +1434,16 @@
    "type": "arc",
    "target_heading_deg": -95.0,
    "sweep_deg": -4.98,
-   "radius_mm": 100.0,
+   "radius_mm": 529.5,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "smoothed_from_mm": 100.0
   },
   {
    "type": "move",
    "target_heading_deg": -95.0,
-   "distance_mm": 218.6,
+   "distance_mm": 199.9,
    "reverse": false,
    "stop": false,
    "label": null
@@ -1540,7 +1551,7 @@
    {
     "type": "move",
     "target_heading_deg": -90.0,
-    "distance_mm": 80.0,
+    "distance_mm": 61.4,
     "reverse": false,
     "stop": false,
     "label": null
@@ -1549,15 +1560,16 @@
     "type": "arc",
     "target_heading_deg": -95.0,
     "sweep_deg": -5.0,
-    "radius_mm": 100.0,
+    "radius_mm": 525.2,
     "reverse": false,
     "stop": false,
-    "label": null
+    "label": null,
+    "smoothed_from_mm": 100.0
    },
    {
     "type": "move",
     "target_heading_deg": -95.0,
-    "distance_mm": 218.5,
+    "distance_mm": 199.9,
     "reverse": false,
     "stop": false,
     "label": null
@@ -1635,5 +1647,6 @@
   "note": "must_be_up_* が null なら最後まで当たらない。時間は経路を作る道具の近似式(止まる時間を入れない短めの見込み)。"
  },
  "note_1113c": "2026-11-13 夜(2): 切り上げに特別な道を作らず、本線の最後の周の道を使う形に変えた(周ごとに最後の周と経路が分かれる所で判断し、切り上げるならその周を最後の周と同じ通り方で完了してガレージへ)。check_plan.py で OK。",
- "note_1113d": "2026-11-13 夜(3): 変換で丸めたあとの向き・距離で位置を積算するように直して作り直し(周を重ねてもずれがたまらない)。"
+ "note_1113d": "2026-11-13 夜(3): 変換で丸めたあとの向き・距離で位置を積算するように直して作り直し(周を重ねてもずれがたまらない)。",
+ "note_1114": "2026-11-14: 短い円弧の折れを半径の大きい円弧にした(元の経路から0.5mm 以内)。脚とのすき間2.5cm 未満の直進に出力の上限92(max_power)。"
 }

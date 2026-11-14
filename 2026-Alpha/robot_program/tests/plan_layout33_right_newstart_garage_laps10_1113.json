@@ -66,7 +66,8 @@
    "distance_mm": 636.9,
    "reverse": false,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -167,7 +168,8 @@
    "distance_mm": 301.0,
    "reverse": false,
    "stop": true,
-   "label": "lap1-blue"
+   "label": "lap1-blue",
+   "max_power": 92
   },
   {
    "type": "move",
@@ -175,7 +177,8 @@
    "distance_mm": 301.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -195,7 +198,8 @@
    "distance_mm": 630.5,
    "reverse": true,
    "stop": true,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "turn",
@@ -292,7 +296,8 @@
    "distance_mm": 301.0,
    "reverse": false,
    "stop": true,
-   "label": "lap2-blue"
+   "label": "lap2-blue",
+   "max_power": 92
   },
   {
    "type": "move",
@@ -300,7 +305,8 @@
    "distance_mm": 301.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -320,7 +326,8 @@
    "distance_mm": 630.5,
    "reverse": true,
    "stop": true,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "turn",
@@ -417,7 +424,8 @@
    "distance_mm": 301.0,
    "reverse": false,
    "stop": true,
-   "label": "lap3-blue"
+   "label": "lap3-blue",
+   "max_power": 92
   },
   {
    "type": "move",
@@ -425,7 +433,8 @@
    "distance_mm": 301.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -445,7 +454,8 @@
    "distance_mm": 630.5,
    "reverse": true,
    "stop": true,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "turn",
@@ -542,7 +552,8 @@
    "distance_mm": 301.0,
    "reverse": false,
    "stop": true,
-   "label": "lap4-blue"
+   "label": "lap4-blue",
+   "max_power": 92
   },
   {
    "type": "move",
@@ -550,7 +561,8 @@
    "distance_mm": 301.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -570,7 +582,8 @@
    "distance_mm": 630.5,
    "reverse": true,
    "stop": true,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "turn",
@@ -667,7 +680,8 @@
    "distance_mm": 301.0,
    "reverse": false,
    "stop": true,
-   "label": "lap5-blue"
+   "label": "lap5-blue",
+   "max_power": 92
   },
   {
    "type": "move",
@@ -675,7 +689,8 @@
    "distance_mm": 301.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -695,7 +710,8 @@
    "distance_mm": 630.5,
    "reverse": true,
    "stop": true,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "turn",
@@ -792,7 +808,8 @@
    "distance_mm": 301.0,
    "reverse": false,
    "stop": true,
-   "label": "lap6-blue"
+   "label": "lap6-blue",
+   "max_power": 92
   },
   {
    "type": "move",
@@ -800,7 +817,8 @@
    "distance_mm": 301.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -820,7 +838,8 @@
    "distance_mm": 630.5,
    "reverse": true,
    "stop": true,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "turn",
@@ -917,7 +936,8 @@
    "distance_mm": 301.0,
    "reverse": false,
    "stop": true,
-   "label": "lap7-blue"
+   "label": "lap7-blue",
+   "max_power": 92
   },
   {
    "type": "move",
@@ -925,7 +945,8 @@
    "distance_mm": 301.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -945,7 +966,8 @@
    "distance_mm": 630.5,
    "reverse": true,
    "stop": true,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "turn",
@@ -1042,7 +1064,8 @@
    "distance_mm": 301.0,
    "reverse": false,
    "stop": true,
-   "label": "lap8-blue"
+   "label": "lap8-blue",
+   "max_power": 92
   },
   {
    "type": "move",
@@ -1050,7 +1073,8 @@
    "distance_mm": 301.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -1070,7 +1094,8 @@
    "distance_mm": 630.5,
    "reverse": true,
    "stop": true,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "turn",
@@ -1167,7 +1192,8 @@
    "distance_mm": 301.0,
    "reverse": false,
    "stop": true,
-   "label": "lap9-blue"
+   "label": "lap9-blue",
+   "max_power": 92
   },
   {
    "type": "move",
@@ -1175,7 +1201,8 @@
    "distance_mm": 301.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -1195,7 +1222,8 @@
    "distance_mm": 630.5,
    "reverse": true,
    "stop": true,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "turn",
@@ -1292,7 +1320,8 @@
    "distance_mm": 301.0,
    "reverse": false,
    "stop": true,
-   "label": "lap10-blue"
+   "label": "lap10-blue",
+   "max_power": 92
   },
   {
    "type": "move",
@@ -1300,7 +1329,8 @@
    "distance_mm": 301.0,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -1317,7 +1347,8 @@
    "distance_mm": 428.2,
    "reverse": true,
    "stop": false,
-   "label": null
+   "label": null,
+   "max_power": 92
   },
   {
    "type": "arc",
@@ -1407,7 +1438,8 @@
     "distance_mm": 428.2,
     "reverse": true,
     "stop": false,
-    "label": null
+    "label": null,
+    "max_power": 92
    },
    {
     "type": "arc",
@@ -1481,5 +1513,6 @@
   "note": "must_be_up_* が null なら最後まで当たらない。時間は経路を作る道具の近似式(止まる時間を入れない短めの見込み)。"
  },
  "note_1113c": "2026-11-13 夜(2): 切り上げに特別な道を作らず、本線の最後の周の道を使う形に変えた(周ごとに最後の周と経路が分かれる所で判断し、切り上げるならその周を最後の周と同じ通り方で完了してガレージへ)。check_plan.py で OK。",
- "note_1113d": "2026-11-13 夜(3): 変換で丸めたあとの向き・距離で位置を積算するように直して作り直し(周を重ねてもずれがたまらない)。"
+ "note_1113d": "2026-11-13 夜(3): 変換で丸めたあとの向き・距離で位置を積算するように直して作り直し(周を重ねてもずれがたまらない)。",
+ "note_1114": "2026-11-14: 短い円弧の折れを半径の大きい円弧にした(元の経路から0.5mm 以内)。脚とのすき間2.5cm 未満の直進に出力の上限92(max_power)。"
 }

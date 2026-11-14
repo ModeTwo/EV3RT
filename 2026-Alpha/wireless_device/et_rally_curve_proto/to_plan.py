@@ -125,6 +125,44 @@ def prims_to_steps(seq, h):
     return out, h, gap
 
 
+SMOOTH_DEV_MM = 0.5    # 2026-11-14: 折れを大きめの円弧にするとき、元の経路から離れてよい量
+SMOOTH_MAX_SWEEP = 12.0
+SMOOTH_MAX_ARC_MM = 40.0
+SMOOTH_MAX_R_MM = 1000.0
+
+
+def smooth_corners(steps):
+    """2026-11-14(ユーザー: 狭い直進の揺れを減らす): 「直進 → ごく短い円弧(数mm で数度)→ 直進」の折れを、同じ角度で
+    半径の大きい円弧に置き換える(前後の直進を同じだけ短くし、2本の直線に接する円弧にする)。元の経路から離れるのは
+    SMOOTH_DEV_MM 以内(半径 R の円弧と元の角の差 ≈ R・θ²/8)。数mm で数度曲がる円弧はロボットが曲がりきれず、直進に入ってから
+    左右に振れていた(配置36の赤のあとの狭い直進)。印(marks)の付いた区間の始まりは動かさない(切り上げの道の始まりと合わせるため)。"""
+    out = [dict(st) for st in steps]
+    for i in range(len(out) - 2):
+        a, b, c_ = out[i], out[i + 1], out[i + 2]
+        if not (a['type'] == 'move' and b['type'] == 'arc' and c_['type'] == 'move'):
+            continue
+        if a.get('reverse') or b.get('reverse') or c_.get('reverse') or b.get('label') or b.get('marks') or c_.get('marks'):
+            continue
+        th = math.radians(abs(b['sweep_deg']))
+        if th < 1e-4 or abs(b['sweep_deg']) > SMOOTH_MAX_SWEEP or b['radius_mm'] * th > SMOOTH_MAX_ARC_MM:
+            continue
+        r = b['radius_mm']
+        R = min(SMOOTH_MAX_R_MM, max(r, 8.0 * SMOOTH_DEV_MM / (th * th)))
+        t0, t1 = r * math.tan(th / 2), R * math.tan(th / 2)
+        room = min(a['distance_mm'], c_['distance_mm']) - 10.0
+        if t1 - t0 > room:
+            t1 = t0 + max(0.0, room)
+            R = t1 / math.tan(th / 2)
+        d = t1 - t0
+        if R <= r + 1.0 or d <= 0.5:
+            continue
+        a['distance_mm'] = round(a['distance_mm'] - d, 1)
+        c_['distance_mm'] = round(c_['distance_mm'] - d, 1)
+        b['radius_mm'] = round(R, 1)
+        b['smoothed_from_mm'] = r
+    return out
+
+
 def finalize(steps, main):
     """止まる場所・止まって終わる円弧のあとの向きの直し・(ゴールなら)最後の向きの旋回。"""
     # 止まる場所: 旋回の前・前後の切り替えの前・最後
@@ -249,6 +287,7 @@ for bi, b in enumerate(blocks):
     for k, p in enumerate(prims):
         seq.append((p, label, mark if k == 0 else None))
 steps, h, max_gap = prims_to_steps(seq, START_H0)
+steps = smooth_corners(steps)
 steps = finalize(steps, True)
 exit_steps = None
 if FINAL_TAIL is not None:
@@ -261,7 +300,7 @@ if FINAL_TAIL is not None:
             pr = _split_prims(pr, float(ARM_DOWN['cm']))
         ep += list(pr)
     exit_steps, _, _ = prims_to_steps([(p, None, None) for p in ep], START_H0)
-    exit_steps = finalize(exit_steps, False)
+    exit_steps = finalize(smooth_corners(exit_steps), False)
     EXIT = dict(laps=cov, kind='final_tail', switch_block=J, cost=None)
 elif EXIT and EXIT.get('prims'):
     ep = EXIT['prims']
@@ -320,6 +359,46 @@ for st in steps:
         if st['label'] in seen:
             st['label'] = None
         seen.add(st['label'])
+# 2026-11-14(ユーザー: 狭い直進の揺れを減らす): 脚とのすき間が NARROW_CM 未満の直進に、出力の上限 NARROW_POWER を書く
+# (出力100に張り付くと、向きを直すとき遅い側を速くできず振れやすい)。すき間は検査(check_plan.py)と同じ当たり判定で測る。
+NARROW_CM = 2.5
+NARROW_POWER = 92
+
+
+def mark_narrow(steps_, start_pose):
+    import os, tempfile
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import check_plan as cpk
+    import numpy as np
+    tmp = tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8')
+    json.dump(c.get('params', {}), tmp); tmp.close()
+    try:
+        hr = cpk.load_tool(gates, tmp.name)
+    finally:
+        os.unlink(tmp.name)
+    pts = cpk.sample(steps_, start_pose, pivot_back_cm=PIVOT_BACK)
+    P = np.array([(q[0], q[1]) for q in pts]); H = np.radians([q[2] for q in pts]); I = np.array([q[3] for q in pts])
+    cl = hr._rect_clear(P[:, 0], P[:, 1], H, -hr.REAR, hr.FRONT)
+    n = 0
+    for k, st in enumerate(steps_):
+        if st['type'] != 'move' or st.get('distance_mm', 0) < 50.0:
+            continue
+        m = I == k
+        if m.any() and float(cl[m].min()) < NARROW_CM:
+            st['max_power'] = NARROW_POWER; n += 1
+    return n
+
+
+if garage and '--no-narrow' not in sys.argv:
+    _first = next(p for b in blocks for p in b['prims'])
+    _sp = _start_point(_first)
+    n_narrow = mark_narrow(steps, (_sp[0], _sp[1], START_H0))
+    if exit_steps:
+        _ep = ep[0]
+        _h = (math.degrees(math.atan2(_ep['b'][1] - _ep['a'][1], _ep['b'][0] - _ep['a'][0])) + (0 if _ep['m'] > 0 else 180)) if _ep['t'] == 'line' else ((_ep['th0'] + (0 if _ep['m'] > 0 else 180)) if _ep['t'] == 'arc' else _ep['h_from'])
+        _s = _start_point(_ep)
+        mark_narrow(exit_steps, (_s[0], _s[1], _h))
+    print('narrow moves (clearance < %.1fcm, power cap %d): %d' % (NARROW_CM, NARROW_POWER, n_narrow))
 dist = sum(s.get('distance_mm', 0) if s['type'] == 'move' else s['radius_mm'] * math.radians(abs(s['sweep_deg'])) if s['type'] == 'arc' else 0 for s in steps)
 plan = {
     'gates': {'mode': 'random', 'seed': gates.get('seed'), 'course': 'right', **{k: gates[k] for k in ('red', 'blue', 'yellow')}},

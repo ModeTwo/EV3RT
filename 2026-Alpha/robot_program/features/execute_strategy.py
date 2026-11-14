@@ -536,6 +536,14 @@ def _finite_number(value, field_name):
     return value
 
 
+def _capped_power(step, power):
+    """2026-11-14: 計画の直進に出力の上限(max_power、狭い所)があれば、その値までに抑える。"""
+    cap = step.get("max_power")
+    if cap is None or step.get("type") != "move":
+        return power
+    return int(min(power, max(30.0, float(cap))))
+
+
 def _merge_consecutive_moves(steps):
     """同じ向きの直進が旋回を挟まずに続くとき、1本の直進にまとめる。
 
@@ -554,6 +562,9 @@ def _merge_consecutive_moves(steps):
                 and abs(step["target_heading_deg"] - prev["target_heading_deg"]) < 1e-6
                 and step.get("reverse", False) == prev.get("reverse", False)):
             prev["distance_mm"] += step["distance_mm"]
+            # 2026-11-14: 出力の上限(狭い直進)は、まとめた直進のどちらかにあれば小さい方を使う
+            if step.get("max_power") is not None or prev.get("max_power") is not None:
+                prev["max_power"] = min(v for v in (step.get("max_power"), prev.get("max_power")) if v is not None)
             # 2026-11-01: 後ろの直進が止まるかどうか(stop)を引き継ぐ。
             if "stop" in step:
                 prev["stop"] = step["stop"]
@@ -750,6 +761,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         if "_plan_course" in step:
             # 2026-11-11: 計画のコース上の姿勢(annotate_plan_course)。止まったあとの走り出しでずれを引き継ぐのに使う。
             checked["_plan_course"] = step["_plan_course"]
+        if step.get("max_power") is not None:
+            # 2026-11-14: 狭い所の直進の出力の上限(計画が書く)。出力を上限に張り付かせず、向きを直す余地を残す。
+            checked["max_power"] = _finite_number(step.get("max_power"), "max_power")
         if step.get("marks"):
             # 2026-11-11: 周の終わりの印(lapN-end)。経過時間で周回数を決めるとき(--rally-time-budget)の判断の場所。
             checked["marks"] = list(step["marks"])
@@ -919,8 +933,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                 end_heading_deg=heading,
                 length_mm=step["distance_mm"],
                 # 2026-11-12: 直進の区間だけ出力を下げて、向きを直す余地(両方の車輪を速くも遅くもできる)を残す試験用。
-                power=(int(path_line_power) if (path_line_power is not None and step["type"] == "move")
-                       else (move_power if path_power is None else int(path_power))),
+                power=_capped_power(step, (int(path_line_power) if (path_line_power is not None and step["type"] == "move")
+                                           else (move_power if path_power is None else int(path_power)))),
                 pid_p=active_move_pid[0], pid_i=active_move_pid[1], pid_d=active_move_pid[2],
                 sweep_deg=step.get("sweep_deg", 0.0),
                 radius_mm=step.get("radius_mm", 0.0),
