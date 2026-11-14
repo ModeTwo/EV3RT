@@ -356,6 +356,17 @@ def _child(cfg):
                     cam_start = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S,
                                                 top_x=sp.START_WIDE_X, top_y=sp.START_WIDE_Y)
                     sp.set_gate_legs(cfg.get('gates'))
+                if folder and cnt['detected'] % 4 == 0 and cnt['detected'] < 24:
+                    # 2026-11-14: スタートで測った画像を数枚残す(配置36 で1つも測れなかった回の原因が調べられなかった)。
+                    # 2秒で約12枚測るうち4枚に1枚、最大6枚。
+                    try:
+                        name = 'start_%05d.jpg' % n
+                        cv2.imwrite(os.path.join(folder, name), frame, [cv2.IMWRITE_JPEG_QUALITY, cfg.get('quality', 90)])
+                        if meta is not None:
+                            meta.write(json.dumps({'file': name, 't': round(t, 4), 'n': n, 'start': True}) + '\n')
+                            meta.flush()
+                    except Exception:
+                        pass
                 dets = sp.detect_ground(cam_start, frame)
                 r, r0, wide = sp.choose_start_fit(cam_start, dets, mirror=state['mirror'])
                 if r is not None:

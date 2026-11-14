@@ -1142,7 +1142,10 @@ class EtRallyStartPoseCapture(Behaviour):
             return Status.RUNNING
         # 2026-11-13: カメラのUSBが切れて開き直している間は画像が来ない。足りなければ最大 EXTRA_WAIT_SEC まで待つ
         # (本番は止まると終わりなので、少し待ってでも位置を取り込むほうがよい)。
-        if len(self.results) < self.min_frames and now - self.counting_since < self.duration_sec + self.EXTRA_WAIT_SEC:
+        # 2026-11-14: 画像は来ているのに位置が出ない(見えるものが足りない)ときは、待っても変わらないので待たない
+        # (配置36 で45枚から0、4秒待って1周少なくなった)。待つのは画像そのものが来ていないときだけ。
+        if (len(self.results) < self.min_frames and self.frames < 3 * self.min_frames
+                and now - self.counting_since < self.duration_sec + self.EXTRA_WAIT_SEC):
             return Status.RUNNING
         return self._finish()
 
