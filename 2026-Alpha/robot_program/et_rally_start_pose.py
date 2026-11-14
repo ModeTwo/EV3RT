@@ -102,7 +102,7 @@ def _near_leg(w):
 START_MM = (4 * P_MM + 149.0, 3.5 * P_MM)
 START_HEADING_DEG = 180.0
 
-DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_11131404.json"   # 2026-11-11 夜: カメラに触れて下向きが約1.3°変わったため較正し直した
+DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_11141717.json"   # 2026-11-11 夜: カメラに触れて下向きが約1.3°変わったため較正し直した
 
 # 真上から見た画像の範囲(車体の座標、mm)と1画素の大きさ。スタートでは止まっているので、少し広めに細かく見る。
 TOP_S = 0.5
