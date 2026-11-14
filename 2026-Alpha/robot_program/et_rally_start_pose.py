@@ -1232,11 +1232,14 @@ class EtRallyApplyStartPose(Behaviour):
             # 向き(マーカーの辺の傾きから)だけ入れて、計画のスタートにいるとみなす。
             _applied = (START_MM[0], START_MM[1], h)
             how = "heading only (%d items, %d dots)" % (m["items"], m.get("n_dots", -1))
-        elif (m.get("n_dots_med", m.get("n_dots", 1)) == 0 and m.get("items", 99) < 3
-              and m.get("assumed", 0) * 2 < m.get("poses", 1)):
+        elif m.get("items", 99) < 3:
             # 2026-11-11: 点が見えずマーカー2つだけのときは、前後を約2〜4cm 間違える(点がないと下向きの当てはめ直しが
             # できないため)。11/12: 同じ画像を広い範囲で点も使って測り直すと、前後は大きく違ったが、左右は数mm で合っていた
             # (配置36の4回)。そこで向きと左右だけを入れ、前後は計画のスタートのままにする。
+            # 2026-11-14: 保存した下向きで写し直した場合(pitch_assumed)も同じにする。下向きは見る点の距離で1〜2°変わり
+            # (スタート +1.1〜2.2°、フィールドの真ん中 −0.5〜+0.5°)、配置36でマーカー2つから前後 +44mm と出て、
+            # そのまま取り込んで1周目が大きく揺れた。見えたものが3つ未満(下向きを当てはめられない)なら、点が見えていても
+            # 前後は入れない。
             a = math.radians(START_HEADING_DEG)
             along = dx * math.cos(a) + dy * math.sin(a)
             x, y = x - along * math.cos(a), y - along * math.sin(a)
