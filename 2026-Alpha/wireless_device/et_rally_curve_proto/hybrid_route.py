@@ -65,6 +65,10 @@ PARAMS = dict(
     # narrow_safest: 狭い配置は垂直に通れないゲートだけ斜めにする(本番の計算用)。事前計算では False にして斜めも全部使う。
     # candidates_only: すき間の判定だけして終わる(全配置から狭い配置を洗い出す用)。
     narrow_safest=True, candidates_only=False,
+    # 2026-11-14: True = 最初のすき間(margin_list[0])で通れないとき、同じすき間で safest + angles の斜め(全部のゲート)を試す。
+    # 配置606・841 で、赤を5〜10°傾けて通るとすき間2.6→3.1cm、赤の前後の曲げ戻しがなくなり8周で約0.5秒速かった。
+    # ふつうの配置(最初のすき間で通れる)と、それでも通れない狭い配置(A〜F)は変わらない。
+    narrow_oblique_grid=False,
     # start_prelude: スタートのあと、赤の前に黄を1回通ってから赤へ行く形も候補にする(黄と赤が縦に並ぶ配置で、黄を抜けてそのまま赤を通れる。2026-11-09)
     start_prelude=True,
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
@@ -960,6 +964,9 @@ def _retrace(q):
     return arc_prim(p_end, th_end + math.pi, -sgn, sweep, r, -m)
 
 
+_GRID_ON = False   # narrow_oblique_grid で、最初のすき間をやり直している間だけ True(main)
+
+
 def visit_candidates(g):
     if OBLIQUE_POLICY != 'safest':
         return _visit_candidates(g)
@@ -995,6 +1002,17 @@ def visit_candidates(g):
             continue
         OBLIQUE_CHOICE.append((g.color, sg, mo, float(best[1]), float(best[2]), best[3], round(best[0] + MARGIN_FRONT, 2)))
         out += _visit_candidates(g, pairs_override=[(best[1], best[2], best[3])], only={(sg, mo)})
+    if _GRID_ON:
+        grid = []
+        for a in ANGLES:
+            if abs(a) < 1e-9:
+                continue
+            if OBLIQUE_MODE in ('split', 'both'):
+                grid += [(a, 0.0), (0.0, a)]
+            if OBLIQUE_MODE in ('straight', 'both'):
+                grid.append((a, a))
+        if grid:
+            out += _visit_candidates(g, pairs_override=grid)
     return out
 
 
@@ -1640,6 +1658,7 @@ def main():
     t0 = time.time()
     global MARGIN_FRONT, MARGIN_REAR, OBLIQUE_POLICY
     used_margin = None
+    global _GRID_ON
     for i_mg, mg in enumerate(MARGIN_LIST or [None]):
         if i_mg == 1 and NARROW_SAFEST:
             # 狭い配置(最初のすき間で通れない): 垂直に通れないゲートだけ斜めを使う(計算量を約1/8にする。ユーザー決定 2026-11-09)
@@ -1652,6 +1671,17 @@ def main():
         cands = {c: visit_candidates(g) for c, g in GATES.items()}
         if all(cands.values()):
             break
+        if i_mg == 0 and NARROW_OBLIQUE_GRID:
+            # 2026-11-14: 最初のすき間(3cm)で通れないとき、同じすき間で「垂直に通れないときの細かい角度(safest) + angles の斜めを
+            # 全部のゲートに」を試す(狭い配置 G〜K: 9配置すべてが3cm に届き、周回は同じか+1、計算時間はほぼ同じ)。
+            # これでも通れなければ、この先は従来どおり(すき間を下げて safest だけ。狭い配置 A〜F は変わらない)。
+            OBLIQUE_POLICY = 'safest'; _GRID_ON = True
+            cands = {c: visit_candidates(g) for c, g in GATES.items()}
+            if all(cands.values()):
+                print('narrow: oblique grid at the first margin', flush=True)
+                break
+            _GRID_ON = False
+            OBLIQUE_CHOICE.clear()
     if used_margin is not None:
         print('margin selected: %.1f' % used_margin, flush=True)
     # 2026-11-14: つなぎの区間(スタートからを含む)だけ、すき間の基準を別にする(ゲートの通り方の候補は上で決めた基準のまま)。
