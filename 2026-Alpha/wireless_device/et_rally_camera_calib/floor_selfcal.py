@@ -98,6 +98,68 @@ def motion(args):
     print('→ write --yaw %.2f' % med)
 
 
+def _static_intervals(P, min_sec=0.8, eps_mm=0.3):
+    """poses.txt(時刻, x, y, 向き, ...)から、車軸が動いていない区間 [(始め, 終わり, 向きの中央値度)]。"""
+    out = []
+    i = 0
+    n = len(P)
+    while i < n:
+        j = i
+        while j + 1 < n and math.hypot(P[j + 1, 1] - P[i, 1], P[j + 1, 2] - P[i, 2]) < eps_mm:
+            j += 1
+        if P[j, 0] - P[i, 0] >= min_sec:
+            out.append((P[i, 0], P[j, 0], float(np.median(P[i:j + 1, 3]))))
+        i = j + 1
+    return out
+
+
+def stops(args):
+    """2026-11-14: まっすぐ進んで止まる、をくり返した走行(plan_test_selfcal_stops_1114.json)の画像から、
+    止まった場所ごとにカメラの位置・向きを出し、止まった場所を結んだ線の向き(実際に進んだ向き)と比べる。
+    止まる位置の正確さ(惰性)は要らない。止まるときに少し回った分は、ジャイロの向きで差し引く。"""
+    D = args.dir
+    cam = _cam(args.calib, wide=True)
+    P = np.loadtxt(os.path.join(D, 'poses.txt'))
+    meta = [json.loads(l) for l in open(os.path.join(D, 'meta.jsonl'))]
+    rows = []
+    for (t0, t1, gh) in _static_intervals(P):
+        fr = [m for m in meta if t0 + args.settle <= m['t'] <= t1 and not m.get('start')]
+        k = int(np.searchsorted(P[:, 0], t0))
+        nom = (float(P[k, 1]), float(P[k, 2]), float(P[k, 3]))
+        res = []
+        for m in fr:
+            r = _fit(cam, cv2.imread(os.path.join(D, m['file'])), nom)
+            if r is not None:
+                res.append(r['pose'] + (r['resid_mm'],))
+        if len(res) < 2:
+            continue
+        a = np.array(res)
+        hc = math.degrees(math.atan2(np.median(np.sin(np.radians(a[:, 2]))), np.median(np.cos(np.radians(a[:, 2])))))
+        rows.append((float(np.median(a[:, 0])), float(np.median(a[:, 1])), hc, gh, len(res), float(np.median(a[:, 3]))))
+        print('止まった場所 %d: カメラ (%.1f, %.1f) 向き%+.2f° / ジャイロの向き %+.2f° / 画像%d枚 食い違い%.1fmm' % (
+            len(rows), rows[-1][0], rows[-1][1], sp._nd(hc), sp._nd(gh), len(res), rows[-1][5]))
+    if len(rows) < 3:
+        print('止まった場所が足りない(3か所以上要る)')
+        return
+    R = np.array(rows)
+    xy = R[:, :2]
+    c = xy.mean(0)
+    u, s, vt = np.linalg.svd(xy - c)
+    d = vt[0]
+    if np.dot(xy[-1] - xy[0], d) < 0:
+        d = -d
+    m = math.degrees(math.atan2(d[1], d[0]))                     # 進んだ向き(コースの座標、度)
+    off = (xy - c) @ np.array([-d[1], d[0]])                      # 線からの横のずれ
+    # ジャイロの向きはスタートで取り込んだ向き(カメラの見誤りを含む)からの相対。止まった場所ごとの回りを差し引く
+    cg = np.array([sp._nd(hc - gh) for hc, gh in zip(R[:, 2], R[:, 3])])
+    gm = math.degrees(math.atan2(np.mean(np.sin(np.radians(R[:, 3]))), np.mean(np.cos(np.radians(R[:, 3])))))
+    yaw = sp._nd(float(np.median(cg)) + gm - m)
+    L = float(np.hypot(*(xy[-1] - xy[0])))
+    print('進んだ向き %.2f°(止まった場所 %d、両端 %.0fmm、線からのずれ 最大 %.1fmm)' % (sp._nd(m), len(R), L, float(np.abs(off).max())))
+    print('カメラの向き - 進んだ向き: %+.2f°(止まった場所ごとのカメラとジャイロの差のばらつき ±%.2f°)' % (yaw, float(np.std(cg))))
+    print('→ write --yaw %.2f' % yaw)
+
+
 def static(args):
     cam = _cam(args.calib, wide=True)
     nom = tuple(float(v) for v in args.pose.split(',')) if args.pose else (sp.START_MM[0], sp.START_MM[1], sp.START_HEADING_DEG)
@@ -150,10 +212,11 @@ def main():
     sub = ap.add_subparsers(dest='cmd', required=True)
     a = sub.add_parser('motion'); a.add_argument('dir'); a.add_argument('--calib'); a.add_argument('--min-d', type=float, default=100.0)
     b = sub.add_parser('static'); b.add_argument('dir'); b.add_argument('--calib'); b.add_argument('--pose')
+    s = sub.add_parser('stops'); s.add_argument('dir'); s.add_argument('--calib'); s.add_argument('--settle', type=float, default=0.5)
     c = sub.add_parser('write'); c.add_argument('--calib'); c.add_argument('--yaw', type=float); c.add_argument('--lat', type=float)
     c.add_argument('--front', type=float); c.add_argument('--out', required=True)
     args = ap.parse_args()
-    {'motion': motion, 'static': static, 'write': write}[args.cmd](args)
+    {'motion': motion, 'static': static, 'stops': stops, 'write': write}[args.cmd](args)
 
 
 if __name__ == '__main__':

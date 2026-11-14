@@ -1,0 +1,50 @@
+{
+ "gates": null,
+ "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution (same as the other plans).",
+ "note_1114": "床での較正の試験: スタートから真っすぐ15cm 進んで止まる、を5回(合計75cm、ゲートは置かない)。--rally-straight-pause-sec 1.5 --rally-straight-pause-labels cal1,cal2,cal3,cal4,cal5 --rally-camera-log 1 で走らせ、floor_selfcal.py stops で解析する。",
+ "laps": 0,
+ "goal_at": "none",
+ "total_distance_mm": 750.0,
+ "steps": [
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 150.0,
+   "reverse": false,
+   "stop": true,
+   "label": "cal1"
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 150.0,
+   "reverse": false,
+   "stop": true,
+   "label": "cal2"
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 150.0,
+   "reverse": false,
+   "stop": true,
+   "label": "cal3"
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 150.0,
+   "reverse": false,
+   "stop": true,
+   "label": "cal4"
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 150.0,
+   "reverse": false,
+   "stop": true,
+   "label": "cal5"
+  }
+ ]
+}
