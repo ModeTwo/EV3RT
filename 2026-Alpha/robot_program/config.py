@@ -148,10 +148,12 @@ class RaceConfig:
     # 2026-10-29: ずれの速さを測る時間(秒)と、その前にアームの振動が収まるのを待つ時間(秒)。
     # 既定None=測定2秒・振動待ち1秒。
     et_rally_gyro_drift_extra_sec: Optional[float] = None
-    et_rally_gyro_drift_settle_sec: Optional[float] = None
+    # 2026-11-14: 1.0 を既定に(試験の --rally-gyro-drift-settle-sec 1.0 と同じ。本番の full でもオプションなしで効くように)
+    et_rally_gyro_drift_settle_sec: Optional[float] = 1.0
     # 2026-10-29: ハブのプログラムを書き換えた版用。ETラリー開始時、アームを上げ切って振動待ちのあと、
     # この秒数だけブレーキで止まり、ハブ自身にジャイロのくせを測り直させる。既定None=止まらない。
-    et_rally_gyro_hub_recal_sec: Optional[float] = None
+    # 2026-11-14: 2秒を既定に(試験の --rally-gyro-hub-recal-sec 2 と同じ)
+    et_rally_gyro_hub_recal_sec: Optional[float] = 2.0
     # 2026-11-05: ETラリーの最後に止まったあと、この秒数ブレーキで止まったまま、ジャイロの回転の速さと向きの変化を
     # 記録する(測るだけで補正しない)。走行中のくせが走る前の測定と違うかを見るため。既定None=測らない。
     et_rally_gyro_post_measure_sec: Optional[float] = None
@@ -177,7 +179,8 @@ class RaceConfig:
     # 2026-10-31: 直進の向きのPIDのI(既定None=0.6のまま)。
     et_rally_move_pid_i: Optional[float] = None
     # 2026-10-31: 50mmより短い直進を、この距離(mm)だけ手前で終える(既定None=計画どおりの距離を走る)。
-    et_rally_move_short_lead_mm: Optional[float] = None
+    # 2026-11-14: 15mm を既定に(試験の --rally-move-short-lead 15 と同じ)
+    et_rally_move_short_lead_mm: Optional[float] = 15.0
     # 2026-11-01: 後退・円弧・止まらずに続く区間を含む計画で、目標の向きと曲がり具合を先読みする時間(秒)。Noneなら0.06。
     # 2026-11-12: 0.12→0.08。seed6周で同じ条件・lead_secだけ変えて、0.08/0.10が向きのずれ約半分・約3秒速い、0.06以下は悪化。
     et_rally_path_lead_sec: Optional[float] = 0.08
@@ -212,7 +215,8 @@ class RaceConfig:
     # 2026-11-03: 円弧の左右の差(フィードフォワード)の倍率(Noneなら1.0)。円弧では実際の輪距が計算より大きく効くため。
     et_rally_path_ff_scale: Optional[float] = 1.2
     # 2026-11-05: 円弧・直進の区間で止まるとき、計画の距離の何mm手前で止め始めるか(Noneなら従来の16mm)。50mm未満は --rally-move-short-lead。
-    et_rally_path_stop_lead: Optional[float] = None
+    # 2026-11-14: 18mm を既定に(試験の --rally-path-stop-lead 18 と同じ)
+    et_rally_path_stop_lead: Optional[float] = 18.0
     # 2026-11-11: 直進の区間だけの向きのPIDのP・D(Noneなら従来どおり --rally-move-pid の値 4.0・0.06)と、
     # 直進の始めの加速の上乗せ(出力と秒。Noneなら使わない)。
     # 同日、6周の実機で既定にした: 揺れ(長い直進の真ん中の左右の出力差)が約3割減り、巡航の速さをそろえると直進で約0.5秒短い。
@@ -245,7 +249,9 @@ class RaceConfig:
     et_rally_camera_far_confirm: Optional[float] = 3
     # 2026-11-03: アームの止め方(EtRallyArmUpDown)。動きの遅いtickがこの回数連続したら止める(Noneなら従来の ArmUpDownFull)と、押す出力(Noneなら35)。
     et_rally_arm_stop_ticks: Optional[float] = 3.0
-    et_rally_arm_power: Optional[float] = 20.0
+    # 2026-11-14: 40 を既定に(試験の --rally-arm-power 40 と同じ)。ETラリーの始めに一番下から上げるときだけ効く
+    # (起動時の較正などの上げ下げは make_arm_up_down で20まで)。
+    et_rally_arm_power: Optional[float] = 40.0
     # 2026-11-03: Trueなら、アームをタッチの前(起動時の較正の最後)に上げ、タッチの後はジャイロの測り直しだけをして走り出す。
     et_rally_arm_up_before_touch: Optional[bool] = None
     # 2026-11-06: スタートで止まっている間にカメラで位置と向きを測り、走り出しに取り込む(et_rally_start_pose.py)。
@@ -257,19 +263,22 @@ class RaceConfig:
     et_rally_camera_calib_path: Optional[str] = None
     # 2026-11-06: 計画から見て間に合うなら、アームを走りながら上げる(behaviours/et_rally_arm.py arm_while_driving)。
     # 既定None=しない。アームを上げるのにかかる秒(仮、TODO実測)と、余裕の秒。
-    et_rally_arm_while_driving: Optional[bool] = None
+    # 2026-11-14: 既定で有効に(試験の --rally-arm-while-driving on と同じ。計画ファイルに et_rally_arm があるときだけ効く)
+    et_rally_arm_while_driving: Optional[bool] = True
     # 2026-11-08: 走行中のカメラの画像を、この枚数に1枚、撮った時刻とコース上の位置つきで run_logs/et_camera_* に残す
     # (et_rally_course_pose.py、走りながらのカメラ補正の確認用)。既定None=残さない。
     et_rally_camera_log_every: Optional[int] = None
     # 2026-11-09: 走行中の画像を残すときの露出(V4L2の単位、1=100マイクロ秒。None=自動のまま)
     et_rally_camera_exposure: Optional[int] = None
     # 2026-11-11: ETラリー開始時にアームを一番下から上げるとき、この角度だけ回したら止める(None=従来の止め方だけ)
-    et_rally_arm_travel_deg: Optional[float] = None
+    # 2026-11-14: 260 を既定に(試験の --rally-arm-travel-deg 260 と同じ)
+    et_rally_arm_travel_deg: Optional[float] = 260.0
     # 2026-11-11: タッチのあと、この距離だけ進んでスタート位置に着いてから測り直し・取り込みをする(本番に近い流れのテスト)
     et_rally_pre_move_mm: Optional[float] = None
     # 2026-11-10: 走行中のカメラの補正 (位置の割合, 向きの割合)。None=使わない(et_rally_camera_correct.py、試作)
     et_rally_camera_correct: Optional[tuple] = None
-    et_rally_arm_up_sec: Optional[float] = 3.0
+    # 2026-11-14: 3.0→0.9(試験の --rally-arm-up-sec 0.9 と同じ。出力40・260°で上げきるのに約0.9秒)
+    et_rally_arm_up_sec: Optional[float] = 0.9
     et_rally_arm_margin_sec: Optional[float] = 0.5
     # Falseでキャスター引きずり補正(DD-15)・横ズレ補正(DD-16)を両方無効化する
     # (較正値そのものは変えない)。2026-10-28: どちらも旧い旋回方式での仮説・実測に
@@ -412,6 +421,8 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
             et_rally_laps=max(1, config.et_rally_laps),
             enable_et_sumo=True,
             enable_finish=True,
+            # 2026-11-14: 本番はタッチ1回で全工程を通す。ETラリーの持ち時間 = 120 − 競技の開始からの秒(et_rally_time_budget.py)
+            et_rally_time_total=(config.et_rally_time_total if config.et_rally_time_total is not None else 120.0),
         )
     return replace(config, mission_mode='configured', **disabled)
 
