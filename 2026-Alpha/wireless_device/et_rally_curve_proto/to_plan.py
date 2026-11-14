@@ -378,7 +378,8 @@ def mark_narrow(steps_, start_pose):
         os.unlink(tmp.name)
     pts = cpk.sample(steps_, start_pose, pivot_back_cm=PIVOT_BACK)
     P = np.array([(q[0], q[1]) for q in pts]); H = np.radians([q[2] for q in pts]); I = np.array([q[3] for q in pts])
-    cl = hr._rect_clear(P[:, 0], P[:, 1], H, -hr.REAR, hr.FRONT)
+    hr._RO = float(c.get('rear_open') or 0.0)   # 2026-11-14: 狭い配置で後ろの端の部分は支柱だけ(hybrid_route の rear_open_cm)
+    cl = hr.body_clear(P[:, 0], P[:, 1], H) if hasattr(hr, 'body_clear') else hr._rect_clear(P[:, 0], P[:, 1], H, -hr.REAR, hr.FRONT)
     n = 0
     for k, st in enumerate(steps_):
         if st['type'] != 'move' or st.get('distance_mm', 0) < 50.0:
@@ -412,6 +413,9 @@ plan = {
     'turn_count': sum(1 for s in steps if s['type'] == 'turn'),
     'steps': steps,
 }
+if c.get('rear_open'):
+    # 2026-11-14: 狭い配置で、後ろの端からこの長さ(cm)は脚の支柱とのすき間だけを見て作った(検査も同じ見方をする)
+    plan['rear_open_cm'] = float(c['rear_open'])
 if exit_steps:
     # 2026-11-11: 途中の周(印 lapN-end)で切り上げるときに、そこから走るガレージまでのつなぎ(--rally-time-budget)
     plan['exit'] = {'laps': EXIT.get('laps', []), 'steps': exit_steps, 'tool_cost_sec': EXIT.get('cost'),

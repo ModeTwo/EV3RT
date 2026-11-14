@@ -139,12 +139,14 @@ def check_path(hr, pts, steps, min_clear, arm_from=None):
     """すき間・進入禁止を調べる。arm_from: この番号のステップからアームが下がっている(前を伸ばす)。"""
     import numpy as np
     P = np.array([(p[0], p[1]) for p in pts]); H = np.radians([p[2] for p in pts]); I = np.array([p[3] for p in pts])
-    clear = hr._rect_clear(P[:, 0], P[:, 1], H, -hr.REAR, hr.FRONT)
+    ro = float(getattr(hr, '_RO', 0.0) or 0.0)
+    # 2026-11-14: 計画に rear_open_cm があれば、後ろの端からその長さは支柱とのすき間だけを見る(道具と同じ)
+    clear = hr.body_clear(P[:, 0], P[:, 1], H) if ro > 0 else hr._rect_clear(P[:, 0], P[:, 1], H, -hr.REAR, hr.FRONT)
     if arm_from is not None:
         m = I >= arm_from
         if m.any():
             arm_front = float(hr.PARAMS.get('arm_front_cm', 5.0))
-            ca = hr._rect_clear(P[m, 0], P[m, 1], H[m], -hr.REAR, hr.FRONT + arm_front,
+            ca = hr._rect_clear(P[m, 0], P[m, 1], H[m], 0.0 if ro > 0 else -hr.REAR, hr.FRONT + arm_front,
                                 hw=max(hr.HALF_WIDTH, float(hr.PARAMS.get('arm_half_width_cm', hr.HALF_WIDTH))))
             clear = clear.copy(); clear[m] = np.minimum(clear[m], ca)
     hr._EXEMPT_ON = True     # スタートの近くだけ、置いた時点でかかっている進入禁止を外す(道具と同じ)
@@ -168,6 +170,7 @@ def check_path(hr, pts, steps, min_clear, arm_from=None):
 def check(plan_path, params_path, budget, min_clear, ratio=0.93, tol=0.1):
     plan = json.load(open(plan_path, encoding='utf-8'))
     hr = load_tool(plan['gates'], params_path)
+    hr._RO = float(plan.get('rear_open_cm') or 0.0)
     sys.path.insert(0, ROOT)
     from robot_program.et_rally_time_budget import estimate_steps
     steps = plan['steps']

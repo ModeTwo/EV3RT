@@ -69,6 +69,15 @@ PARAMS = dict(
     # 配置606・841 で、赤を5〜10°傾けて通るとすき間2.6→3.1cm、赤の前後の曲げ戻しがなくなり8周で約0.5秒速かった。
     # ふつうの配置(最初のすき間で通れる)と、それでも通れない狭い配置(A〜F)は変わらない。
     narrow_oblique_grid=False,
+    # 2026-11-14: 狭い配置(最初のすき間で通れず、すき間を下げたとき)だけ、車体の後ろの端から rear_open_cm(cm)の部分は
+    # 脚の T字の部品とは当たらない(後ろは真ん中にボール、その横は T字より高い空間。ユーザーの実測: T字と当たりうるのは後ろの端から
+    # 10cm より前)ものとし、その部分は脚の支柱(太さ leg_dia、ゲートの幅のばらつきの範囲)とのすき間だけを見る。0で無効。
+    rear_open_cm=0.0,
+    # 2026-11-14: rear_open_cm を使う配置の形。'u' = 赤と黄が隣の行(列)に重なって並び、青がその端をふさぐ「コの字」(狭い配置の形A・B)だけ。
+    # 'any' = 狭い配置すべて。ユーザー決定: 形C〜F は今の経路(すき間1.5cm でもよい、速い方)のまま。
+    rear_open_shape='u',
+    # 2026-11-14: margin_list のこの番号から始める(選んだすき間で経路が作れなかったときの作り直しで使う。ふつうは0)
+    margin_skip=0,
     # start_prelude: スタートのあと、赤の前に黄を1回通ってから赤へ行く形も候補にする(黄と赤が縦に並ぶ配置で、黄を抜けてそのまま赤を通れる。2026-11-09)
     start_prelude=True,
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
@@ -260,27 +269,33 @@ LEG_HU = np.array([l[3] for l in LEGS]); LEG_HV = np.array([l[4] for l in LEGS])
 _RECT_REACH = math.hypot(max(FRONT, REAR), HALF_WIDTH) + float(np.hypot(LEG_HU, LEG_HV).max()) + max(MARGIN_FRONT, MARGIN_REAR) + 1.0
 LEG_CORNERS = np.array([c + u * a * hu + v * b * hv for c, u, v, hu, hv in LEGS for a in (-1, 1) for b in (-1, 1)])
 _LEG_CORNERS4 = LEG_CORNERS.reshape(-1, 4, 2)
+# 2026-11-14: 脚の支柱だけの長方形(T字の長方形と同じ中心・ゲートの線の向きの範囲、直角の向きは支柱の太さの半分)。rear_open_cm で使う
+POST_HV = np.full(len(LEGS), LEG_DIA / 2.0)
+_POST_CORNERS4 = np.array([c + u * a * hu + v * b * LEG_DIA / 2.0 for c, u, v, hu, hv in LEGS for a in (-1, 1) for b in (-1, 1)]).reshape(-1, 4, 2)
+_RO = 0.0   # 今使っている rear_open_cm(main で狭い配置のときだけ入れる)
 if GATE_MODEL == 'rect':
     POST_R = 0.0   # 長方形そのものとの距離なので、点の太さは使わない
 GSEG = [(g.pa, g.pb, g.color) for g in GATES.values()]
 
 
 # ---------------- 当たり判定 ----------------
-def _rect_clear(px, py, h_rad, x0, x1, keep=None, hw=None):
+def _rect_clear(px, py, h_rad, x0, x1, keep=None, hw=None, posts=False):
     """gate_model='rect': 車体の箱 x∈[x0,x1], |y|<=HW と、脚の長方形の最小のすき間(配列)。
     凸な長方形どうしの距離 = 片方の角からもう片方までの距離の最小(脚の角→車体、車体の角→脚の両方を見る)。
-    keep: 見る脚の番号の配列(None なら全部)。hw: 箱の横幅の半分(None なら車体の HALF_WIDTH)。"""
+    keep: 見る脚の番号の配列(None なら全部)。hw: 箱の横幅の半分(None なら車体の HALF_WIDTH)。
+    posts: True なら T字ではなく支柱だけの長方形(rear_open_cm 用)。"""
     hw = HALF_WIDTH if hw is None else hw
+    lhv_all, c4_all = (POST_HV, _POST_CORNERS4) if posts else (LEG_HV, _LEG_CORNERS4)
     if hr_kernels.AVAILABLE and keep is None and np.ndim(x0) == 0 and np.ndim(x1) == 0:
         return hr_kernels.rect_clear(px, py, np.cos(h_rad), np.sin(h_rad), float(x0), float(x1), float(hw),
-                                     LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4)
+                                     LEG_C, LEG_U, LEG_V, LEG_HU, lhv_all, c4_all)
     n = len(px)
     c = np.cos(h_rad); s = np.sin(h_rad)
     if keep is None:
-        corners, lc, lu, lv, lhu, lhv = LEG_CORNERS, LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV
+        corners, lc, lu, lv, lhu, lhv = c4_all.reshape(-1, 2), LEG_C, LEG_U, LEG_V, LEG_HU, lhv_all
     else:
-        corners = LEG_CORNERS.reshape(-1, 4, 2)[keep].reshape(-1, 2)
-        lc, lu, lv, lhu, lhv = LEG_C[keep], LEG_U[keep], LEG_V[keep], LEG_HU[keep], LEG_HV[keep]
+        corners = c4_all[keep].reshape(-1, 2)
+        lc, lu, lv, lhu, lhv = LEG_C[keep], LEG_U[keep], LEG_V[keep], LEG_HU[keep], lhv_all[keep]
     # 脚の角 → 車体の箱
     dx = corners[None, :, 0] - px[:, None]; dy = corners[None, :, 1] - py[:, None]
     lx = dx * c[:, None] + dy * s[:, None]; ly = -dx * s[:, None] + dy * c[:, None]
@@ -296,9 +311,27 @@ def _rect_clear(px, py, h_rad, x0, x1, keep=None, hw=None):
     return np.minimum(d1, d2)
 
 
+def rear_clear(px, py, h_rad, x0, x1, keep=None):
+    """車体の後ろ側の箱 x∈[x0,x1] のすき間。rear_open_cm を使っているときは、後ろの端から _RO の部分は支柱だけと見る
+    (x0+_RO より前は T字、x0 からは支柱)。支柱は T字の長方形の内側なので、前の部分は T字だけ見ればよい。"""
+    if _RO <= 0:
+        return _rect_clear(px, py, h_rad, x0, x1, keep)
+    xt = (np.asarray(x0, float) + _RO) if np.ndim(x0) else x0 + _RO
+    return np.minimum(_rect_clear(px, py, h_rad, xt, x1, keep), _rect_clear(px, py, h_rad, x0, x1, keep, posts=True))
+
+
+def body_clear(px, py, h_rad):
+    """車体全体(前の端から後ろの端まで)と脚のすき間(rear_open_cm を含む)。検査(check_plan)・監査用。"""
+    return np.minimum(_rect_clear(px, py, h_rad, 0.0, FRONT), rear_clear(px, py, h_rad, -REAR, 0.0))
+
+
 def _rect_clear_front_rear(px, py, h_rad, keep):
-    """_rect_clear(…, 0, FRONT, keep) と _rect_clear(…, -REAR, 0, keep) を1回で(脚の角の座標の変換を共有して速くする。値は同じ)。"""
+    """_rect_clear(…, 0, FRONT, keep) と _rect_clear(…, -REAR, 0, keep) を1回で(脚の角の座標の変換を共有して速くする。値は同じ)。
+    2026-11-14: rear_open_cm を使っているときは、後ろは rear_clear と同じ(T字は後ろの端から _RO 前まで、支柱は後ろの端まで)。"""
     c = np.cos(h_rad); s = np.sin(h_rad)
+    if _RO > 0:
+        cf = _rect_clear(px, py, h_rad, 0.0, FRONT, keep)
+        return cf, rear_clear(px, py, h_rad, -REAR, 0.0, keep)
     if hr_kernels.AVAILABLE:
         return hr_kernels.rect_front_rear(px, py, c, s, LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, keep,
                                           float(FRONT), float(REAR), float(HALF_WIDTH))
@@ -523,7 +556,9 @@ def _line_check(a, b, m, allow=None):
     if crosses_gate(xs, ys, allow) or np.any(in_keepout(xs, ys)):
         return False
     px, py, hh = np.array([a[0]]), np.array([a[1]]), np.array([h])
-    if box_clear(px, py, hh, f0, f1)[0] < MARGIN_FRONT or box_clear(px, py, hh, r0, r1)[0] < MARGIN_REAR:
+    if box_clear(px, py, hh, f0, f1)[0] < MARGIN_FRONT:
+        return False
+    if (rear_clear(px, py, hh, r0, r1)[0] if (_RO > 0 and GATE_MODEL == 'rect') else box_clear(px, py, hh, r0, r1)[0]) < MARGIN_REAR:
         return False
     nb = max(2, int(L) + 1)
     return not body_keepout(np.linspace(a[0], b[0], nb), np.linspace(a[1], b[1], nb), np.full(nb, math.degrees(h)))
@@ -940,7 +975,7 @@ def pass_clearance(prims):
             xs.append(ax); ys.append(ay); hs.append(ah)
     px, py, hh = np.concatenate(xs), np.concatenate(ys), np.radians(np.concatenate(hs))
     if GATE_MODEL == 'rect':
-        cf = _rect_clear(px, py, hh, 0.0, FRONT); cr = _rect_clear(px, py, hh, -REAR, 0.0)
+        cf = _rect_clear(px, py, hh, 0.0, FRONT); cr = rear_clear(px, py, hh, -REAR, 0.0)
         return float(min(cf.min() - MARGIN_FRONT, cr.min() - MARGIN_REAR))
     c = np.cos(hh)[:, None]; sn = np.sin(hh)[:, None]
     dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
@@ -1402,7 +1437,8 @@ class Table:
                 self.ptr[e, s] = hr_kernels.next_option(
                     float(ep[0][0]), float(ep[0][1]), float(ep[1]), float(sp[0][0]), float(sp[0][1]), float(sp[1]), int(sp[2]),
                     self.order[e, s], int(self.ptr[e, s]), self.approx[e, s], INF / 2, _OPT_FAM, _OPT_M, _OPT_R, _OPT_W,
-                    float(TAIL_CM), float(PIVOT_BACK_CM), float(FRONT), float(REAR), float(HALF_WIDTH), float(MARGIN_FRONT), float(MARGIN_REAR),
+                    # rear_open_cm のとき、ここ(確実に当たる候補を飛ばすだけ)は後ろを短くして T字だけで見る(ゆるい側。最後の判定は prim_ok)
+                    float(TAIL_CM), float(PIVOT_BACK_CM), float(FRONT), float(REAR - _RO), float(HALF_WIDTH), float(MARGIN_FRONT), float(MARGIN_REAR),
                     LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, float(_RECT_REACH), int(ep[2]), float(LEAD_CM))
                 if not (self.ptr[e, s] < len(OPTS) and self.approx[e, s, self.ptr[e, s]] < INF / 2):
                     break
@@ -1528,7 +1564,7 @@ def route_audit(conn_prims, visits, used):
     px, py, hh = np.concatenate(xs), np.concatenate(ys), np.concatenate(hs)
     h = np.radians(hh)
     if GATE_MODEL == 'rect':
-        cf = _rect_clear(px, py, h, 0.0, FRONT); cr = _rect_clear(px, py, h, -REAR, 0.0)
+        cf = _rect_clear(px, py, h, 0.0, FRONT); cr = rear_clear(px, py, h, -REAR, 0.0)
     else:
         c = np.cos(h)[:, None]; sn = np.sin(h)[:, None]
         dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
@@ -1654,15 +1690,55 @@ def solve_same_laps(T, vs, ends):
     return total, used, picks
 
 
+def is_u_shape():
+    """赤と黄が平行で、ゲートの線と直角の向きに格子1つずれて同じ範囲に重なり、青がその片方の端の外側で2つの脚の
+    すぐ外をふさぐ(コの字。狭い配置の形A・B)か。"""
+    g = {c: [tuple(int(round(v / P)) for v in GATES[c].pa), tuple(int(round(v / P)) for v in GATES[c].pb)] for c in ('red', 'blue', 'yellow')}
+    R, Y, B = sorted(g['red']), sorted(g['yellow']), sorted(g['blue'])
+    ax = 0 if R[0][1] == R[1][1] else 1          # 赤の線が x 向き(同じ y)なら 0
+    if (Y[0][1] == Y[1][1]) != (ax == 0) or (B[0][1] == B[1][1]) == (ax == 0):
+        return False                               # 黄が赤と平行でない、または青が赤と平行
+    off = tuple(Y[0][k] - R[0][k] for k in (0, 1))
+    if Y[1] != tuple(R[1][k] + off[k] for k in (0, 1)) or off[ax] != 0 or abs(off[1 - ax]) != 1:
+        return False                               # 同じ範囲で隣の行(列)に重なっていない
+    for end, d in ((0, -1), (1, 1)):               # 端の外側に青
+        out = [list(R[end]), list(Y[end])]
+        for p in out:
+            p[ax] += d
+        if sorted(tuple(p) for p in out) == B:
+            return True
+    return False
+
+
+def _retry_lower_margin(sel_i):
+    """2026-11-14: 選んだすき間(margin_list[sel_i])で経路が作れなかったとき、次のすき間から作り直す(別のプロセスで最初から。
+    覚えた当たり判定などを残さないため)。すき間の候補は「3色ともゲートを通る候補があるか」だけで選ぶので、つなぎが作れずに
+    止まることがあった(配置33: 後ろの端を支柱だけで見ると2.5cm で候補はあるが、青へのつなぎが1本もない)。"""
+    if not MARGIN_LIST or sel_i is None or sel_i + 1 >= len(MARGIN_LIST):
+        return
+    import subprocess
+    print('retry with the next margin %.1f' % MARGIN_LIST[sel_i + 1], flush=True)
+    env = dict(os.environ, HR_MARGIN_SKIP=str(sel_i + 1))
+    sys.exit(subprocess.call([sys.executable] + sys.argv, env=env))
+
+
 def main():
     t0 = time.time()
+    sel_i = None
     global MARGIN_FRONT, MARGIN_REAR, OBLIQUE_POLICY
     used_margin = None
-    global _GRID_ON
+    global _GRID_ON, _RO
     for i_mg, mg in enumerate(MARGIN_LIST or [None]):
         if i_mg == 1 and NARROW_SAFEST:
             # 狭い配置(最初のすき間で通れない): 垂直に通れないゲートだけ斜めを使う(計算量を約1/8にする。ユーザー決定 2026-11-09)
             OBLIQUE_POLICY = 'safest'
+        if i_mg == 1 and REAR_OPEN_CM > 0 and (REAR_OPEN_SHAPE == 'any' or is_u_shape()):
+            # 2026-11-14: 狭い配置(A〜F)だけ、後ろの端から rear_open_cm は支柱とのすき間だけを見る(ユーザー決定)
+            _RO = float(REAR_OPEN_CM)
+            print('narrow: rear %.1fcm checked against the posts only' % _RO, flush=True)
+        if i_mg < MARGIN_SKIP:
+            continue   # 2026-11-14: 前のすき間で経路が作れず、作り直している(_retry_lower_margin)
+        sel_i = i_mg
         if mg is not None:
             MARGIN_FRONT = MARGIN_REAR = float(mg)
             used_margin = float(mg)
@@ -1696,6 +1772,8 @@ def main():
         return
     if VISIT_FILTER:
         for c in cands:
+            if c not in VISIT_FILTER:   # 2026-11-14: 書いていない色は絞らない
+                continue
             allow_v = {tuple(x) for x in VISIT_FILTER.get(c, [])}
             cands[c] = [v for v in cands[c] if (v['sign'], v['mode'], v['angle'], v['angle_out']) in allow_v]
     print('candidates', {c: len(v) for c, v in cands.items()}, f'{time.time() - t0:.1f}s', flush=True)
@@ -1812,6 +1890,7 @@ def main():
             # つながる(当たらない)組み合わせの数を出す(0 の区間が原因)。
             for k_, t_ in T.items():
                 print('  table %s->%s: %d of %d connections possible' % (k_[0], k_[1], int(np.sum(t_.C < INF / 2)), t_.C.size), flush=True)
+            _retry_lower_margin(sel_i)
             return
         # 経路を復元して、使ったつなぎ区間を厳密に判定する
         if used is None:
@@ -1977,7 +2056,7 @@ def main():
                         [round(float(v), 1) for v in ends['red'][visits[ir]['e']][0]] + [round(float(ends['red'][visits[ir]['e']][1]), 1)],)), flush=True)
         else:
             print('exit: no yellow exits, no early exit to the garage', flush=True)
-    json.dump(dict(total=total, params=PARAMS, margin=MARGIN_FRONT, narrow=bool(MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]), audit=audit, arm=arm, arm_down=arm_down, exit=exit_info, blocks=blocks), open(sys.argv[2], 'w'))
+    json.dump(dict(total=total, params=PARAMS, margin=MARGIN_FRONT, rear_open=_RO, narrow=bool(MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]), audit=audit, arm=arm, arm_down=arm_down, exit=exit_info, blocks=blocks), open(sys.argv[2], 'w'))
 
 
 if __name__ == '__main__':
