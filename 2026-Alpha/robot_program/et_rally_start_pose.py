@@ -592,13 +592,18 @@ def choose_start_fit(cam, dets, mirror=False):
             r, used, wide = r_in, inner, False
     if r is not None and r["n_dots"] == 0 and r["n_markers"] >= 2 and r["n_markers"] < 3:
         r = _fit_markers_assumed_pitch(cam, used, mirror) or r
+    elif r is not None and r["n_dots"] + r["n_markers"] < 3:
+        # 2026-11-14: 見えたものが2つ(点1つ+マーカー1つなど)では下向きを当てはめられず、較正のままの下向きで前後を
+        # 大きく間違えた(配置36: 前後 -47mm・食い違い33mm と出て、そのまま取り込んでぶつかった。カメラの下向きが較正より
+        # 約1°大きくなっていた)。保存した下向きで点もマーカーも写し直して当てはめる。
+        r = _fit_markers_assumed_pitch(cam, used, mirror, with_dots=True) or r
     return r, None, wide
 
 
 START_ASSUMED_PITCH_DEG = 0.45   # 保存した下向きがないときの決め打ち(11/12 のスタートで当てはめた値 +0.12〜+0.65 の真ん中あたり)
 
 
-def _fit_markers_assumed_pitch(cam, dets, mirror=False):
+def _fit_markers_assumed_pitch(cam, dets, mirror=False, with_dots=False):
     """2026-11-12: 点が見えずマーカー2つだけのとき、前回床で当てはめて保存した下向き(なければ START_ASSUMED_PITCH_DEG)で
     写し直して位置を出す。下向きを当てはめられないと前後を2〜4cm 間違えていたが、+0.45° の決め打ちで、点も見えた8回の画像の
     答えとの差は前後 ±12mm 以内・左右 ±11mm 以内になった。結果に pitch_assumed を付ける(取り込みでは位置も入れる)。"""
@@ -611,8 +616,15 @@ def _fit_markers_assumed_pitch(cam, dets, mirror=False):
         if q is None:
             return None
         mk.append(dict(m, xy=q))
-    r = fit_pose_search({"markers": mk, "dots": []}, mirror=mirror)
-    if r is None or r["n_markers"] < 2:
+    dts = []
+    if with_dots:
+        for d in dets.get("dots", []):
+            q = repitch(d, p, C)
+            if q is None:
+                return None
+            dts.append(tuple(q))
+    r = fit_pose_search({"markers": mk, "dots": dts}, mirror=mirror)
+    if r is None or (r["n_markers"] + (r["n_dots"] if with_dots else 0)) < 2:
         return None
     return dict(r, pitch_assumed=p)
 
@@ -774,7 +786,9 @@ REJOIN_CLEAR_MM = 30.0   # 2026-11-14: 引き直したつなぎで、脚との�
 REJOIN_PIVOTS_DEG = (10.0, -10.0, 20.0, -20.0, 30.0, -30.0, 45.0, -45.0)   # 円弧だけでは足りないとき、最初にその場で回る角度の候補
 REJOIN_PIVOT_COST_MM = 150.0   # その場旋回を入れる候補の、比べるときの上乗せ(止まって回るぶんの時間を道のりに換算した目安)。後退は これ + 後退の2倍
 REJOIN_BACK_MM = (40.0, 80.0)  # 円弧だけでは足りないとき、最初に真後ろへ下がる距離の候補(スタートの後ろは広い)
-REJOIN_TIME_LIMIT_SEC = 5.0    # 候補のすき間を測るのをこの時間で打ち切り、それまでで一番よいものを使う(PCで最大約1.9秒、ロボットは未計測)。
+REJOIN_TIME_LIMIT_SEC = 1.5    # 候補のすき間を測るのをこの時間で打ち切り、それまでで一番よいものを使う。
+                               # 11/14 実機: 5秒にしていたら、その場旋回まで探した回は毎回5.2秒かかり(打ち切り)、1回はその直後に
+                               # 車輪の値が止まったまま回り続けた。合流点から先を1回だけ測るようにして短くし、1.5秒で打ち切る。
                                # 11/14: 0.8秒では、PCが混んでいると、その場旋回・後退の候補にたどり着く前に打ち切られた。大きくずれたときだけの処理なので待つ
 
 
@@ -820,6 +834,13 @@ def rejoin_steps(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
         acc += L
         if i + 1 < len(steps) and i + 1 <= run_end:
             cands.append((_integrate(steps, i + 1), acc, list(steps[i + 1:])))
+    # 2026-11-14: 合流点から先(計画どおりの道)のすき間は、どの引き直しでも同じなので、合流点ごとに1回だけ測る
+    # (ロボットで、その場旋回・後退まで探すと5.2秒かかり、その間に走行の制御が止まっていた)
+    tail_clr = {}
+    for ci, (B, old, tail) in enumerate(cands):
+        n_tail = max(0, end_check - (len(steps) - len(tail)))
+        tail_clr[ci] = body_leg_clearance(_sample_steps(tail[:n_tail], B)) if n_tail else 1e9
+
     def search(pres):
         # 道のりの計算は軽いので先に全部出し、短い順にすき間を測って、目標に届いた最初の候補で打ち切る(ロボットで速くするため)
         todo = []
@@ -840,7 +861,9 @@ def rejoin_steps(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
                 if body_leg_clearance(ps) < min(need, start_clr - 0.5):
                     continue
             A = (S[0], S[1], math.radians(S[2]))
-            for B, old, tail in cands:
+            for ci, (B, old, tail) in enumerate(cands):
+                if tail_clr[ci] < need and tail_clr[ci] < best_tail - 1e-6:
+                    continue   # 合流点から先がすでに目標より狭く、一番よい合流点でもない
                 for r in (radius_mm, 80.0, 150.0, 200.0):
                     db = _dubins(A, (B[0], B[1], math.radians(B[2])), r)
                     if db is None:
@@ -861,11 +884,13 @@ def rejoin_steps(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
                     n_check = len(new) + max(0, end_check - (len(steps) - len(tail)))
                     # その場旋回は角度が大きいほど時間がかかり向きもずれやすいので、1°あたり3mm を足す(小さい角度を選ぶ)
                     cost = tot - old + ((REJOIN_PIVOT_COST_MM + 3.0 * abs(pv)) if pv else 0.0) + ((REJOIN_PIVOT_COST_MM + 2.0 * back) if back else 0.0)
-                    todo.append((cost, len(todo), full, n_check, n_pre, len(new), tot, old, r, (back, pv)))
+                    todo.append((cost, len(todo), full, len(new), n_pre, len(new), tot, old, r, (back, pv), tail_clr[ci]))
         todo.sort(key=lambda t: (t[0], t[1]))
         best = None
-        for cost, _, full, n_check, n_pre, nn, tot, old, r, bp in todo:
-            clr = body_leg_clearance(_sample_steps(full[:n_check], actual)[n_pre:])
+        for cost, _, full, n_new, n_pre, nn, tot, old, r, bp, tc in todo:
+            if best is not None and min(tc, 1e9) <= best[5] and best[0][0] == 1 and tc < need:
+                continue   # 合流点から先だけで、今までの一番よい候補より広くならない
+            clr = min(tc, body_leg_clearance(_sample_steps(full[:n_new], actual)[n_pre:]))
             ok = clr >= need
             key = (0 if ok else 1, cost if ok else -clr)
             if best is None or key < best[0]:
@@ -875,6 +900,7 @@ def rejoin_steps(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
         return best
 
     deadline = time.time() + REJOIN_TIME_LIMIT_SEC
+    best_tail = max(tail_clr.values()) if tail_clr else 1e9
 
     best = search([(0.0, 0.0)])
     if best is not None and best[0][0] == 1:
