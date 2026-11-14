@@ -59,7 +59,36 @@ def set_gate_legs(gates):
                     legs.append((float(g[key][0]) * P_MM, float(g[key][1]) * P_MM))
     _legs = legs
     _dots_visible = [d for d in DOTS if all(math.hypot(d[0] - l[0], d[1] - l[1]) > 1.0 for l in legs)]
+    # 2026-11-14: 脚の T字の部品の長方形(経路を作る道具 hybrid_route._make_legs と同じ決まり)。スタートのつなぎの引き直しで、
+    # 脚とのすき間を見るのに使う。(中心 x, y, ゲートの線の外向き u, 直角 v, u 方向の半分, v 方向の半分) mm
+    global _leg_rects
+    rects = []
+    off_min = (GATE_INNER_MIN_MM + LEG_DIA_MM - P_MM) / 2.0
+    off_max = (GATE_OUTER_MAX_MM - LEG_DIA_MM - P_MM) / 2.0
+    s0, s1 = off_min - LEG_DIA_MM / 2.0, off_max + LEG_DIA_MM / 2.0
+    for color in ("red", "blue", "yellow"):
+        g = (gates or {}).get(color)
+        if not (isinstance(g, dict) and "a" in g and "b" in g):
+            continue
+        pa = (float(g["a"][0]) * P_MM, float(g["a"][1]) * P_MM); pb = (float(g["b"][0]) * P_MM, float(g["b"][1]) * P_MM)
+        L = math.hypot(pb[0] - pa[0], pb[1] - pa[1]) or 1.0
+        t = ((pb[0] - pa[0]) / L, (pb[1] - pa[1]) / L); n = (-t[1], t[0])
+        for p, out in ((pa, (-t[0], -t[1])), (pb, t)):
+            c = (p[0] + out[0] * (s0 + s1) / 2.0, p[1] + out[1] * (s0 + s1) / 2.0)
+            rects.append((c, out, n, (s1 - s0) / 2.0, LEG_LEN_MM / 2.0))
+    _leg_rects = rects
     return legs
+
+
+# 2026-11-14: 脚とT字の大きさ(経路を作る道具の gate_inner_min・gate_outer_max・leg_dia・leg_len と同じ)と、車体の箱(車軸から前・後ろ・横)
+GATE_INNER_MIN_MM = 227.0
+GATE_OUTER_MAX_MM = 295.0
+LEG_DIA_MM = 25.0
+LEG_LEN_MM = 75.0
+BODY_FRONT_MM = 75.0
+BODY_REAR_MM = 179.0
+BODY_HALF_W_MM = 70.0
+_leg_rects = []
 
 
 def _near_leg(w):
@@ -675,7 +704,193 @@ def _dubins(A, B, r):
     return best
 
 
+def _sample_steps(steps, start, step_mm=15.0):
+    """steps(前進の直進・円弧)を start=(x, y, 向き度) から積算した、車軸の姿勢の列 [(x, y, 向きrad)]。"""
+    x, y, h = start
+    out = [(x, y, math.radians(h))]
+    for s in steps:
+        if s["type"] == "move":
+            hh = START_HEADING_DEG - float(s["target_heading_deg"]); th = math.radians(hh + (180.0 if s.get("reverse") else 0.0))
+            L = float(s["distance_mm"]); n = max(1, int(L / step_mm))
+            for k in range(1, n + 1):
+                out.append((x + L * k / n * math.cos(th), y + L * k / n * math.sin(th), math.radians(hh)))
+            x, y, h = x + L * math.cos(th), y + L * math.sin(th), hh
+        elif s["type"] == "arc":
+            sw = -float(s["sweep_deg"]); r = float(s["radius_mm"]); sg = 1.0 if sw > 0 else -1.0
+            th0 = math.radians(h + (180.0 if s.get("reverse") else 0.0))
+            cx, cy = x - sg * r * math.sin(th0), y + sg * r * math.cos(th0)
+            n = max(2, int(r * math.radians(abs(sw)) / step_mm), int(abs(sw) / 3.0))
+            for k in range(1, n + 1):
+                t1 = th0 + math.radians(sw) * k / n
+                out.append((cx + sg * r * math.sin(t1), cy - sg * r * math.cos(t1), math.radians(h + sw * k / n)))
+            x, y, h = out[-1][0], out[-1][1], h + sw
+        elif s["type"] == "turn":
+            # その場旋回: 車軸より PIVOT_BACK_MM 後ろの点を中心に回る(経路を作る道具の pivot_back_cm と同じ)
+            hh = START_HEADING_DEG - float(s["target_heading_deg"]); d = _nd(hh - h)
+            cx, cy = x - PIVOT_BACK_MM * math.cos(math.radians(h)), y - PIVOT_BACK_MM * math.sin(math.radians(h))
+            n = max(1, int(abs(d) / 3.0))
+            for k in range(1, n + 1):
+                a = math.radians(h + d * k / n)
+                out.append((cx + PIVOT_BACK_MM * math.cos(a), cy + PIVOT_BACK_MM * math.sin(a), a))
+            x, y, h = out[-1][0], out[-1][1], h + d
+        else:
+            break
+    return out
+
+
+PIVOT_BACK_MM = 5.0
+
+
+def body_leg_clearance(poses):
+    """車体の箱と脚の T字の長方形の、いちばん小さいすき間(mm)。脚が分からないときは大きな値。"""
+    if not _leg_rects or not poses:
+        return 1e9
+    import numpy as np
+    P = np.array(poses, float)
+    px, py, ph = P[:, 0], P[:, 1], P[:, 2]
+    c, s = np.cos(ph), np.sin(ph)
+    bx = np.array([BODY_FRONT_MM, BODY_FRONT_MM, -BODY_REAR_MM, -BODY_REAR_MM]); by = np.array([BODY_HALF_W_MM, -BODY_HALF_W_MM, -BODY_HALF_W_MM, BODY_HALF_W_MM])
+    wx = px[:, None] + bx[None, :] * c[:, None] - by[None, :] * s[:, None]
+    wy = py[:, None] + bx[None, :] * s[:, None] + by[None, :] * c[:, None]
+    best = 1e9
+    for (cc, u, v, hu, hv) in _leg_rects:
+        corners = [(cc[0] + u[0] * a * hu + v[0] * b * hv, cc[1] + u[1] * a * hu + v[1] * b * hv) for a in (-1, 1) for b in (-1, 1)]
+        # 脚の角 → 車体の箱
+        d1 = None
+        for qx, qy in corners:
+            lx = (qx - px) * c + (qy - py) * s; ly = -(qx - px) * s + (qy - py) * c
+            dx = np.maximum(np.maximum(-BODY_REAR_MM - lx, lx - BODY_FRONT_MM), 0.0); dy = np.maximum(np.abs(ly) - BODY_HALF_W_MM, 0.0)
+            dd = np.hypot(dx, dy)
+            d1 = dd if d1 is None else np.minimum(d1, dd)
+        # 車体の角 → 脚の長方形
+        rx = wx - cc[0]; ry = wy - cc[1]
+        du = np.abs(rx * u[0] + ry * u[1]) - hu; dv = np.abs(rx * v[0] + ry * v[1]) - hv
+        d2 = np.hypot(np.maximum(du, 0.0), np.maximum(dv, 0.0)).min(1)
+        best = min(best, float(np.minimum(d1, d2).min()))
+    return best
+
+
+REJOIN_CLEAR_MM = 30.0   # 2026-11-14: 引き直したつなぎで、脚とのすき間をこれ以上にしたい(計画そのものがこれより狭いときは計画のすき間まで)
+REJOIN_PIVOTS_DEG = (10.0, -10.0, 20.0, -20.0, 30.0, -30.0, 45.0, -45.0)   # 円弧だけでは足りないとき、最初にその場で回る角度の候補
+REJOIN_PIVOT_COST_MM = 150.0   # その場旋回を入れる候補の、比べるときの上乗せ(止まって回るぶんの時間を道のりに換算した目安)。後退は これ + 後退の2倍
+REJOIN_BACK_MM = (40.0, 80.0)  # 円弧だけでは足りないとき、最初に真後ろへ下がる距離の候補(スタートの後ろは広い)
+REJOIN_TIME_LIMIT_SEC = 5.0    # 候補のすき間を測るのをこの時間で打ち切り、それまでで一番よいものを使う(PCで最大約1.9秒、ロボットは未計測)。
+                               # 11/14: 0.8秒では、PCが混んでいると、その場旋回・後退の候補にたどり着く前に打ち切られた。大きくずれたときだけの処理なので待つ
+
+
 def rejoin_steps(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
+    """2026-11-14: 脚とのすき間を見て引き直す。実際のスタートの姿勢 actual から、最初のゲートより前の合流点まで、
+    円弧-直進-円弧でつなぐ候補を作る(合流点: 区間の終わり、長い直進の途中。半径 80〜200mm。足りなければ最初にその場旋回)。
+    各候補で、引き直した道と、その先の最初のゲートを抜けるまでの、車体と脚の T字のすき間を測る。
+    目標のすき間 = min(REJOIN_CLEAR_MM, 計画どおりにスタートしたときの同じ範囲のすき間 - 1mm)。目標以上の候補のうち
+    一番短いもの(その場旋回は REJOIN_PIVOT_COST_MM を足して比べる)、なければすき間が一番大きいものを使う。
+    脚が分からない(計画に gates がない)ときは、従来どおりの1通り。
+    11/14: 配置63で、スタートが黄の側に4cm ずれていると、従来の引き直しでは走り出しで黄の脚の T字に当たる計算だった。"""
+    if not _leg_rects:
+        return _rejoin_simple(steps, actual, radius_mm, max_extra_mm)
+    k0 = join_index(steps)
+    if k0 is None:
+        return None, "no join point"
+    # 最初のゲート(label のある区間)の終わりまでを、すき間を見る範囲にする
+    lab = next((i for i, s in enumerate(steps) if s.get("label")), None)
+    end_check = (lab + 1) if lab is not None else min(len(steps), k0 + 3)
+    plan_clr = body_leg_clearance(_sample_steps(steps[:end_check], (START_MM[0], START_MM[1], START_HEADING_DEG)))
+    need = min(REJOIN_CLEAR_MM, plan_clr - 1.0)
+    # 置いた位置がすでに脚に近いとき: 最初の後退・その場旋回の間は置いた位置より近づかないこと、そのあとの道で need を見る
+    start_clr = body_leg_clearance([(actual[0], actual[1], math.radians(actual[2]))])
+    # まず従来の引き直し(合流点・半径が決まった1通り)。脚とのすき間が目標以上なら、それをそのまま使う(実機で使ってきた形)
+    simple, why_s = _rejoin_simple(steps, actual, radius_mm, max_extra_mm)
+    if simple is not None:
+        n_new = len(simple) - (len(steps) - k0)
+        clr_s = body_leg_clearance(_sample_steps(simple[:n_new + max(0, end_check - k0)], actual)[1:])
+        if clr_s >= need:
+            return simple, "%s, leg clearance %.1f mm (target %.1f)" % (why_s, clr_s, need)
+    run_end = next((i for i, s in enumerate(steps) if s["type"] not in ("move", "arc") or s.get("reverse") or s.get("label") or s.get("stop")), len(steps))
+    cands = []   # (合流点の姿勢, 合流点までの元の長さ, 合流点のあとの steps)
+    acc = 0.0
+    for i in range(run_end):
+        s = steps[i]
+        L = _step_len(s)
+        if s["type"] == "move" and L >= 150.0:
+            for d in (80.0, 120.0, 160.0, 220.0, 300.0, 400.0):
+                if d < L - 40.0:
+                    rest = dict(s, distance_mm=round(L - d, 1))
+                    B = _integrate(steps[:i] + [dict(s, distance_mm=d)], i + 1)
+                    cands.append((B, acc + d, [rest] + list(steps[i + 1:])))
+        acc += L
+        if i + 1 < len(steps) and i + 1 <= run_end:
+            cands.append((_integrate(steps, i + 1), acc, list(steps[i + 1:])))
+    def search(pres):
+        # 道のりの計算は軽いので先に全部出し、短い順にすき間を測って、目標に届いた最初の候補で打ち切る(ロボットで速くするため)
+        todo = []
+        for back, pv in pres:
+            pre = []
+            S = tuple(actual)
+            n_pre = 1
+            if back or pv:
+                if back:
+                    pre.append({"type": "move", "target_heading_deg": _plan_heading(actual[2]), "distance_mm": back,
+                                "reverse": True, "stop": False, "label": None})
+                if pv:
+                    pre.append({"type": "turn", "target_heading_deg": _plan_heading(actual[2] + pv), "reverse": False, "stop": False, "label": None})
+                ps = _sample_steps(pre, actual)
+                q = ps[-1]
+                S = (q[0], q[1], math.degrees(q[2]))
+                n_pre = len(ps)
+                if body_leg_clearance(ps) < min(need, start_clr - 0.5):
+                    continue
+            A = (S[0], S[1], math.radians(S[2]))
+            for B, old, tail in cands:
+                for r in (radius_mm, 80.0, 150.0, 200.0):
+                    db = _dubins(A, (B[0], B[1], math.radians(B[2])), r)
+                    if db is None:
+                        continue
+                    tot, t1, a1, phi, Ls, t2, a2 = db
+                    if tot > old + max_extra_mm:
+                        continue
+                    new = list(pre)
+                    if math.degrees(a1) > 0.05:
+                        new.append({"type": "arc", "target_heading_deg": _plan_heading(S[2] + t1 * math.degrees(a1)),
+                                    "sweep_deg": round(-t1 * math.degrees(a1), 3), "radius_mm": r, "reverse": False, "stop": False, "label": None})
+                    new.append({"type": "move", "target_heading_deg": _plan_heading(math.degrees(phi)), "distance_mm": round(Ls, 1),
+                                "reverse": False, "stop": False, "label": None})
+                    if math.degrees(a2) > 0.05:
+                        new.append({"type": "arc", "target_heading_deg": _plan_heading(B[2]), "sweep_deg": round(-t2 * math.degrees(a2), 3),
+                                    "radius_mm": r, "reverse": False, "stop": False, "label": None})
+                    full = new + tail
+                    n_check = len(new) + max(0, end_check - (len(steps) - len(tail)))
+                    # その場旋回は角度が大きいほど時間がかかり向きもずれやすいので、1°あたり3mm を足す(小さい角度を選ぶ)
+                    cost = tot - old + ((REJOIN_PIVOT_COST_MM + 3.0 * abs(pv)) if pv else 0.0) + ((REJOIN_PIVOT_COST_MM + 2.0 * back) if back else 0.0)
+                    todo.append((cost, len(todo), full, n_check, n_pre, len(new), tot, old, r, (back, pv)))
+        todo.sort(key=lambda t: (t[0], t[1]))
+        best = None
+        for cost, _, full, n_check, n_pre, nn, tot, old, r, bp in todo:
+            clr = body_leg_clearance(_sample_steps(full[:n_check], actual)[n_pre:])
+            ok = clr >= need
+            key = (0 if ok else 1, cost if ok else -clr)
+            if best is None or key < best[0]:
+                best = (key, full, nn, tot, old, clr, r, bp)
+            if ok or (time.time() > deadline and best is not None):
+                break
+        return best
+
+    deadline = time.time() + REJOIN_TIME_LIMIT_SEC
+
+    best = search([(0.0, 0.0)])
+    if best is not None and best[0][0] == 1:
+        # 円弧だけでは目標に届かない(スタートが脚の近くにずれている): 最初にその場旋回・少し後退を入れる候補も比べる
+        pres = [(0.0, pv) for pv in REJOIN_PIVOTS_DEG] + [(b, pv) for b in REJOIN_BACK_MM for pv in (0.0,) + tuple(REJOIN_PIVOTS_DEG)]
+        b2 = search(pres)
+        if b2 is not None and (b2[0][0] == 0 or b2[5] > best[5] + 1.0):
+            best = b2
+    if best is None:
+        return None, "no dubins path"
+    key, full, nn, tot, old, clr, r, (back, pv) = best
+    return full, "rejoin (legs) -> %d steps, %.0f mm (plan %.0f mm), radius %.0f, back %.0f, pivot %+.0f, leg clearance %.1f mm (target %.1f)" % (
+        nn, tot, old, r, back, pv, clr, need)
+
+
+def _rejoin_simple(steps, actual, radius_mm=100.0, max_extra_mm=200.0):
     """実際のスタートの姿勢 actual=(x, y, 向き度) から、計画の合流点(join_index)まで、円弧-直進-円弧で
     つなぎ直した steps を返す。合流点がない・つなぎが計画より max_extra_mm 以上長いときは None。"""
     k = join_index(steps)
@@ -802,7 +1017,13 @@ def apply_pending_rejoin(steps, logger=None):
     _pending_rejoin = None
     if actual is None:
         return steps
-    new, why = rejoin_steps(steps, actual)
+    t0 = time.time()
+    try:
+        new, why = rejoin_steps(steps, actual)
+    except Exception as e:   # 2026-11-14: 脚を見る引き直しで思わぬ失敗があっても、従来の引き直しで走る
+        new, why = _rejoin_simple(steps, actual)
+        why = "%s (legs-aware rejoin failed: %r)" % (why, e)
+    why = "%s [%.2fs]" % (why, time.time() - t0)
     if new is None:
         _inject_position(actual, logger)
         if logger is not None:
