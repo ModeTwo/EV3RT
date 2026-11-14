@@ -506,7 +506,10 @@ def fit_pose_pitch(cam, dets, nominal=(START_MM[0], START_MM[1], START_HEADING_D
         c = min(ref, key=lambda q: math.hypot(q[0] - w[0], q[1] - w[1]))
         if math.hypot(c[0] - w[0], c[1] - w[1]) <= lim:
             body_pts.append([xy[0], xy[1], 0.0]); world.append(c)
-    if len(world) < 3:
+    # 2026-11-14: 2つでも当てはめる(未知数4つに式4つ)。11/14 の画像(置いた位置が分かっている4か所)で、
+    # 2つずつ選んだ46通りの前後は、全部で当てはめた値との差が最大14mm・下向きの差は最大0.45°。
+    # 保存した下向きで写し直すやり方は、配置36 で前後を44mm 間違えた。食い違いの確かめはできない(resid が0になる)。
+    if len(world) < 2:
         return r0
     px0, _ = cv2.projectPoints(np.array(body_pts, float), cam.rvec, cam.tvec, cam.K, cam.dist)
     px0 = px0.reshape(-1, 2)
@@ -594,12 +597,9 @@ def choose_start_fit(cam, dets, mirror=False):
             r, used, wide = r_w, dets, True
         else:
             r, used, wide = r_in, inner, False
-    if r is not None and r["n_dots"] == 0 and r["n_markers"] >= 2 and r["n_markers"] < 3:
-        r = _fit_markers_assumed_pitch(cam, used, mirror) or r
-    elif r is not None and r["n_dots"] + r["n_markers"] < 3:
-        # 2026-11-14: 見えたものが2つ(点1つ+マーカー1つなど)では下向きを当てはめられず、較正のままの下向きで前後を
-        # 大きく間違えた(配置36: 前後 -47mm・食い違い33mm と出て、そのまま取り込んでぶつかった。カメラの下向きが較正より
-        # 約1°大きくなっていた)。保存した下向きで点もマーカーも写し直して当てはめる。
+    if r is not None and r["n_dots"] + r["n_markers"] < 3 and "pitch_deg" not in r:
+        # 2つで下向きを当てはめられなかったとき(当てはめが外れたなど)だけ、保存した下向きで写し直す。
+        # 2026-11-14: 取り込みでは、このときは前後を入れない(EtRallyApplyStartPose)。
         r = _fit_markers_assumed_pitch(cam, used, mirror, with_dots=True) or r
     return r, None, wide
 
@@ -1168,7 +1168,8 @@ class EtRallyStartPoseCapture(Behaviour):
                          items=sorted(int(r["n_markers"] + r["n_dots"]) for r in self.results)[len(self.results) // 2],
                          n_dots_med=sorted(int(r["n_dots"]) for r in self.results)[len(self.results) // 2],
                          wide=sum(1 for r in self.results if r.get("wide")),
-                         assumed=sum(1 for r in self.results if r.get("pitch_assumed") is not None))
+                         assumed=sum(1 for r in self.results if r.get("pitch_assumed") is not None),
+                         pitch_fit=sum(1 for r in self.results if "pitch_deg" in r and r.get("pitch_assumed") is None))
         if (_measured["n_dots"] >= 1 and _measured["pitch_deg"] and abs(_measured["pitch_deg"]) <= 1.5
                 and save_last_pitch(_measured["pitch_deg"], self.calib_path)):
             self.logger.info("start pose: saved pitch %+.2f deg for runs without visible dots" % _measured["pitch_deg"])
@@ -1235,7 +1236,7 @@ class EtRallyApplyStartPose(Behaviour):
             # 向き(マーカーの辺の傾きから)だけ入れて、計画のスタートにいるとみなす。
             _applied = (START_MM[0], START_MM[1], h)
             how = "heading only (%d items, %d dots)" % (m["items"], m.get("n_dots", -1))
-        elif m.get("items", 99) < 3:
+        elif m.get("items", 99) < 3 and m.get("pitch_fit", 0) * 2 < m.get("poses", 1):
             # 2026-11-11: 点が見えずマーカー2つだけのときは、前後を約2〜4cm 間違える(点がないと下向きの当てはめ直しが
             # できないため)。11/12: 同じ画像を広い範囲で点も使って測り直すと、前後は大きく違ったが、左右は数mm で合っていた
             # (配置36の4回)。そこで向きと左右だけを入れ、前後は計画のスタートのままにする。
@@ -1243,6 +1244,8 @@ class EtRallyApplyStartPose(Behaviour):
             # (スタート +1.1〜2.2°、フィールドの真ん中 −0.5〜+0.5°)、配置36でマーカー2つから前後 +44mm と出て、
             # そのまま取り込んで1周目が大きく揺れた。見えたものが3つ未満(下向きを当てはめられない)なら、点が見えていても
             # 前後は入れない。
+            # 2026-11-14 夜: 2つでも下向きを当てはめられた画像が半分以上なら前後も入れる(fit_pose_pitch、差は最大14mm)。
+            # 配置36 のスタートの画像(マーカー2つ)では、前後が計画より18mm 後ろと出た(走行中の補正が直していた量と合う)。
             a = math.radians(START_HEADING_DEG)
             along = dx * math.cos(a) + dy * math.sin(a)
             x, y = x - along * math.cos(a), y - along * math.sin(a)
