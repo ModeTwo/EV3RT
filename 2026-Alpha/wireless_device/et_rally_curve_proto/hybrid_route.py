@@ -103,7 +103,9 @@ PARAMS = dict(
     # True: 遠回りなしで経路が見つかっても、遠回りで速くなる区間がないか探す(最速の取りこぼしを防ぐ)
     via_always=True, via_budget_sec=60.0,   # 2026-11-11: 遠回りで速くなる区間を毎回探す(時間の上限は実際の時計なので、並べて計算するときは1本1スレッドに)
     # その場の旋回の中心が車軸からどれだけ後ろか(cm)。10/31の左右同期の旋回で約0.5cm(測り直し予定)
-    pivot_back_cm=0.5,   # 2段目(遠回りで速くなるか)の時間の上限。超えたら1段目の経路を使う
+    pivot_back_cm=0.5,
+    # 2026-11-14: つなぎの区間だけのすき間の基準(cm)。None なら、ゲートの通過と同じ(margin_list で決まった値)。
+    conn_margin_cm=None,   # 2段目(遠回りで速くなるか)の時間の上限。超えたら1段目の経路を使う
     # 2026-11-11(ユーザーの指示): ゲートを抜けたとみなす距離(cm)。車体の後ろの端(後退なら前の端)の角が、ゲートの2つの点の
     # 中心を結ぶ線を、線に垂直にこの距離だけ越えるまで直進で抜ける。規則は「ロボットが完全にゲートを通過すること」で、
     # ゲートには幅があり置き方にもむらがあるため、灰色の点の端(半径2.2cm、直径約44mm)から2cm = 4.2cm にした(以前は2.0cm)。
@@ -1652,6 +1654,13 @@ def main():
             break
     if used_margin is not None:
         print('margin selected: %.1f' % used_margin, flush=True)
+    # 2026-11-14: つなぎの区間(スタートからを含む)だけ、すき間の基準を別にする(ゲートの通り方の候補は上で決めた基準のまま)。
+    # ゲートの通過では2.5cm が要る配置でも、つなぎは脚から離して通れることが多い。その時間の差を見るため。
+    if CONN_MARGIN_CM is not None and used_margin is not None and float(CONN_MARGIN_CM) > used_margin:
+        MARGIN_FRONT = MARGIN_REAR = float(CONN_MARGIN_CM)
+        for memo in (_line_memo, _arc_memo, _pivot_cache, _piv_int, _run_cache, _arc_limit_memo):
+            memo.clear()
+        print('connection margin: %.1f (gate passes %.1f)' % (MARGIN_FRONT, used_margin), flush=True)
     if CANDIDATES_ONLY:
         json.dump(dict(margin=used_margin, counts={c: len(v) for c, v in cands.items()}), open(sys.argv[2], 'w'))
         return
