@@ -288,6 +288,9 @@ class IsTouchOn(Behaviour):
             self.logger.info("%+06d %s.waiting for touch..." % (g_plotter.get_distance(), self.__class__.__name__))
         if g_touch_sensor.is_pressed():
             self.logger.info("%+06d %s.pressed" % (g_plotter.get_distance(), self.__class__.__name__))
+            # 2026-11-14: 競技の開始の時刻(ETラリーの持ち時間を 制限時間 − ここからの秒 で出す、--rally-time-total)
+            from robot_program import et_rally_time_budget
+            et_rally_time_budget.mark_race_start()
             return Status.SUCCESS
         else:
             return Status.RUNNING
@@ -1466,6 +1469,10 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument('--rally-time-budget', type=float, default=None,
                         help=('Decide the number of laps while driving: seconds available for the ET rally (competition: '
                               '120 minus the time before the ET rally starts; tests: 70). Needs a garage plan with "exit". Default off.'))
+    parser.add_argument('--rally-time-total', type=float, default=None,
+                        help=('Competition time limit in seconds (120): the ET rally budget becomes this minus the seconds from '
+                              'the touch start to the ET rally start, measured by the robot. Overrides --rally-time-budget '
+                              '(which is then only used if the touch time is unknown). Default off.'))
     parser.add_argument('--rally-time-margin', type=float, default=None,
                         help='Safety margin in seconds for --rally-time-budget (default 2.0).')
     parser.add_argument('--rally-arm-down-at-garage', choices=('on', 'off'), default=None,
@@ -1840,6 +1847,7 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-path-stop-ticks', 'rally_path_stop_ticks', 1.0, 10.0),
                               ('--rally-time-budget', 'rally_time_budget', 10.0, 120.0),
                               ('--rally-time-margin', 'rally_time_margin', 0.0, 20.0),
+                              ('--rally-time-total', 'rally_time_total', 30.0, 300.0),
                               ('--rally-path-line-pid-d', 'rally_path_line_pid_d', 0.0, 2.0),
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),
@@ -1862,6 +1870,10 @@ def _run_main(argv, startup_cleanup):
             parser.error('%s must be between %g and %g' % (opt, lo, hi))
         mission_config = dataclasses.replace(
             mission_config, **{'et_rally_path_wheel_log_ticks' if attr == 'rally_path_wheel_log' else 'et_' + attr: value})
+    if mission_config.et_rally_time_total is not None and mission_config.et_rally_time_budget is None:
+        # 2026-11-14: 周回の判断のノードを作るため、持ち時間の仮の値を入れる。走るときは 制限時間 − 競技の開始からの秒 に置き換わる
+        # (タッチの時刻が分からないときだけこの値を使う。テストと同じ70秒)。
+        mission_config = dataclasses.replace(mission_config, et_rally_time_budget=70.0)
     if args.rally_gyro_drift_extra_sec is not None:
         if not 0.5 <= args.rally_gyro_drift_extra_sec <= 10.0:
             parser.error('--rally-gyro-drift-extra-sec must be between 0.5 and 10')

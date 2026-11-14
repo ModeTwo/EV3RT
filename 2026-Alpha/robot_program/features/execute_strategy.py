@@ -359,7 +359,7 @@ class DeferredStrategySequence(Sequence):
             exit_plan = _PLAN_EXIT if extra_kwargs.get("time_budget_sec") else None
             if exit_plan and exit_plan.get("steps"):
                 import copy as _copy
-                from ..et_rally_time_budget import estimate_steps
+                from ..et_rally_time_budget import estimate_steps, current_budget
                 exit_raw = exit_plan["steps"]
                 mark_i = next((i for i, st in enumerate(plan_steps) if st.get("marks")), None)
                 mark_pose = plan_steps[mark_i].get("_plan_course") if mark_i is not None else None
@@ -387,7 +387,7 @@ class DeferredStrategySequence(Sequence):
                 extra_kwargs["exit_factory"] = exit_factory
                 extra_kwargs["exit_est_sec"] = est_exit
                 self.logger.info("time budget: %.1fs (margin %s), early exit to the garage after laps %s (%.1fs by plan)" % (
-                    extra_kwargs["time_budget_sec"], extra_kwargs.get("time_margin_sec"), exit_plan.get("laps"), est_exit))
+                    current_budget(extra_kwargs["time_budget_sec"]), extra_kwargs.get("time_margin_sec"), exit_plan.get("laps"), est_exit))
             elif extra_kwargs.get("time_budget_sec"):
                 self.logger.warning("time budget: the plan has no exit (needs a garage plan made by the new tool), running all laps")
             nodes = steps_from_strategy(

@@ -128,7 +128,9 @@ def build_et_rally_phase(context, config):
     gyro_tire_calibration = getattr(config, "et_rally_gyro_tire_calibration_enabled", True)
     from ..et_rally_time_budget import EtRallyTimeBudgetStart
     # 2026-11-11: 経過時間の数え始め(本番はETラリーの始め。テストでスタート位置まで進むときは着いたときに数え直す)
-    children = [EtRallyTimeBudgetStart("et_rally time budget start"), EtRallyBatteryLog("et_rally battery begin", "begin")]
+    # 2026-11-14: --rally-time-total なら、持ち時間 = 制限時間 − 競技の開始(タッチ)からの秒 をここで出す
+    children = [EtRallyTimeBudgetStart("et_rally time budget start", getattr(config, "et_rally_time_total", None)),
+                EtRallyBatteryLog("et_rally battery begin", "begin")]
     # 2026-10-29: 四捨五入前の向き・止まっている間のずれの差し引き(robot_program/et_rally_heading.py)。
     float_heading = bool(getattr(config, "et_rally_gyro_float_heading", None))
     drift_compensation = bool(getattr(config, "et_rally_gyro_drift_compensation", None))

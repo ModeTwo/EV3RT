@@ -234,6 +234,9 @@ class RaceConfig:
     # Noneなら使わない(計画の周回をすべて走る)。余裕(秒)は Noneなら2.0。計画に exit(新しい道具のガレージの計画)が要る。
     et_rally_time_budget: Optional[float] = None
     et_rally_time_margin: Optional[float] = None
+    # 2026-11-14: 競技の制限時間(秒、本番120)。指定すると、持ち時間をETラリーの始めに 制限時間 − 競技の開始(最初のタッチ)からの秒
+    # で自動で出す(et_rally_time_budget.py)。Noneなら et_rally_time_budget をそのまま使う。
+    et_rally_time_total: Optional[float] = None
     et_rally_path_decel: Optional[tuple] = None
     et_rally_path_accel: Optional[tuple] = None
     et_rally_path_stop_ticks: Optional[float] = None
