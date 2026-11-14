@@ -1,0 +1,50 @@
+{
+ "gates": null,
+ "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution (same as the other plans).",
+ "note_1114": "予備の計画: スタートからガレージへ行くだけ(5点)。フィールドに入らないので、どのゲートの配置でも同じ。make_garage_only.py で作成。",
+ "laps": 0,
+ "goal_at": "garage",
+ "total_distance_mm": 1631.4,
+ "steps": [
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 30.0,
+   "reverse": true,
+   "stop": true,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": -90.0,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -90.0,
+   "distance_mm": 1000.4,
+   "reverse": false,
+   "stop": false,
+   "label": null
+  },
+  {
+   "type": "arc",
+   "target_heading_deg": -180.0,
+   "sweep_deg": -90.0,
+   "radius_mm": 150.0,
+   "reverse": false,
+   "stop": false,
+   "label": "garage-arm-down"
+  },
+  {
+   "type": "move",
+   "target_heading_deg": -180.0,
+   "distance_mm": 395.4,
+   "reverse": false,
+   "stop": true,
+   "label": null
+  }
+ ]
+}
