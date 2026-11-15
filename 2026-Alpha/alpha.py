@@ -973,6 +973,8 @@ class TraverseBehaviourTree(object):
             )
             if g_video is not None:
                 start_video_thread()
+            # 2026-11-15: ETラリー(最後の種目)の始めに、本体のカメラを閉じて子プロセスへ渡すための窓口
+            robot_runtime.release_camera = release_main_camera
             print(" -- TraverseBehaviorTree initialization complete")
             self.running = True
         else:
@@ -1120,6 +1122,33 @@ def _cleanup_thread_resources():
     if g_video is not None:
         g_video.close()
     g_video = None
+
+def release_main_camera(timeout=2.0):
+    """2026-11-15: ETラリーの始めに、本体のカメラ(VideoThread と Video)を止めて閉じる。ETラリーは最後の種目なので開き直さない。
+    ETラリーのカメラは子プロセス(robot_program/et_rally_camera_proc.py)が開く(カメラは同時に1つのプロセスしか開けない。
+    同じプロセスで撮ると走りの制御が止まるので、本体が撮って渡す形にはしない)。走りの制御を止めないよう、裏のスレッドから呼ぶ。
+    戻り値: (閉じたか, 説明)。"""
+    global g_video, g_video_thread
+    t0 = time.time()
+    thread, video = g_video_thread, g_video
+    if thread is None and video is None:
+        return True, "no main camera"
+    if thread is not None:
+        thread.stop()
+        if thread.ident is not None:
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                return False, "VideoThread did not stop within %.1fs" % timeout
+        g_video_thread = None
+    if video is not None:
+        g_video = None
+        robot_runtime.video = None
+        try:
+            video.close()
+        except Exception as error:
+            return False, "Video.close failed: %r" % (error,)
+    return True, "closed in %.2fs" % (time.time() - t0)
+
 
 def cleanup_thread():
     # Native camera / X server calls can wait indefinitely.
@@ -1518,6 +1547,9 @@ def _run_main(argv, startup_cleanup):
                         help=('Raise the arm while driving when the plan file says the arm can be up before the legs are '
                               'reached (et_rally_arm.must_be_up_sec >= --rally-arm-up-sec + 0.5); otherwise raise it at the '
                               'start as before (default off).'))
+    parser.add_argument('--rally-camera-handover-test', choices=['on', 'off'], default=None,
+                        help=('rally-drive only: also run the main camera (VideoThread) like --mission full, and hand the camera '
+                              'over to the ET rally camera process at the ET rally start (default off).'))
     parser.add_argument('--rally-camera-log', type=int, default=None,
                         help=('During the ET rally run, save every N-th camera frame (JPEG) with the capture time and the '
                               'course position to run_logs/et_camera_* (default: none).'))
@@ -1632,6 +1664,11 @@ def _run_main(argv, startup_cleanup):
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-arm-while-driving requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(mission_config, et_rally_arm_while_driving=(args.rally_arm_while_driving == 'on'))
+    if args.rally_camera_handover_test is not None:
+        if mission_config.mission_mode != 'rally-drive':
+            parser.error('--rally-camera-handover-test requires --mission rally-drive')
+        mission_config = dataclasses.replace(mission_config,
+                                             et_rally_camera_handover_test=(args.rally_camera_handover_test == 'on'))
     if args.rally_camera_log is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-camera-log requires --mission rally-drive, bottle-rally or rally-sumo')

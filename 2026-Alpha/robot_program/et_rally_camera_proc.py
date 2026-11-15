@@ -31,12 +31,16 @@ elif platform.python_implementation() == 'PyPy':
 class CameraProcess:
     """子プロセスを起動して、知らせを裏のスレッドで受け取る。受け取った知らせは poll() で取り出す。"""
 
-    def __init__(self, folder=None, every_n=5, quality=90, exposure=None, calib_path=None, mirror=False, gates=None):
+    def __init__(self, folder=None, every_n=5, quality=90, exposure=None, calib_path=None, mirror=False, gates=None,
+                 defer_open=False):
         import subprocess
         from pathlib import Path
+        # defer_open(2026-11-15): カメラを開かずに準備だけして待つ。open_camera() で開く(本体がカメラを閉じたあと)。
         cfg = dict(folder=None if folder is None else str(folder), every_n=int(every_n), quality=int(quality),
                    exposure=exposure, calib_path=None if calib_path is None else str(calib_path), mirror=bool(mirror),
-                   gates=gates)
+                   gates=gates, defer_open=bool(defer_open))
+        self.defer_open = bool(defer_open)
+        self.opened = not self.defer_open
         root = Path(__file__).resolve().parents[1]
         self.proc = subprocess.Popen([child_python(), '-m', 'robot_program.et_rally_camera_proc', json.dumps(cfg)],
                                      cwd=str(root), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -71,6 +75,13 @@ class CameraProcess:
             return True
         except (OSError, ValueError):
             return False
+
+    def open_camera(self):
+        """defer_open のとき、子にカメラを開かせる(2回目以降は何もしない)。"""
+        if self.opened:
+            return True
+        self.opened = self.send('open')
+        return self.opened
 
     def poll(self):
         with self.lock:
@@ -151,6 +162,10 @@ def _child(cfg):
                 continue
             if parts[0] == 'quit':
                 break
+            if parts[0] == 'open':
+                # 2026-11-15: defer_open のとき、本体(alpha.py の VideoThread)がカメラを閉じてから開く
+                state['open'] = True
+                continue
             if parts[0] == 'pitch' and len(parts) > 1:
                 # 2026-11-11: 走行中の補正(track)で使うカメラに、この下向き(度)を足して作り直す
                 # (スタート位置の取り込みで当てはめた値。カメラの角度が較正ファイルからずれていても走行中に合わせる)。
@@ -166,6 +181,27 @@ def _child(cfg):
         state['quit'] = True   # 親が終わった(標準入力が閉じた)ときも終わる
 
     threading.Thread(target=commands, daemon=True).start()
+    cam = None
+    cam_start = None
+    if cfg.get('defer_open'):
+        # 2026-11-15: 本番(--mission full)では、ETラリーの前の工程で本体がカメラを開いている(カメラは同時に1つのプロセスしか
+        # 開けない)。ここでは開かずに、重い準備(cv2・numpy の読み込み、スタートの広い範囲の対応表)だけ済ませて待ち、
+        # ETラリーの始めに本体が閉じてから届く "open" で開く。開いて使えるまで約1秒で、ジャイロの測り直し(約3秒)の間に収まる。
+        try:
+            from robot_program import et_rally_start_pose as sp
+            cam_start = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S,
+                                        top_x=sp.START_WIDE_X, top_y=sp.START_WIDE_Y)
+            sp.set_gate_legs(cfg.get('gates'))
+        except Exception:
+            cam_start = None
+        state['prebuilt'] = True
+        say(ev='waiting', prebuilt=cam_start is not None)
+        while not state.get('open') and not state['quit']:
+            time.sleep(0.02)
+        if state['quit']:
+            say(ev='stopped', frames=0, saved=0, detected=0, tracked=0)
+            return
+        say(ev='opening')
     # 2026-11-13: 走行中にぶつかってカメラのUSBが一度切れると、つなぎ直したカメラは video1 になる(video0 は
     # そのとき動いていたプログラムが持っていた)。0 だけを開いていたので、次の走りでカメラなしになった。
     # 0〜3 を順に試し、開けて1枚読めた番号を使う(10番台はラズパイの変換用でカメラではない)。
@@ -242,8 +278,6 @@ def _child(cfg):
     if folder:
         os.makedirs(folder, exist_ok=True)
         meta = open(os.path.join(folder, 'meta.jsonl'), 'a', encoding='utf-8')
-    cam = None
-    cam_start = None
     cnt = dict(n=0, saved=0, detected=0, tracked=0)
     latest = dict(frame=None, t=0.0, n=0)
     lock = threading.Lock()

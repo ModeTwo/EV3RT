@@ -221,9 +221,14 @@ class EtRallyCameraProcessStart(Behaviour):
     """2026-11-10: ETラリーの最初に、カメラの子プロセスを起動する(開くのに約1秒かかるので早めに)。
     走行中の画像を残すときは、保存先のフォルダもここで決める(保存を始めるのは EtRallyCameraLogStart)。"""
 
-    def __init__(self, name, log_every=None, exposure=None, calib_path=None, quality=90, prestart=False, gates=None):
+    def __init__(self, name, log_every=None, exposure=None, calib_path=None, quality=90, prestart=False, gates=None,
+                 defer_open=False):
         super().__init__(name)
         self.gates = gates
+        # 2026-11-15: 本体(alpha.py の VideoThread)がカメラを使っているとき(--mission full など)は、子プロセスを起動時に立ち上げて
+        # カメラは開かずに待たせ、ETラリーの始め(ここ)で本体のカメラを閉じてから子に開かせる。
+        self.defer_open = bool(defer_open)
+        self.handover = None
         self.log_every = log_every
         self.exposure = exposure
         self.calib_path = calib_path
@@ -244,8 +249,31 @@ class EtRallyCameraProcessStart(Behaviour):
         if self.folder is None and self.log_every:
             self.folder = Path(__file__).resolve().parents[1] / "run_logs" / ("et_camera_" + time.strftime("%Y%m%dT%H%M%S"))
         proc = et_rally_camera_proc.shared(folder=self.folder, every_n=self.log_every or 5, quality=self.quality,
-                                           exposure=self.exposure, calib_path=self.calib_path, gates=self.gates)
+                                           exposure=self.exposure, calib_path=self.calib_path, gates=self.gates,
+                                           defer_open=self.defer_open)
         return proc
+
+    def _hand_over(self, proc):
+        """本体のカメラを閉じてから、子に開かせる(裏のスレッドで。閉じるのに最大2秒待つことがあるため)。"""
+        import threading
+        t0 = time.monotonic()
+
+        def work():
+            release = getattr(runtime, "release_camera", None)
+            if release is None:
+                ok, what = True, "no release hook"
+            else:
+                try:
+                    ok, what = release()
+                except Exception as error:
+                    ok, what = False, "release failed: %r" % (error,)
+            # 閉じられなくても開かせる(子は開けるまで video0〜3 を探し続ける)
+            proc.open_camera()
+            self.handover = dict(ok=ok, what=what, sec=round(time.monotonic() - t0, 2))
+            self.logger.info("camera handover: main camera %s (%s), child told to open after %.2fs" % (
+                "closed" if ok else "NOT closed", what, time.monotonic() - t0))
+
+        threading.Thread(target=work, name="et-rally-camera-handover", daemon=True).start()
 
     def update(self):
         try:
@@ -253,8 +281,10 @@ class EtRallyCameraProcessStart(Behaviour):
         except Exception as error:
             self.logger.warning("camera process: start failed (%r)" % (error,))
             return Status.SUCCESS
-        self.logger.info("camera process: running (log=%s, exposure=%s, ready=%s, prestart error=%r)" % (
-            self.folder, self.exposure, proc.ready, self.prestart_error))
+        if getattr(proc, "defer_open", False) and not proc.opened:
+            self._hand_over(proc)
+        self.logger.info("camera process: running (log=%s, exposure=%s, ready=%s, prestart error=%r, deferred open=%s)" % (
+            self.folder, self.exposure, proc.ready, self.prestart_error, getattr(proc, "defer_open", False)))
         return Status.SUCCESS
 
 

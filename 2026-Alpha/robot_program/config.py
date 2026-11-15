@@ -241,6 +241,8 @@ class RaceConfig:
     # 2026-11-14: 競技の制限時間(秒、本番120)。指定すると、持ち時間をETラリーの始めに 制限時間 − 競技の開始(最初のタッチ)からの秒
     # で自動で出す(et_rally_time_budget.py)。Noneなら et_rally_time_budget をそのまま使う。
     et_rally_time_total: Optional[float] = None
+    # 2026-11-15: rally-drive でも本体のカメラ(VideoThread)を起動し、ETラリーの始めに子プロセスへ渡す(本番の full と同じ流れの試験)。
+    et_rally_camera_handover_test: Optional[bool] = None
     et_rally_path_decel: Optional[tuple] = None
     et_rally_path_accel: Optional[tuple] = None
     et_rally_path_stop_ticks: Optional[float] = None
@@ -447,7 +449,8 @@ def mission_requires_camera(config: RaceConfig) -> bool:
     if config.mission_mode == 'rally-drive':
         # 2026-11-10: ETラリーのカメラ(スタートの取り込み・走行中の画像)は子プロセス(et_rally_camera_proc.py)が持つので、
         # 同じプロセスのカメラ(VideoThread)は起動しない(起動すると走りの制御が止まり、カメラも取り合いになる)。
-        return False
+        # 2026-11-15: --rally-camera-handover-test のときだけ起動し、本番と同じく ETラリーの始めに子プロセスへ渡す。
+        return bool(getattr(config, 'et_rally_camera_handover_test', None))
     if config.mission_mode in INTEGRATION_MISSIONS:
         return True
     if config.mission_mode in ('at', 'to', 'hint2', 'hint2-return'):

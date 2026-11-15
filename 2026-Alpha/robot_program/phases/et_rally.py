@@ -164,11 +164,16 @@ def build_et_rally_phase(context, config):
         gates = _plan_gates(config)
         from .. import et_rally_start_pose as _sp
         _sp.set_gate_legs(gates)
+        # 2026-11-15: 本体のカメラ(VideoThread)が動いている走り(--mission full など)では、子プロセスは起動時に立ち上げて
+        # カメラを開かずに待たせ、ETラリーの始めに本体のカメラを閉じてから開かせる(カメラは同時に1つのプロセスしか開けない)。
+        from ..config import mission_requires_camera
+        main_camera = bool(mission_requires_camera(config) or getattr(config, "enable_et_sumo", False))
         children.append(EtRallyCameraProcessStart(
             "et_rally camera process", log_every=camera_log_every,
             exposure=getattr(config, "et_rally_camera_exposure", None),
             calib_path=getattr(config, "et_rally_camera_calib_path", None),
-            prestart=(getattr(config, "mission_mode", None) == "rally-drive"), gates=gates))
+            prestart=(getattr(config, "mission_mode", None) == "rally-drive" or main_camera), gates=gates,
+            defer_open=main_camera))
     # 2026-11-11: 本番に近い流れのテスト。スタート位置の手前に置いてタッチし、この距離だけ進んでスタート位置に着いてから、
     # ジャイロの測り直し・スタートの取り込みをして走り出す(本番は前の種目からスタート位置へ来て、タッチなしで始まる)。
     pre_move_mm = getattr(config, "et_rally_pre_move_mm", None)
