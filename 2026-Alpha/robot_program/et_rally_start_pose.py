@@ -102,7 +102,7 @@ def _near_leg(w):
 START_MM = (4 * P_MM + 149.0, 3.5 * P_MM)
 START_HEADING_DEG = 180.0
 
-DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_11150957.json"   # 2026-11-15: カメラが上向きに動いていた(下向き -1.54°・傾き +0.75°)ため較正台で較正し直した
+DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_11151140.json"   # 2026-11-15: 止まって撮る試験3回で取り付けの補正とスタートの癖(start_fix)を当てはめた
 
 # 真上から見た画像の範囲(車体の座標、mm)と1画素の大きさ。スタートでは止まっているので、少し広めに細かく見る。
 TOP_S = 0.5
@@ -1002,6 +1002,29 @@ def measured_start_pose():
 LAST_PITCH_FILE = Path(__file__).resolve().parents[1] / "run_logs" / "et_rally_last_pitch.json"
 
 
+def start_fix(calib_path=None):
+    """2026-11-15: 較正ファイルの start_fix(スタートで測った姿勢の決まった読み違い、右コースの車体の座標)。
+    戻り値: (前 mm, 左 mm, 向き 度) か None。floor_fit.py で、止まって撮る試験から「本当 − 測った値」として求める。"""
+    try:
+        d = json.load(open(calib_path or DEFAULT_CALIB, encoding="utf-8")).get("start_fix")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    return (float(d.get("front_mm", 0.0)), float(d.get("left_mm", 0.0)), float(d.get("heading_deg", 0.0)))
+
+
+def apply_start_fix(pose, fix, mirror=False):
+    """測った姿勢 (x, y, 向き度) に start_fix を足す。前・左はその姿勢の車体の向きで。左コースは左右と向きの符号が逆。"""
+    front, left, dh = fix
+    if mirror:
+        left, dh = -left, -dh
+    a = math.radians(pose[2])
+    return (pose[0] + front * math.cos(a) - left * math.sin(a),
+            pose[1] + front * math.sin(a) + left * math.cos(a),
+            _nd(pose[2] + dh))
+
+
 def _calib_key(calib_path=None):
     p = Path(calib_path) if calib_path else DEFAULT_CALIB
     try:
@@ -1162,6 +1185,13 @@ class EtRallyStartPoseCapture(Behaviour):
                 len(self.results), self.frames))
             return Status.SUCCESS
         pose = median_pose(self.results)
+        raw_pose = pose
+        fix = start_fix(self.calib_path)
+        if fix is not None:
+            # 2026-11-15: スタートの景色で決まって出る読み違いを直す(較正ファイルの start_fix、floor_fit.py で求める)。
+            # スタートは点が50〜85cm 先に集まり、向きと左右の区別がつきにくいため、較正の小さな誤差が向き1〜2°・左右2cm になる。
+            mirror = getattr(runtime, "course", -1) == 1
+            pose = apply_start_fix(pose, fix, mirror=mirror)
         _measured = dict(pose=pose, frames=self.frames, poses=len(self.results),
                          n_markers=max(r["n_markers"] for r in self.results), n_dots=max(r["n_dots"] for r in self.results),
                          spread_mm=max(math.hypot(r["pose"][0] - pose[0], r["pose"][1] - pose[1]) for r in self.results),
@@ -1184,6 +1214,9 @@ class EtRallyStartPoseCapture(Behaviour):
                              _measured["n_markers"], _measured["n_dots"], _measured["spread_mm"], _measured["spread_deg"],
                              _measured["pitch_deg"], _measured["resid_mm"], _measured["items"],
                              _measured["wide"], len(self.results)))
+        if fix is not None:
+            self.logger.info("start pose: start_fix front %+.1f left %+.1f mm heading %+.2f deg applied (raw x=%.1f y=%.1f h=%+.2f)" % (
+                fix[0], fix[1], fix[2], raw_pose[0], raw_pose[1], raw_pose[2]))
         if _measured["assumed"]:
             self.logger.info("start pose: markers only in %d/%d images, position with the saved/assumed pitch" % (
                 _measured["assumed"], len(self.results)))
