@@ -89,6 +89,28 @@ _chain_pid = None
 # (次の区間が動き出すのは1tick後なので、その間の進みを次の区間で積算するため)。
 _chain_lat = None
 
+# 2026-11-15: 速い急な円弧での滑りの割合(0なら使わない、--rally-path-arc-slip)。半径 ARC_SLIP_MAX_RADIUS_MM より小さい円弧の間だけ、
+# 走った距離をこの割合だけ割り引く(位置・円弧の進み・区間の終わり)。11/15 配置36 の3回で、カメラ補正から円弧の部分は
+# 実際の進みがエンコーダより 7.3〜8.8% 少なかった(円弧の直後の画像を除いても7.3%)。1周目と切り上げの黄で後ろ(右)へ残るずれの元。
+ARC_SLIP = 0.0
+ARC_SLIP_MAX_RADIUS_MM = 190.0
+
+
+def set_arc_slip(ratio):
+    global ARC_SLIP
+    ARC_SLIP = max(0.0, float(ratio or 0.0))
+
+
+def _now():
+    """走った距離(mm)。円弧の滑りを割り引いた分(EtRallyHeading.slip_total)を引く。"""
+    return runtime.plotter.get_distance() - float(getattr(runtime.gyro_sensor, "slip_total", 0.0) or 0.0)
+
+
+def _set_slip(ratio):
+    gyro = runtime.gyro_sensor
+    if hasattr(gyro, "set_arc_slip") and float(getattr(gyro, "arc_slip", 0.0)) != float(ratio):
+        gyro.set_arc_slip(ratio)
+
 
 # 2026-11-05: 円弧・直進の区間の直進の向きのPIDのI(--rally-move-pid-i を付けないとき)。
 # 11/05 実機で、I=8 では608mmの直進で出力が40↔100を約0.5秒周期で振れ(頭打ち43回)、I=2 で消えた。
@@ -317,7 +339,8 @@ class EtRallyPathSegment(Behaviour):
     def _start(self):
         global _chain_pid, _chain_lat, _chain_shape, _chain_speed, _start_position
         ensure_scaled_gyro()
-        now = runtime.plotter.get_distance()
+        _set_slip(ARC_SLIP if (ARC_SLIP > 0.0 and self.kind == "arc" and self.radius_mm < ARC_SLIP_MAX_RADIUS_MM) else 0.0)
+        now = _now()
         if self.continue_from_prev and _chain_end_dist is not None:
             self.orig_dist = _chain_end_dist
         else:
@@ -447,11 +470,11 @@ class EtRallyPathSegment(Behaviour):
             self.stop_prev = counts
             if self.stop_stable < self.stop_stable_ticks and self.stop_ticks < STOP_MAX_TICKS:
                 return Status.RUNNING
-            self._finish_log(runtime.plotter.get_distance(), " stopped ticks=%d%s" % (
+            self._finish_log(_now(), " stopped ticks=%d%s" % (
                 self.stop_ticks, "" if self.stop_stable >= self.stop_stable_ticks else " (timeout)"))
             return Status.SUCCESS
 
-        now = runtime.plotter.get_distance()
+        now = _now()
         s = now - self.orig_dist
         current = _heading()
         # 自分の位置を積算する(進む向きの、区間の始めの進む向きからの回り = 向きの回り。右が+)。
@@ -580,5 +603,7 @@ class EtRallyPathSegment(Behaviour):
             if runtime.left_motor is not None:
                 runtime.left_motor.set_power(0)
             reset_chain()
+        if ARC_SLIP > 0.0 and (new_status != Status.SUCCESS or self.stop_at_end):
+            _set_slip(0.0)   # 止まる・中断したら割り引きをやめる(続く区間は次の区間の始めで決め直す)
         self.running = False
         self.stopping = False

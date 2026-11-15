@@ -1502,6 +1502,9 @@ def _run_main(argv, startup_cleanup):
                         help=('Competition time limit in seconds (120): the ET rally budget becomes this minus the seconds from '
                               'the touch start to the ET rally start, measured by the robot. Overrides --rally-time-budget '
                               '(which is then only used if the touch time is unknown). Default off.'))
+    parser.add_argument('--rally-path-arc-slip', type=float, default=None,
+                        help=('Slip ratio of fast tight arcs (radius < 190 mm): the travelled distance is reduced by this ratio '
+                              'for the position, the arc progress and the segment end (e.g. 0.075). Default off.'))
     parser.add_argument('--rally-time-margin', type=float, default=None,
                         help='Safety margin in seconds for --rally-time-budget (default 2.0).')
     parser.add_argument('--rally-arm-down-at-garage', choices=('on', 'off'), default=None,
@@ -1885,6 +1888,7 @@ def _run_main(argv, startup_cleanup):
                               ('--rally-time-budget', 'rally_time_budget', 10.0, 120.0),
                               ('--rally-time-margin', 'rally_time_margin', 0.0, 20.0),
                               ('--rally-time-total', 'rally_time_total', 30.0, 300.0),
+                              ('--rally-path-arc-slip', 'rally_path_arc_slip', 0.0, 0.2),
                               ('--rally-path-line-pid-d', 'rally_path_line_pid_d', 0.0, 2.0),
                               ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
                               ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),

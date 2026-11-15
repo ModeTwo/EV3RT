@@ -192,6 +192,9 @@ class RaceConfig:
     et_rally_path_arc_speed_scale: Optional[float] = 0.945
     # 2026-11-12: 半径(mm)以下の円弧だけの出力の倍率 (半径, 倍率)。Noneなら全部 et_rally_path_arc_speed_scale。
     et_rally_path_small_arc: Optional[tuple] = None
+    # 2026-11-15: 速い急な円弧(半径190mm 未満)での滑りの割合。この割合だけ走った距離を割り引いて、位置・円弧の進み・区間の終わりを数える。
+    # 11/15 配置36 の3回のカメラ補正から 7.3〜8.8%。Noneなら使わない(試験中)。
+    et_rally_path_arc_slip: Optional[float] = None
     # 2026-11-03: 同じ計画で、計画の線からの横のずれを戻す強さ(横のずれ1mmあたり、目標の向きを何度ずらすか)。
     # Noneなら0(従来どおり向きだけを追う)。上限(度)はNoneなら8。
     # 2026-11-11: 0.3→0.5(出力100で円弧のあとゲートの直進で計画の線に戻りきらなかったため)。

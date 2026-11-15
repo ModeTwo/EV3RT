@@ -94,6 +94,15 @@ class EtRallyHeading(ScaledGyro):
         self.heading_offset = 0.0
         # 2026-11-08: 向きと位置を更新するたびに呼ぶ関数 f(self, heading)(et_rally_course_pose.py がコース上の位置を持つため)。
         self.pose_listener = None
+        # 2026-11-15: 速い急な円弧での滑り。この割合だけ、エンコーダの距離を割り引いて位置を進める(set_arc_slip)。
+        # slip_total = 割り引いた距離の合計(mm)。et_rally_path_segment は plotter の距離からこれを引いた距離で進みを数える。
+        self.arc_slip = 0.0
+        self.slip_total = 0.0
+
+    def set_arc_slip(self, ratio):
+        """2026-11-15: 円弧の区間の始めと終わりで呼ぶ。切り替える前に、ここまでの位置を今の割合で確定させる。"""
+        self.get_angle()
+        self.arc_slip = max(0.0, float(ratio or 0.0))
 
     def set_heading_offset(self, offset_deg):
         self.get_angle()   # ここまでの位置を、今までの向きで確定させる
@@ -121,6 +130,11 @@ class EtRallyHeading(ScaledGyro):
             self.pose_azimuth = azimuth
             return
         dist = math.pi * diameter * ((counts[0] - self.pose_counts[0]) + (counts[1] - self.pose_counts[1])) / 2.0 / 360.0
+        if self.arc_slip > 0.0:
+            # 2026-11-15: 速い急な円弧では、実際の進みがエンコーダより約7〜8% 少ない(11/15 配置36 の3回のカメラ補正から)
+            lost = dist * self.arc_slip
+            dist -= lost
+            self.slip_total += lost
         mid = (self.pose_azimuth + azimuth) / 2.0
         self.pose_x += dist * math.sin(mid)
         self.pose_y += dist * math.cos(mid)

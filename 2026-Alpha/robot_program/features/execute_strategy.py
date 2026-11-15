@@ -445,6 +445,7 @@ _STRATEGY_KWARGS_FROM_CONFIG = (
     ("path_arc_pid_i", "et_rally_path_arc_pid_i"),
     ("path_arc_speed_scale", "et_rally_path_arc_speed_scale"),
     ("path_small_arc", "et_rally_path_small_arc"),
+    ("path_arc_slip", "et_rally_path_arc_slip"),
     ("path_lat_gain", "et_rally_path_lat_gain"),
     ("path_lat_max_deg", "et_rally_path_lat_max_deg"),
     ("path_arc_pid_p", "et_rally_path_arc_pid_p"),
@@ -735,6 +736,8 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         # 切り上げのつなぎのノードを作る関数と、その見込みの時間。continue_first: 最初の区間が前から止まらずに続く。
                         time_budget_sec=None, time_margin_sec=None, exit_factory=None, exit_est_sec=None,
                         continue_first=False,
+                        # 2026-11-15: 速い急な円弧での滑りの割合(et_rally_path_segment.ARC_SLIP)。None/0 なら使わない。
+                        path_arc_slip=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
@@ -837,6 +840,9 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         mm_per_deg_b=lateral_drift_mm_per_deg_b, sign=lateral_drift_sign,
         initial_heading_deg=initial_heading_deg)
     steps = _merge_consecutive_moves(steps)
+    # 2026-11-15: 速い急な円弧での滑りを、位置・円弧の進み・区間の終わりで割り引く(et_rally_path_segment.ARC_SLIP)
+    from ..behaviours import et_rally_path_segment as _ps
+    _ps.set_arc_slip(path_arc_slip or 0.0)
     if path_mode:
         _prepare_path_chains(steps)
         if continue_first and steps and steps[0]["type"] in ("move", "arc"):
