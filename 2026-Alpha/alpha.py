@@ -2046,7 +2046,13 @@ def _run_main(argv, startup_cleanup):
             " -- camera enabled=%s et_sumo=%s"
             % (camera_enabled, mission_config.enable_et_sumo)
         )
-        setup_thread(camera_enabled=camera_enabled, preview_enabled=not args.no_preview)
+        # 2026-11-15: 画面がない(SSH で起動、DISPLAY なし)ときは、映像の表示をしない。表示しようとすると cv2.imshow が
+        # "Can't initialize GTK backend" で止まり、カメラの処理ごと走行が止まっていた(--rally-camera-handover-test の実機)。
+        preview_enabled = not args.no_preview
+        if preview_enabled and camera_enabled and not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+            print(" -- no display (DISPLAY not set): camera preview disabled")
+            preview_enabled = False
+        setup_thread(camera_enabled=camera_enabled, preview_enabled=preview_enabled)
         if camera_enabled and g_video is None:
             # 走行開始後ではなくデバイスdispatch前に初期化不整合を検出する。
             raise RuntimeError("Camera initialization did not provide a Video instance")
