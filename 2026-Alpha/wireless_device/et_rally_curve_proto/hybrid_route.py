@@ -88,6 +88,7 @@ PARAMS = dict(
     # 2026-11-16: 直接つなげない区間で「曲がってからつなぐ」を試す(Table._arc_first)。候補の数
     visit_filter_laps_only=False, arc_first_run_top=60,
     exit_early=[],
+    defer_via=False,
     arc_first=False, arc_first_tries=200, arc_first_lines=[0.0, 8.0, 16.0, 20.0, 24.0, 28.0, 32.0, 40.0],
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
     keepout_body=True, start_exempt_cm=20.0,
@@ -1313,6 +1314,7 @@ def via_options(ep, sp, limit=INF):
 
 
 _run_cache = {}
+_arcfirst_memo = {}   # 2026-11-16: 抜けの姿勢 -> 曲がってからつなぐの円弧の候補
 
 
 def _best_run(A, hA, B, hB, m, tail, top=12):
@@ -1400,6 +1402,7 @@ class Table:
         self.checks = 0
         self.allow_via = via_first
         self.pending = set()   # 1と2が全部当たり、中継はまだ試していない区間
+        self.deferred = set()  # defer_via で見込みの下限だけ入れて後回しにした区間
         self.join = set()      # (e, s): 戻らずにそのまま続ける(self.C は重なる分だけ負の時間)
         if JOIN_MAX_CM > 0.0 and not is_start and starts and ends and starts[0][2] != 0:
             ex, ey, eh, ed = [np.array(v, float)[:, None] for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) for p in ends])]
@@ -1484,6 +1487,21 @@ class Table:
                     self.C[e, s] = c; self.done[e, s] = True; self.prims[(e, s)] = pr
                     return abs(c - old) > 1e-9
             self.ptr[e, s] += 1
+        # 2026-11-16: defer_via: 直接つなげなかったら、まず遠回り・曲がってからつなぐの見込みの下限(当たりを無視)だけを入れて
+        # 後回しにする。経路の探索がまだこの区間を使うときだけ、次の resolve で重い探索をする(使わない区間の探索を省く)。
+        if DEFER_VIA and (self.allow_via or ARC_FIRST) and (e, s) not in self.deferred:
+            lb = INF
+            if self.allow_via:
+                if (e, s) not in self.via:
+                    self.via[(e, s)] = via_options(ep, sp)
+                if self.via[(e, s)]:
+                    lb = self.via[(e, s)][0][0]
+            if ARC_FIRST:
+                lb = min(lb, self._arc_first_lb(ep, sp))
+            self.deferred.add((e, s))
+            if lb < INF / 2:
+                self.C[e, s] = lb
+                return abs(lb - old) > 1e-9
         # 2026-11-16: 曲がってからつなぐ(arc_first)。直接つなげないときに試す(中継の格子では入らない狭い所の折り返し)
         arc_best = self._arc_first(ep, sp) if ARC_FIRST else None
         # 中継(1段目は使わない。経路が見つからないときだけ2段目で使う)
@@ -1525,47 +1543,14 @@ class Table:
         th0 = math.radians(hE + (0 if m > 0 else 180))
         cands = []
         E0 = np.asarray(E, float)
-        Lmax = float(max(ARC_FIRST_LINES)) if ARC_FIRST_LINES else 0.0
-        for r in RADII:
-            for sg in (1, -1):
-                t0 = (-sg * hE) % 45.0
-                if t0 < 1e-6:
-                    t0 = 45.0
-                sweeps = []
-                sw = t0
-                while sw <= 180.0 + 1e-6:
-                    sweeps.append(sw); sw += 45.0
-                for sw in sweeps:
-                    # 2026-11-16: 曲がる前の直進を1cm おきに伸ばし、円弧が当たらない一番短いものを使う(狭い所では入る幅が1cm より狭いことがある
-                    # ので、0.5cm で詰める)。円弧が確実に当たる角度(_arc_limit、1周分を1回だけ調べて覚える)で先にふるい落とす。
-                    found = None
-                    Ls = 0.0
-                    while Ls <= Lmax + 1e-9:
-                        P0 = E0 + Ls * tdir(th0)
-                        if _arc_limit(P0, th0, sg, float(r), m) >= math.radians(sw) - 1e-9:
-                            pr = arc_prim(P0, th0, sg, math.radians(sw), float(r), m)
-                            self.checks += 1
-                            if prim_ok(pr):
-                                found = (Ls, pr)
-                                break
-                        Ls += 1.0 if found is None else 0.0
-                    if found is None:
-                        continue
-                    Ls, pr = found
-                    for back in (0.5,):
-                        L2 = Ls - back
-                        if L2 >= 0:
-                            P2 = E0 + L2 * tdir(th0)
-                            pr2 = arc_prim(P2, th0, sg, math.radians(sw), float(r), m)
-                            if prim_ok(pr2):
-                                Ls, pr = L2, pr2
-                    P0 = E0 + Ls * tdir(th0)
-                    pre = [('line', E0, P0, m)] if Ls > 1e-9 else []
-                    if pre and not prim_ok(pre[0]):
-                        continue
-                    W, _ = arc_end(pr)
-                    c0 = (Ls + float(r) * math.radians(sw) * V_LINE / v_arc(float(r)) + float(np.hypot(*(np.asarray(S, float) - W)))) / V_LINE
-                    cands.append((c0, pre + [pr], W, nd(hE + sg * sw)))
+        key = (round(float(E0[0]), 3), round(float(E0[1]), 3), round(float(hE), 3), m, _ALLOW_TAB, _EXEMPT_ON, MARGIN_FRONT, MARGIN_REAR, _RO)
+        arcs = _arcfirst_memo.get(key)
+        if arcs is None:
+            arcs = _arcfirst_memo[key] = self._arc_first_arcs(E0, hE, th0, m)
+        S0 = np.asarray(S, float)
+        for Ls, prl, W, hW, tarc in arcs:
+            c0 = tarc + float(np.hypot(*(S0 - W))) / V_LINE
+            cands.append((c0, prl, W, hW))
         cands.sort(key=lambda x: x[0])
         best = None
         for c0, prl, W, hW in cands[:ARC_FIRST_TRIES]:
@@ -1585,6 +1570,65 @@ class Table:
             if c < INF / 2 and (best is None or c < best[0]):
                 best = (c, prs)
         return best
+
+    def _arc_first_lb(self, ep, sp):
+        """曲がってからつなぐの見込みの下限(円弧まで + 円弧の終わりから次の入りまでの直線)。"""
+        E, hE, dE = ep; S, hS, dS = sp
+        m = dE if dE != 0 else 1
+        if m not in DIRS:
+            return INF
+        th0 = math.radians(hE + (0 if m > 0 else 180))
+        E0 = np.asarray(E, float)
+        key = (round(float(E0[0]), 3), round(float(E0[1]), 3), round(float(hE), 3), m, _ALLOW_TAB, _EXEMPT_ON, MARGIN_FRONT, MARGIN_REAR, _RO)
+        arcs = _arcfirst_memo.get(key)
+        if arcs is None:
+            arcs = _arcfirst_memo[key] = self._arc_first_arcs(E0, hE, th0, m)
+        S0 = np.asarray(S, float)
+        return min((tarc + float(np.hypot(*(S0 - W))) / V_LINE for _, _, W, _, tarc in arcs), default=INF)
+
+    def _arc_first_arcs(self, E0, hE, th0, m):
+        """2026-11-16: _arc_first の円弧の部分(次のゲートの入り方によらない)。抜けの姿勢ごとに1回だけ計算して _arcfirst_memo に覚える。
+        戻り値: [(直進の長さ, [直進, 円弧], 円弧の終わりの点, その向き, 直進+円弧の時間)]"""
+        out = []
+        Lmax = float(max(ARC_FIRST_LINES)) if ARC_FIRST_LINES else 0.0
+        for r in RADII:
+            for sg in (1, -1):
+                t0 = (-sg * hE) % 45.0
+                if t0 < 1e-6:
+                    t0 = 45.0
+                sweeps = []
+                sw = t0
+                while sw <= 180.0 + 1e-6:
+                    sweeps.append(sw); sw += 45.0
+                for sw in sweeps:
+                    found = None
+                    Ls = 0.0
+                    while Ls <= Lmax + 1e-9:
+                        P0 = E0 + Ls * tdir(th0)
+                        if _arc_limit(P0, th0, sg, float(r), m) >= math.radians(sw) - 1e-9:
+                            pr = arc_prim(P0, th0, sg, math.radians(sw), float(r), m)
+                            self.checks += 1
+                            if prim_ok(pr):
+                                found = (Ls, pr)
+                                break
+                        Ls += 1.0
+                    if found is None:
+                        continue
+                    Ls, pr = found
+                    L2 = Ls - 0.5
+                    if L2 >= 0:
+                        P2 = E0 + L2 * tdir(th0)
+                        pr2 = arc_prim(P2, th0, sg, math.radians(sw), float(r), m)
+                        if prim_ok(pr2):
+                            Ls, pr = L2, pr2
+                    P0 = E0 + Ls * tdir(th0)
+                    pre = [('line', E0, P0, m)] if Ls > 1e-9 else []
+                    if pre and not prim_ok(pre[0]):
+                        continue
+                    W, _ = arc_end(pr)
+                    tarc = (Ls + float(r) * math.radians(sw) * V_LINE / v_arc(float(r))) / V_LINE
+                    out.append((Ls, pre + [pr], W, nd(hE + sg * sw), tarc))
+        return out
 
 
 def arm_must_be_up(prims):
