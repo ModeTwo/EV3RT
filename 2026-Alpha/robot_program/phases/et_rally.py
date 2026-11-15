@@ -1,5 +1,7 @@
 """ET rally phase composition."""
 
+import time
+
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
 from py_trees.common import ParallelPolicy
@@ -224,12 +226,17 @@ def build_et_rally_phase(context, config):
         # アームを上げてジャイロを測る間に並べて撮る(アームが動いている間の画像は使わない)。
         pose_sec = getattr(config, "et_rally_start_pose_sec", None)
         ready = None
+        early_done = None
         if isinstance(arm_up, EtRallyArmUpWithDriftMeasure):
             ready = lambda node=arm_up: getattr(node, "arm_done_time", None) is not None
+            # 2026-11-15: ジャイロの測り直しが終わったら、スタートの撮影も(6枚以上あれば)打ち切る(走り出しを遅らせない)
+            early_done = (lambda node=arm_up: getattr(node, "arm_done_time", None) is not None
+                          and time.monotonic() - node.arm_done_time >= node.settle_sec + node.measure_sec)
         # 2026-11-12: 2.0→2.9秒。アームのあとジャイロを測り終わるまで(約3.0秒)は待つので、時間は延びない。
         # 広い範囲で測るようになり1枚が重くなったため、枚数を増やす。
         capture = EtRallyStartPoseCapture("et_rally start pose", duration_sec=2.9 if pose_sec is None else pose_sec,
-                                          calib_path=getattr(config, "et_rally_camera_calib_path", None), ready=ready)
+                                          calib_path=getattr(config, "et_rally_camera_calib_path", None), ready=ready,
+                                          early_done=early_done)
         if ready is not None:
             both = Parallel(name="et_rally arm/gyro + start pose", policy=ParallelPolicy.SuccessOnAll(synchronise=True))
             both.add_children([arm_up, capture])

@@ -1153,8 +1153,14 @@ class EtRallyStartPoseCapture(Behaviour):
     MAX_WAIT_SEC = 15.0   # ready を待つ上限(念のため)
     EXTRA_WAIT_SEC = 4.0   # 2026-11-13: 撮れた枚数が足りないとき、開き直しを待つ上限
 
-    def __init__(self, name, duration_sec=2.0, calib_path=None, min_frames=3, ready=None):
+    # 2026-11-15: early_done() が True(ジャイロの測り直しが終わった)になった時点で、位置が EARLY_MIN_POSES 枚以上出ていれば打ち切る。
+    # 本番の --mission full では ETラリーの始めにカメラを本体から受け取って開くので、使えるまで約2.2秒かかり、2.9秒数えると
+    # 走り出しが約1.3秒遅れた(--rally-camera-handover-test の実機)。ふだんは2.9秒で約14枚、位置は中央値なので6枚あれば足りる。
+    EARLY_MIN_POSES = 6
+
+    def __init__(self, name, duration_sec=2.0, calib_path=None, min_frames=3, ready=None, early_done=None):
         super().__init__(name)
+        self.early_done = early_done
         self.duration_sec = float(duration_sec)
         self.calib_path = calib_path
         self.min_frames = int(min_frames)
@@ -1206,7 +1212,16 @@ class EtRallyStartPoseCapture(Behaviour):
             if ev.get("r0"):
                 self.results_noscale.append(ev["r0"])
         if now - self.counting_since < self.duration_sec:
-            return Status.RUNNING
+            early = False
+            if self.early_done is not None and len(self.results) >= self.EARLY_MIN_POSES:
+                try:
+                    early = bool(self.early_done())
+                except Exception:
+                    early = False
+            if not early:
+                return Status.RUNNING
+            self.logger.info("start pose: gyro measure done, finishing early with %d poses after %.2fs" % (
+                len(self.results), now - self.counting_since))
         # 2026-11-13: カメラのUSBが切れて開き直している間は画像が来ない。足りなければ最大 EXTRA_WAIT_SEC まで待つ
         # (本番は止まると終わりなので、少し待ってでも位置を取り込むほうがよい)。
         # 2026-11-14: 画像は来ているのに位置が出ない(見えるものが足りない)ときは、待っても変わらないので待たない
