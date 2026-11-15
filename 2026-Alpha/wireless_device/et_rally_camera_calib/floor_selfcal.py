@@ -40,7 +40,11 @@ def _cam(calib, wide=True):
     return sp.GroundCamera(calib, top_s=sp.FAST_TOP_S)
 
 
-def _fit(cam, img, nominal, max_resid=6.0):
+MAX_RESID_MM = 10.0   # 2026-11-15: 6→10(calib_11150957 の止まった画像は食い違い6〜9mm で、5か所中2か所が捨てられた)
+
+
+def _fit(cam, img, nominal, max_resid=None):
+    max_resid = MAX_RESID_MM if max_resid is None else max_resid
     dets = sp.detect_ground(cam, img)
     if len(dets['dots']) + len(dets['markers']) < 3:
         return None
@@ -100,12 +104,16 @@ def motion(args):
 
 def _static_intervals(P, min_sec=0.8, eps_mm=0.3):
     """poses.txt(時刻, x, y, 向き, ...)から、車軸が動いていない区間 [(始め, 終わり, 向きの中央値度)]。"""
+    # 2026-11-15: 5列目(走った距離、エンコーダの mm)があればそれで見る。止まっている間も x・y は0.3mm 以上揺れることがあり、
+    # 11/15 の実機で5か所止まったのに2か所しか見つからなかった。
     out = []
     i = 0
     n = len(P)
+    use_dist = P.shape[1] >= 5
     while i < n:
         j = i
-        while j + 1 < n and math.hypot(P[j + 1, 1] - P[i, 1], P[j + 1, 2] - P[i, 2]) < eps_mm:
+        while j + 1 < n and ((abs(P[j + 1, 4] - P[i, 4]) < 1.0) if use_dist else
+                             (math.hypot(P[j + 1, 1] - P[i, 1], P[j + 1, 2] - P[i, 2]) < eps_mm)):
             j += 1
         if P[j, 0] - P[i, 0] >= min_sec:
             out.append((P[i, 0], P[j, 0], float(np.median(P[i:j + 1, 3]))))
