@@ -1,5 +1,6 @@
 """Robot-side race program entry point."""
 import sys
+import os
 import argparse
 import dataclasses
 import time
