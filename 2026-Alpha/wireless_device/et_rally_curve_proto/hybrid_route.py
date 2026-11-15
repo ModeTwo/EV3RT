@@ -80,6 +80,9 @@ PARAMS = dict(
     margin_skip=0,
     # start_prelude: スタートのあと、赤の前に黄を1回通ってから赤へ行く形も候補にする(黄と赤が縦に並ぶ配置で、黄を抜けてそのまま赤を通れる。2026-11-09)
     start_prelude=True,
+    # 2026-11-15 ユーザー(配置619・121): 最後の黄からガレージへのつなぎで、赤も抜けてよい(順番どおり。黄を後退で戻るより速いことがある)。
+    # 切り上げは最後の周の道を使うので、切り上げにも効く
+    final_via_red=True,
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
     keepout_body=True, start_exempt_cm=20.0,
     # 進入禁止の長方形(右コースのplanner座標cm、[xmin, xmax, ymin, ymax]、±1e9で無限)。None なら plannerの設定(左コース)を左右反転した今の3つ。
@@ -445,6 +448,8 @@ def pivot_interval(p, h):
 _KO_CORNERS = None
 _START_EXEMPT = None
 _EXEMPT_ON = False   # スタートから最初のゲートへのつなぎ区間を判定している間だけ True
+# 2026-11-15: つなぎの区間ごとに、横切ってよいゲートの色(最後の黄→ガレージは赤も抜けてよい。final_via_red)。判定している間だけ入れる
+_ALLOW_TAB = None
 
 
 def body_keepout(px, py, hdeg):
@@ -518,7 +523,7 @@ def crosses_gate(xs, ys, allow=None):
     """折れ線(xs,ys)がゲートの線を横切るか(allowの色は除く)。"""
     ax, ay, bx, by = xs[:-1], ys[:-1], xs[1:], ys[1:]
     for pa, pb, col in GSEG:
-        if col == allow or (_EXEMPT_ON and START_ANY_GATE and col != 'red'):
+        if col == allow or col == _ALLOW_TAB or (_EXEMPT_ON and START_ANY_GATE and col != 'red'):
             continue
         if hr_kernels.AVAILABLE:
             if hr_kernels.seg_cross(xs, ys, float(pa[0]), float(pa[1]), float(pb[0]), float(pb[1])):
@@ -535,7 +540,7 @@ _line_memo = {}   # (始点, 終点, 前後, allow, スタートの除外中か)
 
 
 def line_ok(a, b, m, allow=None):
-    key = (float(a[0]), float(a[1]), float(b[0]), float(b[1]), m, allow, _EXEMPT_ON)
+    key = (float(a[0]), float(a[1]), float(b[0]), float(b[1]), m, allow, _EXEMPT_ON, _ALLOW_TAB)
     ok = _line_memo.get(key)
     if ok is None:
         ok = _line_memo[key] = _line_check(a, b, m, allow)
@@ -605,7 +610,7 @@ def arc_ok(pr, allow=None):
     if pr[5] < 1e-6:
         return True
     _, c, r, theta, sgn, sweep, m, p0 = pr
-    key = (round(float(p0[0]), 3), round(float(p0[1]), 3), round(float(theta), 6), r, sgn, m, allow, _EXEMPT_ON)
+    key = (round(float(p0[0]), 3), round(float(p0[1]), 3), round(float(theta), 6), r, sgn, m, allow, _EXEMPT_ON, _ALLOW_TAB)
     memo = _arc_memo.get(key)
     if memo is not None:
         if memo[1] is not None and sweep >= memo[1] - 1e-9:
@@ -1304,7 +1309,7 @@ _run_cache = {}
 
 def _best_run(A, hA, B, hB, m, tail):
     key = (round(float(A[0]), 3), round(float(A[1]), 3), round(hA, 3), round(float(B[0]), 3), round(float(B[1]), 3),
-           round(hB, 3), m, tail, _EXEMPT_ON)
+           round(hB, 3), m, tail, _EXEMPT_ON, _ALLOW_TAB)
     if key not in _run_cache:
         _run_cache[key] = _best_run0(A, hA, B, hB, m, tail)
     return _run_cache[key]
@@ -1353,9 +1358,10 @@ def build_via(opt, ep, sp):
 
 # ---------------- 表(つなぎ区間ごとの候補の状態) ----------------
 class Table:
-    def __init__(self, ends, starts, is_start=False, via_first=False):
+    def __init__(self, ends, starts, is_start=False, via_first=False, allow_gate=None):
         self.ends, self.starts = ends, starts
         self.is_start = is_start
+        self.allow_gate = allow_gate   # この区間で横切ってよいゲートの色(None なし)
         self.via_first = via_first   # スタート・ゴールの区間: 組み合わせが少ないので、最初から遠回りも比べる
         nE, nS = len(ends), len(starts)
         Ea = [np.repeat(np.array(v, float), nS) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in ends])]
@@ -1402,15 +1408,15 @@ class Table:
 
     def open_via(self):
         """2段目: 直接つなげなかった区間に、遠回りの見込みの時間(当たりを無視)を入れて、解き直せるようにする。"""
-        global _EXEMPT_ON
+        global _EXEMPT_ON, _ALLOW_TAB
         self.allow_via = True
         for (pe, ps) in self.pending:
-            _EXEMPT_ON = self.is_start
+            _EXEMPT_ON = self.is_start; _ALLOW_TAB = self.allow_gate
             try:
                 if (pe, ps) not in self.via:
                     self.via[(pe, ps)] = via_options(self.ends[pe], self.starts[ps])
             finally:
-                _EXEMPT_ON = False
+                _EXEMPT_ON = False; _ALLOW_TAB = None
             v = self.via[(pe, ps)]
             self.C[pe, ps] = v[0][0] if v else INF
             self.done[pe, ps] = not v
@@ -1418,14 +1424,14 @@ class Table:
 
     def resolve(self, e, s):
         """(e,s) の今の候補を厳密に判定し、当たらない最初の候補に確定する。"""
-        global _EXEMPT_ON
+        global _EXEMPT_ON, _ALLOW_TAB
         if self.done[e, s]:
             return False
-        _EXEMPT_ON = self.is_start
+        _EXEMPT_ON = self.is_start; _ALLOW_TAB = self.allow_gate
         try:
             return self._resolve(e, s)
         finally:
-            _EXEMPT_ON = False
+            _EXEMPT_ON = False; _ALLOW_TAB = None
 
     def _resolve(self, e, s):
         ep, sp = self.ends[e], self.starts[s]
@@ -1809,7 +1815,7 @@ def main():
          ('red', 'blue'): Table(ends['red'], starts['blue']),
          ('blue', 'yellow'): Table(ends['blue'], starts['yellow']),
          ('yellow', 'red'): Table(ends['yellow'], starts['red']),
-         ('yellow', 'GOAL'): Table(ends['yellow'], goal_pose, via_first=True)}
+         ('yellow', 'GOAL'): Table(ends['yellow'], goal_pose, via_first=True, allow_gate='red' if FINAL_VIA_RED else None)}
     if START_PRELUDE:
         T[('START', 'yellow')] = Table(start_pose, starts['yellow'], is_start=True, via_first=True)
     print('tables', {k: v.C.shape for k, v in T.items()}, f'{time.time() - t0:.1f}s', flush=True)
