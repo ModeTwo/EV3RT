@@ -14,20 +14,26 @@ from ..behaviours.section_motion import distance_motion
 # 方位はドロップコース基準。既存の方位座標系ではゾーン側が負方向なので、
 # 色別の目標方位は下記の表を参照する。
 _DROP_ROUTE = {
-    BottleColor.YELLOW: (-30.0, 430.0),  # 黄: -30度で430 mm
-    BottleColor.BLUE: (-20.0, 720.0),    # 青: -20度で720 mm
-    BottleColor.RED: (-18.0, 920.0),     # 赤: -18度で920 mm
+    BottleColor.YELLOW: (-39.0, 405.0),  # 黄: -39度で405 mm
+    BottleColor.BLUE: (-24.0, 670.0),    # 青: -24度で670 mm
+    BottleColor.RED: (-18.0, 930.0),     # 赤: -18度で930 mm
 }
+
+# ゾーン進入で減速を始める残り距離[mm]と、減速中の最低走行出力。
+# 最後の150 mmで巡航出力から40まで直線的に下げ、終点で停止する。
+APPROACH_DECEL_MM = 150.0
+APPROACH_MIN_POWER = 40
 
 # 色ごとの後退距離[mm]。
 _DROP_BACK_DISTANCE_MM = {
-    BottleColor.YELLOW: 80.0,
-    BottleColor.BLUE: 190.0,
-    BottleColor.RED: 200.0,
+    BottleColor.YELLOW: 65,
+    BottleColor.BLUE: 170,
+    BottleColor.RED: 210,
 }
 
 
-def _drive(name, context, settings, heading, distance_mm, power):
+def _drive(name, context, settings, heading, distance_mm, power,
+           decel_mm=0.0, decel_min_power=40):
     """指定方位をジャイロ補正で保ちながら、指定距離だけ直進する動作を作る。
 
     distance_motionが走行距離を監視し、DeliveryEtRunが走行中の方位ずれを
@@ -42,6 +48,11 @@ def _drive(name, context, settings, heading, distance_mm, power):
             pid_p=settings.delivery_drive_pid_p,
             pid_i=settings.delivery_drive_pid_i,
             pid_d=settings.delivery_drive_pid_d,
+            # distance_mmを渡すとEtRallyRunByGyroが残距離を計算し、
+            # decel_mmの範囲で出力をdecel_min_powerまで下げる。
+            distance_mm=distance_mm,
+            decel_mm=decel_mm,
+            decel_min_power=decel_min_power,
         ),
         distance_mm,
     )
@@ -68,7 +79,9 @@ def build_drop_bottle(context, config):
             to_turn(f"turn toward {color.name.lower()} drop zone", context, settings, heading),
             # 色ごとの所定距離を前進し、ボトル色のゾーンまで進む。
             _drive(f"drive to {color.name.lower()} drop zone", context, settings,
-                   heading, distance_mm, settings.delivery_drive_first_power),
+                   heading, distance_mm, settings.delivery_drive_first_power,
+                   decel_mm=APPROACH_DECEL_MM,
+                   decel_min_power=APPROACH_MIN_POWER),
                  # 同じ方位を維持して色別距離だけ後退し、ボトルを放す位置を作る。
             _drive(f"back away from {color.name.lower()} bottle", context, settings,
                      heading, back_distance_mm, -settings.delivery_drive_first_power),
