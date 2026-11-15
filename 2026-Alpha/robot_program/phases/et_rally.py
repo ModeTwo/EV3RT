@@ -201,6 +201,11 @@ def build_et_rally_phase(context, config):
         arm_up = EtRallyArmAlreadyUp("et_rally arm up")
     elif drive_arm:
         arm_up = EtRallyArmUpLater("et_rally arm up later", drive_arm_reason)
+    elif (config.et_rally_strategy_source == "received" and getattr(config, "et_rally_arm_while_driving", None)):
+        # 2026-11-15: 受信の計画では、スタートで上げる直前に、届いた計画で走りながら上げるかを決める
+        from ..behaviours.et_rally_arm import EtRallyArmUpDeferred
+        arm_up = EtRallyArmUpDeferred("et_rally arm up (decide)", context, config,
+                                      make_arm_up_down("et_rally arm up", ArmDirection.UP, config, from_bottom=True))
     else:
         arm_up = make_arm_up_down("et_rally arm up", ArmDirection.UP, config, from_bottom=True)
     # 2026-10-29: ハブのプログラムを書き換えた版(ブレーキ中もハブがジャイロのくせを測り直す)用に、
@@ -290,6 +295,13 @@ def build_et_rally_phase(context, config):
         # 走りながらアームを上げる(走りとアームを同じtickで進める)。両方終わったら次へ。
         driving = Parallel(name="et_rally drive + arm up", policy=ParallelPolicy.SuccessOnAll(synchronise=True))
         driving.add_children([execute, make_arm_up_down("et_rally arm up while driving", ArmDirection.UP, config, from_bottom=True)])
+        children.append(driving)
+    elif isinstance(arm_up, EtRallyArmUpWithDriftMeasure) and type(arm_up.arm_up).__name__ == "EtRallyArmUpDeferred" or             type(arm_up).__name__ == "EtRallyArmUpDeferred":
+        # 2026-11-15: 受信の計画で「走りながら」と決めたときだけ、走りと並べて上げる
+        from ..behaviours.et_rally_arm import EtRallyArmUpIfLater
+        driving = Parallel(name="et_rally drive + arm up (if decided)", policy=ParallelPolicy.SuccessOnAll(synchronise=True))
+        driving.add_children([execute, EtRallyArmUpIfLater("et_rally arm up while driving (if decided)",
+                                                           make_arm_up_down("et_rally arm up while driving", ArmDirection.UP, config, from_bottom=True))])
         children.append(driving)
     else:
         children.append(execute)

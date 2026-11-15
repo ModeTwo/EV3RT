@@ -143,7 +143,12 @@ def arm_while_driving(config):
         plan = json.load(open(_resolve_plan_path(config.et_rally_plan_path), encoding="utf-8"))
     except (OSError, ValueError) as error:
         return False, "plan not readable (%s)" % error
-    meta = plan.get("et_rally_arm")
+    return arm_decision_from_plan(plan, config)
+
+
+def arm_decision_from_plan(plan, config):
+    """計画(dict)の et_rally_arm から、走りながら上げて間に合うか (True/False, 理由)。"""
+    meta = plan.get("et_rally_arm") if isinstance(plan, dict) else None
     if not isinstance(meta, dict):
         return False, "plan has no et_rally_arm"
     up_sec = getattr(config, "et_rally_arm_up_sec", None)
@@ -155,6 +160,49 @@ def arm_while_driving(config):
     if float(sec) >= need:
         return True, "must be up by %.2fs (%.0f mm), arm needs %.2fs" % (float(sec), float(meta.get("must_be_up_mm") or 0), need)
     return False, "must be up by %.2fs (%.0f mm) < arm needs %.2fs" % (float(sec), float(meta.get("must_be_up_mm") or 0), need)
+
+
+# 2026-11-15: 受信の計画(本番の --mission full、PC から丸ごと届く)でも、走りながら上げる。木を作るときには計画がまだないので、
+# スタートでアームを上げる直前に、届いた計画(context.strategy_plan_path)の et_rally_arm で決める(EtRallyArmUpDeferred)。
+# 走りながら上げると決めたら、走りの並びの EtRallyArmUpIfLater が上げる。計画がない・情報がないときは今までどおりスタートで上げる。
+_arm_later = False
+
+
+class EtRallyArmUpDeferred(Behaviour):
+    def __init__(self, name, context, config, real_arm):
+        super().__init__(name)
+        self.context, self.config, self.real_arm = context, config, real_arm
+        self.decided = None
+
+    def update(self) -> Status:
+        global _arm_later
+        if self.decided is None:
+            later, why = False, "no received plan"
+            path = getattr(self.context, "strategy_plan_path", None)
+            if path and getattr(self.config, "et_rally_arm_while_driving", None) and not arm_up_before_touch(self.config):
+                try:
+                    later, why = arm_decision_from_plan(json.load(open(path, encoding="utf-8")), self.config)
+                except (OSError, ValueError) as error:
+                    later, why = False, "received plan not readable (%s)" % error
+            _arm_later = bool(later)
+            self.decided = "later" if later else "now"
+            self.logger.info("arm (received plan): %s (%s)" % ("raised while driving" if later else "raised at the start", why))
+        if self.decided == "later":
+            return Status.SUCCESS
+        return self.real_arm.update()
+
+
+class EtRallyArmUpIfLater(Behaviour):
+    """走りの並びに置く。EtRallyArmUpDeferred が「走りながら」と決めたときだけ、アームを上げる。"""
+
+    def __init__(self, name, real_arm):
+        super().__init__(name)
+        self.real_arm = real_arm
+
+    def update(self) -> Status:
+        if not _arm_later:
+            return Status.SUCCESS
+        return self.real_arm.update()
 
 
 def arm_up_before_touch(config):
