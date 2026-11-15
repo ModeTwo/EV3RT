@@ -33,7 +33,9 @@ def main():
     cam = None
     if tail:
         t = re.search(r'median front ([-+\d.]+) right ([-+\d.]+) mm heading ([-+\d.]+)', tail[-1])
-        cam = tuple(float(v) for v in t.groups())
+        cam = tuple(float(v) for v in t.groups()) if t else None
+        if cam is None:
+            print('カメラ: 止まったあとに使える画像なし(%s)' % tail[-1].split('camera tail:')[-1].strip())
     # b の向き: ロボットが来た側(思っていた向きの逆)
     d = (math.cos(math.radians(bel[2])), math.sin(math.radians(bel[2])))
     bu = (-au[1], au[0])

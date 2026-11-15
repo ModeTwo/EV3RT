@@ -273,6 +273,8 @@ def build_et_rally_phase(context, config):
     if camera_correct and track_course:
         # 2026-11-10: 走りながらカメラで位置と向きを直す(試作)。走行が終わったら止める。
         corrected = Parallel(name="et_rally drive + camera correct", policy=ParallelPolicy.SuccessOnSelected(children=[execute]))
+        from .. import et_rally_camera_correct as _cc
+        _cc.FIX_HEADING = bool(getattr(config, "et_rally_camera_fix_heading", None))
         corrected.add_children([execute, EtRallyCameraCorrect(
             "et_rally camera correct", camera_correct[0], camera_correct[1],
             far_confirm=getattr(config, "et_rally_camera_far_confirm", None) or 0)])

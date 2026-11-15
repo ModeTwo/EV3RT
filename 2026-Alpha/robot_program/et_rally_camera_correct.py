@@ -67,6 +67,9 @@ class CameraCorrector:
                  at=None, apply=None, logger=None, far_confirm=0, cam_center=None):
         # cam_center: カメラの位置(前, 左, 上 mm)。与えたら下向きを走りながら選ぶ(子プロセスは較正ファイルの下向きのまま)。
         self.cam_center = cam_center
+        # 2026-11-15: 位置は向きをジャイロに固定して当てはめる(--rally-camera-fix-heading)。下向きを走りながら選ぶとき(cam_center あり)だけ。
+        self.fix_heading = False
+        self.last_fixed = None
         self.last_diff = None   # (t, ex, ey): 直前の画像で見たずれから、そのあと入れた分を引いたもの
         self.pitch = 0.0
         self.pitch_hist = []
@@ -128,6 +131,13 @@ class CameraCorrector:
             return None
         ex, ey = r["pose"][0] - p[1], r["pose"][1] - p[2]
         eh = _nd(r["pose"][2] - p[3])
+        if self.fix_heading:
+            # 2026-11-15: 位置のずれは、向きをジャイロに固定した当てはめから(向きのずれと左右のずれを取り違えない)。向きのずれは今までどおり。
+            rf = self.last_fixed
+            if rf is None or rf["n_dots"] + rf["n_markers"] < self.min_items or rf["resid_mm"] >= self.max_resid_mm:
+                self.counts["items"] += 1
+                return None
+            ex, ey = rf["pose"][0] - p[1], rf["pose"][1] - p[2]
         far_ok = False
         if math.hypot(ex, ey) > self.max_pos_mm or abs(eh) > self.max_head_deg:
             if not self._confirm_far(t, ex, ey, eh):
@@ -163,6 +173,7 @@ def _fit_online_pitch_impl(self, sp, dets, nominal):
     """PITCH_GRID の各下向きで当てはめ、使う下向きを選び直して、その下向きでの結果を返す。"""
     C = self.cam_center
     fits = []
+    self.last_fixed = None
     for g in self.PITCH_GRID:
         mk, ok = [], True
         for m in dets["markers"]:
@@ -174,6 +185,9 @@ def _fit_online_pitch_impl(self, sp, dets, nominal):
         if not ok or any(q is None for q in ds):
             fits.append(None); continue
         fits.append(sp.fit_pose({"markers": mk, "dots": ds}, nominal=nominal, mirror=self.mirror, fit_scale=False))
+        if self.fix_heading and g == self.pitch:
+            # 2026-11-15: 位置は向きをジャイロの向き(nominal の向き)に固定して当てはめる(位置の補正に使う)
+            self.last_fixed = sp.fit_pose_fixed_heading({"markers": mk, "dots": ds}, nominal, nominal[2], mirror=self.mirror)
     if all(f is not None and f["n_dots"] + f["n_markers"] >= 3 for f in fits):
         self.pitch_hist.append([f["resid_mm"] for f in fits])
         self.pitch_hist = self.pitch_hist[-self.PITCH_WINDOW:]
@@ -253,6 +267,7 @@ class EtRallyCameraCorrect(Behaviour):
         self.corrector = CameraCorrector(self.gain_pos, self.gain_head, self.lag_sec,
                                          mirror=getattr(runtime, "course", -1) == 1, at=cp.at, apply=apply_to_robot,
                                          logger=self.logger, far_confirm=self.far_confirm, cam_center=cam_center)
+        self.corrector.fix_heading = bool(FIX_HEADING and cam_center is not None)
         global _last_corrector
         _last_corrector = self.corrector
         if self.proc is None:
@@ -280,8 +295,8 @@ class EtRallyCameraCorrect(Behaviour):
                 else:
                     self.logger.info("camera correct: no pitch fit at the start and no saved pitch, using the calibration file")
         self.proc.send("track 1")
-        self.logger.info("camera correct: started gain_pos=%.2f gain_head=%.2f lag=%.3fs far_confirm=%d" % (
-            self.gain_pos, self.gain_head, self.lag_sec, self.far_confirm))
+        self.logger.info("camera correct: started gain_pos=%.2f gain_head=%.2f lag=%.3fs far_confirm=%d fix_heading=%s" % (
+            self.gain_pos, self.gain_head, self.lag_sec, self.far_confirm, self.corrector.fix_heading))
 
     def update(self):
         if self.proc is None:
@@ -311,6 +326,9 @@ class EtRallyCameraCorrect(Behaviour):
                 self.corrector.counts, *self.corrector.total, ages[len(ages) // 2], ages[-1],
                 self.corrector.pitch, self.corrector.pitch_changes))
 
+
+# 2026-11-15: 位置は向きをジャイロに固定して当てはめる(--rally-camera-fix-heading、phases/et_rally.py が入れる)
+FIX_HEADING = False
 
 _last_corrector = None   # 2026-11-13: 走行中の補正の CameraCorrector(止まったあとの測定 EtRallyCameraTail が同じ下向きの選び方で使う)
 

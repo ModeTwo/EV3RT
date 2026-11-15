@@ -374,6 +374,46 @@ def _nd(a):
     return (a + 180.0) % 360.0 - 180.0
 
 
+def fit_pose_fixed_heading(dets, nominal, heading, mirror=False):
+    """2026-11-15: 向きを heading(度)に固定して、位置だけを当てはめる(走行中の補正用)。1か所の画像では向きのずれと左右のずれの
+    区別がつきにくく(点が50〜85cm 先に集まる)、向きも当てはめると左右に平均10mm 読み違えていた(定規で測った赤2回・青1回:
+    向きも当てはめる 左+9.7/+7.2/+14.2mm → 向きをジャイロに固定 −1.6/+3.9/+6.2mm)。ジャイロの向きは定規と0.6°以内で合っていた。
+    結びつけは nominal の位置と heading で行う。戻り値は fit_pose と同じ形(pose の向きは heading)。"""
+    sgn = -1.0 if mirror else 1.0
+    pose = (float(nominal[0]), float(nominal[1]), float(heading))
+    a = math.radians(heading)
+    ca, sa = math.cos(a), math.sin(a)
+    result = None
+    for _ in range(2):
+        pairs = []
+        for m in dets.get("markers", []):
+            b = (m["xy"][0], sgn * m["xy"][1])
+            w = _to_world(pose, b)
+            if _near_leg(w):
+                continue
+            c = min(CELLS, key=lambda q: math.hypot(q[0] - w[0], q[1] - w[1]))
+            if math.hypot(c[0] - w[0], c[1] - w[1]) <= ASSOC_MARKER_MM:
+                pairs.append((b, c, 2.0, True))
+        for d in dets.get("dots", []):
+            b = (d[0], sgn * d[1])
+            w = _to_world(pose, b)
+            if _near_leg(w) or not _dots_visible:
+                continue
+            c = min(_dots_visible, key=lambda q: math.hypot(q[0] - w[0], q[1] - w[1]))
+            if math.hypot(c[0] - w[0], c[1] - w[1]) <= ASSOC_DOT_MM:
+                pairs.append((b, c, 1.0, False))
+        if not pairs:
+            return None
+        W = sum(p[2] for p in pairs)
+        x = sum(p[2] * (p[1][0] - (p[0][0] * ca - p[0][1] * sa)) for p in pairs) / W
+        y = sum(p[2] * (p[1][1] - (p[0][0] * sa + p[0][1] * ca)) for p in pairs) / W
+        pose = (x, y, float(heading))
+        resid = [math.hypot(*(lambda w: (w[0] - p[1][0], w[1] - p[1][1]))(_to_world(pose, p[0]))) for p in pairs]
+        result = dict(pose=pose, n_markers=sum(1 for p in pairs if p[3]), n_dots=sum(1 for p in pairs if not p[3]),
+                      resid_mm=max(resid), scale=1.0)
+    return result
+
+
 def fit_pose(dets, nominal=(START_MM[0], START_MM[1], START_HEADING_DEG), mirror=False, fit_scale=True):
     """見えたもの(detect_ground の戻り値)から、コース上の位置と向き (x, y, 向き度) を出す。
     nominal: 予想の位置(計画のスタート)。見えたものを予想の位置で床に置き、近いマス・点に結びつける。

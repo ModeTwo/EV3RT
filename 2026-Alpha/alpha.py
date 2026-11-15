@@ -1502,6 +1502,9 @@ def _run_main(argv, startup_cleanup):
                         help=('Competition time limit in seconds (120): the ET rally budget becomes this minus the seconds from '
                               'the touch start to the ET rally start, measured by the robot. Overrides --rally-time-budget '
                               '(which is then only used if the touch time is unknown). Default off.'))
+    parser.add_argument('--rally-camera-fix-heading', choices=['on', 'off'], default=None,
+                        help=('Camera correction: fit the position with the heading fixed to the gyro heading (the heading '
+                              'correction itself is unchanged). Default off.'))
     parser.add_argument('--rally-path-resync', choices=['on', 'off'], default=None,
                         help=('At the start of each continuing path segment, take the lateral offset from the course pose '
                               '(camera-corrected) instead of the previous segment (default off).'))
@@ -1670,6 +1673,10 @@ def _run_main(argv, startup_cleanup):
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-arm-while-driving requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(mission_config, et_rally_arm_while_driving=(args.rally_arm_while_driving == 'on'))
+    if args.rally_camera_fix_heading is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-camera-fix-heading requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_camera_fix_heading=(args.rally_camera_fix_heading == 'on'))
     if args.rally_path_resync is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
             parser.error('--rally-path-resync requires --mission rally-drive, bottle-rally or rally-sumo')
