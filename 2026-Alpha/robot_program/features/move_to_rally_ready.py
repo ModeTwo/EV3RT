@@ -16,7 +16,7 @@ _CURVE_ARC_MM = math.pi * _CURVE_RADIUS_MM / 2.0
 _INWARD_STRAIGHT_MM = 50.0
 _CURVE_DISTANCE_MM = _CURVE_ARC_MM + _INWARD_STRAIGHT_MM
 # Piで2回目以降に使用した値。旧ローカル版からの意図的な反映。
-_APPROACH_POWER = 70
+_APPROACH_POWER = 100
 _CURVE_POWER = 70
 # 11/5 各1回の白判定距離。実機再測定までの仮値。
 _FALLBACK_MM = {BottleColor.RED.value: 403.0, BottleColor.BLUE.value: 592.0,
@@ -115,7 +115,7 @@ def build_move_to_rally_ready(context, config):
         stop_on_success=(config.mission_mode == 'bottle-final' or
                          (config.mission_mode == 'configured' and
                           not (config.enable_et_rally and config.et_rally_laps > 0) and
-                          not config.enable_finish and not config.enable_et_sumo)),
+                          not config.enable_finish)),
     ))
     # 最後の停止旋回は行わず、走行終了時の実方位を記録する。
     root.add_child(MarkRallyReady("mark rally ready", context))
