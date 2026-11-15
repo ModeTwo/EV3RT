@@ -53,6 +53,11 @@ class CameraCorrector:
     STRONG_MIN_MM = 10.0
     STRONG_AGREE_MM = 6.0
     STRONG_WINDOW_SEC = 0.5
+    # 2026-11-15: 円弧を回り終えて STRONG_AFTER_TURN_SEC 秒の間(撮った時刻の前にこれより速く向きが変わっていた)は、強く直さない。
+    # 11/15 配置36 の7周で強い補正14回のうち13回が円弧の直後0.5秒以内で、入った周(1・3・5・7周目)だけ赤のあとの直進で
+    # 蛇行した(向きのずれ 最大 7〜12°、入らない周は2°前後)。円弧の直後はカメラの読みに癖がある(11/13、右回りのあと右寄り)。
+    STRONG_AFTER_TURN_SEC = 0.5
+    STRONG_TURN_RATE_DEG = 15.0
     PITCH_GRID = tuple(round(-0.3 + 0.1 * i, 1) for i in range(13))   # -0.3〜+0.9°(較正ファイルの下向きに足す分)
     PITCH_WINDOW = 15
     PITCH_MIN_FRAMES = 5
@@ -82,6 +87,20 @@ class CameraCorrector:
         self.recent_far = []
         self.counts = dict(seen=0, used=0, rate=0, items=0, resid=0, far=0, far_ok=0, nopose=0, not_line=0)
         self.total = [0.0, 0.0, 0.0]
+
+    def _turned_recently(self, t):
+        """撮った時刻 t の前 STRONG_AFTER_TURN_SEC 秒に、STRONG_TURN_RATE_DEG 度/秒より速く向きが変わっていたか(円弧の直後か)。"""
+        if self.at is None:
+            return False
+        step = 0.1
+        k = 0
+        while k * step < self.STRONG_AFTER_TURN_SEC + 1e-9:
+            a, b = self.at(t - (k + 1) * step), self.at(t - k * step)
+            if a is not None and b is not None and b[0] > a[0]:
+                if abs(_nd(b[3] - a[3])) / (b[0] - a[0]) > self.STRONG_TURN_RATE_DEG:
+                    return True
+            k += 1
+        return False
 
     def process(self, ev):
         """子プロセスからの dets を1つ処理する。使ったら (dx, dy, dh, 差) を返す。"""
@@ -121,7 +140,10 @@ class CameraCorrector:
         prev, self.last_diff = self.last_diff, (t, ex, ey)
         if (math.hypot(ex, ey) >= self.STRONG_MIN_MM and prev is not None and 0.0 < t - prev[0] <= self.STRONG_WINDOW_SEC
                 and math.hypot(ex - prev[1], ey - prev[2]) <= self.STRONG_AGREE_MM and not far_ok):
-            g = max(g, self.STRONG_GAIN)
+            if self._turned_recently(t):
+                self.counts["strong_skip"] = self.counts.get("strong_skip", 0) + 1
+            else:
+                g = max(g, self.STRONG_GAIN)
         dx, dy, dh = g * ex, g * ey, self.gain_head * eh
         if self.apply is not None and self.apply(dx, dy, dh) is False:
             self.counts["not_line"] += 1
