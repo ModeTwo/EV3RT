@@ -1,5 +1,9 @@
 # 走行関連の補足資料・変更履歴
 
+## LAPカメラ復帰の現行構成
+
+標準設定、比較用設定と実機確認範囲は [LAP_NATIVE_RECOVERY_v2.md](LAP_NATIVE_RECOVERY_v2.md) を参照。
+
 ## 2026-10-22 ETラリー周回数を正の整数へ拡張
 
 `--et-rally-laps` / `ET_RALLY_LAPS` を正の整数対応に変更。PC・経路計算ランナー・走行体の受信検証を統一した。詳細と実用上の制約は [LAP_COUNT_NATURAL_NUMBER_v1.md](LAP_COUNT_NATURAL_NUMBER_v1.md)。
@@ -1356,3 +1360,7 @@ summary.routeにpost_return_correction=false、return_angle_gate=false、push_he
 ## ボトルデリバリー → ET相撲
 
 専用ミッションと通し順序の接続・未実装区間は [DELIVERY_SUMO_INTEGRATION_v1.md](DELIVERY_SUMO_INTEGRATION_v1.md) を参照。
+
+## 2026-11-14 LAP黒線復帰を通常VideoThreadに接続
+
+詳細は [LAP_NATIVE_RECOVERY_v1.md](LAP_NATIVE_RECOVERY_v1.md)。devTKの通常LAPと試験LAPで同一処理を使用し、ATの接近重複を防ぐ。PC検査済み、実機未検証。

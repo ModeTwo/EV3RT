@@ -105,7 +105,7 @@ class RunByGyroSpeedDownatCurve(RunByGyro):
         return status
 
 
-def build_start_to_lap_gate(context, config):
+def _build_devtk_start_to_lap_gate(context, config):
     # 旧方式は別ファイルへ保存。通常読む必要はない。
     if config.start_lap_mode == 'legacy':
         from .start_to_lap_gate_legacy import build_legacy_start_to_lap_gate
@@ -237,3 +237,12 @@ def build_start_to_lap_gate(context, config):
         max_heading_correction_deg=config.start_lap_max_heading_correction_deg,
         profile_log_interval_sec=config.start_lap_log_interval_sec,
     )
+
+
+def build_start_to_lap_gate(context, config):
+    """Use the same camera recovery in the LAP mission and the full mission."""
+    original = _build_devtk_start_to_lap_gate(context, config)
+    if config.start_lap_mode != 'profile' or config.mission_mode in ('hint2', 'hint2-return'):
+        return original
+    from .lap_camera_recovery import build_lap_camera_recovery
+    return build_lap_camera_recovery(context, config, original)

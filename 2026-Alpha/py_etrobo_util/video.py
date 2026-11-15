@@ -10,6 +10,10 @@ import numpy as np
 from enum import Enum
 import time
 import threading
+import queue
+import uuid
+from pathlib import Path
+from .parallel_line_observation import observe_lap_line_candidate, observe_lap_line_with_white_sides
 from .vision_sessions import VisionSessions
 try:
     import zxingcpp
@@ -207,6 +211,15 @@ class Video(object):
         self._last_decode_time = 0.0   # time.time() of last successful decode
 
         self.target_insight = False
+        self._lap_lock = threading.Lock()
+        self._lap_enabled = False
+        self._lap_latest = None
+        self._lap_stream = uuid.uuid4().hex
+        self._lap_save = False
+        self._lap_last_photo = None
+        self._lap_queue = None
+        self._lap_worker = None
+        self._lap_directory = None
 
     def __del__(self):
         if hasattr(self, "_closed") and hasattr(self, "cap"):
@@ -379,6 +392,15 @@ class Video(object):
         self.frame_id += 1
         # Host read-completion time, not hardware exposure time.
         sumo_capture_time = time.monotonic()
+        with self._lap_lock:
+            lap_enabled = self._lap_enabled
+        lap_clean = None
+        lap_excluded = None
+        if lap_enabled and capture_mode in ('line', 'bottle'):
+            fh, fw = frame.shape[:2]
+            crop_h = int(fw * 9 / 16)
+            y0 = (fh - crop_h) // 2
+            lap_clean = cv2.resize(frame[y0:y0 + crop_h, :], (FRAME_WIDTH, FRAME_HEIGHT))
         sumo_metadata = None
         if capture_mode == "sumo_align":
             with self._bottle_lock:
@@ -496,6 +518,7 @@ class Video(object):
 
                 if best is not None:
                     area, color, bcx, bbottom, (bx, by, bw, bh), cnt = best
+                    lap_excluded = [bx, by, bw, bh]
                     self.target_insight    = True
                     self.bottle_color      = color
                     self.bottle_cx         = bcx
@@ -766,6 +789,35 @@ class Video(object):
             #        int(self.target_insight), (time.time() - t_cap) * 1000))
 
         # Disk encoding runs in its own bounded worker, also without a preview.
+        if lap_clean is not None:
+            lap_processing_started = time.monotonic()
+            bottle = self.get_bottle_stamped() if capture_mode == 'bottle' else None
+            observation = {
+                'stream_id': self._lap_stream, 'session': capture_session,
+                'frame': self.frame_id, 'capture_time': sumo_capture_time,
+                'lap_line': observe_lap_line_candidate(lap_clean, lap_excluded),
+                'lap_rejoin_line': observe_lap_line_with_white_sides(lap_clean, lap_excluded),
+                'bottle_insight': bool(bottle[0]) if bottle else False,
+                'bottle_color': bottle[1].value if bottle else None,
+                'bottle_x': bottle[2] if bottle else None,
+                'bottle_bottom': bottle[4] if bottle else None,
+                'bottle_area': bottle[5] if bottle else 0,
+                'image': None,
+            }
+            observation['lap_processing_ms'] = (time.monotonic() - lap_processing_started) * 1000.0
+            with self._lap_lock:
+                # A mode change makes the just-finished image stale for the new session.
+                if self._lap_enabled and self._vision_sessions.capture_token() == (capture_session, capture_mode):
+                    if self._lap_save and (self._lap_last_photo is None or sumo_capture_time - self._lap_last_photo >= 0.25):
+                        path = self._lap_directory / ('frame_%06d_raw.jpg' % self.frame_id)
+                        try:
+                            self._lap_queue.put_nowait((path, lap_clean.copy()))
+                            self._lap_last_photo = sumo_capture_time
+                            observation['image'] = str(path)
+                        except queue.Full:
+                            print('LAP_IMAGE_DROPPED frame=%d' % self.frame_id, flush=True)
+                    self._lap_latest = observation
+
         self._record_sumo_alignment_frame(frame, img_orig, capture_session,
                                           capture_mode, sumo_capture_time, sumo_metadata)
         # Recognition and observations above remain active without a display.
@@ -1024,6 +1076,40 @@ class Video(object):
             if request and request[0] == session:
                 self._sumo_alignment_observation = observation
 
+    def set_lap_observation(self, enabled, *, save_images=False):
+        """Observe one frame on the existing VideoThread; never open a second camera."""
+        with self._lap_lock:
+            self._lap_enabled = bool(enabled)
+            self._lap_latest = None
+            self._lap_save = bool(enabled and save_images)
+            if self._lap_save and self._lap_worker is None:
+                self._lap_directory = Path(__file__).resolve().parents[1] / 'bottle_color_captures' / ('camera_line_' + self._lap_stream)
+                self._lap_directory.mkdir(parents=True, exist_ok=True)
+                self._lap_queue = queue.Queue(maxsize=8)
+                def write_images():
+                    while True:
+                        item = self._lap_queue.get()
+                        try:
+                            if item is None:
+                                return
+                            path, image = item
+                            ok, encoded = cv2.imencode('.jpg', image)
+                            if not ok:
+                                raise OSError('JPEG encoding failed')
+                            path.write_bytes(encoded.tobytes())
+                        except Exception as exc:
+                            print('LAP_IMAGE_ERROR %s' % exc, file=sys.stderr, flush=True)
+                        finally:
+                            self._lap_queue.task_done()
+                self._lap_worker = threading.Thread(target=write_images, daemon=True, name='lap-image-writer')
+                self._lap_worker.start()
+
+    def get_lap_observation(self):
+        with self._lap_lock:
+            if self._lap_latest is None or self._vision_sessions.capture_token()[0] != self._lap_latest['session']:
+                return None
+            return dict(self._lap_latest)
+
     def get_bottle_stamped(self):
         with self._bottle_lock:
             return self._bottle_stamped  # (insight, color, cx, theta, bottom_row, area, in_blind)
@@ -1107,6 +1193,15 @@ class Video(object):
         self._closed = True
         self._vision_sessions.start('closed')
         self._worker_stop.set()
+        lap_worker = getattr(self, '_lap_worker', None)
+        if lap_worker is not None:
+            try:
+                self._lap_queue.put(None, timeout=1.0)
+                lap_worker.join(timeout=2.0)
+            except queue.Full:
+                print('LAP_IMAGE_ERROR queue full at shutdown', file=sys.stderr, flush=True)
+            if lap_worker.is_alive():
+                print('LAP_IMAGE_ERROR writer did not stop', file=sys.stderr, flush=True)
         recording = self._sumo_recording
         if recording is not None:
             try:
