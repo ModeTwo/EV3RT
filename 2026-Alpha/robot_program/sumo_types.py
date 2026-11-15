@@ -31,6 +31,7 @@ class SumoState:
     approach_distance_mm: float = 0.0
     camera_capture_heading_deg: Optional[float] = None
     skipped: bool = False
+    bottle_aligned: bool = False
     bottle_captured: bool = False
     bottle_pushed_out: bool = False
     bottle_released: bool = False

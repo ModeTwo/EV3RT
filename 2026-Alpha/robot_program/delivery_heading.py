@@ -28,7 +28,7 @@ class DeliveryHeadingReference:
 
 def initial_delivery_heading(mission):
     # Bottle-final and bottle-rally share delivery-line placement; full start faces 180.
-    return 0.0 if mission in ('bottle-final', 'bottle-rally') else 180.0
+    return 0.0 if mission in ('bottle-final', 'bottle-rally', 'bottle-sumo') else 180.0
 
 
 class RegisterDeliveryHeading(Behaviour):

@@ -63,8 +63,8 @@ def calculate(payload):
     laps = payload.get("laps")
     if course not in ("left", "right"):
         raise ValueError("course must be left or right")
-    if type(laps) is not int or not 1 <= laps <= 3:
-        raise ValueError("laps must be an integer from 1 to 3")
+    if type(laps) is not int or laps <= 0:
+        raise ValueError("laps must be a positive integer")
 
     # ZIP内のモジュールはトップレベルimportを前提にしているため、独立した
     # このプロセス内だけで検索パスへ追加する。親の通信プロセスは汚染しない。

@@ -42,11 +42,12 @@ def main():
     parser.add_argument(
         "--et-rally-laps",
         type=int,
-        choices=(1, 2, 3),
         default=os.environ.get("ET_RALLY_LAPS", "2"),
-        help="Laps selected by the PC (default: 2; env: ET_RALLY_LAPS)",
+        help="Positive lap count selected by the PC (default: 2; env: ET_RALLY_LAPS)",
     )
     args = parser.parse_args()
+    if args.et_rally_laps <= 0:
+        parser.error("--et-rally-laps must be a positive integer")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     selected_backends = sum(bool(value) for value in (
         args.strategy_file, args.planner, args.planner_runner))

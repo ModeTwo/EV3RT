@@ -11,9 +11,9 @@ python -m wireless_device --host RASPBERRY_PI_IP
 - `hint1`: 赤ゲート。`XY,XY`形式
 - `hint2`: 青ゲート、黄ゲートの順。`XY,XY/XY,XY`形式。走行体側で復号済み
 - `course`: `left`または`right`
-- `laps`: PC側で選択した1～3。走行体から受信した値ではなく、PC起動設定を使用
+- `laps`: PC側で選択した正の整数。走行体から受信した値ではなく、PC起動設定を使用
 
-周回数は無線通信デバイス側で指定する。省略時は3周。
+周回数は無線通信デバイス側で正の整数を指定する。省略時は2周。周回数を増やすほど経路探索の処理量と送信SEQの長さが増えるため、実用範囲は処理時間・制御周期・競技時間で確認する。
 
 ```sh
 python -m wireless_device --host RASPBERRY_PI_IP --et-rally-laps 3
