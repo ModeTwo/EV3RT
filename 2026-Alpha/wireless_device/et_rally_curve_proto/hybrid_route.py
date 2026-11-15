@@ -83,6 +83,12 @@ PARAMS = dict(
     # 2026-11-15 ユーザー(配置619・121): 最後の黄からガレージへのつなぎで、赤も抜けてよい(順番どおり。黄を後退で戻るより速いことがある)。
     # 切り上げは最後の周の道を使うので、切り上げにも効く
     final_via_red=True,
+    # 2026-11-16: 中継の候補の試し方(上の _pick_vias)と、最初から遠回りも使うか
+    via_group_tries=0, via_early=False,
+    # 2026-11-16: 直接つなげない区間で「曲がってからつなぐ」を試す(Table._arc_first)。候補の数
+    visit_filter_laps_only=False, arc_first_run_top=60,
+    exit_early=[],
+    arc_first=False, arc_first_tries=200, arc_first_lines=[0.0, 8.0, 16.0, 20.0, 24.0, 28.0, 32.0, 40.0],
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
     keepout_body=True, start_exempt_cm=20.0,
     # 進入禁止の長方形(右コースのplanner座標cm、[xmin, xmax, ymin, ymax]、±1e9で無限)。None なら plannerの設定(左コース)を左右反転した今の3つ。
@@ -886,7 +892,7 @@ def _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r):
         prims.append(arc)
     d2 = float(np.dot(P2 - C, base_u))
     L = (need - d2) / co
-    if L < 0:
+    if L < 0 or L + ee < 0:
         return None
     E = P2 + u_out * (L + ee)
     prims.append(('line', P2, E, m))
@@ -921,7 +927,9 @@ def _visit_candidates(g, pairs_override=None, only=None):
                         lead, trail, m = REAR, FRONT, -1
                     for r in radii:
                         for ea in EXT:
-                            for ee in EXT:
+                            # 2026-11-16: exit_early(負の値)= 後ろの端が線を越えきる前につなぎへ移る(端の行で外へ抜けてすぐ曲がるため。
+                            # 曲がる側と反対へ後ろが振れるので、つなぎの当たり判定で脚とのすき間を確かめる)
+                            for ee in (list(EXT) + list(EXIT_EARLY) if mode in ('F', 'B') else EXT):
                                 if mode in ('F', 'B'):
                                     prims = _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r)
                                     if prims is None:
@@ -1307,15 +1315,15 @@ def via_options(ep, sp, limit=INF):
 _run_cache = {}
 
 
-def _best_run(A, hA, B, hB, m, tail):
+def _best_run(A, hA, B, hB, m, tail, top=12):
     key = (round(float(A[0]), 3), round(float(A[1]), 3), round(hA, 3), round(float(B[0]), 3), round(float(B[1]), 3),
-           round(hB, 3), m, tail, _EXEMPT_ON, _ALLOW_TAB)
+           round(hB, 3), m, tail, _EXEMPT_ON, _ALLOW_TAB, top)
     if key not in _run_cache:
-        _run_cache[key] = _best_run0(A, hA, B, hB, m, tail)
+        _run_cache[key] = _best_run0(A, hA, B, hB, m, tail, top)
     return _run_cache[key]
 
 
-def _best_run0(A, hA, B, hB, m, tail):
+def _best_run0(A, hA, B, hB, m, tail, top=12):
     """A→B の1本の走り(当たらない最短)。tail>0なら最後を直進tailで終える。"""
     add = 0.0 if m > 0 else 180.0
     thA, thB = math.radians(hA + add), math.radians(hB + add)
@@ -1330,7 +1338,7 @@ def _best_run0(A, hA, B, hB, m, tail):
                 pr = pr + [('line', Bm, B, m)]
             cands.append((sum((prim_len(q) / (V_LINE if q[0] == 'line' else v_arc(q[2]))) for q in pr), pr))
     cands.sort(key=lambda c: c[0])
-    for _, pr in cands[:12]:
+    for _, pr in cands[:top]:
         if all(prim_ok(q) for q in pr):
             return pr
     return None
@@ -1357,6 +1365,21 @@ def build_via(opt, ep, sp):
 
 
 # ---------------- 表(つなぎ区間ごとの候補の状態) ----------------
+def _pick_vias(lst):
+    """試す中継の候補。2026-11-16: 見込みの時間の順に VIA_MAX_TRIES 個だけだと、後退を含む候補が上位を埋めて、前進だけで回る
+    遠回り(端の行のゲートを外へ抜けて折り返すなど)を試さないことがあった。via_group_tries > 0 なら、(種類, 前後1, 前後2) の組ごとに
+    その数ずつ試す(見込みの順は保つ)。"""
+    if VIA_GROUP_TRIES <= 0:
+        return lst[:VIA_MAX_TRIES]
+    cnt, out = {}, []
+    for c0, opt in lst:
+        k = (opt[0], opt[1], opt[2])
+        if cnt.get(k, 0) < VIA_GROUP_TRIES:
+            cnt[k] = cnt.get(k, 0) + 1
+            out.append((c0, opt))
+    return out
+
+
 class Table:
     def __init__(self, ends, starts, is_start=False, via_first=False, allow_gate=None):
         self.ends, self.starts = ends, starts
@@ -1395,7 +1418,7 @@ class Table:
 
     def _best_via(self, e, s, ep, sp, limit):
         """遠回りの候補のうち、limit より速く当たらない最初のもの。(cost, prims) か (INF, None)。"""
-        for c0, opt in via_options(ep, sp, limit)[:VIA_MAX_TRIES]:
+        for c0, opt in _pick_vias(via_options(ep, sp, limit)):
             if c0 >= limit:
                 break
             pr = build_via(opt, ep, sp)
@@ -1461,22 +1484,107 @@ class Table:
                     self.C[e, s] = c; self.done[e, s] = True; self.prims[(e, s)] = pr
                     return abs(c - old) > 1e-9
             self.ptr[e, s] += 1
+        # 2026-11-16: 曲がってからつなぐ(arc_first)。直接つなげないときに試す(中継の格子では入らない狭い所の折り返し)
+        arc_best = self._arc_first(ep, sp) if ARC_FIRST else None
         # 中継(1段目は使わない。経路が見つからないときだけ2段目で使う)
         if not self.allow_via:
+            if arc_best is not None:
+                self.C[e, s], self.prims[(e, s)] = arc_best; self.done[e, s] = True
+                return True
             self.C[e, s] = INF; self.done[e, s] = True; self.pending.add((e, s))
             return True
         if (e, s) not in self.via:
             self.via[(e, s)] = via_options(ep, sp)
-        for c0, opt in self.via[(e, s)][:VIA_MAX_TRIES]:
+        for c0, opt in _pick_vias(self.via[(e, s)]):
+            if arc_best is not None and c0 >= arc_best[0]:
+                break
             pr = build_via(opt, ep, sp)
             self.checks += 1
             if pr is not None and all(prim_ok(q) for q in pr):
                 c = seq_cost(ep[2], pr, sp[2])
                 if c < INF / 2:
+                    if arc_best is not None and arc_best[0] <= c:
+                        break
                     self.C[e, s] = c; self.done[e, s] = True; self.prims[(e, s)] = pr
                     return True
+        if arc_best is not None:
+            self.C[e, s], self.prims[(e, s)] = arc_best; self.done[e, s] = True
+            return True
         self.C[e, s] = INF; self.done[e, s] = True
         return True
+
+    def _arc_first(self, ep, sp):
+        """2026-11-16: 抜けた姿勢から円弧で向きを変え(体の向きが45°の倍数になるまで)、そこから1本の走りでつなぐ。
+        端の行のゲートを外へ前進で抜けて折り返す所(半径8cm で横を向き、すぐ大きい半径で戻る)は、中継の点の格子(8cm おき)では
+        高さが合わず作れなかった。(cost, prims) か None。"""
+        E, hE, dE = ep; S, hS, dS = sp
+        m = dE if dE != 0 else 1
+        if m not in DIRS:
+            return None
+        stopS = dS == 0 or dS != m
+        th0 = math.radians(hE + (0 if m > 0 else 180))
+        cands = []
+        E0 = np.asarray(E, float)
+        Lmax = float(max(ARC_FIRST_LINES)) if ARC_FIRST_LINES else 0.0
+        for r in RADII:
+            for sg in (1, -1):
+                t0 = (-sg * hE) % 45.0
+                if t0 < 1e-6:
+                    t0 = 45.0
+                sweeps = []
+                sw = t0
+                while sw <= 180.0 + 1e-6:
+                    sweeps.append(sw); sw += 45.0
+                for sw in sweeps:
+                    # 2026-11-16: 曲がる前の直進を1cm おきに伸ばし、円弧が当たらない一番短いものを使う(狭い所では入る幅が1cm より狭いことがある
+                    # ので、0.5cm で詰める)。円弧が確実に当たる角度(_arc_limit、1周分を1回だけ調べて覚える)で先にふるい落とす。
+                    found = None
+                    Ls = 0.0
+                    while Ls <= Lmax + 1e-9:
+                        P0 = E0 + Ls * tdir(th0)
+                        if _arc_limit(P0, th0, sg, float(r), m) >= math.radians(sw) - 1e-9:
+                            pr = arc_prim(P0, th0, sg, math.radians(sw), float(r), m)
+                            self.checks += 1
+                            if prim_ok(pr):
+                                found = (Ls, pr)
+                                break
+                        Ls += 1.0 if found is None else 0.0
+                    if found is None:
+                        continue
+                    Ls, pr = found
+                    for back in (0.5,):
+                        L2 = Ls - back
+                        if L2 >= 0:
+                            P2 = E0 + L2 * tdir(th0)
+                            pr2 = arc_prim(P2, th0, sg, math.radians(sw), float(r), m)
+                            if prim_ok(pr2):
+                                Ls, pr = L2, pr2
+                    P0 = E0 + Ls * tdir(th0)
+                    pre = [('line', E0, P0, m)] if Ls > 1e-9 else []
+                    if pre and not prim_ok(pre[0]):
+                        continue
+                    W, _ = arc_end(pr)
+                    c0 = (Ls + float(r) * math.radians(sw) * V_LINE / v_arc(float(r)) + float(np.hypot(*(np.asarray(S, float) - W)))) / V_LINE
+                    cands.append((c0, pre + [pr], W, nd(hE + sg * sw)))
+        cands.sort(key=lambda x: x[0])
+        best = None
+        for c0, prl, W, hW in cands[:ARC_FIRST_TRIES]:
+            if best is not None and c0 >= best[0]:
+                break
+            self.checks += 1
+            if not all(prim_ok(q) for q in prl):
+                continue
+            # 狭い所では短い(半径の小さい)走りほど当たるので、長い候補まで全部見る
+            r2 = _best_run(W, hW, np.asarray(S, float), hS, m, TAIL_CM if stopS else 0.0, top=ARC_FIRST_RUN_TOP)
+            if r2 is None:
+                continue
+            prs = prl + r2
+            if not all(prim_ok(q) for q in r2):
+                continue
+            c = seq_cost(dE, prs, dS)
+            if c < INF / 2 and (best is None or c < best[0]):
+                best = (c, prs)
+        return best
 
 
 def arm_must_be_up(prims):
@@ -1776,11 +1884,16 @@ def main():
     if CANDIDATES_ONLY:
         json.dump(dict(margin=used_margin, counts={c: len(v) for c, v in cands.items()}), open(sys.argv[2], 'w'))
         return
+    LAP_MASK = {}
     if VISIT_FILTER:
         for c in cands:
             if c not in VISIT_FILTER:   # 2026-11-14: 書いていない色は絞らない
                 continue
             allow_v = {tuple(x) for x in VISIT_FILTER.get(c, [])}
+            if VISIT_FILTER_LAPS_ONLY and c == 'yellow':
+                # 2026-11-16: 周回の通り方だけ絞り、最後の黄(ガレージへ向かう前)はどの通り方でもよい(費用で絞る。下の FINAL_YELLOW_COST)
+                LAP_MASK[c] = np.array([(v['sign'], v['mode'], v['angle'], v['angle_out']) in allow_v for v in cands[c]])
+                continue
             cands[c] = [v for v in cands[c] if (v['sign'], v['mode'], v['angle'], v['angle_out']) in allow_v]
     print('candidates', {c: len(v) for c, v in cands.items()}, f'{time.time() - t0:.1f}s', flush=True)
     for oc in OBLIQUE_CHOICE:
@@ -1822,6 +1935,9 @@ def main():
     seq = ['red', 'blue', 'yellow'] * LAPS
     vs = {c: (np.array([v['s'] for v in cands[c]]), np.array([v['e'] for v in cands[c]]),
               np.array([v['cost'] for v in cands[c]])) for c in cands}
+    VS_COST0 = {c: vs[c][2].copy() for c in vs}
+    for c, mk in LAP_MASK.items():
+        vs[c] = (vs[c][0], vs[c][1], np.where(mk, vs[c][2], INF))
     global FINAL_YELLOW_COST
     FINAL_YELLOW_COST = None
     if FINAL_MIN_CLEAR_CM and FINAL_MIN_CLEAR_CM > 0:
@@ -1837,7 +1953,7 @@ def main():
                 allow_f = {tuple(x) for x in FINAL_YELLOW_VISITS}
                 ok &= np.array([(v['sign'], v['mode'], v['angle'], v['angle_out']) in allow_f for v in cands['yellow']])
             if ok.any():
-                FINAL_YELLOW_COST = np.where(ok, vs['yellow'][2], INF)
+                FINAL_YELLOW_COST = np.where(ok, VS_COST0['yellow'], INF)
                 print('final yellow: %d/%d ways through with clearance >= %.1fcm' % (ok.sum(), len(ok), FINAL_MIN_CLEAR_CM), flush=True)
             else:
                 print('final yellow: no way through with clearance >= %.1fcm (best %.2fcm), not restricted' % (
@@ -1845,7 +1961,9 @@ def main():
     it = 0
     phase = 1
     # 2026-11-09: 狭い配置(最初のすき間では通れなかった配置)は、遠回りなしでは経路がないことが多いので、最初から遠回りも使う
-    if MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]:
+    if (MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]) or VIA_EARLY:
+        # 2026-11-16: via_early なら、どの配置でも最初から遠回りも使う(直接つなげない区間は、その場で遠回りを試す。
+        # 端の行のゲートを前進で抜けて折り返す周は遠回りでしかつながらず、遠回りなしの経路が見つかると試されなかった)
         phase = 2
         for t in T.values():
             t.allow_via = True
