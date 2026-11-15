@@ -19,7 +19,7 @@ from ..behaviours.line_trace import TraceLine
 from ..behaviours.camera_line_trace import RecoverLineByCamera
 from ..behaviours.hint2_exit import Hint2Exit
 from ..behaviours.projected_distance import IsProjectedDistanceEarned
-from ..behaviours.conditions import IsDistanceEarned, IsTimePassed, IsColorDetected, IsBlackDetected, IsColorPassed, IsDistanceEarnedUntilColorEntered
+from ..behaviours.conditions import IsDistanceEarned, IsTimePassed, IsColorDetected, IsBlackDetected, IsColorPassed, IsDistanceEarnedUntilColorEntered, IsQRDistanceLimitReached
 from ..behaviours.motor_control import StopNow
 from ..behaviours.hint_reader import ReadHintCard as IsQRDecoded, PrepareHintCamera
 
@@ -83,7 +83,7 @@ def build_tantou_tree(context, config, include_exit=True):
         name="Tantou Section",
         memory=True
     )
-
+ 
     # ========================================================
     # 1. START → 左55°
     # ========================================================
@@ -178,40 +178,40 @@ def build_tantou_tree(context, config, include_exit=True):
     
         IsDistanceEarned(
             name="black_distance_limit_a",
-            delta_dist=300  # tantou4: 550
+            delta_dist=670  # tantou4: 550
         ),
     
     ])
 
-    go_to_black_a2 = Parallel(
-        name="go_to_black_a2",
-        policy=ParallelPolicy.SuccessOnOne()
-    )
-    
-    go_to_black_a2.add_children([
-    
-        RunByGyro(
-            context=context,
-            name="run_to_black_a2",
-            target=40,
-            power=50,
-            pid_p=1.1,
-            pid_i=0.00075,
-            pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
-        ),
-    
-        # IsColorDetected(
-        #     name="detect_black",
-        #     color=Color.BLACK
-        # ),
-    
-        IsDistanceEarned(
-            name="black_distance_limit_a2",
-            delta_dist=460  # tantou4: 550
-        ),
-    
-    ])
+    #go_to_black_a2 = Parallel(
+        #name="go_to_black_a2",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)
+#    
+    #go_to_black_a2.add_children([
+#    
+        #RunByGyro(
+            #context=context,
+            #name="run_to_black_a2",
+            #target=40,
+            #power=50,
+            #pid_p=1.1,
+            #pid_i=0.00075,
+            #pid_d=0.04,
+            #target_type=HeadingType.ABSOLUTE
+        #),
+#    
+        ## IsColorDetected(
+        ##     name="detect_black",
+        ##     color=Color.BLACK
+        ## ),
+#    
+        #IsDistanceEarned(
+            #name="black_distance_limit_a2",
+            #delta_dist=460  # tantou4: 550
+        #),
+#    
+    #])
 
     go_to_black_aa = Sequence(
         name="go_to_black_aa",
@@ -221,7 +221,7 @@ def build_tantou_tree(context, config, include_exit=True):
     go_to_black_aa.add_children([
     
         go_to_black_a,
-        go_to_black_a2,
+        #go_to_black_a2,
     
     ])
     
@@ -265,7 +265,7 @@ def build_tantou_tree(context, config, include_exit=True):
         RunByGyro(
             context=context,
             name="run_after_qr_200mm",
-            target=45,
+            target=40,
             power=50,
             pid_p=1.1,
             pid_i=0.00075,
@@ -277,7 +277,7 @@ def build_tantou_tree(context, config, include_exit=True):
             name="distance_after_qr_200mm",
             delta_dist=140
         ),
-    
+
     ])
     
     
@@ -295,11 +295,18 @@ def build_tantou_tree(context, config, include_exit=True):
     pause_after_qr_timeout.add_children([
     
         # 4秒経過かつQR未読み取りの場合にSUCCESS
-        IsQRTimeoutReached(
-            name="qr_timeout_4sec",
+        #IsQRTimeoutReached(
+            #name="qr_timeout_4sec",
+            #qr_reader=read_qr1,
+            #timeout_sec=4.0
+        #),
+
+        IsQRDistanceLimitReached(
+            name="qr_distance_500mm",
             qr_reader=read_qr1,
-            timeout_sec=4.0
+            delta_dist=530
         ),
+    
     
         # 一時停止
         StopNow(
@@ -672,7 +679,7 @@ def build_tantou_tree(context, config, include_exit=True):
     
     IsDistanceEarned(
         name="run_to_black_limit",
-        delta_dist=300  # tantou4: 550
+        delta_dist=400  # tantou4: 550
     ),
     ])
 
@@ -762,10 +769,16 @@ def build_tantou_tree(context, config, include_exit=True):
     pause_after_qr_timeout_2.add_children([
     
         # 4秒経過かつQR未読み取りの場合にSUCCESS
-        IsQRTimeoutReached(
-            name="qr_timeout_4sec_2",
+        #IsQRTimeoutReached(
+            #name="qr_timeout_4sec_2",
+            #qr_reader=read_qr2,
+            #timeout_sec=4.0
+        #),
+
+        IsQRDistanceLimitReached(
+            name="qr_distance_500mm_2",
             qr_reader=read_qr2,
-            timeout_sec=4.0
+            delta_dist=400
         ),
     
         # 一時停止
