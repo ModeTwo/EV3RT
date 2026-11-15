@@ -101,6 +101,27 @@ def set_arc_slip(ratio):
     ARC_SLIP = max(0.0, float(ratio or 0.0))
 
 
+# 2026-11-15: 止まらずに続く区間の始めに、横のずれ(右)を、前の区間から受け渡した値ではなく、コース上の位置(カメラで直したもの)と
+# 計画の区間の始めの位置の差から計算し直す(--rally-path-resync)。区間の位置とコース上の位置が1周に約1.5mm ずつ食い違い
+# (11/15 配置36 の5回すべて、黄の直進の始めで区間の位置は左1〜4mm・コース上の位置は左4→13mm)、カメラの補正は両方に同じだけ入るので
+# 食い違いが残り、走りは区間の位置を計画に合わせるため、実際の位置がその分ゴールから離れる側へずれていった(切り上げの黄で −19〜−28mm)。
+# 前後は受け渡しのまま(円弧の進み=目標の向きが飛ぶのを避ける)。差が RESYNC_MAX_MM を超えるときは使わない。
+RESYNC = False
+RESYNC_MAX_MM = 30.0
+_resync_stats = dict(n=0, sum_abs=0.0, max_abs=0.0)
+
+
+def set_resync(on):
+    global RESYNC
+    RESYNC = bool(on)
+    _resync_stats.update(n=0, sum_abs=0.0, max_abs=0.0)
+
+
+def resync_summary():
+    s = _resync_stats
+    return "resync %d times, mean |change| %.1f mm, max %.1f mm" % (s["n"], s["sum_abs"] / max(1, s["n"]), s["max_abs"])
+
+
 def _now():
     """走った距離(mm)。円弧の滑りを割り引いた分(EtRallyHeading.slip_total)を引く。"""
     return runtime.plotter.get_distance() - float(getattr(runtime.gyro_sensor, "slip_total", 0.0) or 0.0)
@@ -383,6 +404,8 @@ class EtRallyPathSegment(Behaviour):
         carried = None
         if self.continue_from_prev and _chain_lat is not None:
             self.pos_x, self.pos_y, self.pos_prev_dist, self.prev_heading = _chain_lat
+            if RESYNC and self.plan_start is not None:
+                self._resync_lateral()
         elif _start_position is not None:
             self.pos_x, self.pos_y = _start_position
             self.logger.info("start position from camera: front %+.1f right %+.1f mm" % _start_position)
@@ -418,6 +441,24 @@ class EtRallyPathSegment(Behaviour):
             self.start_heading, self.end_heading, self.length_mm, self.radius_mm, self.stop_at_end,
             self.continue_from_prev, self.remaining_after_mm,
             runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text()))
+
+    def _resync_lateral(self):
+        """続く区間の始めに、横のずれ pos_y をコース上の位置から計算し直す(RESYNC)。"""
+        from .. import et_rally_course_pose as cp
+        from .. import et_rally_start_pose as sp
+        cur = cp.current()
+        if cur is None:
+            return
+        _, right = sp.plan_offset_in_segment(self.plan_start, self.reverse, (cur[1], cur[2]))
+        change = right - self.pos_y
+        if abs(change) > RESYNC_MAX_MM:
+            self.logger.warning("resync: course and segment differ by %+.1f mm (right), not used" % change)
+            return
+        self.pos_y = right
+        s = _resync_stats
+        s["n"] += 1
+        s["sum_abs"] += abs(change)
+        s["max_abs"] = max(s["max_abs"], abs(change))
 
     def _carry_from_course(self):
         """コース上の今の位置と計画の始めの位置の差 (前, 右) mm。使えなければ None(理由はログ)。"""
@@ -470,6 +511,8 @@ class EtRallyPathSegment(Behaviour):
             self.stop_prev = counts
             if self.stop_stable < self.stop_stable_ticks and self.stop_ticks < STOP_MAX_TICKS:
                 return Status.RUNNING
+            if RESYNC:
+                self.logger.info("path: " + resync_summary())
             self._finish_log(_now(), " stopped ticks=%d%s" % (
                 self.stop_ticks, "" if self.stop_stable >= self.stop_stable_ticks else " (timeout)"))
             return Status.SUCCESS
