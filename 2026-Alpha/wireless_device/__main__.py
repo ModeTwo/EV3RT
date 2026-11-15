@@ -46,6 +46,11 @@ def main():
         default=os.environ.get("ET_RALLY_LAPS", "2"),
         help="Laps selected by the PC (default: 2; env: ET_RALLY_LAPS)",
     )
+    # 2026-11-15: 経路の道具の計画を丸ごと送る(curve_plan_provider.py)。どちらかを付けるとこの形になる。
+    parser.add_argument("--curve-plans-dir",
+                        help="Send whole curve-tool plans: look up precomputed plan_<key>.json / plans.zip here first")
+    parser.add_argument("--curve-compute-sec", type=float, default=0.0,
+                        help="Send whole curve-tool plans: compute with the curve tool for up to this many seconds")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     selected_backends = sum(bool(value) for value in (
@@ -67,6 +72,12 @@ def main():
     else:
         app = WirelessDeviceApplication(planner_runner=args.planner_runner)
         calculate = app.prepare_strategy
+    plan_provider = None
+    if args.curve_plans_dir or args.curve_compute_sec > 0:
+        from .curve_plan_provider import CurvePlanProvider
+        plan_provider = CurvePlanProvider(args.curve_plans_dir, args.curve_compute_sec)
+        logging.info("Curve plans: dir=%s compute=%.0fs (garage-only plan if neither works)",
+                     args.curve_plans_dir, args.curve_compute_sec)
     stop = threading.Event()
     try:
         run_client(
@@ -76,6 +87,7 @@ def main():
             stop,
             strategy_log_dir=args.strategy_log_dir,
             selected_laps=args.et_rally_laps,
+            plan_provider=plan_provider,
         )
     except KeyboardInterrupt:
         pass

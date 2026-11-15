@@ -83,7 +83,15 @@ python wireless_device/et_rally_camera_calib/floor_selfcal.py write --yaw <stops
 - **カメラ**: `full` では本体（ほかの工程の QR・ボトル・相撲）がカメラを開いている。ETラリーのカメラの子プロセスと取り合いになるので、スタートの取り込みと走行中の補正を入れていない。
 - **オプション**: `full` では `--rally-*` を付けられない。設定は RaceConfig の既定値で決まる（カメラを使わないものは 11/14 に既定値にした）。
 
-TODO: PC で新しい道具の計画を作って送る、全配置の事前計算を予備に持たせる、ETラリーの間だけカメラを受け渡す。今は、下の手順は `rally-drive` で計画ファイルを指定して走るときのもの。
+11/15 にできたこと(実機の `full` ではまだ通していない):
+- **計画を丸ごと送る(PC)**: `python -m wireless_device --host <ロボット> --curve-plans-dir <計画のフォルダ> --curve-compute-sec <秒>`。
+  ヒントから配置の鍵を出し、(1) 前もって作った計画 `plan_<鍵>.json`(または `plans.zip`)、(2) その場で経路の道具で作る(秒で打ち切り。配置36で約16秒)、
+  (3) ガレージだけの計画、の順で送る。どちらを先にするかはユーザーが決める(今は付けたオプションで決まる)。
+- **前もって作った計画の書き出し**: `python wireless_device/et_rally_curve_proto/export_plans.py <計画のフォルダ> --out <出力> --check-json <results.jsonl>`(1000配置で998、zip 2.0MB)。
+- **ロボットの受け取り**: 届いた計画は `run_logs/received_plan.json` に書き、ファイルで走るときと同じに走る。届かなければ、ロボットが読んだヒントで `~/et_rally_plans`(`ET_RALLY_PLANS_DIR`)を探し、なければガレージだけ。
+- **カメラの受け渡し**: 子プロセスは起動時に準備だけして待ち、ETラリーの始めに本体のカメラを閉じてから開く(`--rally-camera-handover-test on` で rally-drive でも試せる)。
+
+TODO: 実機で `full`(または受け渡しの試験)を通す。今は、下の手順は `rally-drive` で計画ファイルを指定して走るときのもの。
 
 1. **計画を選ぶ**。
    - TODO: ヒントからの自動の選び方はまだない。今は、配置に合わせた計画（`robot_program/tests/plan_<name>.json`）を走らせる。
