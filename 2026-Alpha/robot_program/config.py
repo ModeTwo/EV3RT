@@ -247,7 +247,10 @@ class RaceConfig:
     # 2026-11-15: rally-drive でも本体のカメラ(VideoThread)を起動し、ETラリーの始めに子プロセスへ渡す(本番の full と同じ流れの試験)。
     et_rally_camera_handover_test: Optional[bool] = None
     et_rally_path_decel: Optional[tuple] = None
-    et_rally_path_accel: Optional[tuple] = None
+    # 2026-11-15: (80mm, 出力40) を既定に。止まった状態から走り出す区間(スタート・その場旋回や止まったあと)は、最初の80mm を出力40から上げる。
+    # 11/15 配置36 の赤で止める試験(定規で測った): ふつうの走り出しは計画より後ろ14mm・左6mm、ゆっくりは後ろ1mm・右0mm・向き0.4°。
+    # エンコーダが実際より多く数えた分も 17→11mm に減った(出力100で止まった状態から半径80mm の円弧に入ると空回りする)。
+    et_rally_path_accel: Optional[tuple] = (80.0, 40.0)
     et_rally_path_stop_ticks: Optional[float] = None
     # 2026-11-11: 走行中の補正で、差が40mmを超える画像は取り違えとして捨てるが、この枚数続けて同じずれ(互いに15mm以内)に
     # 見えたら本当のずれとして受け入れる(Noneか0なら従来どおり捨てる)。
