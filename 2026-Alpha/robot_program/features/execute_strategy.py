@@ -570,7 +570,10 @@ def _merge_consecutive_moves(steps):
     for step in steps:
         prev = merged[-1] if merged else None
         # 2026-11-11: アームを下げ始める印(garage-arm-down)の付いた直進は、まとめない(ここから下げ始めるため)。
+        # 2026-11-15: 前の直進が計画ではっきり止まる(stop: true)ときも、まとめない。止まって撮る較正の計画
+        # (15cm 進んで止まる×5)が750mm の1本になり、1回も止まらなかった。周回の計画(1114個)にはこの並びはない。
         if (step["type"] == "move" and prev is not None and prev["type"] == "move"
+                and prev.get("stop") is not True
                 and step.get("label") != "garage-arm-down" and not step.get("marks")
                 and abs(step["target_heading_deg"] - prev["target_heading_deg"]) < 1e-6
                 and step.get("reverse", False) == prev.get("reverse", False)):
