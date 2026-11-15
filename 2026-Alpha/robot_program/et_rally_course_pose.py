@@ -222,9 +222,11 @@ class EtRallyCameraProcessStart(Behaviour):
     走行中の画像を残すときは、保存先のフォルダもここで決める(保存を始めるのは EtRallyCameraLogStart)。"""
 
     def __init__(self, name, log_every=None, exposure=None, calib_path=None, quality=90, prestart=False, gates=None,
-                 defer_open=False):
+                 defer_open=False, gates_provider=None):
         super().__init__(name)
         self.gates = gates
+        # 2026-11-15: ETラリーの始めにゲートの位置を出す関数(受信の計画のとき)。出せたら親と子の両方に入れ直す。
+        self.gates_provider = gates_provider
         # 2026-11-15: 本体(alpha.py の VideoThread)がカメラを使っているとき(--mission full など)は、子プロセスを起動時に立ち上げて
         # カメラは開かずに待たせ、ETラリーの始め(ここ)で本体のカメラを閉じてから子に開かせる。
         self.defer_open = bool(defer_open)
@@ -281,6 +283,18 @@ class EtRallyCameraProcessStart(Behaviour):
         except Exception as error:
             self.logger.warning("camera process: start failed (%r)" % (error,))
             return Status.SUCCESS
+        if self.gates_provider is not None:
+            try:
+                g = self.gates_provider()
+            except Exception as error:
+                g = None
+                self.logger.warning("camera process: gates not available (%r)" % (error,))
+            if g:
+                import json
+                from . import et_rally_start_pose as _sp
+                _sp.set_gate_legs(g)
+                proc.send("gates " + json.dumps(g, separators=(",", ":")))
+                self.logger.info("camera process: gates set from the received plan/hints")
         if getattr(proc, "defer_open", False) and not proc.opened:
             self._hand_over(proc)
         self.logger.info("camera process: running (log=%s, exposure=%s, ready=%s, prestart error=%r, deferred open=%s)" % (

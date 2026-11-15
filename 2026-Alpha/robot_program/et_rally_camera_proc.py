@@ -162,6 +162,13 @@ def _child(cfg):
                 continue
             if parts[0] == 'quit':
                 break
+            if parts[0] == 'gates' and len(parts) > 1:
+                # 2026-11-15: ゲートの位置を入れ直す(受信した計画のとき、ETラリーの始めに届く)。走りの流れの中で入れる。
+                try:
+                    state['gates'] = json.loads(line.split(None, 1)[1])
+                except ValueError:
+                    pass
+                continue
             if parts[0] == 'open':
                 # 2026-11-15: defer_open のとき、本体(alpha.py の VideoThread)がカメラを閉じてから開く
                 state['open'] = True
@@ -337,6 +344,12 @@ def _child(cfg):
     rt.start()
     done_n = 0
     while not state['quit']:
+        if state.get('gates') is not None:
+            try:
+                from robot_program import et_rally_start_pose as sp
+                sp.set_gate_legs(state.pop('gates'))
+            except Exception:
+                state.pop('gates', None)
         if not (state['track'] or state['detect']):
             if cam_start is None and not state.get('prebuilt'):
                 # 2026-11-12: スタートの広い範囲の対応表(約56万点)は作るのが重く、測り始めの時間を食っていた

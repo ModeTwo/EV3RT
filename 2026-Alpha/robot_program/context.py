@@ -32,6 +32,10 @@ class RaceContext:
     strategy_error: Optional[str] = None
     # ETラリー開始時のエラーで、PCの経路ではなく固定ルートを使うことにしたか。
     strategy_fallback_used: bool = False
+    # 2026-11-15: 経路の道具の計画(ファイルで走るときと同じ形)のパス。PC から丸ごと届いたとき、または
+    # 届かずロボットが選んだとき(et_rally_plan_select.py)に入る。入っていれば strategy の代わりにこれで走る。
+    strategy_plan_path: Optional[str] = None
+    strategy_plan_source: Optional[str] = None
     rally_lap: int = 0
     timer: RaceTimer = field(default_factory=RaceTimer)
     sumo: SumoState = field(default_factory=SumoState)

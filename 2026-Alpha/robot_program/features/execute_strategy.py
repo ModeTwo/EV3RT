@@ -350,6 +350,11 @@ class DeferredStrategySequence(Sequence):
             # 2026-11-06: スタートでカメラから測った位置がずれていれば、最初のつなぎを引き直す(et_rally_start_pose.py)。
             # 予定がなければ計画のまま。
             plan_steps = self._loader()
+            if isinstance(plan_steps, tuple):
+                # 2026-11-15: (steps, 上書きする設定)。受信した計画が経路の道具の計画のときに使う。
+                plan_steps, overrides = plan_steps
+                if "initial_heading_deg" in overrides:
+                    self._initial_heading_deg = overrides["initial_heading_deg"]
             if extra_kwargs.get("path_carry_error"):
                 # 2026-11-11: 止まったあとの走り出しで計画とのずれを引き継ぐため、各ステップの計画のコース上の姿勢を入れる
                 # (引き直しで差し替わる最初のつなぎには入らない。そこはスタートの取り込みが受け持つ)。
@@ -481,9 +486,17 @@ def build_execute_strategy(context, config, lap_number=None):
             [{"type": "turn", "target_heading_deg": RALLY_START_HEADING}],
             config.mission_mode,
         )[0]["target_heading_deg"]
+        def load_received():
+            # 2026-11-15: 経路の道具の計画(PC から丸ごと届いた、またはロボットが選んだ)があれば、ファイルで走るときと同じに読む
+            # (exit も読む)。最初の旋回の直前の向きもファイルのときと同じ 0。なければ従来の受信SEQ。
+            path = getattr(context, "strategy_plan_path", None)
+            if path:
+                return _load_plan_steps(path), {"initial_heading_deg": 0.0}
+            return full_start_to_gyro(context.strategy, config.mission_mode)
+
         return DeferredStrategySequence(
             name="execute_received_strategy",
-            loader=lambda: full_start_to_gyro(context.strategy, config.mission_mode),
+            loader=load_received,
             initial_heading_deg=start_heading,
             fallback_loader=(
                 (lambda: full_start_to_gyro(fallback_strategy(), config.mission_mode))

@@ -1207,7 +1207,8 @@ class EtRallyApplyStartPose(Behaviour):
         self.min_items_for_position = int(min_items_for_position)
         # plan_frame_known: 計画が経路を作る道具の座標(スタート START_MM・START_HEADING_DEG、gyro = スタートの向き - 向き)か。
         # 受信した計画(古い計画の道具)は座標の決め方が違うので、向きだけを取り込む。
-        self.plan_frame_known = bool(plan_frame_known)
+        # 2026-11-15: 関数も受け付ける(本番の full では、走る計画が経路の道具のものか、走り出す直前まで分からないため)。
+        self.plan_frame_known = plan_frame_known if callable(plan_frame_known) else bool(plan_frame_known)
         self.rejoin_min_mm = float(rejoin_min_mm)
         self.max_offset_mm = float(max_offset_mm)
         self.max_offset_deg = float(max_offset_deg)
@@ -1232,7 +1233,8 @@ class EtRallyApplyStartPose(Behaviour):
         else:
             self.logger.warning("start pose: gyro has no heading offset (EtRallyHeading not installed), heading not applied")
         _applied = (x, y, h)
-        if not self.plan_frame_known:
+        known = self.plan_frame_known() if callable(self.plan_frame_known) else self.plan_frame_known
+        if not known:
             _applied = (START_MM[0], START_MM[1], h)
             how = "heading only (plan frame unknown)"
         elif m.get("items", 99) < self.min_items_for_position:

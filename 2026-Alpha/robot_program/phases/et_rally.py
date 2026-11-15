@@ -120,6 +120,14 @@ def _plan_gates(config):
         return None
 
 
+def _received_gates(context):
+    """2026-11-15: 受信のときのゲートの位置。届いた計画(またはロボットが選んだ計画)の gates、なければ読んだヒントから。"""
+    from ..et_rally_plan_select import gates_from_context, plan_gates
+    path = getattr(context, "strategy_plan_path", None)
+    g = plan_gates(path) if path else None
+    return g or gates_from_context(context)
+
+
 def build_et_rally_phase(context, config):
     # PCまたは固定planが全周回分を一つのSEQとして返すため、SEQは一度だけ実行する。
     # ボトル配送までアームを下げたまま運んでいるため、ETラリー走行の前に上げ直す。
@@ -173,7 +181,9 @@ def build_et_rally_phase(context, config):
             exposure=getattr(config, "et_rally_camera_exposure", None),
             calib_path=getattr(config, "et_rally_camera_calib_path", None),
             prestart=(getattr(config, "mission_mode", None) == "rally-drive" or main_camera), gates=gates,
-            defer_open=main_camera))
+            defer_open=main_camera,
+            # 2026-11-15: 受信のときは、ETラリーの始めに、届いた計画(なければ読んだヒント)のゲートの位置を入れ直す
+            gates_provider=(None if config.et_rally_strategy_source == "file" else (lambda c=context: _received_gates(c)))))
     # 2026-11-11: 本番に近い流れのテスト。スタート位置の手前に置いてタッチし、この距離だけ進んでスタート位置に着いてから、
     # ジャイロの測り直し・スタートの取り込みをして走り出す(本番は前の種目からスタート位置へ来て、タッチなしで始まる)。
     pre_move_mm = getattr(config, "et_rally_pre_move_mm", None)
@@ -229,7 +239,10 @@ def build_et_rally_phase(context, config):
         rejoin_min = getattr(config, "et_rally_start_pose_rejoin_min_mm", None)
         children.append(EtRallyApplyStartPose(
             "et_rally apply start pose", rejoin_min_mm=5.0 if rejoin_min is None else rejoin_min,
-            plan_frame_known=(config.et_rally_strategy_source == "file")))
+            # 2026-11-15: 受信のときは、旧い形の計画(経路の道具ではない)を受け取ったときだけ向きだけにする。
+            # 経路の道具の計画が届いた・届かずロボットが選ぶ(どちらも経路の道具の座標)ときは位置も入れる。
+            plan_frame_known=(True if config.et_rally_strategy_source == "file" else
+                              (lambda c=context: not (c.strategy_status == "ready" and not c.strategy_plan_path)))))
         if not camera_log_every and not camera_correct:
             children.append(EtRallyCameraProcessStop("et_rally camera process stop"))
     else:

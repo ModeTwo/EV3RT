@@ -102,6 +102,26 @@ class StrategyExchange:
             if kind == "STRATEGY":
                 if self.started_at is None or message["sequenceVersion"] != 1:
                     continue
+                if payload.get("planFormat") is not None:
+                    # 2026-11-15: 経路の道具の計画を丸ごと受け取る(et_rally_plan_select.py)。ファイルに書いて、
+                    # ファイルで走るときと同じように走る(exit・gates・アームの目印などがそのまま効く)。
+                    from ..et_rally_plan_select import PLAN_FORMAT, store_received_plan
+                    try:
+                        if payload.get("planFormat") != PLAN_FORMAT:
+                            raise ValueError("unknown planFormat %r" % payload.get("planFormat"))
+                        path = store_received_plan(payload.get("plan"), self.mission_id)
+                    except (OSError, ValueError) as error:
+                        LOG.warning("Invalid plan ignored: %s", error)
+                        continue
+                    context.strategy_plan_path = str(path)
+                    context.strategy_plan_source = "pc %s" % payload.get("source", "")
+                    context.strategy = list(payload["plan"]["steps"])
+                    context.selected_rally_laps = payload["plan"].get("laps")
+                    context.strategy_status = "ready"
+                    LOG.info("Plan received mission=%d source=%s steps=%d -> %s", self.mission_id,
+                             payload.get("source"), len(context.strategy), path)
+                    self.close()
+                    return
                 try:
                     if payload.get("headingFrame") != HEADING_FRAME:
                         raise ValueError("Strategy heading frame mismatch; update PC and robot together")
