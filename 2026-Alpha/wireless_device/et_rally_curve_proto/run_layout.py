@@ -33,6 +33,12 @@ COMMON = dict(
 )
 FAST = '2.5,2.0'
 TIMEOUT = int(os.environ.get('RUN_LAYOUT_TIMEOUT', '4000'))
+# 2026-11-16(計算時間): 新しいやり方。道具の中で、numba で候補を先に飛ばし(run_kernel=1、結果は同じ)、例外のすき間の経路は
+# 例外なしでも解き直して1秒以上速いときだけ残す(fast_keep_min_sec=1.0)。例外が残ったときだけ、5秒未満なら70秒の周回数で比べる
+# ため例外なしでもう1回計算する。
+NEW = os.environ.get('RUN_LAYOUT_FAST', '0') == '1'
+if NEW:
+    COMMON.update(HR_RUN_KERNEL='1', HR_FAST_KEEP_MIN_SEC='1.0')
 
 
 def tool(gates, out_r, log, fast):
@@ -53,6 +59,8 @@ def tool(gates, out_r, log, fast):
 
 
 def plan_and_check(r, gates, plan, chk):
+    if INPROC:
+        return _plan_and_check_inproc(r, gates, plan, chk)
     env = dict(os.environ, PYTHONUTF8='1')
     subprocess.run([sys.executable, os.path.join(HERE, 'to_plan.py'), r, gates, plan], capture_output=True, env=env)
     if not os.path.exists(plan):
@@ -67,14 +75,71 @@ def plan_and_check(r, gates, plan, chk):
     return d
 
 
+INPROC = False   # True: 計画への変換と当たり判定を、この作業者のプロセスの中で行う(--batch のとき。読み込みの手間を省く)
+
+
+def _plan_and_check_inproc(r, gates, plan, chk):
+    """plan_and_check と同じことを、このプロセスの中で行う(to_plan.py を同じ引数で実行し、check_plan.check を呼ぶ)。
+    道具の設定の環境変数(HR_*)は、別プロセスで実行するときと同じく外しておく。"""
+    import contextlib, io, runpy
+    saved = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith('HR_')}
+    argv = sys.argv
+    try:
+        sys.argv = [os.path.join(HERE, 'to_plan.py'), r, gates, plan]
+        with contextlib.redirect_stdout(io.StringIO()):
+            try:
+                runpy.run_path(os.path.join(HERE, 'to_plan.py'), run_name='__main__')
+            except SystemExit:
+                pass
+        if not os.path.exists(plan):
+            return None
+        sys.argv = [os.path.join(HERE, 'check_plan.py')]
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import check_plan
+        with contextlib.redirect_stdout(io.StringIO()):
+            d = check_plan.check(plan, os.path.join(HERE, 'params_day.json'), BUDGET, 1.5, 0.93)
+    except Exception as e:
+        print('inproc plan/check failed for %s: %r' % (r, e), flush=True)
+        return None
+    finally:
+        sys.argv = argv
+        os.environ.pop('HR_PARAMS', None)
+        os.environ.update(saved)
+    json.dump(d, open(chk, 'w', encoding='utf-8'), ensure_ascii=False)
+    return d
+
+
 def main():
-    gates, out, name = sys.argv[1], sys.argv[2], sys.argv[3]
+    if len(sys.argv) >= 3 and sys.argv[1] == '--batch':
+        # usage: python run_layout.py --batch <一覧のファイル(1行に「gates.json 出力フォルダ 名前」)>
+        global INPROC
+        INPROC = True
+        for line in open(sys.argv[2], encoding='utf-8'):
+            a = line.split()
+            if len(a) == 3:
+                process(*a)
+        return
+    process(sys.argv[1], sys.argv[2], sys.argv[3])
+
+
+def process(gates, out, name):
     os.makedirs(out, exist_ok=True)
     P = lambda suf: os.path.join(out, name + suf)
     tf, used = tool(gates, P('.fast.r.json'), P('.fast.log'), FAST)
     pick = dict(fast_total=tf, fast_used=used)
     chosen = 'fast'
-    if tf is not None and used and used != 'none':
+    kept = None
+    if NEW:
+        # 道具の中で例外なしと比べ済み: "fast margins kept (X faster ...)" なら X 秒速い、"dropped" なら例外なしの経路を出している
+        lt = open(P('.fast.log'), encoding='utf-8', errors='ignore').read()
+        mk = re.search(r'fast margins kept \(([\d.]+)s faster', lt)
+        kept = float(mk.group(1)) if mk else None
+        if 'fast margins dropped' in lt:
+            pick['tool'] = 'dropped in the tool'
+    if NEW and kept is not None and kept >= FAST_TOTAL_GAIN - 1e-9:
+        pick['why'] = 'kept in the tool (%.1fs faster)' % kept
+    elif tf is not None and used and used != 'none':
         tb, _ = tool(gates, P('.base.r.json'), P('.base.log'), None)
         cf = plan_and_check(P('.fast.r.json'), gates, P('.fast.plan.json'), P('.fast.chk.json'))
         cb = plan_and_check(P('.base.r.json'), gates, P('.base.plan.json'), P('.base.chk.json')) if tb is not None else None
