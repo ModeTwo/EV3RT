@@ -472,3 +472,47 @@ def run_costs(ax, ay, tha, bx, by, thb, rs, karc, vline, htread, tail):
                 out[k] = c
             k += 1
     return out
+
+
+@njit(cache=True)
+def run_survivors(ax, ay, ha_deg, bx, by, hb_deg, tha, thb, bmx, bmy, rs, karc, vline, htread, tail, top, m,
+                  back, front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach):
+    """2026-11-16(計算時間): hybrid_route._best_run_k の numba の部分を1回の呼び出しにまとめたもの。候補(半径 rs × 形 0..7、
+    番号 = 半径の番号*8 + 形)を時間の順(同じ時間なら番号の順、kind='stable' と同じ)に並べ、時間が有限の先頭 top 個のうち、
+    脚に確実に当たらない候補の番号を、その順に返す(next_option で1つずつ飛ばしていたのと同じ並び)。"""
+    costs = run_costs(ax, ay, tha, bmx, bmy, thb, rs, karc, vline, htread, tail)
+    idx = np.argsort(costs, kind='mergesort')
+    sel = np.empty(top, np.int64)
+    n = 0
+    for i in idx:
+        if n >= top:
+            break
+        if np.isfinite(costs[i]):
+            sel[n] = i
+            n += 1
+    out = np.empty(n, np.int64)
+    if n == 0:
+        return out
+    sel = sel[:n]
+    order = np.arange(n)
+    approx = np.empty(n)
+    fam = np.zeros(n, np.int64)
+    ms = np.full(n, m, np.int64)
+    rs2 = np.empty(n)
+    ws = np.empty(n, np.int64)
+    for j in range(n):
+        approx[j] = costs[sel[j]]
+        rs2[j] = rs[sel[j] // 8]
+        ws[j] = sel[j] % 8
+    ds = 0 if tail > 0 else m
+    k = 0
+    ptr = 0
+    while True:
+        ptr = next_option(ax, ay, ha_deg, bx, by, hb_deg, ds, order, ptr, approx, 5e8, fam, ms, rs2, ws, tail, back,
+                          front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach, m, 0.0)
+        if ptr >= n:
+            break
+        out[k] = sel[ptr]
+        k += 1
+        ptr += 1
+    return out[:k]

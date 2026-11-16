@@ -64,7 +64,7 @@ PARAMS = dict(
     fast_keep_min_sec=0.0,   # run_layout.py は 1.0 にする(既定の 0 は使わない)
     # 2026-11-16(計算時間): 遠回り・曲がってからつなぐの1本の走り(_best_run)でも、確実に当たる候補を numba で先に飛ばす。
     # 結果は変わらない見込み(確かめてから既定にする)。
-    run_kernel=False,
+    run_kernel=0,   # 1: 候補ごとに numba を呼ぶ版、2: 1回の呼び出しにまとめた版(同じ結果)
     # final_min_clear_cm: 最後の周の黄(そのあとガレージへ向かう)の通り方は、脚とのすき間がこれ以上のものだけにする(0で無効)。
     # 2026-11-12 実機: 配置36で最後の黄だけ反対向きから25°斜めに通り抜ける計画(すき間1.70cm)になり、その手前で大きく
     # 回り込む円弧(カメラがほとんど床の点を見ない)の間に約2cm 右にずれて、右側が脚に当たった。ユーザー決定で2cmにする。
@@ -497,6 +497,13 @@ def body_keepout_mask(px, py, hdeg):
         return np.zeros(len(px), bool)
     if not KEEPOUT_BODY:
         return in_keepout(px, py)
+    # 2026-11-16(計算時間): どの進入禁止の長方形にも車体が届かないなら、向きの計算などをせずに返す(下のループと同じ判定を先に)
+    reach0 = math.hypot(max(FRONT, REAR), HALF_WIDTH) + 1.0
+    if len(px):
+        xmn, xmx, ymn, ymx = float(px.min()), float(px.max()), float(py.min()), float(py.max())
+        if not any(not (xmx + reach0 < x0 or xmn - reach0 > x1 or ymx + reach0 < y0 or ymn - reach0 > y1)
+                   for x0, x1, y0, y1 in KEEPOUT):
+            return np.zeros(len(px), bool)
     h = np.radians(np.asarray(hdeg, float))
     if _KO_CORNERS is None:
         _KO_CORNERS = [[(x, y) for x in (x0, x1) for y in (y0, y1) if abs(x) < INF / 2 and abs(y) < INF / 2]
@@ -1402,6 +1409,8 @@ def _best_run0(A, hA, B, hB, m, tail, top=12):
     thA, thB = math.radians(hA + add), math.radians(hB + add)
     Bm = B - tail * tdir(thB) if tail > 0 else B
     if RUN_KERNEL and hr_kernels.AVAILABLE and GATE_MODEL == 'rect':
+        if RUN_KERNEL >= 2:
+            return _best_run_k2(A, hA, B, hB, m, tail, top, thA, thB, Bm)
         return _best_run_k(A, hA, B, hB, m, tail, top, thA, thB, Bm)
     cands = []
     for r in RADII:
@@ -1457,6 +1466,27 @@ def _best_run_k(A, hA, B, hB, m, tail, top, thA, thB, Bm):
             if all(prim_ok(q) for q in pr):
                 return pr
         ptr += 1
+
+
+def _best_run_k2(A, hA, B, hB, m, tail, top, thA, thB, Bm):
+    """_best_run_k と同じ候補・同じ順番。numba の部分(時間・並べ替え・確実に当たる候補の飛ばし)を1回の呼び出しにまとめた版。"""
+    global _RADII_ARR
+    if _RADII_ARR is None:
+        _RADII_ARR = np.array([float(r) for r in RADII], float)
+    surv = hr_kernels.run_survivors(
+        float(A[0]), float(A[1]), float(hA), float(B[0]), float(B[1]), float(hB), float(thA), float(thB), float(Bm[0]), float(Bm[1]),
+        _RADII_ARR, float(ARC_K), float(V_LINE), float(HALF_TREAD), float(tail), int(top), int(m),
+        float(PIVOT_BACK_CM), float(FRONT), float(REAR - _RO), float(HALF_WIDTH), float(MARGIN_FRONT), float(MARGIN_REAR),
+        LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, float(_RECT_REACH))
+    for i in surv:
+        pr = dubins_one(A, thA, Bm, thB, float(_RADII_ARR[i // 8]), int(i % 8), m)
+        if pr is None:
+            continue
+        if tail > 0:
+            pr = pr + [('line', Bm, B, m)]
+        if all(prim_ok(q) for q in pr):
+            return pr
+    return None
 
 
 def build_via(opt, ep, sp):
