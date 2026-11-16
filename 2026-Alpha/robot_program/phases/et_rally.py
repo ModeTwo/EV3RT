@@ -50,6 +50,7 @@ class EtRallyBatteryLog(Behaviour):
     def update(self):
         from .. import power_log
         if self.mode == "begin":
+            power_log.set_enabled(True)  # 2026-11-16: ここから RALLY_PWR を出す(ETラリーの間だけ)
             power_log.battery_snapshot("begin (still)", warn_low=True)
         elif self.mode == "start":
             power_log.battery_snapshot("drive start (still)", warn_low=True)

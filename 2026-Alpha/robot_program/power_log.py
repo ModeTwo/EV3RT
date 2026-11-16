@@ -16,6 +16,15 @@ TAG = "RALLY_PWR"
 
 # 毎tick出すとログ量が多すぎるため、間引く(既定: 5tick=0.1秒に1回)。
 _DEFAULT_INTERVAL_TICKS = 5
+# 2026-11-16(devTKとのマージ): RALLY_PWR の記録はETラリーの間だけ出す(共通の RunByGyro・SpinAround や、
+# devTK の EtRun・EncoderSpin を通るETラリー以外の走りでは、ハブの読み取りも print もしない)。
+# ETラリーの工程の始め(phases/et_rally.py の EtRallyBatteryLog "begin")と、ETラリーの診断用ミッションで有効にする。
+_enabled = False
+
+
+def set_enabled(enabled: bool) -> None:
+    global _enabled
+    _enabled = bool(enabled)
 _tick_counts: dict = {}
 
 
@@ -27,6 +36,8 @@ def log_power_state(source: str, right_power: float, left_power: float,
     right_power/left_power: このtickで実際にモーターへ指示した出力値
         (モーター側にget_power()が無いため、呼び出し側が指示値をそのまま渡す)。
     """
+    if not _enabled:
+        return
     count = _tick_counts.get(source, 0) + 1
     _tick_counts[source] = count
     if count % interval_ticks != 0:

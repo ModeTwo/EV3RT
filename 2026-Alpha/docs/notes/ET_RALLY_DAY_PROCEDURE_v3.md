@@ -64,6 +64,9 @@ python wireless_device/et_rally_camera_calib/day_floor_calib.py C:\Users\MSAD\Do
   - `camera correct: started ... fix_heading=True`、ガレージで止まったあとの `path: resync ...`。
 
 ## 3. 本番
+> **2026-11-16 の devTK とのマージ以降の注意**: 計画の取り方の既定が devTK に合わせて "file" になった。今の `--mission full` は
+> PC を待たず(4桁の復号キーの入力もない)、`robot_program/et_rally_default_plan.json`(配置36の計画)で走る。
+> 下の PC の計画を使う流れに戻すには、`robot_program/config.py` の `et_rally_strategy_source` を `"received"` にする(TODO: 本番前に決める)。
 1. **PC**（ヒントを受けて計画を送る役）を先に起動する。**必ず先に `cd` で 2026-Alpha フォルダへ移る**（PowerShell には画面の表示ごと貼らず、1行ずつ入力）:
    ```
    cd C:\Users\MSAD\EV3RT\2026-Alpha

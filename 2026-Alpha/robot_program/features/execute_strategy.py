@@ -36,7 +36,10 @@ RALLY_TURN_METHODS = ('spin_pid', 'spin_encoder', 'one_shot', 'lqi', 'spin_encod
 SPIN_MAX_POWER = 70         # その場回旋（スピン）するときの最大モーター出力
 SPIN_MIN_POWER = 60         # その場回旋（スピン）するときの最低モーター出力
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PLAN_PATH = Path(__file__).resolve().parents[1] / "tests" / "plan_seed9392783.json"
+# 2026-11-16: 計画をファイルで走るとき(et_rally_strategy_source="file" が既定、--rally-plan-path なし)に使う計画。
+# 配置36の計画(robot_program/tests/plan_layout36_1116.json と同じもの、その場旋回なし・86.7秒、右コースの座標で左コースは鏡写し)。
+# 別の配置で走らせたいときは、このファイルを差し替えるか --rally-plan-path で渡す。
+DEFAULT_PLAN_PATH = Path(__file__).resolve().parents[1] / "et_rally_default_plan.json"
 
 _LAP_LABEL_RE = re.compile(r"^lap(\d+)")
 # 2026-10-29: turn_forward_compensation有効時の、IsDistanceEarned側の余裕(mm)。

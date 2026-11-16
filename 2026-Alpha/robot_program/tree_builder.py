@@ -17,6 +17,10 @@ from .gyro_scale import EnableGyroScale
 def build_mission_children(context, config):
     # この関数は統合担当者だけが変更し、各機能担当者はfeatures配下だけを変更する。
     from .config import INTEGRATION_MISSIONS
+    if config.mission_mode.startswith('et-rally'):
+        # 2026-11-16: ETラリーの診断用ミッションでも RALLY_PWR を出す(それ以外のミッションではETラリーの工程に入るまで出さない)。
+        from . import power_log
+        power_log.set_enabled(True)
     if config.mission_mode in ("sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit"):
         from .features.sumo_stage_test import build_sumo_stage_test
         return [EnableGyroScale(), build_sumo_stage_test(context, config)]
