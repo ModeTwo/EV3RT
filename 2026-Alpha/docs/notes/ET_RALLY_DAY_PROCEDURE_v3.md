@@ -64,8 +64,9 @@ python wireless_device/et_rally_camera_calib/day_floor_calib.py C:\Users\MSAD\Do
   - `camera correct: started ... fix_heading=True`、ガレージで止まったあとの `path: resync ...`。
 
 ## 3. 本番
-1. **PC**（ヒントを受けて計画を送る役）を先に起動する。`2026-Alpha` フォルダで:
+1. **PC**（ヒントを受けて計画を送る役）を先に起動する。**必ず先に `cd` で 2026-Alpha フォルダへ移る**（PowerShell には画面の表示ごと貼らず、1行ずつ入力）:
    ```
+   cd C:\Users\MSAD\EV3RT\2026-Alpha
    python -m wireless_device --host <ロボットのIP> --curve-plans-dir C:\Users\MSAD\EV3RT\et_rally_plans
    ```
    - その場で計算もさせるなら `--curve-compute-sec <秒>` を足す（配置36で約16秒）。
