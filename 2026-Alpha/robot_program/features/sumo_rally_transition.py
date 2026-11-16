@@ -31,7 +31,7 @@ class TurnTowardRallyStart(Behaviour):
                 None,
             )
 
-            angle = 235.0
+            angle = 215.0
 
             # RIGHTは左回り、LEFTは右回り
             if runtime.course == -1:
@@ -53,7 +53,7 @@ class TurnTowardRallyStart(Behaviour):
                 % (runtime.course, signed_angle, start_bearing, target_bearing)
             )
 
-            power = 60  # 235°旋回専用
+            power = 60  # 215°旋回専用
             motion = self.config.sumo
 
             self.turn = SpinAround(
@@ -113,25 +113,67 @@ from ..types import HeadingType
 
 
 class StableBlueArrival(Behaviour):
-    """床面カラーセンサーで青を3回連続検出したら成功。"""
+    """最初の青検出から77.5mm進み、車軸中点を円中心へ近づける。"""
+
+    BLUE_RADIUS_MM = 39.5
+    SENSOR_FORWARD_MM = 38.0
+    # 正なら停止目標を手前へ補正。実測するまで0。
+    STOP_ADVANCE_MM = 0.0
 
     def __init__(self):
-        super().__init__("青い丸への到着判定")
+        super().__init__("青い丸中心への到着判定")
         self.classifier = ColorClassifier()
-        self.count = 0
 
     def initialise(self):
         self.count = 0
+        self.first_blue_distance = None
+        self.blue_confirmed = False
 
     def update(self):
-        runtime.require("color_sensor")
-        h, s, v = runtime.color_sensor.get_raw_color_hsv()
-        if self.classifier.classify(h, s, v) == Color.BLUE:
-            self.count += 1
-        else:
-            self.count = 0
+        import math
+        runtime.require("color_sensor", "plotter")
+        distance = float(runtime.plotter.get_distance())
+        if not math.isfinite(distance):
+            raise ValueError("invalid blue-centering distance")
 
-        return Status.SUCCESS if self.count >= 3 else Status.RUNNING
+        if not self.blue_confirmed:
+            h, s, v = runtime.color_sensor.get_raw_color_hsv()
+            if self.classifier.classify(h, s, v) == Color.BLUE:
+                if self.count == 0:
+                    self.first_blue_distance = distance
+                self.count += 1
+                if self.count >= 3:
+                    self.blue_confirmed = True
+                    self.logger.info(
+                        "RALLY_BLUE CENTER_CONFIRMED first=%.1f now=%.1f "
+                        "target_after_first=%.1f"
+                        % (
+                            self.first_blue_distance, distance,
+                            self.BLUE_RADIUS_MM + self.SENSOR_FORWARD_MM
+                            - self.STOP_ADVANCE_MM,
+                        )
+                    )
+            else:
+                # 単発ノイズは捨て、次の連続検出の先頭を使う。
+                self.count = 0
+                self.first_blue_distance = None
+
+        if not self.blue_confirmed:
+            return Status.RUNNING
+
+        # 確定後はセンサーが青から外れても距離目標を維持する。
+        progress = distance - self.first_blue_distance
+        target = (
+            self.BLUE_RADIUS_MM + self.SENSOR_FORWARD_MM
+            - self.STOP_ADVANCE_MM
+        )
+        if progress >= target:
+            self.logger.info(
+                "RALLY_BLUE CENTER_STOP progress=%.1f target=%.1f"
+                % (progress, target)
+            )
+            return Status.SUCCESS
+        return Status.RUNNING
 
 
 class WaitForSumoRecordingClose(Behaviour):
@@ -168,10 +210,10 @@ class WaitForSumoRecordingClose(Behaviour):
 
 
 class TurnAfterBlue(Behaviour):
-    """青い丸到着後、LEFTは左35度、RIGHTは右35度旋回する。"""
+    """青い丸到着後、RIGHTは90度、LEFTは270度へ正対する。"""
 
     def __init__(self, context, config):
-        super().__init__("⑤ 青い丸到着後にコース別35°旋回")
+        super().__init__("⑤ 青い丸到着後にラリー方向へ正対")
         self.context = context
         self.config = config
         self.turn = None
@@ -189,31 +231,31 @@ class TurnAfterBlue(Behaviour):
             if runtime.course not in (-1, 1):
                 self.logger.error("BLUE_EXIT_TURN unsupported course")
                 return Status.FAILURE
+
+            target = 90.0 if runtime.course == -1 else 270.0
             motion = self.config.sumo
-            self.turn = SpinAround(
-                name="blue arrival course turn 35 degrees",
-                target=35.0,
-                target_type=HeadingType.RELATIVE,
-                max_power=40,
-                min_power=40,
+            self.turn = SpinToBearing(
+                name="face rally direction after blue arrival",
+                context=self.context,
+                bearing=target,
+                max_power=50,
+                min_power=50,
                 pid_p=motion.turn_pid_p,
                 pid_i=motion.turn_pid_i,
                 pid_d=motion.turn_pid_d,
                 tolerance=1.0,
-                normalize_error=False,
             )
             self.logger.info(
                 "BLUE_EXIT_TURN START course=%s bearing=%.2f "
-                "physical_angle=%.1f power=40"
-                % (runtime.course, current_bearing(self.context),
-                   -runtime.course * 35.0)
+                "target=%.2f power=50"
+                % (runtime.course, current_bearing(self.context), target)
             )
 
         self.turn.tick_once()
         if self.turn.status == Status.SUCCESS:
             self.logger.info(
-                "BLUE_EXIT_TURN COMPLETE bearing=%.2f"
-                % current_bearing(self.context)
+                "BLUE_EXIT_TURN COMPLETE bearing=%.2f target=%.2f"
+                % (current_bearing(self.context), self.turn.target_bearing)
             )
         return self.turn.status
 
@@ -235,7 +277,7 @@ class MoveToRallyBlue(Behaviour):
     TURN_TIMEOUT_SEC = 6.0
     DRIVE_TIMEOUT_SEC = 8.0
     MAX_OBSERVATION_AGE_SEC = 0.5
-    MAX_DRIVE_MM = 650.0
+    MAX_DRIVE_MM = 750.0
     DRIVE_POWER = 70
     TURN_POWER = 20
     CENTER_TOLERANCE_PX = 12
@@ -261,6 +303,7 @@ class MoveToRallyBlue(Behaviour):
         self.started_at = time.monotonic()
         self.phase_started_at = self.started_at
         self.phase = "DETECT"
+        self.blue_alignment_turns = 0
         self.session = runtime.video.begin_rally_blue_read()
         self.logger.info(
             "RALLY_BLUE START session=%s" % self.session
@@ -341,7 +384,7 @@ class MoveToRallyBlue(Behaviour):
             # 既存の黒ボトル認識と同じ画角モデルによる初期推定。
             # 実機で符号・倍率を検証すること。
             import math
-            correction = math.degrees(
+            correction = 0.6 * math.degrees(
                 math.atan(error_px * 270.0 / 320.0 / 230.0)
             )
 
@@ -350,8 +393,11 @@ class MoveToRallyBlue(Behaviour):
             ) % 360.0
 
             motion = self.config.sumo
-            power = 40  # 青い丸への補正旋回専用
+            power = 50  # 青い丸への補正旋回専用
 
+            if self.blue_alignment_turns >= 3:
+                return self._fail("blue alignment correction limit")
+            self.blue_alignment_turns += 1
             self.turn = SpinToBearing(
                 "rally blue alignment",
                 self.context,
@@ -381,8 +427,24 @@ class MoveToRallyBlue(Behaviour):
                 return self._fail("alignment turn failed")
 
             if self.turn.status == Status.SUCCESS:
-                self._start_drive()
+                self._stop_motors()
+                self.turn = None
+                self._set_phase("ALIGN_SETTLE")
 
+            return Status.RUNNING
+
+        if self.phase == "ALIGN_SETTLE":
+            self._stop_motors()
+            if now - self.phase_started_at < 0.2:
+                return Status.RUNNING
+            # 旋回前・旋回中の画像を使わず、新しい世代で再確認する。
+            runtime.video.end_rally_blue_read(self.session)
+            self.session = runtime.video.begin_rally_blue_read()
+            self.logger.info(
+                "RALLY_BLUE RECHECK session=%s corrections=%d"
+                % (self.session, self.blue_alignment_turns)
+            )
+            self._set_phase("DETECT")
             return Status.RUNNING
 
         if self.phase == "DRIVE":
@@ -464,6 +526,6 @@ def build_move_sumo_to_rally_start(context, config):
         MoveToRallyBlue(context, config),
         StopNow(name="④ 青い丸到着・停止"),
         TurnAfterBlue(context, config),
-        StopNow(name="⑤ コース別35°旋回完了・停止"),
+        StopNow(name="⑤ ラリー方向正対完了・停止"),
     ])
     return root

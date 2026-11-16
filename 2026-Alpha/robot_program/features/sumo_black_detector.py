@@ -85,7 +85,8 @@ class SumoBlackDetector:
     def _candidates(self, mask, source, d, t, frame_id, gyro_deg):
         # Apply ALL shape conditions before choosing any candidate.
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
+        # 隣接するバーの根元とラベルを結合しないよう、
+        # クロージングは行わずオープニングのみ使用する。
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         points = []
         for cnt in contours:

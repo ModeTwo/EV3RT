@@ -100,10 +100,8 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             if runtime.course not in (-1, 1):
                 raise ValueError("unsupported course for delivery-to-sumo")
             self.approach_offset_from_reset_deg = -90.0 * runtime.course
-        if (
-            getattr(self, "delivery_green_on_right", False)
-            and runtime.course == 1
-        ):
+        # bottle-sumo: LEFTの右側、RIGHTの左側は共に床面方位180度。
+        if getattr(self, "delivery_green_on_right", False):
             from dataclasses import replace
             self.push_settings = replace(
                 self.push_settings, green_bearing_deg=180.0
