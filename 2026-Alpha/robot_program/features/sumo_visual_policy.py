@@ -177,6 +177,17 @@ class VisualTurnPolicy:
         return row
 
     def _control(self, now, gyro, observation, excursion):
+        # 累積旋回上限にも、制動中に進む角度の予測を適用する。
+        stop_allowance = (
+            abs(self.velocity) * self.s.visual_stop_horizon_sec
+            + self.s.visual_stop_margin_deg
+        )
+        if (
+            self.stage != "BRAKING"
+            and excursion + stop_allowance >= self.s.max_turn_step_deg
+        ):
+            self._brake(now, "predicted-total-turn-bound", finish=True)
+            return
         valid = self._valid(observation, now)
         if valid:
             self.frame_id = observation["frame_id"]

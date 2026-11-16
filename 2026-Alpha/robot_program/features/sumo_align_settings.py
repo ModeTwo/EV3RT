@@ -8,7 +8,7 @@ from dataclasses import dataclass, fields
 
 @dataclass(frozen=True)
 class SumoAlignSettings:
-    distance_mm: float = 1000.0
+    distance_mm: float = 950.0
     power: int = 80
     drive_timeout_sec: float = 15.0
     settle_sec: float = 0.3
@@ -19,7 +19,7 @@ class SumoAlignSettings:
     center_tolerance_px: float = 8.0
     max_stationary_heading_error_deg: float = 2.0
     max_turn_step_deg: float = 20.0
-    max_turns: int = 5
+    max_turns: int = 3
     turn_timeout_sec: float = 4.0
     overall_timeout_sec: float = 40.0
 

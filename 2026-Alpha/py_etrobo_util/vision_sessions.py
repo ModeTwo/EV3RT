@@ -11,6 +11,7 @@ class VisionSessions:
         self.bottle = (0, -1, None)
         self.marker = (0, -1, None)
         self.error = None
+        self.rally_blue = (0, -1, None)
 
     def start(self, mode):
         with self.lock:
@@ -19,6 +20,7 @@ class VisionSessions:
             self.qr = (self.generation, -1, '')
             self.bottle = (self.generation, -1, None)
             self.marker = (self.generation, -1, None)
+            self.rally_blue = (self.generation, -1, None)
             self.error = None
             return self.generation
 
@@ -67,3 +69,15 @@ class VisionSessions:
     def get_marker(self):
         with self.lock:
             return self.marker
+
+    def publish_rally_blue(self, session, frame_id, observation):
+        with self.lock:
+            if self.mode != "rally_blue" or session != self.generation:
+                return False
+            if frame_id > self.rally_blue[1]:
+                self.rally_blue = (session, frame_id, observation)
+            return True
+
+    def get_rally_blue(self):
+        with self.lock:
+            return self.rally_blue
