@@ -38,7 +38,11 @@ TIMEOUT = int(os.environ.get('RUN_LAYOUT_TIMEOUT', '4000'))
 # ため例外なしでもう1回計算する。
 NEW = os.environ.get('RUN_LAYOUT_FAST', '0') == '1'
 if NEW:
-    COMMON.update(HR_RUN_KERNEL='1', HR_FAST_KEEP_MIN_SEC='1.0')
+    COMMON.update(HR_RUN_KERNEL='1', HR_LINE_KERNEL='1', HR_FAST_KEEP_MIN_SEC='1.0')
+# 2026-11-16: 試し用。RUN_LAYOUT_EXTRA="HR_VIA_GROUP_TRIES=15;HR_ARC_FIRST_TRIES=30" のように、道具の設定を上書きする
+for kv in filter(None, os.environ.get('RUN_LAYOUT_EXTRA', '').split(';')):
+    k_, v_ = kv.split('=', 1)
+    COMMON[k_.strip()] = v_.strip()
 
 
 def tool(gates, out_r, log, fast):

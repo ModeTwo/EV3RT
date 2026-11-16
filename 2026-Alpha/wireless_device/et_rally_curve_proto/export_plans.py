@@ -36,7 +36,19 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     written, skipped, dup = {}, [], 0
     for d in a.dirs:
-        for f in sorted(glob.glob(os.path.join(d, 'plan_*.json'))):
+        # 2026-11-16: run_all.py / run_layout.py の出力(<鍵>.plan.json、当たり判定は <鍵>.chk.json)も読む。NG の配置は書き出さない
+        files = sorted(glob.glob(os.path.join(d, 'plan_*.json')))
+        for f in sorted(glob.glob(os.path.join(d, '*.plan.json'))):
+            if f.endswith(('.fast.plan.json', '.base.plan.json')):
+                continue
+            ck = f[:-len('.plan.json')] + '.chk.json'
+            try:
+                if json.load(open(ck, encoding='utf-8')).get('ng'):
+                    bad.add(os.path.basename(f))
+            except (OSError, ValueError):
+                bad.add(os.path.basename(f))
+            files.append(f)
+        for f in files:
             if os.path.basename(f) in bad:
                 skipped.append(os.path.basename(f))
                 continue

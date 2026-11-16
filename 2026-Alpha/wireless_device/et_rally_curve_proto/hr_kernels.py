@@ -584,3 +584,33 @@ def arc_core(xs, ys, c, s, lc, lu, lv, lhu, lhv, corners, reach, front, rear, hw
         if seg_cross(xs, ys, gsegs[g, 0], gsegs[g, 1], gsegs[g, 2], gsegs[g, 3]):
             return 3, 0
     return 0, 0
+
+
+@njit(cache=True)
+def label4(free):
+    """2026-11-16(行き止まりの判定): 0/1 の格子(1 = 通れる)の、4方向につながった領域に番号(1から)を振る。通れないマスは0。"""
+    ny, nx = free.shape
+    lab = np.zeros((ny, nx), np.int32)
+    stack = np.empty(ny * nx, np.int64)
+    cur = 0
+    for y0 in range(ny):
+        for x0 in range(nx):
+            if free[y0, x0] == 0 or lab[y0, x0] != 0:
+                continue
+            cur += 1
+            sp = 0
+            stack[sp] = y0 * nx + x0; sp += 1
+            lab[y0, x0] = cur
+            while sp > 0:
+                sp -= 1
+                v = stack[sp]
+                y = v // nx; x = v % nx
+                if x > 0 and free[y, x - 1] and lab[y, x - 1] == 0:
+                    lab[y, x - 1] = cur; stack[sp] = v - 1; sp += 1
+                if x < nx - 1 and free[y, x + 1] and lab[y, x + 1] == 0:
+                    lab[y, x + 1] = cur; stack[sp] = v + 1; sp += 1
+                if y > 0 and free[y - 1, x] and lab[y - 1, x] == 0:
+                    lab[y - 1, x] = cur; stack[sp] = v - nx; sp += 1
+                if y < ny - 1 and free[y + 1, x] and lab[y + 1, x] == 0:
+                    lab[y + 1, x] = cur; stack[sp] = v + nx; sp += 1
+    return lab
