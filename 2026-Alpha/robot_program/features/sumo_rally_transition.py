@@ -520,7 +520,7 @@ _original_build_move_sumo_to_rally_start = build_move_sumo_to_rally_start
 
 def build_move_sumo_to_rally_start(context, config):
     root = _original_build_move_sumo_to_rally_start(context, config)
-    if config.mission_mode in ("sumo-stage-all", "bottle-sumo"):
+    if config.mission_mode in ("sumo-stage-all", "bottle-sumo", "full"):
         root.add_child(WaitForSumoRecordingClose(context))
     root.add_children([
         MoveToRallyBlue(context, config),

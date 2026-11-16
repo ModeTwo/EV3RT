@@ -115,10 +115,8 @@ class AlignSumoBottle(Behaviour):
         return row
 
     def _start_drive(self, now):
-        if self.continuous_entry:
-            if runtime.course not in (-1, 1):
-                raise ValueError("unsupported course for delivery-to-sumo")
-            self.approach_offset_from_reset_deg = -90.0 * runtime.course
+        if runtime.course not in (-1, 1):
+            raise ValueError("unsupported course for sumo approach")
         self.phase = "DRIVE"
         self.phase_started_at = now
         self.distance = IsDistanceEarned(

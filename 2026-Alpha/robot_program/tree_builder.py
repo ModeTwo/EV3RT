@@ -48,6 +48,45 @@ def build_mission_children(context, config):
         from .integration_runs import build_integration_children
         # ラップゲートを通らない試験ミッションは、先頭からジャイロの倍率補正を有効にする。
         return [EnableGyroScale()] + list(build_integration_children(context, config))
+    if config.mission_mode in ('lap-to', 'lap-to-sumo', 'full'):
+        # LAP already performed bottle approach; carry only AT's handoff state.
+        from .behaviours.motor_control import StopNow
+        from .features.catch_bottle import RequireBottleColor
+        from .diagnostics.lap_recovery_observation import FlushLapFloorDiagnostics, DumpTransitionDiagnostics
+        from .behaviours.continue_after_failure import ContinueAfterFailure
+        from py_trees.decorators import Timeout
+        lap = build_lap_gate_phase(context, config)
+        lap_phase = lap
+        to = build_tantou_tree(context, config, include_exit=True)
+        if config.mission_mode in ('lap-to-sumo', 'full'):
+            lap = ContinueAfterFailure(name='continue after LAP failure', child=lap)
+            to = ContinueAfterFailure(name='continue after TO failure',
+                    child=Timeout(name='TO 60s limit', child=to, duration=60))
+        children = [lap, EnableGyroScale(),
+                RequireBottleColor(context),
+                CaptureAtToHandoff('AT_TO capture boundary', context),
+                to]
+        if config.mission_mode in ('lap-to-sumo', 'full'):
+            from .phases.et_sumo import build_sumo_after_delivery
+
+            delivery = build_bottle_delivery_final_phase(context, config)
+            sumo = build_sumo_after_delivery(context, config)
+            children.extend([ContinueAfterFailure(name='continue after delivery failure',
+                                child=Timeout(name='delivery 60s limit', child=delivery, duration=60)),
+                             ContinueAfterFailure(name='finish after sumo failure', child=sumo)])
+        if config.mission_mode == 'full':
+            from .features.sumo_rally_transition import build_move_sumo_to_rally_start
+            transition = build_move_sumo_to_rally_start(context, config)
+            children.append(ContinueAfterFailure(name='continue after sumo-to-rally failure', child=transition))
+            if config.enable_et_rally and config.et_rally_laps > 0:
+                children.append(build_et_rally_phase(context, config))
+            if config.enable_finish:
+                children.append(build_finish_phase(context, config))
+        children.append(StopNow(name='LAP to route complete brake'))
+        if hasattr(lap_phase, 'floor_recorder'):
+            children.extend([FlushLapFloorDiagnostics(lap_phase.floor_recorder),
+                             DumpTransitionDiagnostics(lap_phase.lap_controller)])
+        return children
     if config.mission_mode not in (
         'at',
         'to',

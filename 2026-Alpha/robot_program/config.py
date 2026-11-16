@@ -343,6 +343,8 @@ MANUAL_RALLY_MISSIONS = ('rally-drive', 'bottle-rally', 'rally-sumo')
 
 MISSION_CHOICES = (
     *INTEGRATION_MISSIONS,
+    'lap-to',
+    'lap-to-sumo',
     'at',
     'to',
     'configured',
@@ -394,6 +396,10 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
         enable_et_sumo=False,
         enable_finish=False,
     )
+    if mission in ('lap-to', 'lap-to-sumo'):
+        disabled.update(lapgate=True, enable_bottle_delivery=True,
+                        enable_et_sumo=(mission == 'lap-to-sumo'))
+        return replace(config, mission_mode=mission, **disabled)
     if mission in ('sumo-stage-all', 'sumo-stage-entry', 'sumo-stage-push', 'sumo-stage-exit', 'sumo-align','sumo-catch-test','sumo-sensor-test','sumo-turn-test','sumo-push-route-test'):
         disabled['enable_et_sumo'] = True
         return replace(config, mission_mode=mission, **disabled)
@@ -469,7 +475,7 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
             # 2026-11-14: 本番はタッチ1回で全工程を通す。ETラリーの持ち時間 = 120 − 競技の開始からの秒(et_rally_time_budget.py)
             et_rally_time_total=(config.et_rally_time_total if config.et_rally_time_total is not None else 120.0),
         )
-    return replace(config, mission_mode='configured', **disabled)
+    return replace(config, mission_mode=('full' if mission == 'full' else 'configured'), **disabled)
 
 
 def mission_requires_qr(config: RaceConfig) -> bool:
