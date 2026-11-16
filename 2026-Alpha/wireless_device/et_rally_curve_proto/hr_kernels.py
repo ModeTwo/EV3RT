@@ -516,3 +516,71 @@ def run_survivors(ax, ay, ha_deg, bx, by, hb_deg, tha, thb, bmx, bmy, rs, karc, 
         k += 1
         ptr += 1
     return out[:k]
+
+
+@njit(cache=True)
+def line_core(xs, ys, gsegs, ko, c1, s1, ax, ay, f0, f1, r0, r1, hw, mf, mr, ro,
+              lc, lu, lv, lhu, lhv, corners, post_hv, post_corners):
+    """2026-11-16(計算時間): hybrid_route._line_check のうち、車体の進入禁止の判定(body_keepout)より前の部分を1回で。
+    gsegs: 横切ってはいけないゲートの線分 (G,4)、ko: 進入禁止の長方形 (K,4)。xs, ys, c1, s1 は呼ぶ側の numpy で作った値
+    (今までと同じ値で判定するため)。戻り値: 当たらないか(True)。"""
+    for g in range(len(gsegs)):
+        if seg_cross(xs, ys, gsegs[g, 0], gsegs[g, 1], gsegs[g, 2], gsegs[g, 3]):
+            return False
+    for i in range(len(xs)):
+        for k in range(len(ko)):
+            if xs[i] > ko[k, 0] and xs[i] < ko[k, 1] and ys[i] > ko[k, 2] and ys[i] < ko[k, 3]:
+                return False
+    px = np.empty(1); py = np.empty(1); cc = np.empty(1); ss = np.empty(1)
+    px[0] = ax; py[0] = ay; cc[0] = c1; ss[0] = s1
+    if rect_clear(px, py, cc, ss, f0, f1, hw, lc, lu, lv, lhu, lhv, corners)[0] < mf:
+        return False
+    if ro > 0:
+        d = min(rect_clear(px, py, cc, ss, r0 + ro, r1, hw, lc, lu, lv, lhu, lhv, corners)[0],
+                rect_clear(px, py, cc, ss, r0, r1, hw, lc, lu, lv, lhu, post_hv, post_corners)[0])
+    else:
+        d = rect_clear(px, py, cc, ss, r0, r1, hw, lc, lu, lv, lhu, lhv, corners)[0]
+    if d < mr:
+        return False
+    return True
+
+
+@njit(cache=True)
+def arc_core(xs, ys, c, s, lc, lu, lv, lhu, lhv, corners, reach, front, rear, hw, mf, mr,
+             ko, ko_corners, ko_nc, ko_exempt_now, near_start, keepout_body, outx, outy, body_reach, gsegs):
+    """2026-11-16(計算時間): hybrid_route._arc_check(_RO = 0 のとき)の判定を1回で。xs, ys, c, s は呼ぶ側の numpy で作った値。
+    戻り値 (code, i): 0 = 当たらない、1 = 姿勢 i で脚か進入禁止に当たる(最初の姿勢)、2 = 点が進入禁止、3 = ゲートを横切る。"""
+    n = len(xs)
+    okp = np.ones(n, np.bool_)
+    keep, near = poses_near(xs, ys, lc, reach)
+    if len(near):
+        cf, cr = rect_front_rear(xs[near], ys[near], c[near], s[near], lc, lu, lv, lhu, lhv, corners, keep, front, rear, hw)
+        for j in range(len(near)):
+            okp[near[j]] = (cf[j] >= mf) and (cr[j] >= mr)
+    if len(ko):
+        if not keepout_body:
+            for i in range(n):
+                for k in range(len(ko)):
+                    if xs[i] > ko[k, 0] and xs[i] < ko[k, 1] and ys[i] > ko[k, 2] and ys[i] < ko[k, 3]:
+                        okp[i] = False
+        else:
+            xmn = xs.min(); xmx = xs.max(); ymn = ys.min(); ymx = ys.max()
+            for k in range(len(ko)):
+                x0, x1, y0, y1 = ko[k, 0], ko[k, 1], ko[k, 2], ko[k, 3]
+                if xmx + body_reach < x0 or xmn - body_reach > x1 or ymx + body_reach < y0 or ymn - body_reach > y1:
+                    continue
+                hit = keepout_hit(xs, ys, c, s, outx, outy, x0, x1, y0, y1, ko_corners[k, :ko_nc[k]], front, rear, hw)
+                for i in range(n):
+                    if hit[i] and not (ko_exempt_now[k] and near_start[i]):
+                        okp[i] = False
+    for i in range(n):
+        if not okp[i]:
+            return 1, i
+    for i in range(n):
+        for k in range(len(ko)):
+            if xs[i] > ko[k, 0] and xs[i] < ko[k, 1] and ys[i] > ko[k, 2] and ys[i] < ko[k, 3]:
+                return 2, 0
+    for g in range(len(gsegs)):
+        if seg_cross(xs, ys, gsegs[g, 0], gsegs[g, 1], gsegs[g, 2], gsegs[g, 3]):
+            return 3, 0
+    return 0, 0

@@ -64,6 +64,7 @@ PARAMS = dict(
     fast_keep_min_sec=0.0,   # run_layout.py は 1.0 にする(既定の 0 は使わない)
     # 2026-11-16(計算時間): 遠回り・曲がってからつなぐの1本の走り(_best_run)でも、確実に当たる候補を numba で先に飛ばす。
     # 結果は変わらない見込み(確かめてから既定にする)。
+    line_kernel=0,   # 2026-11-16(計算時間): 1 なら直線の当たり判定(_line_check)の前半を numba の1回の呼び出しで(同じ結果)
     run_kernel=0,   # 1: 候補ごとに numba を呼ぶ版、2: 1回の呼び出しにまとめた版(同じ結果)
     # final_min_clear_cm: 最後の周の黄(そのあとガレージへ向かう)の通り方は、脚とのすき間がこれ以上のものだけにする(0で無効)。
     # 2026-11-12 実機: 配置36で最後の黄だけ反対向きから25°斜めに通り抜ける計画(すき間1.70cm)になり、その手前で大きく
@@ -581,7 +582,44 @@ def line_ok(a, b, m, allow=None):
     return ok
 
 
+_KO_ARR = None
+
+
 def _line_check(a, b, m, allow=None):
+    if LINE_KERNEL and hr_kernels.AVAILABLE and GATE_MODEL == 'rect':
+        return _line_check_k(a, b, m, allow)
+    return _line_check0(a, b, m, allow)
+
+
+def _line_check_k(a, b, m, allow=None):
+    """_line_check0 と同じ判定。点の並び・向きの三角関数は同じ numpy の式で作り、判定の順番どおりに numba で調べる。"""
+    global _KO_ARR
+    v = b - a; L = float(np.hypot(*v))
+    if L < 1e-6:
+        return True
+    h = math.atan2(v[1], v[0]) + (0 if m > 0 else math.pi)
+    if m > 0:
+        f0, f1, r0, r1 = 0.0, L + FRONT, -REAR, L
+    else:
+        f0, f1, r0, r1 = -L, FRONT, -L - REAR, 0.0
+    n = max(2, int(L / 2) + 1)
+    xs = np.linspace(a[0], b[0], n); ys = np.linspace(a[1], b[1], n)
+    if _KO_ARR is None:
+        _KO_ARR = np.array([[float(v_) for v_ in r_] for r_ in KEEPOUT], float).reshape(-1, 4)
+    gs = [(pa[0], pa[1], pb[0], pb[1]) for pa, pb, col in GSEG
+          if not (col == allow or col == _ALLOW_TAB or (_EXEMPT_ON and START_ANY_GATE and col != 'red'))]
+    gsegs = np.array(gs, float).reshape(-1, 4)
+    hh = np.array([h])
+    if not hr_kernels.line_core(xs, ys, gsegs, _KO_ARR, float(np.cos(hh)[0]), float(np.sin(hh)[0]), float(a[0]), float(a[1]),
+                                float(f0), float(f1), float(r0), float(r1), float(HALF_WIDTH), float(MARGIN_FRONT), float(MARGIN_REAR),
+                                float(_RO) if GATE_MODEL == 'rect' else 0.0,
+                                LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, POST_HV, _POST_CORNERS4):
+        return False
+    nb = max(2, int(L) + 1)
+    return not body_keepout(np.linspace(a[0], b[0], nb), np.linspace(a[1], b[1], nb), np.full(nb, math.degrees(h)))
+
+
+def _line_check0(a, b, m, allow=None):
     v = b - a; L = float(np.hypot(*v))
     if L < 1e-6:
         return True
@@ -661,7 +699,71 @@ def arc_ok(pr, allow=None):
     return ok
 
 
+_ARC_K_STATIC = None
+
+
+def _arc_k_static():
+    """arc_core に渡す、配置ごとに変わらない配列(進入禁止の長方形と角、車体の輪郭、スタートの除外)。body_keepout_mask と同じ作り方。"""
+    global _ARC_K_STATIC, _KO_CORNERS, _START_EXEMPT, _BODY_OUTLINE
+    if _ARC_K_STATIC is None:
+        if _KO_CORNERS is None:
+            _KO_CORNERS = [[(x, y) for x in (x0, x1) for y in (y0, y1) if abs(x) < INF / 2 and abs(y) < INF / 2]
+                           for x0, x1, y0, y1 in KEEPOUT]
+        if _BODY_OUTLINE is None:
+            _BODY_OUTLINE = (np.concatenate([np.linspace(-REAR, FRONT, 14), np.full(8, FRONT), np.linspace(FRONT, -REAR, 14), np.full(8, -REAR)]),
+                             np.concatenate([np.full(14, HALF_WIDTH), np.linspace(HALF_WIDTH, -HALF_WIDTH, 8), np.full(14, -HALF_WIDTH),
+                                             np.linspace(-HALF_WIDTH, HALF_WIDTH, 8)]))
+        xs_, ys_ = _BODY_OUTLINE
+        if _START_EXEMPT is None:
+            sb = [(START[0] + a * math.cos(math.radians(START_H)) - b * math.sin(math.radians(START_H)),
+                   START[1] + a * math.sin(math.radians(START_H)) + b * math.cos(math.radians(START_H)))
+                  for a, b in zip(xs_, ys_)]
+            _START_EXEMPT = {k for k, (x0, x1, y0, y1) in enumerate(KEEPOUT) if any(x0 < x < x1 and y0 < y < y1 for x, y in sb)}
+        K = len(KEEPOUT)
+        ko = np.array([[float(v_) for v_ in r_] for r_ in KEEPOUT], float).reshape(-1, 4)
+        kc = np.zeros((K, 4, 2)); nc = np.zeros(K, np.int64)
+        for k in range(K):
+            nc[k] = len(_KO_CORNERS[k])
+            for j, (x, y) in enumerate(_KO_CORNERS[k]):
+                kc[k, j, 0] = x; kc[k, j, 1] = y
+        ex = np.array([k in _START_EXEMPT for k in range(K)], np.bool_)
+        _ARC_K_STATIC = (ko, kc, nc, ex, np.asarray(xs_, float), np.asarray(ys_, float))
+    return _ARC_K_STATIC
+
+
 def _arc_check(pr, allow=None):
+    if LINE_KERNEL and hr_kernels.AVAILABLE and GATE_MODEL == 'rect' and _RO <= 0:
+        return _arc_check_k(pr, allow)
+    return _arc_check0(pr, allow)
+
+
+def _arc_check_k(pr, allow=None):
+    """_arc_check0 と同じ判定(_RO = 0 のとき)。点の並び・向き・三角関数は同じ numpy の式で作り、判定を numba で。"""
+    _, c, r, theta, sgn, sweep, m, p0 = pr
+    xs, ys, hb = arc_samples(pr)
+    n = len(xs) - 1
+    h = np.radians(np.asarray(hb, float))
+    cs = np.cos(h); sn = np.sin(h)
+    ko, kc, nc, ex, ox, oy = _arc_k_static()
+    if not KEEPOUT:
+        ko = np.zeros((0, 4))
+    near_start = np.hypot(xs - START[0], ys - START[1]) <= START_EXEMPT_CM
+    ex_now = ex & bool(_EXEMPT_ON)
+    gs = [(pa[0], pa[1], pb[0], pb[1]) for pa, pb, col in GSEG
+          if not (col == allow or col == _ALLOW_TAB or (_EXEMPT_ON and START_ANY_GATE and col != 'red'))]
+    gsegs = np.array(gs, float).reshape(-1, 4)
+    code, i = hr_kernels.arc_core(np.asarray(xs, float), np.asarray(ys, float), cs, sn, LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV,
+                                  _LEG_CORNERS4, float(_RECT_REACH), float(FRONT), float(REAR), float(HALF_WIDTH),
+                                  float(MARGIN_FRONT), float(MARGIN_REAR), ko, kc, nc, ex_now, near_start, bool(KEEPOUT_BODY),
+                                  ox, oy, float(math.hypot(max(FRONT, REAR), HALF_WIDTH) + 1.0), gsegs)
+    if code == 1:
+        return False, sweep * max(i - 1, 0) / n
+    if code in (2, 3):
+        return False, 0.0
+    return True, None
+
+
+def _arc_check0(pr, allow=None):
     """(当たらないか, 当たる最初の角度rad)"""
     _, c, r, theta, sgn, sweep, m, p0 = pr
     xs, ys, hb = arc_samples(pr)
