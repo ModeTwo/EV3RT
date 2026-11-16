@@ -31,8 +31,9 @@ v2（11/14）からの主な変更:
    ```
    python3 et_rally_camera_capture.py --tag jig --count 1
    ```
-2. PC で較正し直す:
+2. **PC で**較正し直す(ロボットでは動かない。ロボットには cv2 がない。画像は PC がロボットから取ってくる):
    ```
+   cd C:\Users\MSAD\EV3RT\2026-Alpha
    python wireless_device/et_rally_camera_calib/recalibrate_day.py --set-default
    ```
    - ばらつきの警告が出たら撮り直す。commit・push し、ロボットで `git pull`。
@@ -45,11 +46,12 @@ v2（11/14）からの主な変更:
   python3 alpha.py right --mission rally-drive --rally-start-pose on --rally-camera-log 1 --rally-camera-exposure 30 --rally-straight-pause-sec 1.5 --rally-straight-pause-labels cal1,cal2,cal3,cal4,cal5 --rally-plan-path robot_program/tests/plan_test_selfcal_stops_1114.json
   ```
   15cm 進んで1.5秒止まる、を5回して終わる。**最後まで走らせる**（途中で止めると止まった場所が足りない）。
-- PC でログを取ってくる: `python wireless_device/fetch_run_logs.py`
+- PC でログを取ってくる: `python wireless_device/fetch_run_logs.py`(名前が引けないときは `--host shunsuke09@<ロボットのIP>`)。
+  保存先は既定で `C:\Users\MSAD\Downloads\et_run_logs`。
 
 ### 2-2. 床での較正（PC、約1分）
 ```
-python wireless_device/et_rally_camera_calib/day_floor_calib.py run_logs/et_camera_<1回目> run_logs/et_camera_<2回目> --set-default
+python wireless_device/et_rally_camera_calib/day_floor_calib.py C:\Users\MSAD\Downloads\et_run_logs\et_camera_<1回目> C:\Users\MSAD\Downloads\et_run_logs\et_camera_<2回目> --set-default
 ```
 - 出る値の目安（11/15）: 取り付けの補正 向き +0.4°・傾き −0.6°・高さ +2.5mm、`start_fix` 前 −3・左 +17mm・向き −1.3°。
 - 「回ごとのばらつきが大きい」の警告が出たら、もう1回走らせて3回分で出し直す。
@@ -82,6 +84,7 @@ python wireless_device/et_rally_camera_calib/day_floor_calib.py run_logs/et_came
 4. TODO（未確認）: `--mission full` の通し（前の工程からつないで）、左コースで今日の新しい設定を通すこと。
 
 ## 4. 走ったあと
+- 毎回、カメラ補正が効いていたかも見る: `camera correct: finished {...}` の used が seen の4割前後、resid(合わずに捨てた数)が20前後まで、`pitch now ... (median resid ...)` が3〜6mm、`start pose:` の pitch_fix が +0.4〜+1.5° くらい。外れていればカメラが動いた疑い → 1章・2章の較正(11/16 は走行の途中で動いた)。
 `python wireless_device/fetch_run_logs.py`。見る所: `TIME BUDGET lapN done`、`camera correct: finished`、`path: resync`、`RALLY_BATT`。
 
 ## 5. 参考: 今の既定（2026-11-15）
