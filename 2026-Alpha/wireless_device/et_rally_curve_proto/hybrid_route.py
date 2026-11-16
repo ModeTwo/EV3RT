@@ -1445,6 +1445,8 @@ class Table:
         self.is_start = is_start
         self.allow_gate = allow_gate   # この区間で横切ってよいゲートの色(None なし)
         self.margin = None   # 2026-11-16: この区間だけのすき間(per_gate_margin で狭いゲートにつながる区間)。None なら全体の値
+        self.margin_fallback = None   # 広いすき間でつなげない組だけ使うすき間(per_gate_conn_mode=fallback)
+        self.fb_used = set()
         self.via_first = via_first   # スタート・ゴールの区間: 組み合わせが少ないので、最初から遠回りも比べる
         nE, nS = len(ends), len(starts)
         Ea = [np.repeat(np.array(v, float), nS) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in ends])]
@@ -1513,10 +1515,24 @@ class Table:
             return False
         _EXEMPT_ON = self.is_start; _ALLOW_TAB = self.allow_gate
         mf0, mr0 = MARGIN_FRONT, MARGIN_REAR
-        if self.margin is not None:
-            MARGIN_FRONT = MARGIN_REAR = self.margin
+        fb = self.margin_fallback is not None and (e, s) not in self.fb_used
+        m_use = self.margin
+        if (e, s) in self.fb_used:
+            m_use = self.margin_fallback
+        if m_use is not None:
+            MARGIN_FRONT = MARGIN_REAR = m_use
         try:
-            return self._resolve(e, s)
+            r = self._resolve(e, s)
+            if fb and not (self.C[e, s] < INF / 2) and self.done[e, s]:
+                # 2026-11-16: 広いすき間でつなげなかったときだけ、狭いすき間でやり直す(per_gate_conn_mode=fallback)
+                self.fb_used.add((e, s))
+                self.pending.discard((e, s))
+                self.done[e, s] = False; self.ptr[e, s] = 0
+                self.C[e, s] = self.approx[e, s, 0]
+                self.deferred.discard((e, s))
+                MARGIN_FRONT = MARGIN_REAR = self.margin_fallback
+                r = self._resolve(e, s) or True
+            return r
         finally:
             _EXEMPT_ON = False; _ALLOW_TAB = None
             MARGIN_FRONT, MARGIN_REAR = mf0, mr0
@@ -2062,12 +2078,15 @@ def main():
          ('yellow', 'GOAL'): Table(ends['yellow'], goal_pose, via_first=True, allow_gate='red' if FINAL_VIA_RED else None)}
     if START_PRELUDE:
         T[('START', 'yellow')] = Table(start_pose, starts['yellow'], is_start=True, via_first=True)
-    if PER_GATE_MARGIN and PER_GATE_CONN_MODE == 'adjacent' and gm and used_margin is not None:
+    if PER_GATE_MARGIN and PER_GATE_CONN_MODE in ('adjacent', 'fallback') and gm and used_margin is not None:
         for (ka, kb), tab in T.items():
             lo = min([gm.get(ka, INF), gm.get(kb, INF)])
             if lo < INF / 2 and lo < MARGIN_FRONT - 1e-9:
-                tab.margin = float(lo)
-        print('table margins:', {'%s->%s' % k: (t.margin if t.margin is not None else MARGIN_FRONT) for k, t in T.items()}, flush=True)
+                if PER_GATE_CONN_MODE == 'fallback':
+                    tab.margin_fallback = float(lo)
+                else:
+                    tab.margin = float(lo)
+        print('table margins:', {'%s->%s' % k: ((t.margin if t.margin is not None else MARGIN_FRONT), t.margin_fallback) for k, t in T.items()}, flush=True)
     print('tables', {k: v.C.shape for k, v in T.items()}, f'{time.time() - t0:.1f}s', flush=True)
     seq = ['red', 'blue', 'yellow'] * LAPS
     vs = {c: (np.array([v['s'] for v in cands[c]]), np.array([v['e'] for v in cands[c]]),
