@@ -93,6 +93,8 @@ PARAMS = dict(
     # 'all' = つなぎは全部 per_gate_conn_cm、'adjacent' = 狭いゲートにつながる区間だけ狭いゲートのすき間、ほかは per_gate_conn_cm
     per_gate_conn_mode='all',
     out_arc_angles=[],
+    # 2026-11-16 ユーザー: 真ん中からカーブで抜ける通り方の半径(cm)。空なら使わない
+    exit_arc_radii=[],
     arc_first=False, arc_first_tries=200, arc_first_lines=[0.0, 8.0, 16.0, 20.0, 24.0, 28.0, 32.0, 40.0],
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
     keepout_body=True, start_exempt_cm=20.0,
@@ -904,6 +906,25 @@ def _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r):
     return prims
 
 
+def _pass_arc_exit(g, C, base_u, a_in, lead, trail, m, ea, R, turn):
+    """2026-11-16 ユーザー: 車軸がゲートの線の真ん中に来たら、そのまま半径 R の円弧(カーブ)を走り始めて抜ける。
+    円弧は、後ろの端(後退なら前の端)が線を PM 越えるまで。戻り値 (prims, 回った角度deg) か None。"""
+    u_in = _rot(base_u, a_in)
+    ci, si = math.cos(math.radians(a_in)), abs(math.sin(math.radians(a_in)))
+    S = C - u_in * ((lead * ci + HALF_WIDTH * si + CLR) / ci + ea)
+    th = math.atan2(u_in[1], u_in[0])
+    for deg in range(1, 121):
+        arc = arc_prim(C, th, turn, math.radians(deg), float(R), m)
+        P, th2 = arc_end(arc)
+        hb = th2 if m > 0 else th2 + math.pi     # 車体の向き
+        d = np.array([math.cos(hb), math.sin(hb)]); n = np.array([-d[1], d[0]])
+        # 後ろの端(動く向きと反対の端)の2つの角
+        back = -trail if m > 0 else trail
+        cs = [P + d * back + n * HALF_WIDTH, P + d * back - n * HALF_WIDTH]
+        if min(float(np.dot(c - C, base_u)) for c in cs) >= PM:
+            return [('line', S, C, m), arc], float(deg)
+    return None
+
 def _visit_candidates(g, pairs_override=None, only=None):
     """ゲートの通り方の候補。斜め(angles が0以外)は、車軸の中心がゲートの真ん中を通るときだけ(横のずれは0)。"""
     out = []
@@ -979,6 +1000,34 @@ def _visit_candidates(g, pairs_override=None, only=None):
                                 out.append(dict(color=g.color, mode=mode, sign=sg, off=off, angle=a_in, angle_out=a_out, ea=ea, ee=ee,
                                                 prims=prims, legs=[(q[1], q[2], q[3]) for q in prims if q[0] == 'line'], cost=t,
                                                 start=(S, hS, prims[0][3]), end=(E, hE, last[3])))
+    if pairs_override is None and EXIT_ARC_RADII:
+        # 2026-11-16 ユーザー: 真ん中からカーブを走り始めて抜ける通り方(_pass_arc_exit)
+        for sg in (1, -1):
+            base_u = g.n * sg
+            for a_in in sorted(set([0.0] + [float(a) for a in ANGLES])):
+                for mode in [mo for mo in ('F', 'B') if mo in modes]:
+                    if only is not None and (sg, mode) not in only:
+                        continue
+                    lead, trail, m = (FRONT, REAR, 1) if mode == 'F' else (REAR, FRONT, -1)
+                    for R in EXIT_ARC_RADII:
+                        for turn in (1, -1):
+                            for ea in EXT:
+                                res = _pass_arc_exit(g, g.c, base_u, a_in, lead, trail, m, ea, R, turn)
+                                if res is None:
+                                    continue
+                                prims, deg = res
+                                if not line_ok(prims[0][1], prims[0][2], m, allow=g.color) or not arc_ok(prims[1], allow=g.color):
+                                    continue
+                                t = sum((prim_len(q) / (V_LINE if q[0] == 'line' else v_arc(q[2]))) * spd(m) for q in prims)
+                                if m < 0:
+                                    t += PEN_REV_M * sum(prim_len(q) for q in prims) / 100.0
+                                S = prims[0][1]
+                                E, th2 = arc_end(prims[1])
+                                hS = nd(math.degrees(math.atan2(*(prims[0][2] - prims[0][1])[::-1])) + (0 if m > 0 else 180))
+                                hE = nd(math.degrees(th2) + (0 if m > 0 else 180))
+                                out.append(dict(color=g.color, mode=mode, sign=sg, off=0.0, angle=a_in, angle_out=round(turn * deg, 1), ea=ea, ee=0.0,
+                                                exit_arc_r=float(R), prims=prims, legs=[(prims[0][1], prims[0][2], m)], cost=t,
+                                                start=(S, hS, m), end=(E, hE, m)))
     return out
 
 
