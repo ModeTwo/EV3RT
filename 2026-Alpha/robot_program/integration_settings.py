@@ -15,16 +15,18 @@ class IntegrationSettings:
     at_gate_forward_mm: float = 100.0
     at_recognition_reverse_mm: float = 200.0
     # REの青検知後、色認識を並行して行うカラートレース距離。
-    at_to_transfer_trace_mm: float = 400.0
+    at_to_transfer_trace_mm: float = 300.0
     at_marker_straight_mm: float = 293.0  # 青検知からグレー丸出口まで絶対0度
     # TOが引渡し後に黒線へ接近する区間の距離上限。受領tantou4準拠。
     to_first_black_limit_mm: float = 550.0
     # ヒント1後は青検知を待たず、緑を通り抜けてから固定距離だけ直進する。
     # 緑検知は近距離で起きるはずのため、検知できない場合は320mmで打ち切って
     # 次工程(90度旋回→カメラトレース)へ進む(実機未校正)。
-    to_after_hint1_green_pass_mm: float = 320.0
-    to_after_hint1_safety_limit_mm: float = 320.0
-    to_hint2_trace_mm: float = 1250.0  # 受領値。終了判定は現行の投影距離を維持
+    to_after_hint1_green_pass_mm: float = 270.0
+    to_after_hint1_safety_limit_mm: float = 270.0
+    to_hint2_trace_mm: float = 950.0  # 受領値。終了判定は現行の投影距離を維持
+    #to_hint2_trace_mm: float = 900.0  # 受領値。終了判定は現行の投影距離を維持
+    ##to_hint2_trace_mm: float = 1100.0  # 受領値。終了判定は現行の投影距離を維持
     # 左90度旋回後、色センサーtrace_120へ渡す前にカメラでライン中央へ寄せる。
     # LAP前のRecoverLineByCamera(config.start_lap_camera_*)と同じ値を初期値として流用。実機未校正。
     to_after_hint1_camera_power: int = 50
@@ -81,8 +83,8 @@ class IntegrationSettings:
     to_exit_heading_tolerance_deg: float = 5.0
     # TURN序盤の誤検出を避けるため、目標方位までの残り誤差がこの範囲内に入るまで黒検出を数えない。実機未校正の試走初期値。
     to_exit_turn_black_detect_max_error_deg: float = 60.0
-    to_spin_min_power: int = 60
-    to_spin_max_power: int = 60
+    to_spin_min_power: int = 65
+    to_spin_max_power: int = 65
     # Hint2後の移動完了位置から、黄→青→赤のドロップゾーン前を進む。
     delivery_trace_target_v: int = 75
     delivery_trace_power: int = 50
@@ -90,9 +92,15 @@ class IntegrationSettings:
     delivery_marker_full_width_mm: float = 120.0
     delivery_marker_half_width_mm: float = 60.0
     delivery_drop_distance_first_mm: float = 100.0
-    delivery_drive_first_power: int = 50
+    delivery_drive_first_power: int = 90
     delivery_drop_distance_second_mm: float = 100.0
     delivery_drive_second_power: int = 50
+    # ドロップゾーン進入・退出をDeliveryEtRun(方位保持、power<0で後退)で行うためのPID。
+    # corrected_run.USE_ET_STRAIGHT_PID=True(既定)の間はET_MOVE_PIDに上書きされ、
+    # ここの値は使われない。Falseへ切り替えた場合の初期値として残す。
+    delivery_drive_pid_p: float = 1.1
+    delivery_drive_pid_i: float = 0.00075
+    delivery_drive_pid_d: float = 0.04
     # ライン進行方向からドロップゾーン側へ向く角度。ラリー内側とは反対側。
     delivery_drop_turn_deg_first: float = -30.0
     delivery_drop_turn_deg_second: float = -90.0
@@ -163,6 +171,11 @@ class IntegrationSettings:
         for name in ('delivery_drop_turn_deg_first', 'delivery_drop_turn_deg_second', 'delivery_inward_turn_deg'):
             if not math.isfinite(getattr(self, name)):
                 raise ValueError(f'{name} must be finite')
+        for name in ('delivery_drive_pid_p', 'delivery_drive_pid_d'):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f'{name} must be positive and finite')
+        if not math.isfinite(self.delivery_drive_pid_i) or self.delivery_drive_pid_i < 0:
+            raise ValueError('delivery_drive_pid_i must be nonnegative and finite')
 
 
 @dataclass

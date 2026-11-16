@@ -21,15 +21,39 @@ def build_legacy_start_to_lap_gate(context, config):
     lap2_1 = Parallel(name='lap2_1', policy=ParallelPolicy.SuccessOnOne())
     lap2_2 = Parallel(name='lap2_2', policy=ParallelPolicy.SuccessOnOne())
     lap2_3 = Parallel(name='lap2_3', policy=ParallelPolicy.SuccessOnOne())
-    edge_01.add_children([RunByGyro(name='run straight', target=0, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE), IsDistanceEarned(name='check distance', delta_dist=500)])
-    edge_02.add_children([RunByGyro(name='run straight', target=-45, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE), IsDistanceEarned(name='check distance', delta_dist=200)])
-    edge_03.add_children([RunByGyro(name='run straight', target=-90, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE), IsDistanceEarned(name='check distance', delta_dist=550)])
-    edge_04.add_children([RunByGyro(name='run straight', target=-135, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE), IsDistanceEarned(name='check distance', delta_dist=230)])
-    edge_05.add_children([RunByGyro(name='run straight', target=-180, power=60, pid_p=1.1, pid_i=0.1, pid_d=0.03, target_type=HeadingType.ABSOLUTE), IsDistanceEarned(name='check distance', delta_dist=300)])
+    gyro_after_blue_legacy = Parallel(name='gyro_after_blue_legacy', policy=ParallelPolicy.SuccessOnOne())
+    edge_01.add_children([RunByGyro(name='run straight', target=0, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, 
+                                    target_type=HeadingType.ABSOLUTE), 
+                          IsDistanceEarned(name='check distance', delta_dist=500)])
+    edge_02.add_children([RunByGyro(name='run straight', target=-45, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, 
+                                    target_type=HeadingType.ABSOLUTE), 
+                          IsDistanceEarned(name='check distance', delta_dist=200)])
+    edge_03.add_children([RunByGyro(name='run straight', target=-90, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03,
+                                    target_type=HeadingType.ABSOLUTE),
+                          IsDistanceEarned(name='check distance', delta_dist=550)])
+    edge_04.add_children([RunByGyro(name='run straight', target=-135, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, 
+                                    target_type=HeadingType.ABSOLUTE),
+                         IsDistanceEarned(name='check distance', delta_dist=230)])
+    edge_05.add_children([RunByGyro(name='run straight', target=-180, power=60, pid_p=1.1, pid_i=0.1, pid_d=0.03, 
+                                    target_type=HeadingType.ABSOLUTE), 
+                          IsDistanceEarned(name='check distance', delta_dist=300)])
     square.add_children([edge_01, edge_02, edge_03, edge_04, edge_05])
-    lap2_1.add_children([TraceLine(name='sensor trace normal edge', target=TRACELINE_TARGET_V, power=33, pid_p=0.55, pid_i=9e-07, pid_d=0.015, trace_side=TraceSide.NORMAL, cutoff_hz=None), IsDistanceEarned(name='check distance', delta_dist=100)])
-    lap2_2.add_children([TraceLine(name='sensor trace normal edge', target=TRACELINE_TARGET_V, power=60, pid_p=0.55, pid_i=9e-07, pid_d=0.08, trace_side=TraceSide.NORMAL, cutoff_hz=None), IsDistanceEarned(name='check distance', delta_dist=2460)])
-    lap2_3.add_children([TraceLine(name='sensor trace normal edge', target=TRACELINE_TARGET_V, power=60, pid_p=0.1, pid_i=9e-07, pid_d=0.08, trace_side=TraceSide.NORMAL, cutoff_hz=None), IsColorDetected(name='check color', color=Color.BLUE)])
-    root.add_children([square, lap2_1, lap2_2, lap2_3])
+    lap2_1.add_children([TraceLine(name='sensor trace normal edge', target=TRACELINE_TARGET_V, 
+                                   power=33, pid_p=0.65, pid_i=0.000001, pid_d=0.045, trace_side=TraceSide.NORMAL, 
+                                   cutoff_hz=None), 
+                        IsDistanceEarned(name='check distance', delta_dist=100)])
+    lap2_2.add_children([TraceLine(name='sensor trace normal edge', target=TRACELINE_TARGET_V, 
+                                   power=70, pid_p=0.65, pid_i=0.000001, pid_d=0.045, trace_side=TraceSide.NORMAL, 
+                                   cutoff_hz=None), 
+                        IsDistanceEarned(name='check distance', delta_dist=2460)])
+    lap2_3.add_children([TraceLine(name='sensor trace normal edge', target=TRACELINE_TARGET_V, 
+                                   power=70,pid_p=0.65, pid_i=0.000001, pid_d=0.045, trace_side=TraceSide.NORMAL, cutoff_hz=None), 
+                        IsColorDetected(name='check color', color=Color.BLUE)])
+    gyro_after_blue_legacy.add_children([RunByGyro(name='run straight', 
+                                            target=0, power=70, pid_p=1.1, pid_i=0.1, pid_d=0.03, 
+                                            target_type=HeadingType.ABSOLUTE), 
+                                  IsDistanceEarned(name='check distance', delta_dist=120)])
+
+    root.add_children([square, lap2_1, lap2_2, lap2_3,gyro_after_blue_legacy])
     return root
 

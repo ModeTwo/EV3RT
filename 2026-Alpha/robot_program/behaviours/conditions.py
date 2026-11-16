@@ -396,3 +396,88 @@ class IsColorTransitionDetected(Behaviour):
         else:
             self.to_started_at = None
         return Status.RUNNING
+
+
+class IsQRDistanceLimitReached(Behaviour):
+    """
+    QRコードが未読取の状態で、指定距離に到達したかを判定する。
+    QR読取済み、または距離未到達の場合は FAILURE を返す。
+    """
+
+    def __init__(self, name: str, qr_reader, delta_dist: int = 500):
+        super(IsQRDistanceLimitReached, self).__init__(name)
+
+        self.logger.debug("%s.__init__()" % self.__class__.__name__)
+
+        self.qr_reader = qr_reader
+        self.delta_dist = delta_dist
+        self.orig_dist = None
+        self.earned = False
+
+    #def update(self) -> Status:
+#
+        ## QRコードが既に読み取られている場合は距離判定を終了
+        #if self.qr_reader.status == Status.SUCCESS:
+            #return Status.FAILURE
+#
+        ## 初回実行時の距離を記録
+        #if self.orig_dist is None:
+            #self.orig_dist = g_plotter.get_distance()
+            #self.logger.info(
+                #"%+06d %s.distance monitoring started for delta=%d"
+                #% (self.orig_dist, self.__class__.__name__, self.delta_dist)
+            #)
+#
+        ## 現在の走行距離を取得
+        #cur_dist = g_plotter.get_distance()
+        #earned_dist = cur_dist - self.orig_dist
+#
+        ## 指定距離に到達したか判定
+        #if abs(earned_dist) >= self.delta_dist:
+            #if not self.earned:
+                #self.earned = True
+                #self.logger.info(
+                    #"%+06d %s.distance limit reached"
+                    #% (cur_dist, self.__class__.__name__)
+                #)
+#
+            #return Status.SUCCESS
+#
+        ## 距離未到達ならSelectorに次の処理を実行させる
+        #return Status.FAILURE
+
+    def update(self) -> Status:
+
+    # QRコードが既に読み取られている場合は距離判定を終了
+        if self.qr_reader.status == Status.SUCCESS:
+            return Status.FAILURE
+    
+        runtime.require("plotter")
+    
+        # 初回実行時の距離を記録
+        if self.orig_dist is None:
+            self.orig_dist = runtime.plotter.get_distance()
+            self.logger.info(
+                "%+06d %s.distance monitoring started for delta=%d"
+                % (self.orig_dist, self.__class__.__name__, self.delta_dist)
+            )
+    
+        # 現在の走行距離を取得
+        cur_dist = runtime.plotter.get_distance()
+        earned_dist = cur_dist - self.orig_dist
+    
+        # 指定距離に到達したか判定
+        if abs(earned_dist) >= self.delta_dist:
+            if not self.earned:
+                self.earned = True
+                self.logger.info(
+                    "%+06d %s.distance limit reached"
+                    % (cur_dist, self.__class__.__name__)
+                )
+    
+            return Status.SUCCESS
+    
+        # 距離未到達ならSelectorに次の処理を実行させる
+        return Status.FAILURE
+
+

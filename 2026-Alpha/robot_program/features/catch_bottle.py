@@ -18,16 +18,49 @@ class MarkerZeroDrive(BrakeReleasingEtRun):
 
 
 class RequireBottleColor(Behaviour):
+    """
+    AT工程終了時にボトル色を確認する。
+
+    ・RED / BLUE / YELLOW を正常に検知済み
+        → その色をそのまま使用
+
+    ・最後までボトル色を検知できなかった
+        → BLUEとして扱う
+    """
+
     def __init__(self, context):
         super().__init__('AT require recognised bottle color')
         self.context = context
 
     def update(self):
+
+        # ------------------------------------------
+        # 正常にボトル色を検知できている場合
+        # → 検知した色をそのまま使用
+        # ------------------------------------------
         if self.context.bottle_color in (
-                BottleColor.RED.value, BottleColor.BLUE.value, BottleColor.YELLOW.value):
+            BottleColor.RED.value,
+            BottleColor.BLUE.value,
+            BottleColor.YELLOW.value,
+        ):
+            self.logger.info(
+                "AT bottle color confirmed: %s"
+                % self.context.bottle_color
+            )
             return Status.SUCCESS
-        self.logger.error('AT stopped at distance limit without a recognised bottle color')
-        return Status.FAILURE
+
+        # ------------------------------------------
+        # ボトル色を検知できなかった場合
+        # → BLUEとして扱う
+        # ------------------------------------------
+        self.context.bottle_color = BottleColor.BLUE.value
+
+        self.logger.warning(
+            "AT bottle color was not detected; "
+            "defaulting to BLUE"
+        )
+
+        return Status.SUCCESS
 
 
 class IsDistanceReached(IsDistanceEarned):
@@ -43,6 +76,24 @@ class DetectBottleColorWhileMoving(DetectBottleColor):
                          min_frames=min_frames, while_moving=True)
 
 
+class LapBottleApproachCompleted(Behaviour):
+    """Skip AT motion only after LAP actually completed bottle approach."""
+    def __init__(self, context, standalone):
+        super().__init__('check completed LAP bottle approach')
+        self.context = context
+        self.standalone = standalone
+
+    def update(self):
+        result = getattr(self.context, 'lap_bottle_approach_result', None)
+        if result not in (None, 'confirmed', 'fallback'):
+            raise ValueError('invalid LAP bottle approach result: %r' % result)
+        if not self.standalone and result in ('confirmed', 'fallback'):
+            self.logger.info('AT_LAP_HANDOFF approach_result=%s action=skip_duplicate_drive' % result)
+            return Status.SUCCESS
+        self.logger.info('AT_LAP_HANDOFF approach_result=%s action=normal_drive' % result)
+        return Status.FAILURE
+
+
 def build_catch_bottle(context, config):
     """
     単体実行（mission_mode == "at"）
@@ -52,9 +103,9 @@ def build_catch_bottle(context, config):
             ↓
         ライントレース継続
           + ボトル色認識
-          + 400mm走行距離監視
+          + 設定距離の走行監視
             ↓
-        400mm到達
+        設定距離へ到達
             ↓
         停止
             ↓
@@ -67,9 +118,9 @@ def build_catch_bottle(context, config):
             ↓
         ライントレース
           + ボトル色認識
-          + 400mm走行距離監視
+          + 設定距離の走行監視
             ↓
-        400mm到達
+        設定距離へ到達
             ↓
         停止
             ↓
@@ -133,14 +184,14 @@ def build_catch_bottle(context, config):
     # ==========================================
     # 青ライン検知後
     #
-    # ・ジャイロで400mm直進
+    # ・ジャイロで設定距離を直進
     # ・走行しながらボトル色認識
     #
-    # 400mm到達まで並行実行する
+    # 設定距離へ到達まで並行実行する
     # ==========================================
 
     trace_detect_bottle_400mm = Parallel(
-        name="gyro drive and detect bottle for 400mm",
+        name="gyro drive and detect bottle for configured distance",
         policy=ParallelPolicy.SuccessOnOne()
     )
 
@@ -171,10 +222,10 @@ def build_catch_bottle(context, config):
             ),
 
             # --------------------------------------
-            # 青ライン検知地点から400mm進んだら終了
+            # AT開始地点から設定距離を進んだら終了
             # --------------------------------------
             IsDistanceReached(
-                name="check 400mm after blue",
+                name="check configured distance after blue",
                 distance_mm=settings.at_to_transfer_trace_mm
             ),
         ]
@@ -189,6 +240,12 @@ def build_catch_bottle(context, config):
     if config.mission_mode == "at":
         root.add_child(trace_until_blue)
 
+    approach = Selector(name='LAP completed approach or AT approach', memory=True)
+    approach.add_children([
+        LapBottleApproachCompleted(context, config.mission_mode == 'at'),
+        trace_detect_bottle_400mm,
+    ])
+
     root.add_children(
         [
 
@@ -201,11 +258,11 @@ def build_catch_bottle(context, config):
 
 
             # ③ 青ライン検知地点から
-            #    ボトル認識しながら400mmライントレース
-            trace_detect_bottle_400mm,
+            #    ボトル認識しながら設定距離を直進
+            approach,
 
 
-            # ④ 400mm進んだら停止
+            # ④ 設定距離を進んだら停止
             StopNow(
                 name="final stop"
             ),

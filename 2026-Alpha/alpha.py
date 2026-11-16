@@ -106,16 +106,25 @@ g_bottle_color = BottleColor.NONE   # written by CatchBottle.update()
 g_hint1: str = None                 # written by IsQRDecoded
 g_hint2: str = None                 # written by IsQRDecoded
 
+
+
 class TheEnd(Behaviour):
     def __init__(self, name: str):
+
         super(TheEnd, self).__init__(name)
+
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
+
         self.running = False
+
+
 
     def update(self) -> Status:
         if not self.running:
             self.running = True
+
             self.logger.info("%+06d %s.behavior tree exhausted. ctrl+C shall terminate the program" % (g_plotter.get_distance(), self.__class__.__name__))
+
         return Status.RUNNING
 
 
@@ -124,6 +133,8 @@ class ReadKey(Behaviour):
         super(ReadKey, self).__init__(name)
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
         self.running = False
+
+
 
     def update(self) -> Status:
         if not self.running:
@@ -147,29 +158,41 @@ class ReadKey(Behaviour):
                     self.logger.info("%+06d %s.key rejected, please enter again" % (g_plotter.get_distance(), self.__class__.__name__))
                     return Status.RUNNING
 
-
 class IsTimePassed(Behaviour):
     def __init__(self, name: str, delta_time: int):
         super(IsTimePassed, self).__init__(name)
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
         self.delta_time = delta_time
         self.running = False
+
         self.earned = False
+
+
 
     def update(self) -> Status:
         if not self.running:
             self.running = True
+
             self.orig_time = time.time()
+
             self.logger.info("%+06d %s.accumulation started for delta=%d" % (self.orig_time, self.__class__.__name__, self.delta_time))
+
         cur_time = time.time()
+
         earned_time = cur_time - self.orig_time
+
         if earned_time >= self.delta_time:
+
             if not self.earned:
+
                 self.earned = True
                 self.logger.info("%+06d %s.delta time passed" % (g_plotter.get_distance(), self.__class__.__name__))
             return Status.SUCCESS
         else:
+
             return Status.RUNNING
+
+
 
 
 class IsDistanceEarned(Behaviour):
@@ -178,12 +201,17 @@ class IsDistanceEarned(Behaviour):
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
         self.delta_dist = delta_dist
         self.running = False
+
         self.earned = False
 
+
     def update(self) -> Status:
+
         if not self.running:
             self.running = True
+
             self.orig_dist = g_plotter.get_distance()
+
             self.logger.info("%+06d %s.accumulation started for delta=%d" % (self.orig_dist, self.__class__.__name__, self.delta_dist))
         cur_dist = g_plotter.get_distance()
         earned_dist = cur_dist - self.orig_dist
@@ -205,14 +233,12 @@ class IsColorDetected(Behaviour):
         self.classifier = ColorClassifier()
         self.running = False
         self.detected = False
-
     def update(self) -> Status:
         cur_dist = g_plotter.get_distance()
         if not self.running:
             self.running = True
             self.logger.info("%+06d %s.detection started for color=%s" % (cur_dist, self.__class__.__name__, self.color.value))
         h, s, v = g_color_sensor.get_raw_color_hsv()
-
         detected_color = self.classifier.classify(h, s, v)
         if detected_color == self.color:
             if not self.detected:
@@ -227,14 +253,12 @@ class IsColorDetected(Behaviour):
                     self.prevColor = detected_color
             return Status.RUNNING
 
-
 class IsQRDecoded(Behaviour):
     def __init__(self, name: str):
         super(IsQRDecoded, self).__init__(name)
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
         self.running = False
         self.detected = False
-
     def update(self) -> Status:
         global g_key, g_hint1, g_hint2
         if not self.running:
@@ -255,20 +279,16 @@ class IsQRDecoded(Behaviour):
             return Status.SUCCESS
         else:
             return Status.RUNNING
-
-
 class IsSonarOn(Behaviour):
     def __init__(self, name: str, alert_dist: int):
         super(IsSonarOn, self).__init__(name)
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
         self.alert_dist = alert_dist
         self.running = False
-
     def update(self) -> Status:
         if not self.running:
             self.running = True
             self.logger.info("%+06d %s.detection started for dist=%d" % (g_plotter.get_distance(), self.__class__.__name__, self.alert_dist))
-        
         dist = g_sonar_sensor.get_distance()
         if (dist <= self.alert_dist and dist > 0):
             self.logger.info("%+06d %s.alerted at dist=%d" % (g_plotter.get_distance(), self.__class__.__name__, dist))
@@ -276,13 +296,11 @@ class IsSonarOn(Behaviour):
         else:
             return Status.RUNNING
 
-
 class IsTouchOn(Behaviour):
     def __init__(self, name: str):
         super(IsTouchOn, self).__init__(name)
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
         self.running = False
-
     def update(self) -> Status:
         if not self.running:
             self.running = True
@@ -296,12 +314,10 @@ class IsTouchOn(Behaviour):
         else:
             return Status.RUNNING
 
-
 class StopNow(Behaviour):
     def __init__(self, name: str):
         super(StopNow, self).__init__(name)
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-
     def update(self) -> Status:
         g_right_motor.set_power(0)
         g_right_motor.set_brake(True)
@@ -310,22 +326,22 @@ class StopNow(Behaviour):
         self.logger.info("%+06d %s.motors stopped" % (g_plotter.get_distance(), self.__class__.__name__))
         return Status.SUCCESS
 
-
 class RunAsInstructed(Behaviour):
     def __init__(self, name: str, pwm_l: int, pwm_r: int) -> None:
         super(RunAsInstructed, self).__init__(name)
         self.pwm_l = g_course * pwm_l
         self.pwm_r = g_course * pwm_r
         self.running = False
-
-
     def update(self) -> Status:
         if not self.running:
             self.running = True
             self.logger.info("%+06d %s.started with pwm=(%s, %s)" % (g_plotter.get_distance(), self.__class__.__name__, self.pwm_l, self.pwm_r))
         g_right_motor.set_power(self.pwm_r)
         g_left_motor.set_power(self.pwm_l)
+
         return Status.RUNNING
+
+
 
 
 class TraceLine(Behaviour):
@@ -380,7 +396,6 @@ class TraceLine(Behaviour):
         self.recover_after = recover_after
         self.recover_turn = recover_turn
         self._lost_count = 0
-
         self.running = False
 
     def update(self) -> Status:
@@ -390,10 +405,8 @@ class TraceLine(Behaviour):
             self.metric_lpf.reset()
             self.running = True
             self.logger.info("%+06d %s.trace started with TS=%s" % (g_plotter.get_distance(), self.__class__.__name__, self.trace_side.name))
-
         h, s, v_raw = g_color_sensor.get_raw_color_hsv()
         v = self.lpf(v_raw) if self.lpf else v_raw
-
         # ---- adaptive base speed -------------------------------------------
         # Use the TRUE tracking error (target - raw v) as the instability metric,
         # smoothed so the speed reacts to course shape, not to every wobble.
@@ -423,7 +436,6 @@ class TraceLine(Behaviour):
             turn = (-1) * g_course * int(self.pid(v))
         else: # TraceSide.OPPOSITE
             turn = g_course * int(self.pid(v))
-
         # ---- line-lost recovery --------------------------------------------
         # When the sensor pins at the bright rail, target=75 only yields a weak
         # clamped-P turn (Kp*(75-100) ~= -16), too gentle to curl back to a line
@@ -439,22 +451,18 @@ class TraceLine(Behaviour):
             if self._lost_count >= self.recover_after and turn != 0:
                 mag = self.power_max if self.recover_turn is None else self.recover_turn
                 turn = int(math.copysign(mag, turn))
-
         # On a sharp slow curve, |turn| may exceed the reduced base speed, so the
         # inner wheel can go to zero/negative -> a tight pivot. That's desired.
         p = int(round(self.power))
-        left  = max(-100, min(100, p + turn))    # motors cap at +-100
-        right = max(-100, min(100, p - turn))
+        left  = max(-400, min(400, p + turn))    # motors cap at +-100
+        right = max(-400, min(400, p - turn))
         g_right_motor.set_power(right)
         g_left_motor.set_power(left)
-
         # log raw v, filtered vf, error-metric, commanded power, gains, and turn
         #self.logger.info("%+06d %s.color sensor HSV=(%d, %d, %d) vf=%d, em=%d, pwr=%d, kp=%.3f, kd=%.3f, turn=%d" % (
         #    g_plotter.get_distance(), self.__class__.__name__,
         #    h, s, v_raw, int(v), int(self.err_metric), p, kp_now, kd_now, turn))
-
         return Status.RUNNING
-
 
 class SpinAndLocateLine(Behaviour):
     def __init__(self, name: str, target: int, max_power: int, min_power: int,
@@ -468,7 +476,6 @@ class SpinAndLocateLine(Behaviour):
         self.clamper = SymmetricClamper(min_power, max_power)
         self.move_away = True
         self.running = False
-
     def update(self) -> Status:
         # first to spin to move away from the line, then to locate the line by spinning in the opposite direction
         current_heading = (-1) * g_course * g_gyro_sensor.get_angle()
@@ -507,7 +514,6 @@ class SpinAndLocateLine(Behaviour):
         g_left_motor.set_power((-1) * g_course * power)
         return Status.RUNNING    
 
-
 class SpinAround(Behaviour):
     def __init__(self, name: str, target: int, max_power: int, min_power: int,
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType) -> None:
@@ -519,7 +525,6 @@ class SpinAround(Behaviour):
         self.pid_d = pid_d
         self.clamper = SymmetricClamper(min_power, max_power)
         self.running = False
-
     def update(self) -> Status:
         current_heading = (-1) * g_course * g_gyro_sensor.get_angle()
         if not self.running:
@@ -546,7 +551,6 @@ class SpinAround(Behaviour):
         g_left_motor.set_power((-1) * g_course * power)
         return Status.RUNNING    
 
-
 class RunByGyro(Behaviour):
     def __init__(self, name: str, target: int, power: int,
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType) -> None:
@@ -559,7 +563,6 @@ class RunByGyro(Behaviour):
         self.pid_d = pid_d
         self.last_log_time = None
         self.running = False
-
     def update(self) -> Status:
         current_heading = (-1) * g_course * g_gyro_sensor.get_angle()
         # log every 1 second
@@ -579,7 +582,6 @@ class RunByGyro(Behaviour):
         g_right_motor.set_power(self.power + g_course * turn)
         g_left_motor.set_power(self.power - g_course * turn)
         return Status.RUNNING
-
 
 class TraceLineCam(Behaviour):
     def __init__(self, name: str, power: int, pid_p: float, pid_i: float, pid_d: float,
@@ -601,7 +603,6 @@ class TraceLineCam(Behaviour):
         self._blind = 0
         self.trace_side = trace_side
         self.running = False
-
     def update(self) -> Status:
         if not self.running:
             self.running = True
@@ -620,10 +621,8 @@ class TraceLineCam(Behaviour):
             else: # TraceSide.CENTER
                 g_video.set_trace_side(TraceSide.CENTER)
             self.logger.info("%+06d %s.trace started with TS=%s" % (g_plotter.get_distance(), self.__class__.__name__, self.trace_side.name))
-
         theta, fid, cap_t, odo_cap = g_video.get_theta_stamped()
         odo_now = g_plotter.get_distance()
-
         # ----- live tilt feed-forward (anti-cut) -----
         # Driven by the CURRENT frame's band tilt, not a buffered past value,
         # so it tracks the curve as it tightens and can't invert at the exit
@@ -639,11 +638,9 @@ class TraceLineCam(Behaviour):
         if not ff_gated:
             tilt_ff = self._tilt_ff_gain * tilt
             tilt_ff = max(-self._ff_cap, min(self._ff_cap, tilt_ff))   # don't let FF override the PID's sign
-
         # PID runs on theta; feed-forward is ADDED to the turn output.
         turn_pid = self.pid(theta)
         turn = turn_pid + tilt_ff
-
         # ----- blind-pivot cap -----
         # When the band is blind (no usable target) the PID is running on a
         # stale saturated theta -> full-power open-loop pivot. Keep rotating the
@@ -659,10 +656,8 @@ class TraceLineCam(Behaviour):
                 turn = hold; blind_capped = True
             elif turn < -hold:
                 turn = -hold; blind_capped = True
-
         g_right_motor.set_power(self.power + int(turn))
         g_left_motor.set_power(self.power - int(turn))
-
         # ----- single per-tick line: FF, PID split, motors, frame state -----
         #p, i, d = self.pid.components
         #self.logger.info(
@@ -675,7 +670,6 @@ class TraceLineCam(Behaviour):
         #        (time.time() - cap_t) * 1000))
         return Status.RUNNING
 
-
 class IsJunction(Behaviour):
     def __init__(self, name: str, target_state: JState) -> None:
         super(IsJunction, self).__init__(name)
@@ -684,7 +678,6 @@ class IsJunction(Behaviour):
         self.prev_roe = 0
         self.state:JState = JState.INITIAL
         self.running = False
-
     def update(self) -> Status:
         if not self.running:
             self.running = True
@@ -702,7 +695,6 @@ class IsJunction(Behaviour):
                 if roe <= JUNCT_LOWER_THRESH:
                     self.logger.info("%+06d %s.the join completed" % (g_plotter.get_distance(), self.__class__.__name__))
                     self.state = JState.JOINED
-                    
             elif self.state == JState.FORKING:
                 if roe <= JUNCT_LOWER_THRESH and self.prev_roe >= JUNCT_UPPER_THRESH:
                     self.logger.info("%+06d %s.the fork completed" % (g_plotter.get_distance(), self.__class__.__name__))
@@ -710,7 +702,6 @@ class IsJunction(Behaviour):
             else:
                 pass
         self.prev_roe = roe
-
         if not self.reached and self.state == self.target_state:
             self.reached = True
             self.logger.info("%+06d %s.target state reached" % (g_plotter.get_distance(), self.__class__.__name__))
@@ -718,11 +709,9 @@ class IsJunction(Behaviour):
         else:
             return Status.RUNNING
 
-
 class CatchBottle(Behaviour):
     """
     Drive up to a tape-wrapped bottle and trap it between the two front arms.
-
     IDENTIFY  - find the coloured band, latch its colour into g_bottle_color and
                 lock the video tracker onto that colour (kills colour flicker).
     APPROACH  - PID-steer on the band bearing (bottle_theta) at `power` until the
@@ -733,7 +722,6 @@ class CatchBottle(Behaviour):
                 default) so the two front arms close over it, then stop.
     """
     IDENTIFY, APPROACH, CATCH = range(3)
-
     def __init__(self, name: str, power: int,
                  pid_p: float, pid_i: float, pid_d: float,
                  catch_run_mm: int = 150,
@@ -758,19 +746,15 @@ class CatchBottle(Behaviour):
         self._blind_steer = 0
         self.pid = None
         self.running = False
-
     def _cur_heading(self) -> int:
         return (-1) * g_course * g_gyro_sensor.get_angle()
-
     def _steer_vision(self, theta: float) -> None:
         # vision-based: theta already encodes direction, no g_course factor
         turn = int(self.pid(theta))
         g_right_motor.set_power(self.power + turn)
         g_left_motor.set_power(self.power - turn)
-
     def update(self) -> Status:
         global g_bottle_color
-
         if not self.running:
             self.running = True
             g_video.set_target_interested(TargetInterested.BOTTLE)
@@ -794,7 +778,6 @@ class CatchBottle(Behaviour):
                     g_plotter.get_distance(), self.__class__.__name__, color.name, barea))
                 self._state = self.APPROACH
             return Status.RUNNING
-
         # ---------- APPROACH ----------
         if self._state == self.APPROACH:
             if insight:
@@ -807,7 +790,6 @@ class CatchBottle(Behaviour):
                 self._blind_steer += 1                            # brief dropout: hold straight
                 g_right_motor.set_power(self.power)
                 g_left_motor.set_power(self.power)
-
             # band reached / passed the blind edge -> commit to the run-in
             if in_blind or (not insight and self._blind_steer > 8):
                 hist = self._heading_hist or [self._cur_heading()]
@@ -822,7 +804,6 @@ class CatchBottle(Behaviour):
                     self._target_heading, self.catch_run_mm))
                 self._state = self.CATCH
             return Status.RUNNING
-
         # ---------- CATCH (gyro run-in) ----------
         if self._state == self.CATCH:
             travelled = g_plotter.get_distance() - self._catch_start_odo
@@ -837,19 +818,15 @@ class CatchBottle(Behaviour):
             g_right_motor.set_power(self.power + g_course * turn)
             g_left_motor.set_power(self.power - g_course * turn)
             return Status.RUNNING
-
         return Status.RUNNING
-
 
 class IsBottleInsight(Behaviour):
     """
     Condition node: SUCCESS while a tape-wrapped bottle of `color` is in sight,
     FAILURE otherwise.
-
     - color == BottleColor.NONE  -> match any detected bottle colour.
     - color == a specific colour -> SUCCESS only when the detected band is that
       colour (and big enough to trust).
-
     Reads the same snapshot CatchBottle consumes (g_video.get_bottle_stamped()),
     so it stays consistent with whatever the BOTTLE detector decided this frame.
     A short debounce (`min_frames`) suppresses single-frame colour flicker; set
@@ -867,7 +844,6 @@ class IsBottleInsight(Behaviour):
         self.set_target = set_target
         self._hits = 0
         self.running = False
-
     def update(self) -> Status:
         if not self.running:
             self.running = True
@@ -875,9 +851,7 @@ class IsBottleInsight(Behaviour):
                 g_video.set_target_interested(TargetInterested.BOTTLE)
             self.logger.info("%+06d %s.watching for color=%s" % (
                 g_plotter.get_distance(), self.__class__.__name__, self.color.name))
-
         insight, color, bcx, btheta, bbottom, barea, in_blind = g_video.get_bottle_stamped()
-
         match = (insight
                  and barea >= self.min_area
                  and (self.color == BottleColor.NONE or color == self.color))
@@ -1171,10 +1145,10 @@ def sig_handler(signum, frame) -> None:
 
 def read_bottle_color_for_final_mission(mission, color_argument, check_tree):
     # 通常ミッションでは色の手入力を使わない。
-    if mission not in ('bottle-final', 'to-bottle', 'bottle-rally'):
+    if mission not in ('bottle-final', 'to-bottle', 'bottle-rally', 'bottle-sumo'):
         if color_argument is not None:
             raise ValueError(
-                '--bottle-color requires bottle-final, to-bottle or bottle-rally'
+                '--bottle-color requires bottle-final, to-bottle, bottle-rally or bottle-sumo'
             )
         return None
 
@@ -1236,19 +1210,23 @@ def _run_main(argv, startup_cleanup):
         '--bottle-color',
         choices=BOTTLE_COLOR_NAMES,
         default=None,
-        help='Held bottle color for bottle-final, to-bottle or bottle-rally',
-    )
-    parser.add_argument("--sumo-initial-bearing", type=float, default=None,
-                        help="Placement bearing for sumo or sumo-garage: up=0, clockwise positive")
-    parser.add_argument(
-        '--rally-hint1',
-        default=None,
-        help='Decoded Hint 1 coordinates for rally-drive, bottle-rally or rally-sumo',
+        help='Held bottle color for bottle-final, to-bottle, bottle-rally or bottle-sumo',
     )
     parser.add_argument(
-        '--rally-hint2-gate-info',
+        "--sumo-initial-bearing",
+        type=float,
         default=None,
-        help='Decoded Hint 2 coordinates for rally-drive, bottle-rally or rally-sumo',
+        help="Placement bearing for sumo, sumo-garage, sumo-align or sumo-turn-test: up=0, clockwise positive",
+    )
+    parser.add_argument(
+        "--rally-hint1",
+        default=None,
+        help="Decoded Hint 1 coordinates for rally-drive, bottle-rally or rally-sumo",
+    )
+    parser.add_argument(
+        "--rally-hint2-gate-info",
+        default=None,
+        help="Decoded Hint 2 coordinates for rally-drive, bottle-rally or rally-sumo",
     )
     parser.add_argument(
         '--rally-plan-path',
@@ -1585,7 +1563,185 @@ def _run_main(argv, startup_cleanup):
                               'measuring (the arm vibrates). Default (unset) = 1.'))
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
+    parser.add_argument(
+        "--sumo-distance-mm",
+        type=float,
+        default=None,
+        help="Prescribed straight distance for sumo-align (default: 1000mm)",
+    )
+    parser.add_argument(
+        "--sumo-power",
+        type=int,
+        default=None,
+        help="Straight PWM for sumo-align (default: 80)",
+    )
+    parser.add_argument(
+        "--sumo-target-cx",
+        type=float,
+        default=None,
+        help="Calibrated bottle center in the 320px image (default: 160)",
+    )
+    parser.add_argument(
+        "--sumo-turn-angle",
+        type=float,
+        default=None,
+        help="sumo-turn-test only: signed physical clockwise angle, 1..20 deg magnitude",
+    )
+    parser.add_argument(
+        "--sumo-turn-power",
+        type=int,
+        default=None,
+        help="sumo-turn-test only: main PWM 20..80 (default:75)",
+    )
+    parser.add_argument(
+        "--sumo-turn-hold-sec",
+        type=float,
+        default=None,
+        help="sumo-turn-test only: observe after braking for 0.5..3 sec (default:1)",
+    )
+    parser.add_argument(
+        "--sumo-catch-distance-mm",
+        type=float,
+        default=None,
+        help="sumo-catch-test only: required positive finite additional distance after alignment (mm), no upper cap",
+    )
+    parser.add_argument(
+        "--sumo-catch-power",
+        type=int,
+        default=None,
+        help="sumo-catch-test only: approach base PWM 15..100 (default:25)",
+    )
+    parser.add_argument(
+        "--sumo-sensor-label",
+        default=None,
+        help="sumo-sensor-test only: placement label (e.g. inside, empty, left-out)",
+    )
+    parser.add_argument(
+        "--sumo-sensor-forward-mm",
+        type=float,
+        default=None,
+        help="Measured bottle center forward from arm-mouth midpoint; inside may be negative",
+    )
+    parser.add_argument(
+        "--sumo-sensor-lateral-mm",
+        type=float,
+        default=None,
+        help="Measured bottle center lateral from arm-mouth midpoint; robot right is positive",
+    )
+    parser.add_argument("--sumo-sensor-notes", default=None)
+    parser.add_argument("--sumo-sensor-sec", type=float, default=None)
+    parser.add_argument("--sumo-sensor-interval-sec", type=float, default=None)
+    parser.add_argument("--sumo-sensor-mm-per-unit", type=float, default=None)
+    parser.add_argument(
+        "--sumo-sensor-interactive",
+        action="store_true",
+        help="sumo-sensor-test only: select placement/start repeated segments by keyboard",
+    )
+    parser.add_argument(
+        "--sumo-push-calibration",
+        default=None,
+        help="sumo-push-route-test: measured floor/robot calibration JSON",
+    )
+    parser.add_argument(
+        "--sumo-push-execute",
+        action="store_true",
+        help="enable guarded capture/push; default stops after aligned corridor check",
+    )
+    parser.add_argument(
+        "--sumo-push-distance-mm",
+        type=float,
+        default=None,
+        help="no-calibration mode: required additional distance AFTER capture",
+    )
+    parser.add_argument("--sumo-push-capture-max-mm", type=float, default=500.0)
+    parser.add_argument("--sumo-push-power", type=int, default=80)
+    parser.add_argument("--sumo-push-turn-power", type=int, default=50)
     args = parser.parse_args(argv)
+    if args.mission == "sumo-push-route-test" and not args.sumo_push_calibration:
+        from robot_program.features.sumo_relative_push_settings import (
+            RelativePushSettings,
+        )
+        try:
+            RelativePushSettings(
+                push_distance_mm=args.sumo_push_distance_mm,
+                capture_max_mm=args.sumo_push_capture_max_mm,
+                power=args.sumo_push_power,
+                turn_power=args.sumo_push_turn_power,
+            )
+        except ValueError as error:
+            parser.error(str(error))
+        if args.sumo_push_execute and args.sumo_push_distance_mm is None:
+            parser.error(
+                "no-calibration execution requires --sumo-push-distance-mm (distance AFTER capture)"
+            )
+        if args.sumo_initial_bearing is None:
+            args.sumo_initial_bearing = 270.0 if args.course == "left" else 90.0
+    elif (
+        args.sumo_push_distance_mm is not None
+        or args.sumo_push_capture_max_mm != 500.0
+        or args.sumo_push_power != 80
+        or args.sumo_push_turn_power != 50
+    ):
+        parser.error(
+            "relative push distance/power options require sumo-push-route-test without calibration"
+        )
+    if args.mission == "sumo-push-route-test" and args.sumo_push_calibration:
+        from pathlib import Path
+        from robot_program.features.sumo_push_geometry import PushCalibration, delta
+        calibration_path = Path(args.sumo_push_calibration)
+        if not calibration_path.is_absolute():
+            calibration_path = Path(__file__).resolve().parent / calibration_path
+        try:
+            push_calibration = PushCalibration.load(calibration_path)
+            if push_calibration.course != args.course:
+                raise ValueError("calibration course mismatch")
+            if (
+                args.sumo_initial_bearing is not None
+                and abs(
+                    delta(args.sumo_initial_bearing, push_calibration.start_bearing_deg)
+                )
+                > 1e-6
+            ):
+                raise ValueError("initial bearing differs from floor calibration")
+            args.sumo_initial_bearing = push_calibration.start_bearing_deg
+        except (OSError, TypeError, ValueError) as error:
+            parser.error(str(error))
+    elif args.mission != "sumo-push-route-test" and (
+        args.sumo_push_calibration is not None or args.sumo_push_execute
+    ):
+        parser.error("--sumo-push-* options require sumo-push-route-test")
+    sensor_overrides = {
+        key: value
+        for key, value in (
+            ("interactive", True if args.sumo_sensor_interactive else None),
+            ("label", args.sumo_sensor_label),
+            ("forward_mm", args.sumo_sensor_forward_mm),
+            ("lateral_mm", args.sumo_sensor_lateral_mm),
+            ("notes", args.sumo_sensor_notes),
+            ("duration_sec", args.sumo_sensor_sec),
+            ("interval_sec", args.sumo_sensor_interval_sec),
+            ("mm_per_unit", args.sumo_sensor_mm_per_unit),
+        )
+        if value is not None
+    }
+    if (
+        args.mission == "sumo-sensor-test"
+        and args.sumo_sensor_label is None
+        and not args.sumo_sensor_interactive
+    ):
+        parser.error("sumo-sensor-test requires --sumo-sensor-label")
+    if sensor_overrides and args.mission != "sumo-sensor-test":
+        parser.error("--sumo-sensor-* options require sumo-sensor-test")
+    if args.mission == "sumo-catch-test" and args.sumo_catch_distance_mm is None:
+        parser.error(
+            "sumo-catch-test requires --sumo-catch-distance-mm; measure the remaining approach distance"
+        )
+    if args.mission != "sumo-catch-test" and (
+        args.sumo_catch_distance_mm is not None or args.sumo_catch_power is not None
+    ):
+        parser.error(
+            "--sumo-catch-distance-mm and --sumo-catch-power require sumo-catch-test"
+        )
     if args.mission == 'to-bottle':
         if args.delivery_initial_heading is None:
             if args.check_tree:
@@ -1596,9 +1752,15 @@ def _run_main(argv, startup_cleanup):
             parser.error('--delivery-initial-heading must be finite')
     elif args.delivery_initial_heading is not None:
         parser.error('--delivery-initial-heading is available only with --mission to-bottle')
+    if args.mission in ("sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit") and args.sumo_initial_bearing is None:
+        test_settings = config_for_mission(args.mission).sumo_stage_test
+        args.sumo_initial_bearing = (test_settings.initial_bearing_left_deg
+                                     if args.course == "left"
+                                     else test_settings.initial_bearing_right_deg)
     try:
-        sumo_initial_bearing = initial_sumo_bearing(args.mission, args.sumo_initial_bearing,
-                                                    -1 if args.course == 'right' else 1)
+        sumo_initial_bearing = initial_sumo_bearing(
+            args.mission, args.sumo_initial_bearing, -1 if args.course == "right" else 1
+        )
     except ValueError as error:
         parser.error(str(error))
     g_course = -1 if args.course == 'right' else 1
@@ -1606,11 +1768,94 @@ def _run_main(argv, startup_cleanup):
     # 未実装ノードは明示警告するが、PendingFeature自身のSUCCESSで後続工程へ進める。
     print(" -- shutdown-v8 control interval=%.3fs mission=%s" % (EXEC_INTERVAL, args.mission))
     mission_config = config_for_mission(args.mission)
+    mission_config = dataclasses.replace(
+        mission_config,
+        sumo_push_calibration=args.sumo_push_calibration,
+        sumo_push_execute=args.sumo_push_execute,
+    )
+    if args.mission in ("sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit"):
+        from robot_program.features.sumo_stage_test import configured_sumo_test
+        try:
+            mission_config = configured_sumo_test(mission_config)
+        except ValueError as error:
+            parser.error(str(error))
+    if args.mission == "sumo-push-route-test" and not args.sumo_push_calibration:
+        mission_config = dataclasses.replace(
+            mission_config,
+            sumo_relative_push=RelativePushSettings(
+                push_distance_mm=args.sumo_push_distance_mm,
+                capture_max_mm=args.sumo_push_capture_max_mm,
+                power=args.sumo_push_power,
+                turn_power=args.sumo_push_turn_power,
+            ),
+        )
+    sumo_overrides = {
+        key: value
+        for key, value in (
+            ("distance_mm", args.sumo_distance_mm),
+            ("power", args.sumo_power),
+            ("target_cx", args.sumo_target_cx),
+        )
+        if value is not None
+    }
+    if sumo_overrides and args.mission not in (
+        "sumo-align",
+        "sumo-catch-test",
+        "sumo-push-route-test",
+    ):
+        parser.error(
+            "--sumo-distance-mm, --sumo-power and --sumo-target-cx require sumo-align or sumo-catch-test"
+        )
+    turn_overrides = {
+        key: value
+        for key, value in (
+            ("angle_deg", args.sumo_turn_angle),
+            ("power", args.sumo_turn_power),
+            ("hold_sec", args.sumo_turn_hold_sec),
+        )
+        if value is not None
+    }
+    if turn_overrides and args.mission != "sumo-turn-test":
+        parser.error(
+            "--sumo-turn-angle, --sumo-turn-power and --sumo-turn-hold-sec require sumo-turn-test"
+        )
+    try:
+        mission_config = dataclasses.replace(
+            mission_config,
+            sumo_align=dataclasses.replace(mission_config.sumo_align, **sumo_overrides),
+            sumo_turn_test=dataclasses.replace(
+                mission_config.sumo_turn_test, **turn_overrides
+            ),
+            sumo_catch=dataclasses.replace(
+                mission_config.sumo_catch,
+                **{
+                    key: value
+                    for key, value in (
+                        ("distance_mm", args.sumo_catch_distance_mm),
+                        ("power", args.sumo_catch_power),
+                    )
+                    if value is not None
+                }
+            ),
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    try:
+        mission_config = dataclasses.replace(
+            mission_config,
+            sumo_sensor=dataclasses.replace(
+                mission_config.sumo_sensor, **sensor_overrides
+            ),
+        )
+    except ValueError as error:
+        parser.error(str(error))
     if args.rally_plan_path is not None:
         # PC接続・Hint計算を一切使わず、指定したplan.json(steps形式)をそのまま実行する
         # (直進距離やキャスター引きずりの実機較正など、固定動作だけを試したいときに使う)。
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-            parser.error('--rally-plan-path requires --mission rally-drive, bottle-rally or rally-sumo')
+            parser.error(
+                "--rally-plan-path requires --mission rally-drive, bottle-rally or rally-sumo"
+            )
         mission_config = dataclasses.replace(
             mission_config, et_rally_strategy_source='file', et_rally_plan_path=args.rally_plan_path)
     if args.rally_turn_method is not None:
@@ -2040,8 +2285,7 @@ def _run_main(argv, startup_cleanup):
         # ET相撲の実行木は力士ボトル捕捉にカメラを必須とする。
         # config.pyだけが旧版のまま配備された場合でも、ET相撲有効時にvideo=Noneを渡さない。
         camera_enabled = (
-            mission_requires_camera(mission_config)
-            or mission_config.enable_et_sumo
+            mission_requires_camera(mission_config) or mission_config.enable_et_sumo
         )
         print(
             " -- camera enabled=%s et_sumo=%s"
@@ -2059,7 +2303,7 @@ def _run_main(argv, startup_cleanup):
             raise RuntimeError("Camera initialization did not provide a Video instance")
         if mission_requires_qr(mission_config):
             g_video.require_qr_decoder()
-        etrobo = initialize_etrobo(backend='raspike_art')
+        etrobo = initialize_etrobo(backend="raspike_art")
         etrobo.add_handler(TraverseBehaviourTree(tree))
         etrobo.dispatch(interval=EXEC_INTERVAL, logfile=args.logfile)
     finally:

@@ -13,6 +13,8 @@ from .delivery_heading import DeliveryHeadingReference
 class RaceContext:
     # 各担当機能は他担当のモジュールを直接参照せず、この共有状態を介して情報を渡す。
     bottle_color: Optional[str] = None
+    # None: 通常AT / confirmed: 青→黒後の接近完了 / fallback: 推定位置後の接近完了。
+    lap_bottle_approach_result: Optional[str] = None
     # 配置先は認識色から一度だけ決定し、配置後の開始位置復帰にも同じ値を使う。
     selected_drop_zone: Optional[str] = None
     bottle_delivered: bool = False

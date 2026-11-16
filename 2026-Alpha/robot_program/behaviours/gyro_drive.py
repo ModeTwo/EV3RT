@@ -187,7 +187,7 @@ class RunByGyro(Behaviour):
                 raise ValueError('distance_limit_mm must be positive and finite')
             if not math.isfinite(completion_min_mm) or not 0 <= completion_min_mm < distance_limit_mm:
                 raise ValueError('completion window must be within distance_limit_mm')
-            if not isinstance(power, int) or not 1 <= power <= 100:
+            if not isinstance(power, int) or not 1 <= power <= 400:
                 raise ValueError('power must be an integer from 1 to 100')
             if any(not math.isfinite(gain) for gain in (pid_p, pid_i, pid_d)):
                 raise ValueError('PID gains must be finite')
@@ -222,7 +222,8 @@ class RunByGyro(Behaviour):
                 self.pid_d,
                 setpoint=self.target_heading,
                 sample_time=EXEC_INTERVAL,
-                output_limits=(-self.power, self.power),
+                # abs()により、power<0(後退)でもmin<=maxを保った有効な範囲になる。
+                output_limits=(-abs(self.power), abs(self.power)),
             )
             self.logger.info(
                 "%+06d %s.gyro run started at heading=%.1f requested=%.1f resolved=%.1f delta=%.1f"
@@ -265,7 +266,7 @@ class RunByGyro(Behaviour):
             self.path_tracker = (PathTracking(self.cross_track_lookahead_mm, self.max_heading_correction_deg)
                                  if self.cross_track_lookahead_mm > 0 else None)
             self.last_log_time = None
-            turn_limit = min(self.power, 100 - self.power)
+            turn_limit = min(self.power, 400 - self.power)
             self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=0,
                            sample_time=EXEC_INTERVAL,
                            output_limits=(-turn_limit, turn_limit))
@@ -298,7 +299,7 @@ class RunByGyro(Behaviour):
         correction = (self.path_tracker.correction(progress, actual_heading, self.target)
                       if self.path_tracker is not None else 0.0)
         self.target_heading = nominal_heading + correction
-        turn_limit = min(self.power, 100-self.power)
+        turn_limit = min(self.power, 400-self.power)
         feedforward = curvature_turn(self.target, progress, self.power,
                                      self.wheel_tread_mm, self.feedforward_gain)
         feedforward = max(-turn_limit, min(turn_limit, feedforward))

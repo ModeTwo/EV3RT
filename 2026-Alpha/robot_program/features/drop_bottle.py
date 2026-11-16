@@ -1,109 +1,94 @@
-"""Feature 08 subtree factory."""
+"""ボトル色に対応するゾーンへ進入し、ボトルを置く機能。
 
-from .bt_imports import Behaviour, BottleColor, Color, Failure, HeadingType, Parallel, ParallelPolicy, Running, Selector, Sequence, Status, Success, TargetInterested, TraceSide, runtime, time
-from ..behaviours.bottle import MarkBottleDelivered
-from ..behaviours.line_trace import TraceLine
-from ..behaviours.section_motion import DriveDistance, distance_motion
+色ごとの進入方位・距離・後退距離でゾーンへ進み、配置完了を
+共有contextへ記録する。
+"""
+
+from .bt_imports import BottleColor, Selector, Sequence
+from ..behaviours.bottle import IsSelectedDropZone, MarkBottleDelivered
+from ..behaviours.corrected_run import DeliveryEtRun
 from ..behaviours.encoder_spin import delivery_encoder_turn as to_turn
+from ..behaviours.section_motion import distance_motion
+
+# 色ごとの (ドロップゾーン側への進入方位, ゾーンまでの距離[mm])。
+# 方位はドロップコース基準。既存の方位座標系ではゾーン側が負方向なので、
+# 色別の目標方位は下記の表を参照する。
+_DROP_ROUTE = {
+    BottleColor.YELLOW: (-39.0, 405.0),  # 黄: -39度で405 mm
+    BottleColor.BLUE: (-24.0, 670.0),    # 青: -24度で670 mm
+    BottleColor.RED: (-18.0, 930.0),     # 赤: -18度で930 mm
+}
+
+# ゾーン進入で減速を始める残り距離[mm]と、減速中の最低走行出力。
+# 最後の150 mmで巡航出力から40まで直線的に下げ、終点で停止する。
+APPROACH_DECEL_MM = 150.0
+APPROACH_MIN_POWER = 40
+
+# 色ごとの後退距離[mm]。
+_DROP_BACK_DISTANCE_MM = {
+    BottleColor.YELLOW: 65,
+    BottleColor.BLUE: 170,
+    BottleColor.RED: 210,
+}
+
+
+def _drive(name, context, settings, heading, distance_mm, power,
+           decel_mm=0.0, decel_min_power=40):
+    """指定方位をジャイロ補正で保ちながら、指定距離だけ直進する動作を作る。
+
+    distance_motionが走行距離を監視し、DeliveryEtRunが走行中の方位ずれを
+    補正する。powerを負にすると、headingを保ったまま後退する。
+    """
+    return distance_motion(
+        name,
+        DeliveryEtRun(
+            name + " motor", context,
+            target=heading,
+            power=power,
+            pid_p=settings.delivery_drive_pid_p,
+            pid_i=settings.delivery_drive_pid_i,
+            pid_d=settings.delivery_drive_pid_d,
+            # distance_mmを渡すとEtRallyRunByGyroが残距離を計算し、
+            # decel_mmの範囲で出力をdecel_min_powerまで下げる。
+            distance_mm=distance_mm,
+            decel_mm=decel_mm,
+            decel_min_power=decel_min_power,
+        ),
+        distance_mm,
+    )
 
 
 def build_drop_bottle(context, config):
-    # No.8 旋回、前進、後退、復帰旋回によるボトル配置を担当する。
+    """選択されたボトル色に応じた配置シーケンスを作る。
+
+    Selectorは黄・青・赤の分岐を順に確認し、IsSelectedDropZoneが成功した
+    色のシーケンスだけを実行する。分岐内の順序は、色の確認、ゾーン側へ旋回、
+    色別距離の前進、色別距離の後退、配置完了の記録。
+    """
     settings = config.integration
     root = Sequence(name="drop_bottle", memory=True)
+    color_route = Selector(name="approach color drop zone", memory=True)
 
-    # 1. 検知した青ラインの手前端から中央まで進む。
-    move_to_blue_line_center = distance_motion(
-        "center selected blue line",
-        TraceLine(
-            name="center selected blue line motor",
-            target=settings.delivery_trace_target_v,
-            power=settings.delivery_trace_power,
-            pid_p=0.65,
-            pid_i=0.000001,
-            pid_d=0.045,
-            trace_side=TraceSide.NORMAL,
-        ),
-        settings.delivery_marker_half_width_mm,
-    )
+    for color, (heading, distance_mm) in _DROP_ROUTE.items():
+        back_distance_mm = _DROP_BACK_DISTANCE_MM[color]
+        # この色が確定配置先の場合だけ、その色に対応する動作を実行する。
+        route = Sequence(name=f"{color.name.lower()} bottle drop", memory=True)
+        route.add_children([
+            IsSelectedDropZone(f"is {color.name.lower()} zone", color, context),
+            # コース基準の色別方位でドロップゾーン側を向く。
+            to_turn(f"turn toward {color.name.lower()} drop zone", context, settings, heading),
+            # 色ごとの所定距離を前進し、ボトル色のゾーンまで進む。
+            _drive(f"drive to {color.name.lower()} drop zone", context, settings,
+                   heading, distance_mm, settings.delivery_drive_first_power,
+                   decel_mm=APPROACH_DECEL_MM,
+                   decel_min_power=APPROACH_MIN_POWER),
+                 # 同じ方位を維持して色別距離だけ後退し、ボトルを放す位置を作る。
+            _drive(f"back away from {color.name.lower()} bottle", context, settings,
+                     heading, back_distance_mm, -settings.delivery_drive_first_power),
+            # この分岐の移動がすべて成功したあと、配置済み状態を後続へ通知する。
+            MarkBottleDelivered(f"mark {color.name.lower()} bottle delivered", context),
+        ])
+        color_route.add_child(route)
 
-    # 2. ライン進行方向からドロップゾーン側へ90度旋回する。
-    turn_toward_drop_zone_first = to_turn(
-        "turn toward bottle drop zone",
-        context,
-        settings,
-        settings.delivery_drop_turn_deg_first,
-    )
-
-    # 3. ボトルを置くため、ドロップゾーンへ規定距離だけ前進する。
-    drive_into_drop_zone_first = DriveDistance(
-        "enter bottle drop zone",
-        settings.delivery_drop_distance_first_mm,
-        settings.delivery_drive_first_power,
-    )
-        # 2. ライン進行方向からドロップゾーン側へ90度旋回する。
-    turn_toward_drop_zone_second = to_turn(
-        "turn toward bottle drop zone",
-        context,
-        settings,
-        settings.delivery_drop_turn_deg_second,
-    )
-
-    # 3. ボトルを置くため、ドロップゾーンへ規定距離だけ前進する。
-    drive_into_drop_zone_second = DriveDistance(
-        "enter bottle drop zone",
-        settings.delivery_drop_distance_second_mm,
-        settings.delivery_drive_second_power,
-    )
-
-    # 4. 前進した距離と同じ距離を後退し、青ライン中央へ戻る。
-    reverse_to_blue_line_first = DriveDistance(
-        "leave bottle drop zone",
-        settings.delivery_drop_distance_first_mm,
-        -settings.delivery_drive_first_power,
-    )
-
-    # 5. 次の青ラインへ進めるよう、元のライン進行方向へ向きを戻す。
-    turn_back_to_line_first = to_turn(
-        "turn back to drop zone line",
-        context,
-        settings,
-        settings.delivery_drop_turn_deg_first,  # 絶対方位: ライン進行方向へ戻る
-    )
-    # 4. 前進した距離と同じ距離を後退し、青ライン中央へ戻る。
-    reverse_to_blue_line_second = DriveDistance(
-        "leave bottle drop zone",
-        settings.delivery_drop_distance_second_mm,
-        -settings.delivery_drive_second_power,
-    )
-
-    # 5. 次の青ラインへ進めるよう、元のライン進行方向へ向きを戻す。
-    turn_back_to_line_second = to_turn(
-        "turn back to drop zone line",
-        context,
-        settings,
-        0.0,  # 絶対方位: ライン進行方向へ戻る
-    )
-    
-
-    # 6. ここまでの制御が完了したことを後続工程へ記録する。
-    mark_delivery_complete = MarkBottleDelivered(
-        "mark bottle delivered",
-        context,
-    )
-
-    root.add_children(
-        [
-            move_to_blue_line_center,
-            turn_toward_drop_zone_first,
-            drive_into_drop_zone_first,
-            turn_toward_drop_zone_second,
-            drive_into_drop_zone_second,
-            reverse_to_blue_line_first,
-            turn_back_to_line_first,
-            reverse_to_blue_line_second,
-            turn_back_to_line_second,
-            mark_delivery_complete,
-        ]
-    )
+    root.add_child(color_route)
     return root

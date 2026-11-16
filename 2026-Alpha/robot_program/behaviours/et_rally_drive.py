@@ -162,7 +162,7 @@ class EtRallySpinAroundByEncoder(Behaviour):
                  fine_trim: bool = True, backlash_preload_deg: float = 0.0,
                  lag_compensation_deg: float = 0.0,
                  adaptive_lag_compensation: bool = False,
-                 left_target_scale: float = 1.0) -> None:
+                 left_target_scale: float = 1.0, tire_diameter_mm: float = None) -> None:
         super(EtRallySpinAroundByEncoder, self).__init__(name)
         # DD-22較正用: 片輪エンコーダテストで実測した、右輪の方が同じエンコーダ回転量に
         # 対して約0.9%多く実際の方位を変える(実効径・グリップの定常的な左右差)分を
@@ -170,6 +170,9 @@ class EtRallySpinAroundByEncoder(Behaviour):
         # 物理的な車輪そのものの特性による差なので、どちらが先に止まるかとは無関係に
         # 常に左輪の目標値だけにこの係数をかける。1.0なら無効(既定、挙動は変えない)。
         self.left_target_scale = left_target_scale
+        # 2026-11-16(devTKとのマージ): 回す量に使うタイヤ径。None なら直進と同じ runtime.plotter.tire_diameter(ETラリー)。
+        # devTK の EncoderSpin(behaviours/encoder_spin.py)は、マージ前と同じ動きにするため元の 56.87 を渡す。
+        self.tire_diameter_mm = tire_diameter_mm
         # DD-22較正用: 前の旋回と逆方向に切り替わる旋回だけ、フェーズ1の目標エンコーダ角度に
         # この分を上乗せする。機構内のバックラッシュ(前の旋回で片側に詰まった遊びを、
         # 逆方向ではまず詰め直す必要がある)による「エンコーダは回るが実際には車輪が
@@ -241,7 +244,7 @@ class EtRallySpinAroundByEncoder(Behaviour):
             arc_length_mm = math.radians(abs(error)) * (WHEEL_TREAD / 2.0)
             # 直進(Plotter.plot())と同じタイヤ径を使う。固定値を別途持つと、
             # --rally-gyro-tire-calibration offでの較正前/較正後の切替が旋回側に反映されない。
-            self.target_motor_deg = arc_length_mm / (math.pi * runtime.plotter.tire_diameter) * 360.0
+            self.target_motor_deg = arc_length_mm / (math.pi * (self.tire_diameter_mm or runtime.plotter.tire_diameter)) * 360.0
             self.direction = 1 if error > 0 else -1
 
             global _last_turn_direction
@@ -510,7 +513,9 @@ class EtRallyRunByGyro(Behaviour):
             # 2026-11-05: --rally-move-pid-i を付けないときは、fine_power なら 10/31 に決めた 8(止まってから曲がる形の直進)。
             pid_i = (_move_pid_i_override if _move_pid_i_override is not None
                      else (OLD_STRAIGHT_PID_I if _fine_power_enabled else self.pid_i))
-            self.pid = PID(self.pid_p, pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
+            self.pid = PID(self.pid_p, pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL,
+                           # devTK(516cfa6): abs()により、power<0(後退)でもmin<=maxを保った有効な範囲になる。
+                           output_limits=(-abs(self.power), abs(self.power)))
             # fine_power用の、左右それぞれの整数にしきれなかった端数。
             self.right_residual = 0.0
             self.left_residual = 0.0
@@ -599,7 +604,7 @@ class EtRallyRunByGyro(Behaviour):
             self.out_n += 1
         base_power = -power_now if self.reverse else power_now
         if _fine_power_enabled:
-            turn_f = max(-power_now, min(power_now, output))
+            turn_f = max(-abs(power_now), min(abs(power_now), output))
             self.right_residual += base_power + runtime.course * turn_f
             self.left_residual += base_power - runtime.course * turn_f
             right_power = int(round(self.right_residual))
@@ -610,7 +615,7 @@ class EtRallyRunByGyro(Behaviour):
             turn = int(output)  # まっすぐ走るために必要な微修正の旋回量
             # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める
             # (PID自体の上限は巡航パワーで作ってあるため)。
-            turn = max(-power_now, min(power_now, turn))
+            turn = max(-abs(power_now), min(abs(power_now), turn))  # abs(): power<0(後退、devTKのEtRun)でも範囲が反転しない(devTK 516cfa6)
             right_power = base_power + runtime.course * turn
             left_power = base_power - runtime.course * turn
         runtime.right_motor.set_power(right_power)

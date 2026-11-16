@@ -6,14 +6,16 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
+from ..color_thresholds import CAMERA_SUMO_BLACK_TAPE
+
 
 @dataclass(frozen=True)
 class SumoBlackBottleConfig:
     # 3色ボトル用BOTTLE_HSVとは共有せず、力士ボトルの黒テープだけを調整する。
     frame_width: int = 320
     frame_height: int = 180
-    black_max_saturation: int = 120
-    black_max_value: int = 40
+    black_max_saturation: int = CAMERA_SUMO_BLACK_TAPE.s_max
+    black_max_value: int = CAMERA_SUMO_BLACK_TAPE.v_max
 
     # 画像上部を黒ボトル探索対象から除外する割合
     search_top_ratio: float = 0.30

@@ -1,4 +1,5 @@
 import math
+import time
 from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSensor, GyroSensor
 
 # 2026-09-12: 直進100cm/102.9cmの実測テスト(計4回、指令距離に対する誤差は
@@ -63,6 +64,36 @@ class Plotter(object):
         self.loc_x = 0.0
         self.loc_y = 0.0
         self.prev_azimuth = 0.0
+        self._encoder_diag = None
+
+    def _log_encoder_snapshot(self, right_count, left_count, *, now=None):
+        """Log the same counts used for odometry; timestamps are local reads, not hub timestamps."""
+        now = time.monotonic() if now is None else now
+        previous = self._encoder_diag
+        if previous is None:
+            self._encoder_diag = {'right': right_count, 'left': left_count,
+                                  'right_changed': now, 'left_changed': now,
+                                  'emit_time': now, 'emit_right': right_count,
+                                  'emit_left': left_count}
+            print('ODOMETRY_SAMPLE read_mono_sec=%.6f right_deg=%s left_deg=%s distance_mm=%.3f init=True' %
+                  (now, right_count, left_count, self.distance), flush=True)
+            return
+        if right_count != previous['right']:
+            previous['right'], previous['right_changed'] = right_count, now
+        if left_count != previous['left']:
+            previous['left'], previous['left_changed'] = left_count, now
+        elapsed = now - previous['emit_time']
+        if elapsed < 0.2:
+            return
+        right_delta = right_count - previous['emit_right']
+        left_delta = left_count - previous['emit_left']
+        print('ODOMETRY_SAMPLE read_mono_sec=%.6f interval_sec=%.3f right_deg=%s left_deg=%s '
+              'right_delta_deg=%s left_delta_deg=%s right_rpm=%.2f left_rpm=%.2f '
+              'distance_mm=%.3f right_unchanged_sec=%.3f left_unchanged_sec=%.3f' %
+              (now, elapsed, right_count, left_count, right_delta, left_delta,
+               right_delta / (6.0 * elapsed), left_delta / (6.0 * elapsed), self.distance,
+               now - previous['right_changed'], now - previous['left_changed']), flush=True)
+        previous.update(emit_time=now, emit_right=right_count, emit_left=left_count)
 
     def plot(
         self,
@@ -83,6 +114,7 @@ class Plotter(object):
             self.prev_ang_r = right_motor.get_count()
             self.prev_ang_l = left_motor.get_count()
             gyro_sensor.reset()
+            self._log_encoder_snapshot(self.prev_ang_r, self.prev_ang_l)
             return
 
         # --- distance: taken from the wheel encoders ------------------
@@ -123,6 +155,7 @@ class Plotter(object):
         # --- location --------------------------------------------------------
         self.loc_x += delta_dist * math.sin(azi_mid)
         self.loc_y += delta_dist * math.cos(azi_mid)
+        self._log_encoder_snapshot(cur_ang_r, cur_ang_l)
         return
 
     def get_distance(self) -> int:
