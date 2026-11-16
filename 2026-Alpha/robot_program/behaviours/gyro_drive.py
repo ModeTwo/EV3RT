@@ -42,6 +42,7 @@ class SpinAround(Behaviour):
         pid_d: float,
         target_type: HeadingType,
         tolerance: float = 0.5,
+        normalize_error: bool = True,
     ) -> None:
         super().__init__(name)
         self.target = target
@@ -50,6 +51,7 @@ class SpinAround(Behaviour):
         self.pid_i = pid_i
         self.pid_d = pid_d
         self.tolerance = tolerance
+        self.normalize_error = normalize_error
         self.clamper = SymmetricClamper(min_power, max_power)
         self.running = False
         self.target_heading = 0.0
@@ -81,7 +83,12 @@ class SpinAround(Behaviour):
                 )
             )
 
-        error = _normalize_heading_error(self.target_heading - current_heading)
+        raw_error = self.target_heading - current_heading
+        error = (
+            _normalize_heading_error(raw_error)
+            if self.normalize_error
+            else raw_error
+        )
         if abs(error) < self.tolerance:
             self.logger.info(
                 "%+06d %s.spin ended at heading=%d"

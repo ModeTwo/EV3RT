@@ -115,6 +115,10 @@ class AlignSumoBottle(Behaviour):
         return row
 
     def _start_drive(self, now):
+        if self.continuous_entry:
+            if runtime.course not in (-1, 1):
+                raise ValueError("unsupported course for delivery-to-sumo")
+            self.approach_offset_from_reset_deg = -90.0 * runtime.course
         self.phase = "DRIVE"
         self.phase_started_at = now
         self.distance = IsDistanceEarned(
@@ -183,7 +187,6 @@ class AlignSumoBottle(Behaviour):
         self._new_session()
         runtime.video.begin_sumo_alignment_recording(self._record_snapshot)
         if self.continuous_entry:
-            # 録画準備と並行して、カーブ直後から距離を数えて直進する。
             self._start_drive(self.started_at)
 
     def _settle(self, now, after_turn=False):
@@ -241,7 +244,11 @@ class AlignSumoBottle(Behaviour):
                 "recording failed: %s"
                 % (recording["error"] if recording else "not started")
             )
-        if self.continuous_entry and not recording["ready"] and now - self.started_at > 5.0:
+        if (
+            self.continuous_entry
+            and not recording["ready"]
+            and now - self.started_at > 5.0
+        ):
             return self._fail("recording/camera startup timeout")
         if self.phase == "RECORD_START":
             if not recording["ready"]:
@@ -327,6 +334,8 @@ class AlignSumoBottle(Behaviour):
 
     def _start_approach_recovery(self, now):
         """直進中の履歴から限定的に推定旋回し、画像の再取得を試す。"""
+        if self.turns >= self.settings.max_turns:
+            return False
         rows = self.approach_observations
         if self.approach_recovery_attempted or len(rows) < 3:
             return False
@@ -379,6 +388,10 @@ class AlignSumoBottle(Behaviour):
             self._stop_child("turn")
             self._settle(now, after_turn=True)
         return Status.RUNNING
+
+    def _on_alignment_turn_limit(self, now, observation, target):
+        # Align-only / calibrated routes must not claim alignment success.
+        return self._fail("alignment turn limit reached without alignment")
 
     def _update_bottle_observation(self, now):
         """停止後の新しい画像を評価し、正対完了または次の画像旋回を選ぶ。"""
@@ -481,6 +494,9 @@ class AlignSumoBottle(Behaviour):
             return Status.RUNNING
         self.stable = 0
         self.previous_stable_at = None
+        if self.turns >= self.settings.max_turns:
+            # Reached only after a new, fresh, confirmed stopped observation.
+            return self._on_alignment_turn_limit(now, observation, target)
         if abs(error) < min(self.motion_settings.heading_tolerance_deg, 1.0):
             # Wait for a stationary image rather than accepting a stale pose or
             # launching a turn smaller than the shared turn's completion tolerance.

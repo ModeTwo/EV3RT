@@ -1,18 +1,531 @@
-"""③ 相撲終了位置からETラリーの開始位置へ。"""
+from ..behaviours.gyro_drive import SpinAround
 
-from py_trees.behaviours import Failure
+"""③ ET相撲終了後、ETラリー開始位置の青い丸へ向けて旋回する。"""
+
+from py_trees.behaviour import Behaviour
+from py_trees.common import Status
 from py_trees.composites import Sequence
 
+from ..runtime import runtime
+from ..features.sumo_bearing_motion import SpinToBearing, current_bearing
 from ..behaviours.motor_control import StopNow
 
 
+class TurnTowardRallyStart(Behaviour):
+    """緑床回避の有無に応じて旋回角度を切り替える。"""
+
+    def __init__(self, context, config):
+        super().__init__("③ 青い丸へ向けて旋回")
+        self.context = context
+        self.config = config
+        self.turn = None
+
+    def initialise(self):
+        self.turn = None
+
+    def update(self):
+        if self.turn is None:
+            avoidance = getattr(
+                self.context.sumo,
+                "rally_avoidance_performed",
+                None,
+            )
+
+            angle = 215.0
+
+            # RIGHTは左回り、LEFTは右回り
+            if runtime.course == -1:
+                signed_angle = -angle
+            elif runtime.course == 1:
+                signed_angle = angle
+            else:
+                self.logger.error(
+                    "RALLY_TURN: unsupported course=%s" % runtime.course
+                )
+                return Status.FAILURE
+
+            start_bearing = current_bearing(self.context)
+            target_bearing = (start_bearing + signed_angle) % 360.0
+
+            self.logger.info(
+                "RALLY_TURN START course=%s angle=%.1f "
+                "start=%.2f target=%.2f"
+                % (runtime.course, signed_angle, start_bearing, target_bearing)
+            )
+
+            power = 60  # 215°旋回専用
+            motion = self.config.sumo
+
+            self.turn = SpinAround(
+                "rally start camera direction",
+                target=-runtime.course * signed_angle,
+                max_power=power,
+                min_power=power,
+                pid_p=motion.turn_pid_p,
+                pid_i=motion.turn_pid_i,
+                pid_d=motion.turn_pid_d,
+                target_type=HeadingType.RELATIVE,
+                tolerance=1.0,
+                normalize_error=False,
+            )
+
+        self.turn.tick_once()
+
+        if self.turn.status == Status.SUCCESS:
+            self.logger.info(
+                "RALLY_TURN COMPLETE bearing=%.2f"
+                % current_bearing(self.context)
+            )
+            return Status.SUCCESS
+
+        if self.turn.status == Status.FAILURE:
+            return Status.FAILURE
+
+        return Status.RUNNING
+
+    def terminate(self, new_status):
+        if self.turn is not None:
+            if self.turn.status == Status.RUNNING:
+                self.turn.stop(Status.INVALID)
+
 def build_move_sumo_to_rally_start(context, config):
-    """担当者はここに走行ツリーを実装し、ラリーの開始位置・方位で終了する。"""
-    # TODO ③: ②終了時の位置・方位のばらつきと、到達位置を実測して決める。
-    # 未実装のまま後続へ進ませない。完成時は下記の2ノードを実走行に置換。
-    root = Sequence(name="③ 相撲終了位置からETラリー開始位置へ", memory=True)
+    root = Sequence(
+        name="③ 相撲終了位置からETラリー開始位置へ",
+        memory=True,
+    )
+
     root.add_children([
-        StopNow(name="③ 未実装のため停止"),
-        Failure(name="③ 経路未実装"),
+        TurnTowardRallyStart(context, config),
+        StopNow(name="③ 旋回完了・停止"),
+    ])
+
+    return root
+
+
+
+# ---- 青い丸への移動 ----
+
+import time
+
+from py_etrobo_util import Color, ColorClassifier
+from ..behaviours.gyro_drive import RunByGyro
+from ..types import HeadingType
+
+
+class StableBlueArrival(Behaviour):
+    """最初の青検出から77.5mm進み、車軸中点を円中心へ近づける。"""
+
+    BLUE_RADIUS_MM = 39.5
+    SENSOR_FORWARD_MM = 38.0
+    # 正なら停止目標を手前へ補正。実測するまで0。
+    STOP_ADVANCE_MM = 0.0
+
+    def __init__(self):
+        super().__init__("青い丸中心への到着判定")
+        self.classifier = ColorClassifier()
+
+    def initialise(self):
+        self.count = 0
+        self.first_blue_distance = None
+        self.blue_confirmed = False
+
+    def update(self):
+        import math
+        runtime.require("color_sensor", "plotter")
+        distance = float(runtime.plotter.get_distance())
+        if not math.isfinite(distance):
+            raise ValueError("invalid blue-centering distance")
+
+        if not self.blue_confirmed:
+            h, s, v = runtime.color_sensor.get_raw_color_hsv()
+            if self.classifier.classify(h, s, v) == Color.BLUE:
+                if self.count == 0:
+                    self.first_blue_distance = distance
+                self.count += 1
+                if self.count >= 3:
+                    self.blue_confirmed = True
+                    self.logger.info(
+                        "RALLY_BLUE CENTER_CONFIRMED first=%.1f now=%.1f "
+                        "target_after_first=%.1f"
+                        % (
+                            self.first_blue_distance, distance,
+                            self.BLUE_RADIUS_MM + self.SENSOR_FORWARD_MM
+                            - self.STOP_ADVANCE_MM,
+                        )
+                    )
+            else:
+                # 単発ノイズは捨て、次の連続検出の先頭を使う。
+                self.count = 0
+                self.first_blue_distance = None
+
+        if not self.blue_confirmed:
+            return Status.RUNNING
+
+        # 確定後はセンサーが青から外れても距離目標を維持する。
+        progress = distance - self.first_blue_distance
+        target = (
+            self.BLUE_RADIUS_MM + self.SENSOR_FORWARD_MM
+            - self.STOP_ADVANCE_MM
+        )
+        if progress >= target:
+            self.logger.info(
+                "RALLY_BLUE CENTER_STOP progress=%.1f target=%.1f"
+                % (progress, target)
+            )
+            return Status.SUCCESS
+        return Status.RUNNING
+
+
+class WaitForSumoRecordingClose(Behaviour):
+    """Check asynchronous recording close after the rally turn."""
+
+    def __init__(self, context):
+        super().__init__("③ 相撲録画の終了確認")
+        self.context = context
+
+    def initialise(self):
+        self.started_at = time.monotonic()
+
+    def update(self):
+        recording = runtime.video.get_sumo_alignment_recording_status()
+        reason = None
+        if recording is None:
+            reason = "sumo recording status missing"
+        elif recording["error"]:
+            reason = "sumo recording failed: " + str(recording["error"])
+        elif recording["finished"]:
+            return Status.SUCCESS
+        elif time.monotonic() - self.started_at > 5.0:
+            reason = "sumo recording finalize timeout"
+        else:
+            return Status.RUNNING
+
+        for motor in (runtime.left_motor, runtime.right_motor):
+            if motor is not None:
+                motor.set_power(0)
+                motor.set_brake(True)
+        self.context.sumo.failure_reason = reason
+        self.logger.error(reason)
+        return Status.FAILURE
+
+
+class TurnAfterBlue(Behaviour):
+    """青い丸到着後、RIGHTは90度、LEFTは270度へ正対する。"""
+
+    def __init__(self, context, config):
+        super().__init__("⑤ 青い丸到着後にラリー方向へ正対")
+        self.context = context
+        self.config = config
+        self.turn = None
+
+    def initialise(self):
+        self.turn = None
+        self.started_at = time.monotonic()
+
+    def update(self):
+        if time.monotonic() - self.started_at > 6.0:
+            self.logger.error("BLUE_EXIT_TURN timeout")
+            return Status.FAILURE
+
+        if self.turn is None:
+            if runtime.course not in (-1, 1):
+                self.logger.error("BLUE_EXIT_TURN unsupported course")
+                return Status.FAILURE
+
+            target = 90.0 if runtime.course == -1 else 270.0
+            motion = self.config.sumo
+            self.turn = SpinToBearing(
+                name="face rally direction after blue arrival",
+                context=self.context,
+                bearing=target,
+                max_power=50,
+                min_power=50,
+                pid_p=motion.turn_pid_p,
+                pid_i=motion.turn_pid_i,
+                pid_d=motion.turn_pid_d,
+                tolerance=1.0,
+            )
+            self.logger.info(
+                "BLUE_EXIT_TURN START course=%s bearing=%.2f "
+                "target=%.2f power=50"
+                % (runtime.course, current_bearing(self.context), target)
+            )
+
+        self.turn.tick_once()
+        if self.turn.status == Status.SUCCESS:
+            self.logger.info(
+                "BLUE_EXIT_TURN COMPLETE bearing=%.2f target=%.2f"
+                % (current_bearing(self.context), self.turn.target_bearing)
+            )
+        return self.turn.status
+
+    def terminate(self, new_status):
+        try:
+            if self.turn is not None and self.turn.status == Status.RUNNING:
+                self.turn.stop(Status.INVALID)
+        finally:
+            for motor in (runtime.left_motor, runtime.right_motor):
+                if motor is not None:
+                    motor.set_power(0)
+                    motor.set_brake(True)
+
+
+class MoveToRallyBlue(Behaviour):
+    """画像認識→方向補正→距離制限付き前進→青色検知で停止。"""
+
+    DETECT_TIMEOUT_SEC = 5.0
+    TURN_TIMEOUT_SEC = 6.0
+    DRIVE_TIMEOUT_SEC = 8.0
+    MAX_OBSERVATION_AGE_SEC = 0.5
+    MAX_DRIVE_MM = 750.0
+    DRIVE_POWER = 70
+    TURN_POWER = 20
+    CENTER_TOLERANCE_PX = 12
+
+    def __init__(self, context, config):
+        super().__init__("④ 青い丸へ移動")
+        self.context = context
+        self.config = config
+        self.session = None
+        self.phase = None
+        self.started_at = None
+        self.phase_started_at = None
+        self.turn = None
+        self.drive = None
+
+    def initialise(self):
+        runtime.require(
+            "video", "plotter", "gyro_sensor",
+            "color_sensor", "left_motor", "right_motor"
+        )
+        self.turn = None
+        self.drive = None
+        self.started_at = time.monotonic()
+        self.phase_started_at = self.started_at
+        self.phase = "DETECT"
+        self.blue_alignment_turns = 0
+        self.session = runtime.video.begin_rally_blue_read()
+        self.logger.info(
+            "RALLY_BLUE START session=%s" % self.session
+        )
+
+    def _stop_motors(self):
+        for motor in (runtime.left_motor, runtime.right_motor):
+            if motor is not None:
+                motor.set_power(0)
+                motor.set_brake(True)
+
+    def _fail(self, reason):
+        self.logger.error("RALLY_BLUE FAILURE: %s" % reason)
+        self._stop_motors()
+        return Status.FAILURE
+
+    def _set_phase(self, phase):
+        self.phase = phase
+        self.phase_started_at = time.monotonic()
+
+    def update(self):
+        now = time.monotonic()
+
+        if self.phase == "DETECT":
+            if now - self.phase_started_at > self.DETECT_TIMEOUT_SEC:
+                return self._fail("blue circle not detected")
+
+            observation = runtime.video.get_rally_blue_observation(
+                self.session
+            )
+
+            # 1秒ごとに画像認識の状態を記録する。
+            if not hasattr(self, "_last_debug_log"):
+                self._last_debug_log = 0.0
+
+            if now - self._last_debug_log >= 1.0:
+                self._last_debug_log = now
+
+                if observation is None:
+                    self.logger.info(
+                        "RALLY_BLUE DEBUG observation=None"
+                    )
+                else:
+                    self.logger.info(
+                        "RALLY_BLUE DEBUG frame=%s confirmed=%s "
+                        "candidate=%s candidate_count=%s age=%.3f"
+                        % (
+                            observation.get("frame_id"),
+                            observation.get("confirmed"),
+                            observation.get("candidate"),
+                            observation.get("candidate_count"),
+                            now - observation.get("t", now),
+                        ))
+
+            if not observation or not observation.get("confirmed"):
+                return Status.RUNNING
+
+            if now - observation["t"] > self.MAX_OBSERVATION_AGE_SEC:
+                return Status.RUNNING
+
+            candidate = observation.get("candidate")
+            if not candidate:
+                return Status.RUNNING
+
+            cx = float(candidate["cx"])
+            error_px = cx - 160.0
+
+            self.logger.info(
+                "RALLY_BLUE DETECT cx=%.1f error_px=%.1f area=%.1f"
+                % (cx, error_px, candidate["area"])
+            )
+
+            # 画像中央に十分近い場合は追加旋回しない。
+            if abs(error_px) <= self.CENTER_TOLERANCE_PX:
+                self._start_drive()
+                return Status.RUNNING
+
+            # 既存の黒ボトル認識と同じ画角モデルによる初期推定。
+            # 実機で符号・倍率を検証すること。
+            import math
+            correction = 0.6 * math.degrees(
+                math.atan(error_px * 270.0 / 320.0 / 230.0)
+            )
+
+            target_bearing = (
+                current_bearing(self.context) + correction
+            ) % 360.0
+
+            motion = self.config.sumo
+            power = 50  # 青い丸への補正旋回専用
+
+            if self.blue_alignment_turns >= 3:
+                return self._fail("blue alignment correction limit")
+            self.blue_alignment_turns += 1
+            self.turn = SpinToBearing(
+                "rally blue alignment",
+                self.context,
+                target_bearing,
+                max_power=power,
+                min_power=power,
+                pid_p=motion.turn_pid_p,
+                pid_i=motion.turn_pid_i,
+                pid_d=motion.turn_pid_d,
+                tolerance=2.0,
+            )
+
+            self.logger.info(
+                "RALLY_BLUE TURN correction=%.2f target=%.2f"
+                % (correction, target_bearing)
+            )
+            self._set_phase("TURN")
+            return Status.RUNNING
+
+        if self.phase == "TURN":
+            if now - self.phase_started_at > self.TURN_TIMEOUT_SEC:
+                return self._fail("alignment turn timeout")
+
+            self.turn.tick_once()
+
+            if self.turn.status == Status.FAILURE:
+                return self._fail("alignment turn failed")
+
+            if self.turn.status == Status.SUCCESS:
+                self._stop_motors()
+                self.turn = None
+                self._set_phase("ALIGN_SETTLE")
+
+            return Status.RUNNING
+
+        if self.phase == "ALIGN_SETTLE":
+            self._stop_motors()
+            if now - self.phase_started_at < 0.2:
+                return Status.RUNNING
+            # 旋回前・旋回中の画像を使わず、新しい世代で再確認する。
+            runtime.video.end_rally_blue_read(self.session)
+            self.session = runtime.video.begin_rally_blue_read()
+            self.logger.info(
+                "RALLY_BLUE RECHECK session=%s corrections=%d"
+                % (self.session, self.blue_alignment_turns)
+            )
+            self._set_phase("DETECT")
+            return Status.RUNNING
+
+        if self.phase == "DRIVE":
+            if now - self.phase_started_at > self.DRIVE_TIMEOUT_SEC:
+                return self._fail("drive timeout")
+
+            self.drive.tick_once()
+
+            if self.drive.status == Status.SUCCESS:
+                self.logger.info(
+                    "RALLY_BLUE ARRIVED distance=%.1f"
+                    % runtime.plotter.get_distance()
+                )
+                return Status.SUCCESS
+
+            if self.drive.status == Status.FAILURE:
+                return self._fail(
+                    "blue not reached within distance limit"
+                )
+
+            return Status.RUNNING
+
+        return self._fail("invalid phase")
+
+    def _start_drive(self):
+        # RunByGyroのABSOLUTEは床面方位ではなく、
+        # -runtime.course * gyro角度を使用する。
+        target_heading = (
+            -runtime.course * float(runtime.gyro_sensor.get_angle())
+        )
+        motion = self.config.sumo
+
+        self.drive = RunByGyro(
+            name="rally blue gyro approach",
+            target=lambda distance: target_heading,
+            power=self.DRIVE_POWER,
+            pid_p=motion.drive_pid_p,
+            pid_i=motion.drive_pid_i,
+            pid_d=motion.drive_pid_d,
+            target_type=HeadingType.ABSOLUTE,
+            distance_limit_mm=self.MAX_DRIVE_MM,
+            completion_condition=StableBlueArrival(),
+            completion_min_mm=0.0,
+        )
+
+        self.logger.info(
+            "RALLY_BLUE DRIVE heading=%.2f power=%d limit=%.1f"
+            % (
+                target_heading,
+                self.DRIVE_POWER,
+                self.MAX_DRIVE_MM,
+            )
+        )
+        self._set_phase("DRIVE")
+
+    def terminate(self, new_status):
+        if self.turn is not None and self.turn.status == Status.RUNNING:
+            self.turn.stop(Status.INVALID)
+
+        if self.drive is not None and self.drive.status == Status.RUNNING:
+            self.drive.stop(Status.INVALID)
+
+        self._stop_motors()
+
+        if self.session is not None:
+            runtime.video.end_rally_blue_read(self.session)
+            self.session = None
+
+
+# 既存のbuild_move_sumo_to_rally_startを拡張する。
+_original_build_move_sumo_to_rally_start = build_move_sumo_to_rally_start
+
+
+def build_move_sumo_to_rally_start(context, config):
+    root = _original_build_move_sumo_to_rally_start(context, config)
+    if config.mission_mode in ("sumo-stage-all", "bottle-sumo"):
+        root.add_child(WaitForSumoRecordingClose(context))
+    root.add_children([
+        MoveToRallyBlue(context, config),
+        StopNow(name="④ 青い丸到着・停止"),
+        TurnAfterBlue(context, config),
+        StopNow(name="⑤ ラリー方向正対完了・停止"),
     ])
     return root
