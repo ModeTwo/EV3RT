@@ -75,10 +75,41 @@ class WaitForQRDecode(Behaviour):
 
 def build_tantou_tree(context, config, include_exit=True):
     settings = config.integration
-    SPIN_MAX_POWER = settings.to_spin_max_power  # 元: 60
-    SPIN_MIN_POWER = settings.to_spin_min_power  # 元: 55
+    SPIN_MAX_POWER = settings.to_spin_max_power
+    SPIN_MIN_POWER = settings.to_spin_min_power
     TRACELINE_TARGET_V = 65
 
+    class QRSpeedUpRun(RunByGyro):
+        """QR読み取り成功後に走行パワーを上げる"""
+        def __init__(self, name, qr_reader,
+                        slow_power=55, fast_power=80, **kwargs):
+            self.qr_reader = qr_reader
+            self.slow_power = slow_power
+            self.fast_power = fast_power
+            # 初回起動時は55で走行
+            kwargs["power"] = slow_power
+            super(QRSpeedUpRun, self).__init__(
+                name=name,
+                **kwargs
+            )
+        def update(self):
+            # QR読み取り状況に応じて速度を切り替える
+            if self.qr_reader.status == Status.SUCCESS:
+                target_power = self.fast_power
+            else:
+                target_power = self.slow_power
+            # 基本出力を変更
+            self.power = target_power
+            # PID初期化後なら補正量の上限も変更
+            if self.running and hasattr(self, "pid"):
+                self.pid.output_limits = (
+                    -abs(target_power),
+                    abs(target_power)
+                )
+            return super().update()
+
+    # ここから下は、元のツリー構築処理を続ける
+        # TO担当区間の親ノード
     root = Sequence(
         name="Tantou Section",
         memory=True
@@ -153,35 +184,62 @@ def build_tantou_tree(context, config, include_exit=True):
     # 1. 黒線方向への通常走行
     # ========================================================
     
-    go_to_black_a = Parallel(
-        name="go_to_black_a",
-        policy=ParallelPolicy.SuccessOnOne()
-    )
-    
-    go_to_black_a.add_children([
-    
-        RunByGyro(
-            context=context,
-            name="run_to_black_a",
-            target=40,
-            power=55,
-            pid_p=1.1,
-            pid_i=0.00075,
-            pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
-        ),
-    
-        # IsColorDetected(
-        #     name="detect_black",
-        #     color=Color.BLACK
-        # ),
-    
-        IsDistanceEarned(
-            name="black_distance_limit_a",
-            delta_dist=670  # tantou4: 550
-        ),
-    
-    ])
+    #go_to_black_a = Parallel(
+        #name="go_to_black_a",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)
+#    
+    #go_to_black_a.add_children([
+#    
+        #RunByGyro(
+            #context=context,
+            #name="run_to_black_a",
+            #target=45,
+            #power=55,
+            #pid_p=1.1,
+            #pid_i=0.00075,
+            #pid_d=0.04,
+            #target_type=HeadingType.ABSOLUTE
+        #),
+#    
+        ## IsColorDetected(
+        ##     name="detect_black",
+        ##     color=Color.BLACK
+        ## ),
+#    
+        #IsDistanceEarned(
+            #name="black_distance_limit_a",
+            #delta_dist=640  # tantou4: 550
+        #),
+#    
+    #])
+
+#    go_to_black_a = Parallel(
+        #name="go_to_black_a",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)
+#    
+    #go_to_black_a.add_children([
+#    
+        #QRSpeedUpRun(
+            #context=context,
+            #name="run_to_black_a",
+            #qr_reader=read_qr1,
+            #target=45,
+            #slow_power=55,
+            #fast_power=80,
+            #pid_p=1.1,
+            #pid_i=0.00075,
+            #pid_d=0.04,
+            #target_type=HeadingType.ABSOLUTE
+        #),
+#    
+        #IsDistanceEarned(
+            #name="black_distance_limit_a",
+            #delta_dist=640
+        #),
+#    
+    #])
 
     #go_to_black_a2 = Parallel(
         #name="go_to_black_a2",
@@ -213,17 +271,17 @@ def build_tantou_tree(context, config, include_exit=True):
 #    
     #])
 
-    go_to_black_aa = Sequence(
-        name="go_to_black_aa",
-        memory=True
-    )
-    
-    go_to_black_aa.add_children([
-    
-        go_to_black_a,
-        #go_to_black_a2,
-    
-    ])
+    #go_to_black_aa = Sequence(
+        #name="go_to_black_aa",
+        #memory=True
+    #)
+#    
+    #go_to_black_aa.add_children([
+#    
+        #go_to_black_a,
+        ##go_to_black_a2,
+#    
+    #])
     
     
     # ========================================================
@@ -247,6 +305,45 @@ def build_tantou_tree(context, config, include_exit=True):
     trace_to_qr1.add_children([
         read_qr1,
     ])
+
+    go_to_black_a = Parallel(
+        name="go_to_black_a",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
+    
+    go_to_black_a.add_children([
+    
+        QRSpeedUpRun(
+            context=context,
+            name="run_to_black_a",
+            qr_reader=read_qr1,
+            target=40,
+            slow_power=50,
+            fast_power=65,
+            pid_p=1.1,
+            pid_i=0.00075,
+            pid_d=0.04,
+            target_type=HeadingType.ABSOLUTE
+        ),
+    
+        IsDistanceEarned(
+            name="black_distance_limit_a",
+            delta_dist=760
+        ),
+    
+    ])
+
+    go_to_black_aa = Sequence(
+        name="go_to_black_aa",
+        memory=True
+    )
+    
+    go_to_black_aa.add_children([
+    
+        go_to_black_a,
+        #go_to_black_a2,
+    
+    ])
     
     
     # ========================================================
@@ -266,7 +363,7 @@ def build_tantou_tree(context, config, include_exit=True):
             context=context,
             name="run_after_qr_200mm",
             target=40,
-            power=55,
+            power=60,
             pid_p=1.1,
             pid_i=0.00075,
             pid_d=0.04,
@@ -275,7 +372,7 @@ def build_tantou_tree(context, config, include_exit=True):
     
         IsDistanceEarned(
             name="distance_after_qr_200mm",
-            delta_dist=140
+            delta_dist=250
         ),
 
     ])
@@ -304,7 +401,7 @@ def build_tantou_tree(context, config, include_exit=True):
         IsQRDistanceLimitReached(
             name="qr_distance_500mm",
             qr_reader=read_qr1,
-            delta_dist=530
+            delta_dist=500
         ),
     
     
@@ -666,11 +763,24 @@ def build_tantou_tree(context, config, include_exit=True):
 
     run_to_black_2_01.add_children([
 
-    RunByGyro(
+    #RunByGyro(
+        #context=context,
+        #name="run_to_black_2_01",
+        #target=105,
+        #power=55,
+        #pid_p=1.1,
+        #pid_i=0.00075,
+        #pid_d=0.04,
+        #target_type=HeadingType.ABSOLUTE
+    #),
+
+    QRSpeedUpRun(
         context=context,
         name="run_to_black_2_01",
+        qr_reader=read_qr2,
         target=105,
-        power=70,
+        slow_power=80,
+        fast_power=80,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
@@ -690,11 +800,24 @@ def build_tantou_tree(context, config, include_exit=True):
 
     run_to_black_2.add_children([
 
-    RunByGyro(
+    #RunByGyro(
+        #context=context,
+        #name="run_to_black_2",
+        #target=105,
+        #power=55,
+        #pid_p=1.1,
+        #pid_i=0.00075,
+        #pid_d=0.04,
+        #target_type=HeadingType.ABSOLUTE
+    #),
+
+    QRSpeedUpRun(
         context=context,
         name="run_to_black_2",
+        qr_reader=read_qr2,
         target=105,
-        power=70,
+        slow_power=80,
+        fast_power=80,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
@@ -741,7 +864,7 @@ def build_tantou_tree(context, config, include_exit=True):
             context=context,
             name="run_after_qr_100mm",
             target=105,
-            power=70,
+            power=80,
             pid_p=1.1,
             pid_i=0.00075,
             pid_d=0.04,
