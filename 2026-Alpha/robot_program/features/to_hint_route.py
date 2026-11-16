@@ -126,7 +126,7 @@ def build_tantou_tree(context, config, include_exit=True):
         SpinAround(
             context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
             name="left 55",
-            target=40,
+            target=45,
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
             pid_p=0.2,
@@ -163,8 +163,8 @@ def build_tantou_tree(context, config, include_exit=True):
         RunByGyro(
             context=context,
             name="run_to_black_a",
-            target=40,
-            power=50,
+            target=45,
+            power=55,
             pid_p=1.1,
             pid_i=0.00075,
             pid_d=0.04,
@@ -178,7 +178,7 @@ def build_tantou_tree(context, config, include_exit=True):
     
         IsDistanceEarned(
             name="black_distance_limit_a",
-            delta_dist=670  # tantou4: 550
+            delta_dist=640  # tantou4: 550
         ),
     
     ])
@@ -265,8 +265,8 @@ def build_tantou_tree(context, config, include_exit=True):
         RunByGyro(
             context=context,
             name="run_after_qr_200mm",
-            target=40,
-            power=50,
+            target=45,
+            power=55,
             pid_p=1.1,
             pid_i=0.00075,
             pid_d=0.04,
@@ -304,7 +304,7 @@ def build_tantou_tree(context, config, include_exit=True):
         IsQRDistanceLimitReached(
             name="qr_distance_500mm",
             qr_reader=read_qr1,
-            delta_dist=530
+            delta_dist=500
         ),
     
     
@@ -670,7 +670,7 @@ def build_tantou_tree(context, config, include_exit=True):
         context=context,
         name="run_to_black_2_01",
         target=105,
-        power=50,
+        power=80,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
@@ -694,7 +694,7 @@ def build_tantou_tree(context, config, include_exit=True):
         context=context,
         name="run_to_black_2",
         target=105,
-        power=50,
+        power=80,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
@@ -741,7 +741,7 @@ def build_tantou_tree(context, config, include_exit=True):
             context=context,
             name="run_after_qr_100mm",
             target=105,
-            power=50,
+            power=80,
             pid_p=1.1,
             pid_i=0.00075,
             pid_d=0.04,
