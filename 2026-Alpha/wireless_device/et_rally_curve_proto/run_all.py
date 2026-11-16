@@ -34,7 +34,14 @@ def _job(args):
     t0 = time.time()
     try:
         run_layout.process(gates, out, key)
-        why = json.load(open(os.path.join(out, key + '.pick.json'), encoding='utf-8')).get('why')
+        pp = os.path.join(out, key + '.pick.json')
+        if os.path.exists(pp):
+            why = json.load(open(pp, encoding='utf-8')).get('why')
+        elif os.path.exists(os.path.join(out, key + '.failed.json')):
+            why = 'FAILED (tool gave no route)'
+        else:
+            dp = os.path.join(out, key + '.deferred.json')
+            why = 'DEFERRED ' + (json.load(open(dp, encoding='utf-8')).get('deferred') if os.path.exists(dp) else '?')
     except Exception as e:   # 1つの配置の失敗で全体を止めない
         why = 'ERROR %r' % (e,)
     return key, time.time() - t0, why
@@ -46,7 +53,17 @@ def main():
     ap.add_argument('--workers', type=int, default=12)
     ap.add_argument('--keys', default=None)
     ap.add_argument('--limit', type=int, default=0)
+    # 2026-11-17(ユーザー): 1回目は狭い配置を後回しにし(--defer-narrow)、重い配置は --cap 秒で打ち切って後回しにする。
+    # 2回目はどちらも付けずに同じフォルダで回す(結果のない配置=後回しにした配置だけを計算する)。
+    ap.add_argument('--defer-narrow', action='store_true')
+    ap.add_argument('--cap', type=int, default=0)
     a = ap.parse_args()
+    if a.defer_narrow:
+        os.environ['HR_DEFER_NARROW'] = '1'
+    else:
+        os.environ.pop('HR_DEFER_NARROW', None)
+    if a.cap:
+        os.environ['RUN_LAYOUT_TIMEOUT'] = str(a.cap)
     sys.path.insert(0, ROOT)
     from shared_communication.et_rally_layouts import all_layouts, layout_key
     out = os.path.abspath(a.out)

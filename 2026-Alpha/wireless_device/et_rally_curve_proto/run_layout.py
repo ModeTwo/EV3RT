@@ -131,6 +131,19 @@ def process(gates, out, name):
     os.makedirs(out, exist_ok=True)
     P = lambda suf: os.path.join(out, name + suf)
     tf, used = tool(gates, P('.fast.r.json'), P('.fast.log'), FAST)
+    # 2026-11-17: 後回し(狭い配置で defer_narrow、または打ち切り時間 RUN_LAYOUT_TIMEOUT を超えた)なら結果を書かずに印だけ残す
+    # (<名前>.pick.json がないので、run_all.py の2回目で計算する)
+    lt0 = open(P('.fast.log'), encoding='utf-8', errors='ignore').read() if os.path.exists(P('.fast.log')) else ''
+    if 'DEFERRED narrow' in lt0 or 'TIMEOUT' in lt0:
+        why = 'narrow' if 'DEFERRED narrow' in lt0 else 'timeout %ds' % TIMEOUT
+        json.dump(dict(deferred=why), open(P('.deferred.json'), 'w', encoding='utf-8'))
+        print('deferred', name, why, flush=True)
+        return
+    if tf is None:
+        # 2026-11-17: 道具が経路を出せなかった(エラーなど)。<名前>.pick.json を書かない(run_all.py の再開で計算し直す)
+        json.dump(dict(failed=True), open(P('.failed.json'), 'w', encoding='utf-8'))
+        print('failed', name, flush=True)
+        return
     pick = dict(fast_total=tf, fast_used=used)
     chosen = 'fast'
     kept = None

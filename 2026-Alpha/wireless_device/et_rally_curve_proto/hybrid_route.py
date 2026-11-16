@@ -60,6 +60,11 @@ PARAMS = dict(
     # 狭い配置でなければ下限は2cm(ユーザー)。空なら使わない。
     fast_margins=[], fast_gain_sec=0.5,
     time_pairs=False,
+    # 2026-11-17(全配置の計算の順番・ユーザー): True なら、狭い配置(最初のすき間で通れないゲートがある)は候補を作った段階で
+    # 'DEFERRED narrow' と出して終わる(run_all.py の1回目で後回しにする)。
+    defer_narrow=False,
+    # 2026-11-17 計測用: 3つ目のゲートが、つなぎの探索に関わったか(調べた形の範囲に入ったか)を数える(time_pairs と一緒に)
+    measure_third=False,
     # 2026-11-16(計算時間): 行き止まりの判定。車体には車軸を中心とした半径 min(前, 後ろ, 横幅の半分) の円が入るので、脚から
     # (その半径 + すき間の下限)、進入禁止から(その半径)より近くには車軸が来られない。そう太らせた障害物とゲートの線(壁)で格子を
     # 領域に分け、抜けと入りの姿勢が別の領域のつなぎは試さずに「つながらない」にする(どんな走り方でもつながらないので結果は同じ)。
@@ -95,6 +100,12 @@ PARAMS = dict(
     final_yellow_visits=[],
     # 2段階探索の2段目: 色ごとに使う通り方 [sign, mode, angle, angle_out] だけに絞る(空なら絞らない)
     visit_filter={},
+    # 2026-11-17(ユーザーの経路案の確かめ用): {色: [通る向き sign, ...]} の向きで、前進(F)で通る候補だけにする。空なら使わない。
+    visit_signs={},
+    # 2026-11-17 ユーザー: 狭い配置で、すき間を下げたとき(margin_list[0] より小さいすき間で候補を作るとき)だけ、ゲートを真ん中から
+    # 横にずらして通る候補も作る(cm、ゲートの線の向き。斜めの通過も含む)。#244 で黄を 0.5〜0.75cm 赤の側へずらすと、
+    # 青の脚とのすき間が 1.6 → 2.1cm になる(真ん中を通る候補しかなく、2cm で通れなかった)。空なら使わない。
+    narrow_offsets=[],
     # 狭い配置の判定(2026-11-09): この順にすき間を試し、3色ともゲートを通る候補がある最初のすき間で探索する。
     # 候補を作るだけなので約1秒で分かる。空なら margin_front/margin_rear のまま。
     margin_list=[],
@@ -203,6 +214,7 @@ for k in list(PARAMS):
     if v is not None:
         d = PARAMS[k]
         PARAMS[k] = ([float(x) for x in v.split(',')] if isinstance(d, list) else
+                     json.loads(v) if isinstance(d, dict) else   # 2026-11-17: 辞書は JSON で渡す(visit_signs など)
                      (v == '1' if isinstance(d, bool) else type(d)(v)))
 globals().update({k.upper(): v for k, v in PARAMS.items()})
 
@@ -855,7 +867,17 @@ def _ko_touch(pr):
 _REG = None   # 2026-11-16(share_db): 今確定しているつなぎで調べた範囲 [xmin, xmax, ymin, ymax](車軸の位置、広げる前)
 
 
+_THIRD = None      # 計測用: 3つ目のゲートの障害物の範囲のリスト [x0, x1, y0, y1](広げたもの)
+_TOUCH3 = False
+
+
 def _reg_add(xmn, xmx, ymn, ymx):
+    global _TOUCH3
+    if _THIRD is not None and not _TOUCH3:
+        for x0, x1, y0, y1 in _THIRD:
+            if not (xmx < x0 or xmn > x1 or ymx < y0 or ymn > y1):
+                _TOUCH3 = True
+                break
     r = _REG
     if xmn < r[0]: r[0] = xmn
     if xmx > r[1]: r[1] = xmx
@@ -1147,7 +1169,10 @@ def _visit_candidates(g, pairs_override=None, only=None):
         for a_in, a_out, *rr in (pairs_override if pairs_override is not None else pairs):
             oblique = abs(a_in) > 1e-9 or abs(a_out) > 1e-9
             radii = (rr if rr else SPLIT_RADII) if abs(a_in - a_out) > 1e-9 else [0.0]
-            for off in (OFFSETS if not oblique else [0.0]):
+            offs = OFFSETS if not oblique else [0.0]
+            if NARROW_OFFSETS and MARGIN_LIST and MARGIN_FRONT < MARGIN_LIST[0] - 1e-9:
+                offs = sorted(set(list(offs) + [float(o) for o in NARROW_OFFSETS]), key=abs)
+            for off in offs:
                 C = g.c + g.t * off
                 for mode in modes:
                     if only is not None and (sg, mode) not in only:
@@ -1732,7 +1757,7 @@ def _shift_prim(q, d):
     return ('pivot', q[1] + d) + tuple(q[2:])
 
 
-PAIR_T = {}; PAIR_K = {}   # 計測用(time_pairs)
+PAIR_T = {}; PAIR_K = {}; PAIR_3 = {}   # 計測用(time_pairs・measure_third)
 _CONN = {}          # すき間の下限 -> (格子の番号, x0, y0, 刻み)(conn_prune)
 CONN_STAT = {'pruned': 0, 'checked': 0}
 
@@ -1947,7 +1972,23 @@ class Table:
     def resolve(self, e, s):
         if TIME_PAIRS:
             t0_ = time.perf_counter(); self._kind = 'direct_try'
-            r_ = self._resolve_t(e, s)
+            global _REG, _TOUCH3, _THIRD
+            m3 = MEASURE_THIRD and self.lap
+            if m3:
+                _THIRD = self._third; _TOUCH3 = False; _REG = [INF, -INF, INF, -INF]; self._via_cmax = self._cmax.get((e, s), 0.0)
+                ep_, sp_ = self.ends[e], self.starts[s]
+                _reg_pair(ep_[0], sp_[0], 2.0 * max(RADII) + max(float(TAIL_CM), float(LEAD_CM)) + max(PIVOT_BACK_CM, 0.0) + 1.0)
+            try:
+                r_ = self._resolve_t(e, s)
+            finally:
+                if m3:
+                    if self._via_cmax > 0.0:
+                        Lv = self._via_cmax * V_LINE * max(1.0, REV_SPEED_SCALE)
+                        _reg_pair(ep_[0], sp_[0], Lv / 2)
+                    self._cmax[(e, s)] = self._via_cmax
+                    k3 = (id(self), e, s)
+                    PAIR_3[k3] = PAIR_3.get(k3, False) or _TOUCH3
+                    _REG = None; _THIRD = None
             k_ = (id(self), e, s)
             PAIR_T[k_] = PAIR_T.get(k_, 0.0) + time.perf_counter() - t0_
             if self.done[e, s]:
@@ -2626,10 +2667,22 @@ def main():
         for memo in (_line_memo, _arc_memo, _pivot_cache, _piv_int, _run_cache, _arc_limit_memo):
             memo.clear()
         print('connection margin: %.1f (gate passes %.1f)' % (MARGIN_FRONT, used_margin), flush=True)
+    if DEFER_NARROW and MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0] - 1e-9:
+        print('DEFERRED narrow (margin %.1f)' % used_margin, flush=True)
+        return
     if CANDIDATES_ONLY:
         json.dump(dict(margin=used_margin, counts={c: len(v) for c, v in cands.items()}), open(sys.argv[2], 'w'))
         return
     LAP_MASK = {}
+    if VISIT_SIGNS:
+        for c in list(cands):
+            if c not in VISIT_SIGNS:
+                continue
+            if c == 'yellow':
+                # 周回の黄だけしぼる(最後の黄はガレージへ向かいやすい通り方を選べる。今の道具と同じ)
+                LAP_MASK[c] = np.array([v['sign'] in VISIT_SIGNS[c] and v['mode'] == 'F' for v in cands[c]])
+            else:
+                cands[c] = [v for v in cands[c] if v['sign'] in VISIT_SIGNS[c] and v['mode'] == 'F']
     if VISIT_FILTER:
         for c in cands:
             if c not in VISIT_FILTER:   # 2026-11-14: 書いていない色は絞らない
@@ -2678,6 +2731,16 @@ def main():
         T[('START', 'yellow')] = Table(start_pose, starts['yellow'], is_start=True, via_first=True)
     for k_ in (('red', 'blue'), ('blue', 'yellow'), ('yellow', 'red')):
         T[k_].lap = True
+        if MEASURE_THIRD:
+            third = [c for c in ('red', 'blue', 'yellow') if c not in k_][0]
+            g3 = GATES[third]; ex3 = float(_RECT_REACH) + 1.0
+            bx = []
+            for k, (c, u, v, hu, hv) in enumerate(LEGS):
+                if min(np.hypot(*(c - g3.pa)), np.hypot(*(c - g3.pb))) < 20.0:
+                    cs = _LEG_CORNERS4[k]
+                    bx.append((cs[:, 0].min() - ex3, cs[:, 0].max() + ex3, cs[:, 1].min() - ex3, cs[:, 1].max() + ex3))
+            bx.append((min(g3.pa[0], g3.pb[0]) - 1.0, max(g3.pa[0], g3.pb[0]) + 1.0, min(g3.pa[1], g3.pb[1]) - 1.0, max(g3.pa[1], g3.pb[1]) + 1.0))
+            T[k_]._third = bx
     # 2026-11-16(share_db): ゲートの間のつなぎを配置をまたいで共有する
     global SHARE, SHARE_PREFIX
     if SHARE_DB:
@@ -2880,6 +2943,19 @@ def main():
             kk = PAIR_K.get(k_, 'unfinished')
             a = agg.setdefault(kk, [0, 0.0]); a[0] += 1; a[1] += t_
         tot_ = sum(v[1] for v in agg.values())
+        if MEASURE_THIRD:
+            lapids = {id(t) for t in T.values() if t.lap}
+            t_lap = sum(t_ for k_, t_ in PAIR_T.items() if k_[0] in lapids)
+            t_free = sum(t_ for k_, t_ in PAIR_T.items() if k_[0] in lapids and not PAIR_3.get(k_, True))
+            n_lap = sum(1 for k_ in PAIR_T if k_[0] in lapids); n_free = sum(1 for k_ in PAIR_T if k_[0] in lapids and not PAIR_3.get(k_, True))
+            byk = {}
+            for k_, t_ in PAIR_T.items():
+                if k_[0] in lapids:
+                    kk = (PAIR_K.get(k_, 'unfinished'), PAIR_3.get(k_, True))
+                    a = byk.setdefault(kk, [0, 0.0]); a[0] += 1; a[1] += t_
+            print('third gate: lap pairs %d (%.1fs of %.1fs total), not touched by the third gate %d pairs %.1fs (%.0f%% of lap time)' % (
+                n_lap, t_lap, tot_, n_free, t_free, 100 * t_free / max(t_lap, 1e-9)), flush=True)
+            print('  by kind (kind, touched): ' + ', '.join('%s/%s %d %.1fs' % (k[0], 'T' if k[1] else 'F', v[0], v[1]) for k, v in sorted(byk.items(), key=lambda x: -x[1][1])), flush=True)
         try:
             nm_ = {id(t): '%s->%s' % k for k, t in T.items()}
             json.dump([[nm_.get(k_[0], '?'), int(k_[1]), int(k_[2]), PAIR_K.get(k_, 'unfinished'), round(t_, 4)] for k_, t_ in PAIR_T.items()],
