@@ -19,6 +19,11 @@ max_gap = 0.0
 # 2026-11-11(ユーザー): ガレージへの最後のつなぎで、アームを下げても脚に当たらない点(hybrid_route の arm_down、
 # 黄ゲートを抜けたあとの距離 cm)から下げ始める。その点で直進・円弧を2つに分け、後ろの区間に印 'garage-arm-down' を付ける。
 ARM_DOWN = c.get('arm_down')
+# 2026-11-16: 続く直進をひとまとまりにする条件(prims_to_steps 参照)。道具の直進どうしの向きの差の上限(度)と、
+# まとめた直線が道具の経路(直進のつなぎ目の点)から離れてよい量(cm)。
+CHAIN_MAX_DEG = 10.0
+CHAIN_MAX_DEV_CM = 0.2
+CHAIN_MARK_DEV_CM = 0.2   # 周の終わりの印の付いた直進の始まりを動かしてよい量(cm)。check_plan は印の所までたどった位置から切り上げの道を検査する
 
 
 def _split_prims(prims, d0):
@@ -62,7 +67,8 @@ def prims_to_steps(seq, h):
     直進は「いまの位置 → 道具の直進の終わりの点」へ向かう向きと長さにする(直進のたびに道具の経路に戻る)。"""
     out = []; gap = 0.0; pending = None
     pos = None
-    for p, label, mark in seq:
+    chain = None   # (向き hh, 終わりの番号): 続く直進をひとまとまりにして同じ向きで走るとき
+    for k_, (p, label, mark) in enumerate(seq):
         if pos is None:
             pos = _start_point(p)
             # 始めの向きは、最初の区間の向き(切り上げのつなぎは、黄の抜けの向きから始まる)
@@ -91,8 +97,49 @@ def prims_to_steps(seq, h):
             e = p['b']
             dx, dy = e[0] - pos[0], e[1] - pos[1]
             L = math.hypot(dx, dy) * 10
+            # 2026-11-16(ユーザー: ゲートの中で円弧なしに向きを変えない): 直進のあとに、ほぼ同じ向きの直進が続くとき
+            # (周のつなぎ目の直進 → 赤を通る短い直進など)、道具の経路の小さな横のとび(最大約1.5mm)を後ろの短い直進だけで
+            # 取り戻すと、円弧なしに最大3.5° 向きを変えていた(配置243の赤で約6° 左を向いて通った)。続く直進をひとまとまりにして、
+            # まとまりの終わりの点へ向けた同じ向きで走る(取り戻しを長い直進全体に広げる)。印の付いた直進の始まりは
+            # CHAIN_MARK_DEV_CM までしか動かさない(切り上げの道の始まりの位置と合わせるため)。
+            if chain is not None and k_ <= chain[1]:
+                hh_c = chain[0]
+                u = (math.cos(math.radians(hh_c - (0 if p['m'] > 0 else 180))),
+                     math.sin(math.radians(hh_c - (0 if p['m'] > 0 else 180))))
+                L = (dx * u[0] + dy * u[1]) * 10
+            else:
+                chain = None
+                end = k_
+                while (end + 1 < len(seq) and seq[end + 1][0]['t'] == 'line'
+                       and seq[end + 1][0]['m'] == p['m']):
+                    q0, q1 = seq[end][0], seq[end + 1][0]
+                    a0 = math.degrees(math.atan2(q0['b'][1] - q0['a'][1], q0['b'][0] - q0['a'][0]))
+                    a1 = math.degrees(math.atan2(q1['b'][1] - q1['a'][1], q1['b'][0] - q1['a'][0]))
+                    if abs(nd(a1 - a0)) > CHAIN_MAX_DEG:
+                        break
+                    end += 1
+                # まとめた直線(いまの位置 → まとまりの終わり)が、道具の直進のつなぎ目の点から CHAIN_MAX_DEV_CM より離れるなら縮める
+                while end > k_:
+                    E = seq[end][0]['b']
+                    ex, ey = E[0] - pos[0], E[1] - pos[1]
+                    n_ = math.hypot(ex, ey)
+                    # 印の付いた直進の始まり(切り上げの道の始まり)は CHAIN_MARK_DEV_CM までしか動かさない
+                    ok_ = n_ > 1e-9 and all(
+                        abs((seq[j][0]['b'][0] - pos[0]) * ey - (seq[j][0]['b'][1] - pos[1]) * ex) / n_
+                        <= (CHAIN_MARK_DEV_CM if seq[j + 1][2] else CHAIN_MAX_DEV_CM) for j in range(k_, end))
+                    if ok_:
+                        break
+                    end -= 1
+                if end > k_:
+                    E = seq[end][0]['b']
+                    hh_c = math.degrees(math.atan2(E[1] - pos[1], E[0] - pos[0])) + (0 if p['m'] > 0 else 180)
+                    chain = (hh_c, end)
+                    u = (math.cos(math.radians(hh_c - (0 if p['m'] > 0 else 180))),
+                         math.sin(math.radians(hh_c - (0 if p['m'] > 0 else 180))))
+                    L = (dx * u[0] + dy * u[1]) * 10
             if L >= 0.5:
-                hh = math.degrees(math.atan2(dy, dx)) + (0 if p['m'] > 0 else 180)
+                hh = (chain[0] if chain is not None and k_ <= chain[1]
+                      else math.degrees(math.atan2(dy, dx)) + (0 if p['m'] > 0 else 180))
                 gap = max(gap, abs(nd(hh - h)))
                 st_ = {'type': 'move', 'target_heading_deg': g(hh), 'distance_mm': round(L, 1), 'reverse': p['m'] < 0,
                        'stop': False, 'label': 'garage-arm-down' if p.get('arm_down') else label}
