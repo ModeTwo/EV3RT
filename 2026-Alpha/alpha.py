@@ -31,7 +31,7 @@ from robot_program.config import (
 from robot_program.context import RaceContext
 from robot_program.delivery_heading import RegisterDeliveryHeading, initial_delivery_heading
 from robot_program.decryption_key import read_decryption_key
-from robot_program.behaviours.device_control import ArmDirection, ResetDevice
+from robot_program.behaviours.device_control import ArmDirection, ArmUpDownFull, ResetDevice
 from robot_program.behaviours.et_rally_arm import arm_up_before_touch, make_arm_up_down
 from robot_program.features.sumo_bearing import initial_sumo_bearing
 from robot_program.features.sumo_bearing_motion import RegisterSumoBearing
@@ -1007,11 +1007,12 @@ def build_behaviour_tree(
     calibration = Sequence(name="calibration", memory=True)
     start = Parallel(name="start", policy=ParallelPolicy.SuccessOnOne())
 
-    # 2026-11-03: --rally-arm-stop-ticks のときだけETラリー用の止め方(make_arm_up_downの中で切り替え)。
+    # 2026-11-16(devTKとのマージ): 準備のアームは全ミッション共通なので devTK と同じ元の ArmUpDownFull に戻した
+    # (devSS の --rally-arm-stop-ticks 版はETラリーの中のアームの動きだけで使う)。
     calibration.add_children(
         [
-            make_arm_up_down("arm up", ArmDirection.UP, mission_config),
-            make_arm_up_down("arm down", ArmDirection.DOWN, mission_config),
+            ArmUpDownFull(name="arm up", direction=ArmDirection.UP),
+            ArmUpDownFull(name="arm down", direction=ArmDirection.DOWN),
             ResetDevice(name="device reset"),
             #ReadKey(name="read key"),
         ]
