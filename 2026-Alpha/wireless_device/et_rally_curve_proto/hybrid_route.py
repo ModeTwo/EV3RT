@@ -1994,6 +1994,9 @@ def main():
                 break
             _GRID_ON = False
             OBLIQUE_CHOICE.clear()
+            # 2026-11-16: 細かい角度の試しが通れなかったら、斜めの方針を元に戻す(戻していなかったので、narrow_safest=False でも
+            # 狭い配置は safest(1つだけ)のままになっていた)
+            OBLIQUE_POLICY = PARAMS['oblique_policy']
     if used_margin is not None:
         print('margin selected: %.1f' % used_margin, flush=True)
     conn_margin = CONN_MARGIN_CM
