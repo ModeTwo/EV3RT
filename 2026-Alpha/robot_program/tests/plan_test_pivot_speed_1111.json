@@ -1,0 +1,78 @@
+{
+ "note_1111": "2026-11-11: その場旋回の速さと精度の試験。その場で ±54・±90・±135 度を回って元の向きに戻る(12回)→ 300mm 前進して止まる。止まった位置の左右のずれで向きのずれを見る(300mmで5mm ≒ 1度)。--rally-turn-power などを変えて比べる。",
+ "expected_end": {
+  "front_mm": 300.0,
+  "right_mm": 0.0,
+  "heading_deg": 0.0
+ },
+ "steps": [
+  {
+   "type": "turn",
+   "target_heading_deg": 54.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 0.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": -54.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 0.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 90.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 0.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": -90.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 0.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 135.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 0.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": -135.0,
+   "label": null
+  },
+  {
+   "type": "turn",
+   "target_heading_deg": 0.0,
+   "label": null
+  },
+  {
+   "type": "move",
+   "target_heading_deg": 0.0,
+   "distance_mm": 300.0,
+   "reverse": false,
+   "stop": true,
+   "label": null
+  }
+ ]
+}

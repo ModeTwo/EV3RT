@@ -1,10 +1,17 @@
-"""ETラリー旋回の、LQI(積分付きLQR)による仕上げ制御を設計するための、実測データ収集専用ツール。
+"""ETラリー旋回のモーター+ジャイロ応答特性を実測するための、較正専用データ収集ツール。
+
+2026-10-24改名: 元は「LQI(積分付きLQR)設計専用」の名前だったが、ここで集めているのは
+b・c(応答特性)とstiction_floor(不感帯)という汎用的な較正データで、LQI
+(behaviours/et_rally_turn_lqi.py)だけでなく、一発パルス仕上げ
+(behaviours/et_rally_turn_one_shot.py、wireless_device/et_rally_lqi/one_shot_pulse.py)
+でも同じデータをそのまま使う。LQI専用という名前は実態と合わないため、較正内容に
+即した名前(turn_calibration)に変更した。
 
 ここにあるクラスは、いずれも「本番の走行」には使わない、較正専用の使い捨てビヘイビアである。
 既存の EtRallySpinAroundByEncoder / EtRallyRunByGyro(behaviours/et_rally_drive.py)は、
 一切変更・再利用(継承)しない。データの取り方だけを、ここで完結させる。
 
-収集するデータは3種類:
+収集するデータは4種類:
   1. 応答特性(HoldSymmetricPower): 静止状態から、一定の出力を短時間与え続け、
      角度・角速度の変化を記録する。モデル(A・B)を最小二乗法で求めるための入力。
   2. 不感帯(FindStictionThreshold): 出力を少しずつ上げ、実際に動き出す最小出力を、
@@ -13,9 +20,16 @@
      (1・2で作ったモデルとの答え合わせ専用。既存のEtRallySpinAroundByEncoderの
      フェーズ2と同じPID構成を、ログ目的だけのために、ここで独立して再実装する。
      既存クラスへは一切手を入れない)。
+  4. 固定tickパルス実測(FixedTickPulse、2026-10-25追加): 一発パルス仕上げの
+     FLOOR_POWER等、複数の出力候補で、tick数を変えて実際に何度回るかを直接測る。
+     ブレーキをかけた直後と、settle_sec待って落ち着いた後の両方のheadingを記録し、
+     その差から「ブレーキ後の慣性オーバーシュート」を切り分ける(実測の結果、
+     この仮説はほぼ否定された。代わりに、FLOOR_POWER=40だけではtick数を増やしても
+     到達角度が2〜3度で頭打ちになる=失速する現象が見つかったため、複数の出力候補
+     (PULSE_TEST_POWERS)で同じ測定をして、失速しない出力を探す)。
 
-ログの読み方: すべての行に "LQI_CAL" という目印を付けている。
-    grep "LQI_CAL" run_logs/xxxx.log
+ログの読み方: すべての行に "TURN_CAL" という目印を付けている。
+    grep "TURN_CAL" run_logs/xxxx.log
 で抽出し、wireless_device/et_rally_lqi/parse_log.py で表に変換する。
 """
 
@@ -30,17 +44,19 @@ from simple_pid import PID
 from py_etrobo_util import SymmetricClamper
 
 from ..behaviours.conditions import IsTimePassed
+from ..behaviours.et_rally_turn_one_shot import FLOOR_POWER
 from ..behaviours.motor_control import StopNow
 from ..gyro_scale import ensure_scaled_gyro
 from ..runtime import runtime
 from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
 
-TAG = "LQI_CAL"
+TAG = "TURN_CAL"
 
 
 def _current_heading():
     # EtRallySpinAroundByEncoder/EtRallyRunByGyroと同じ符号規約(時計回り正)に揃える。
-    # LQIの設計は、この関数で読んだ値をそのまま使う前提で行うため、規約を変えない。
+    # LQI・一発パルス仕上げどちらの較正も、この関数で読んだ値をそのまま使う前提で行うため、
+    # 規約を変えない。
     return (-1) * runtime.course * runtime.gyro_sensor.get_angle()
 
 
@@ -82,9 +98,19 @@ class HoldSymmetricPower(Behaviour):
         dt = max(now - self.prev_time, 1e-6)
         omega = (heading - self.prev_heading) / dt
         elapsed = now - self.start_time
+        # 2026-10-25較正用: b・cがpowerのみを入力にしており、較正中の電圧変動を
+        # 誤差として取り込んでしまっている可能性を検証するため、battery_mvも残す
+        # (fit_model.pyのfit_b_c_with_voltage()で使う)。power_log.pyと同じガードで、
+        # hub未接続(--check-tree等)でも落ちないようにする。
+        battery_mv = -1
+        if runtime.hub is not None:
+            try:
+                battery_mv = runtime.hub.get_battery_voltage()
+            except Exception:
+                battery_mv = -1
         self.logger.info(
-            "%s step power=%+d t=%.3f heading=%.3f omega=%.3f"
-            % (TAG, self.direction * self.power, elapsed, heading, omega)
+            "%s step power=%+d t=%.3f heading=%.3f omega=%.3f battery_mv=%d"
+            % (TAG, self.direction * self.power, elapsed, heading, omega, battery_mv)
         )
         self.prev_time, self.prev_heading = now, heading
 
@@ -202,6 +228,82 @@ class FindStictionThreshold(Behaviour):
         self.running = False
 
 
+class FixedTickPulse(Behaviour):
+    """左右対称の出力を、指定ティック数だけ正確に与えてブレーキし、ブレーキ直後と、
+    さらにsettle_sec待って落ち着いた後、それぞれのheadingをログに残す(目的4)。
+
+    一発パルス仕上げ(et_rally_turn_one_shot.py)の ticks_for_target() は、
+    「予測thetaが目標を超えた瞬間」のtick数で止める設計だが、その瞬間の角速度は
+    ゼロではない。ブレーキが効くまでの慣性で、モデルが想定していない分だけ余計に
+    回ってしまう可能性があり(phase1のlag_compensation_degと同種の現象)、それを
+    直接測るための較正(2026-10-25追加)。braked直後のheadingとfinalのheadingの差が、
+    この「ブレーキ後オーバーシュート」の実測値になる。
+    """
+
+    def __init__(self, name: str, power: int, direction: int, ticks: int, settle_sec: float = 0.5):
+        super().__init__(name)
+        if power < 0:
+            raise ValueError("power must be non-negative; use direction for the sign")
+        if direction not in (1, -1):
+            raise ValueError("direction must be 1 or -1")
+        self.power = power
+        self.direction = direction
+        self.ticks = ticks
+        self.settle_sec = settle_sec
+        self.running = False
+
+    def update(self) -> Status:
+        runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
+        if not self.running:
+            ensure_scaled_gyro()
+            self.tick_count = 0
+            self.braked = False
+            self.brake_started_at = None
+            self.start_heading = _current_heading()
+            self.running = True
+            self.logger.info(
+                "%s %s.start power=%+d ticks=%d heading0=%.2f"
+                % (TAG, self.__class__.__name__, self.direction * self.power, self.ticks, self.start_heading)
+            )
+
+        heading = _current_heading()
+
+        if not self.braked:
+            if self.tick_count < self.ticks:
+                runtime.right_motor.set_power(runtime.course * self.direction * self.power)
+                runtime.left_motor.set_power((-1) * runtime.course * self.direction * self.power)
+                self.tick_count += 1
+                return Status.RUNNING
+            runtime.right_motor.set_power(0)
+            runtime.right_motor.set_brake(True)
+            runtime.left_motor.set_power(0)
+            runtime.left_motor.set_brake(True)
+            self.braked = True
+            self.brake_started_at = time.monotonic()
+            self.logger.info(
+                "%s %s.braked power=%+d ticks=%d heading_braked=%.3f moved_at_brake=%+.3f"
+                % (TAG, self.__class__.__name__, self.direction * self.power, self.ticks,
+                   heading, heading - self.start_heading)
+            )
+            return Status.RUNNING
+
+        if time.monotonic() - self.brake_started_at >= self.settle_sec:
+            self.logger.info(
+                "%s %s.end power=%+d ticks=%d heading0=%.3f heading_final=%.3f moved_final=%+.3f"
+                % (TAG, self.__class__.__name__, self.direction * self.power, self.ticks,
+                   self.start_heading, heading, heading - self.start_heading)
+            )
+            return Status.SUCCESS
+        return Status.RUNNING
+
+    def terminate(self, new_status: Status) -> None:
+        if runtime.right_motor is not None:
+            runtime.right_motor.set_power(0)
+        if runtime.left_motor is not None:
+            runtime.left_motor.set_power(0)
+        self.running = False
+
+
 class LoggedFineTrim(Behaviour):
     """小さい角度誤差からの収束を、毎ティックログに残す(目的3、検証専用)。
 
@@ -300,9 +402,25 @@ STEP_SETTLE_SEC = 0.5
 # 検証テスト(目的3)の条件。
 FINE_TRIM_TARGETS_DEG = (3.0, -3.0, 5.0, -5.0, 2.0, -2.0)
 
+# 固定tickパルステスト(目的4)の条件。一発パルス仕上げ(et_rally_turn_one_shot.py)の
+# FLOOR_POWERと同じ出力で、tick数を変えて実際にどれだけ回るか・ブレーキ後に
+# どれだけ余計に回るかを直接測る(2026-10-25追加、ブレーキ後オーバーシュート仮説の検証用)。
+#
+# 2026-10-25追記: FLOOR_POWER(40)単体での実測で、ブレーキ後オーバーシュートは
+# ほぼゼロ(仮説は否定)だったが、代わりにtick数を10→40まで増やしても到達角度が
+# 2〜3度のまま変わらない(失速している)ことが分かった。CCWの不感帯閾値がこの回
+# power=40と測定されたことと整合する。FLOOR_POWER=40では力不足で、動き続けるには
+# 足りない可能性があるため、複数のpower候補でも同じテストを行い、tick数を増やすと
+# 到達角度も増える(失速しない)出力を探す。PULSE_TEST_POWERSの先頭はFLOOR_POWER
+# そのもの(比較の基準)。
+PULSE_TEST_POWERS = (FLOOR_POWER, 45, 50, 60)
+PULSE_TEST_TICKS = (5, 10, 15, 20, 25, 30, 35, 40)
+PULSE_TEST_REPEATS = 3
+PULSE_TEST_SETTLE_SEC = 0.5
 
-def build_et_rally_lqi_calibration_sequence() -> Sequence:
-    root = Sequence(name="et_rally_lqi_calibration", memory=True)
+
+def build_et_rally_turn_calibration_sequence() -> Sequence:
+    root = Sequence(name="et_rally_turn_calibration", memory=True)
     children = [
         FindStictionThreshold(name="stiction cw", direction=1),
         StopNow(name="settle after stiction cw"),
@@ -328,6 +446,21 @@ def build_et_rally_lqi_calibration_sequence() -> Sequence:
                                        target_relative_deg=target))
         children.append(StopNow(name="settle fine_trim %d" % index))
         children.append(IsTimePassed(name="wait fine_trim %d" % index, delta_time=STEP_SETTLE_SEC))
-    children.append(StopNow(name="et_rally_lqi_calibration final stop"))
+    for power in PULSE_TEST_POWERS:
+        for ticks in PULSE_TEST_TICKS:
+            for rep in range(PULSE_TEST_REPEATS):
+                for direction in (1, -1):
+                    children.append(FixedTickPulse(
+                        name="pulse_test power=%d ticks=%d dir=%+d rep=%d" % (power, ticks, direction, rep),
+                        power=power, direction=direction, ticks=ticks,
+                        settle_sec=PULSE_TEST_SETTLE_SEC,
+                    ))
+                    children.append(StopNow(
+                        name="settle pulse_test power=%d ticks=%d dir=%+d rep=%d" % (power, ticks, direction, rep)))
+                    children.append(IsTimePassed(
+                        name="wait pulse_test power=%d ticks=%d dir=%+d rep=%d" % (power, ticks, direction, rep),
+                        delta_time=STEP_SETTLE_SEC,
+                    ))
+    children.append(StopNow(name="et_rally_turn_calibration final stop"))
     root.add_children(children)
     return root

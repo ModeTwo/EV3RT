@@ -1,0 +1,134 @@
+{
+  "note": "2026-11-01: plan_spin_mixed30 (+40,+90,-110,-90,+110,-40 x5, ends at 0) followed by a 1000mm straight at heading 0. Run with --rally-straight-pause-sec 10 (no labels): it pauses before and after the straight. At the first pause, the position shift shows the slip of the 30 turns; the sideways shift between the two pauses / 1000mm shows the real heading error after the turns (gyro drift + scale). Compare with plan_straight_1000.json run the same way.",
+  "steps": [
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 130.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 20.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -70.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 130.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 20.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -70.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 130.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 20.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -70.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 130.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 20.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -70.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 130.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 20.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -70.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 1000.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    }
+  ]
+}

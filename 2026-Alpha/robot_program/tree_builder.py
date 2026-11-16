@@ -17,6 +17,10 @@ from .gyro_scale import EnableGyroScale
 def build_mission_children(context, config):
     # この関数は統合担当者だけが変更し、各機能担当者はfeatures配下だけを変更する。
     from .config import INTEGRATION_MISSIONS
+    if config.mission_mode.startswith('et-rally'):
+        # 2026-11-16: ETラリーの診断用ミッションでも RALLY_PWR を出す(それ以外のミッションではETラリーの工程に入るまで出さない)。
+        from . import power_log
+        power_log.set_enabled(True)
     if config.mission_mode in ("sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit"):
         from .features.sumo_stage_test import build_sumo_stage_test
         return [EnableGyroScale(), build_sumo_stage_test(context, config)]
@@ -53,7 +57,14 @@ def build_mission_children(context, config):
         'bottle-final',
         'rally-drive',
         'full',
-        'et-rally-lqi-calibration',
+        'et-rally-turn-calibration',
+        'et-rally-marker-observe',
+        'et-rally-turn-phase2-diagnostic',
+        'et-rally-single-wheel-diagnostic',
+        'et-rally-single-wheel-reversal-diagnostic',
+        'et-rally-single-wheel-alternating-diagnostic',
+        'et-rally-single-wheel-alternating-right-diagnostic',
+        'et-rally-single-wheel-alternating-left-diagnostic',
     ):
         raise ValueError('Unknown mission mode: ' + config.mission_mode)
     if config.mission_mode == 'at':
@@ -71,10 +82,44 @@ def build_mission_children(context, config):
     if config.mission_mode == 'rally-drive':
         # Hint取得・Bottle Deliveryを通らず、受信待ちとSEQ実行だけを構成する。
         return [EnableGyroScale(), build_et_rally_phase(context, config)]
-    if config.mission_mode == 'et-rally-lqi-calibration':
-        # ETラリー旋回のLQI設計用データ収集だけを実行する(PC通信・Hintは使わない)。
-        from .behaviours.et_rally_lqi_calibration import build_et_rally_lqi_calibration_sequence
-        return [EnableGyroScale(), build_et_rally_lqi_calibration_sequence()]
+    if config.mission_mode == 'et-rally-turn-calibration':
+        # ETラリー旋回の応答特性データ収集だけを実行する(PC通信・Hintは使わない)。
+        from .behaviours.et_rally_turn_calibration import build_et_rally_turn_calibration_sequence
+        return [EnableGyroScale(), build_et_rally_turn_calibration_sequence()]
+    if config.mission_mode == 'et-rally-marker-observe':
+        # マーカー検出の実機確認専用(走行体は動かさず、検出結果だけをログに出す)。
+        from .behaviours.et_rally_camera_correction import (
+            PrepareEtRallyMarkerCamera, EtRallyMarkerObserveLoop)
+        return [EnableGyroScale(), PrepareEtRallyMarkerCamera(name="prepare et_rally marker camera"),
+                EtRallyMarkerObserveLoop(name="et_rally marker observe")]
+    if config.mission_mode == 'et-rally-turn-phase2-diagnostic':
+        # フェーズ2が横ズレの原因かどうかの切り分け専用(plan_spin_alternating30.jsonと比較)。
+        from .behaviours.et_rally_turn_phase2_diagnostic import (
+            build_et_rally_turn_phase2_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_turn_phase2_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-diagnostic':
+        # 片輪だけのエンコーダ駆動で、左右の実効的な移動量の差を直接確認する専用。
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-reversal-diagnostic':
+        # 片輪だけの順方向→逆方向の反転コストを、左右で比較する専用。
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_reversal_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_reversal_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-alternating-diagnostic':
+        # 片輪だけを1周ごとに反転させ続け、反転コストのサンプル数を増やす専用。
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_alternating_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_alternating_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-alternating-right-diagnostic':
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_alternating_right_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_alternating_right_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-alternating-left-diagnostic':
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_alternating_left_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_alternating_left_diagnostic_sequence()]
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))

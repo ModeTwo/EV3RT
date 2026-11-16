@@ -1,0 +1,9 @@
+{
+  "note": "2026-10-30: straight 300mm, stop (0-degree turn), straight 300mm, stop. Measure the real total distance on the floor (expected 600mm) to check the stop lead and the turn-forward compensation between straights.",
+  "steps": [
+    {"type": "move", "target_heading_deg": 0.0, "distance_mm": 300.0},
+    {"type": "turn", "target_heading_deg": 0.0},
+    {"type": "move", "target_heading_deg": 0.0, "distance_mm": 300.0},
+    {"type": "turn", "target_heading_deg": 0.0}
+  ]
+}

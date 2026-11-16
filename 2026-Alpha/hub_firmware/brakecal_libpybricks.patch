@@ -1,0 +1,79 @@
+
+
+diff --git a/lib/pbio/include/pbio/dcmotor.h b/lib/pbio/include/pbio/dcmotor.h
+index 689cbd32..9db1b569 100644
+--- a/lib/pbio/include/pbio/dcmotor.h
++++ b/lib/pbio/include/pbio/dcmotor.h
+@@ -65,6 +65,8 @@ void pbio_dcmotor_stop_all(bool clear_parents);
+ 
+ // Backport from v3.6.1
+ bool pbio_dcmotor_all_coasting(void);
++// ETrobo 2026-Alpha (2026-10-29): true if every motor is coasting or braking (zero voltage).
++bool pbio_dcmotor_all_passive(void);
+ 
+ // Setup and status:
+ 
+diff --git a/lib/pbio/src/dcmotor.c b/lib/pbio/src/dcmotor.c
+index 8cef3df5..8d69d4af 100644
+--- a/lib/pbio/src/dcmotor.c
++++ b/lib/pbio/src/dcmotor.c
+@@ -65,6 +65,34 @@ void pbio_dcmotor_stop_all(bool clear_parents) {
+  *
+  * @return                  @c true if all motors are coasting, @c false otherwise.
+  */
++// ETrobo 2026-Alpha (2026-10-29): like pbio_dcmotor_all_coasting, but braking
++// (pup_motor_brake = zero voltage) also counts as passive, so that the IMU
++// can recalibrate its gyro bias while the robot stands still with brakes on.
++// (pbio_dcmotor_all_coasting checks dcmotors->, i.e. only the first motor.)
++bool pbio_dcmotor_all_passive(void) {
++    for (pbio_port_id_t port = PBDRV_CONFIG_FIRST_MOTOR_PORT; port <= PBDRV_CONFIG_LAST_MOTOR_PORT; port++) {
++        pbio_dcmotor_t *dcmotor;
++        pbio_error_t err = pbio_dcmotor_get_dcmotor(port, &dcmotor);
++        if (err != PBIO_SUCCESS) {
++            continue;
++        }
++        pbio_iodev_type_id_t type_id;
++        err = pbdrv_ioport_get_motor_device_type_id(port, &type_id);
++        if (err != PBIO_SUCCESS) {
++            continue;
++        }
++        if (dcmotor->actuation_now == PBIO_DCMOTOR_ACTUATION_COAST ||
++            dcmotor->actuation_now == PBIO_DCMOTOR_ACTUATION_BRAKE) {
++            continue;
++        }
++        if (dcmotor->actuation_now == PBIO_DCMOTOR_ACTUATION_VOLTAGE && dcmotor->voltage_now == 0) {
++            continue;
++        }
++        return false;
++    }
++    return true;
++}
++
+ bool pbio_dcmotor_all_coasting(void) {
+     for (pbio_port_id_t port = PBDRV_CONFIG_FIRST_MOTOR_PORT; port <= PBDRV_CONFIG_LAST_MOTOR_PORT; port++) {
+         pbio_dcmotor_t *dcmotor;
+diff --git a/lib/pbio/src/imu.c b/lib/pbio/src/imu.c
+index a379cce2..ece1a53d 100644
+--- a/lib/pbio/src/imu.c
++++ b/lib/pbio/src/imu.c
+@@ -391,7 +391,9 @@ static void pbio_imu_handle_stationary_data_func(const int32_t *gyro_data_sum, c
+ 
+     // The relative weight of the new data in order to build a long term
+     // average of the data without maintaining a data buffer.
+-    float weight = stationary_counter >= 20 ? 0.05f : 1.0f / stationary_counter;
++    // ETrobo 2026-Alpha (2026-10-29): follow a changed bias within a few seconds of standing
++    // still (was 0.05 after 20 updates, about 20 s).
++    float weight = stationary_counter >= 4 ? 0.3f : 1.0f / stationary_counter;
+ 
+     for (uint8_t i = 0; i < PBIO_ARRAY_SIZE(gyro_bias.values); i++) {
+         // Average gyro rate while stationary, indicating current bias.
+@@ -453,7 +455,8 @@ pbio_error_t pbio_imu_set_base_orientation(pbio_geometry_xyz_t *front_side_axis,
+  * @return    True if it has been stationary for about a second, false if moving.
+  */
+ bool pbio_imu_is_stationary(void) {
+-    return pbdrv_imu_is_stationary(imu_dev) && pbio_dcmotor_all_coasting();
++    // ETrobo 2026-Alpha (2026-10-29): braking also counts (was pbio_dcmotor_all_coasting).
++    return pbdrv_imu_is_stationary(imu_dev) && pbio_dcmotor_all_passive();
+ }
+ 
+ /**

@@ -1,0 +1,35 @@
+{
+  "note_1109": "2026-11-09: 半径80mmの半円のテスト(実機未確認の半径。速さと、ログに出ないずれを測る)。直進300mm→半径80mmで右へ180度→直進300mm。半径100の同じテスト(plan_test_arc_entry_r100_180)と比べる。",
+  "expected_end": {
+    "front_mm": 0.0,
+    "right_mm": 160.0,
+    "heading_deg": 180.0
+  },
+  "steps": [
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 180.0,
+      "sweep_deg": 180.0,
+      "radius_mm": 80.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 180.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    }
+  ]
+}

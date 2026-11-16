@@ -2,32 +2,344 @@
 
 import json
 import math
+import re
+import time
 from shared_communication.heading_frame import RALLY_START_HEADING, full_start_to_gyro
 from pathlib import Path
 
-from .bt_imports import Failure, HeadingType, Parallel, ParallelPolicy, Sequence
+from py_trees.behaviour import Behaviour
+from py_trees.common import Status
+
+from .bt_imports import Failure, HeadingType, Parallel, ParallelPolicy, Selector, Sequence
 from ..behaviours.et_rally_drive import EtRallyRunByGyro, EtRallySpinAroundByEncoder
+from ..behaviours.et_rally_path_segment import EtRallyPathSegment
+from ..behaviours.et_rally_turn_one_shot import EtRallyTurnOneShot
+from ..behaviours.et_rally_turn_lqi import EtRallyTurnLqi
+from ..behaviours.et_rally_turn_direction_test import EtRallySpinAroundDirectionTest
+from ..behaviours.gyro_drive import SpinAround
 from ..behaviours.conditions import IsDistanceEarned
+from ..behaviours.device_control import ArmDirection, ArmUpDownFull
 from ..runtime import runtime
+from ..et_rally_heading import et_pose_text
 from ..et_rally_compensation import apply_caster_drag_compensation, apply_lateral_drift_compensation
 from ..et_rally_fallback import fallback_planner_steps, fallback_strategy
+from .. import et_rally_start_pose
+
+
+# DD-19較正: --rally-turn-method で選べる旋回方式。spin_pidだけ構成要素(name,target,
+# max_power,min_power,pid_p,pid_i,pid_d,target_type)がほかと異なるため、呼び出し側で分岐する。
+# spin_encoder_dir_test: 検証専用(2026-10-10)。各turnステップの"direction"(+1/-1)で
+# 回転方向を明示できる、EtRallySpinAroundByEncoderの検証用コピーを使う。本番では使わない。
+RALLY_TURN_METHODS = ('spin_pid', 'spin_encoder', 'one_shot', 'lqi', 'spin_encoder_dir_test')
 
 
 SPIN_MAX_POWER = 70         # その場回旋（スピン）するときの最大モーター出力
 SPIN_MIN_POWER = 60         # その場回旋（スピン）するときの最低モーター出力
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PLAN_PATH = Path(__file__).resolve().parents[1] / "tests" / "plan_seed9392783.json"
+# 2026-11-16: 計画をファイルで走るとき(et_rally_strategy_source="file" が既定、--rally-plan-path なし)に使う計画。
+# 配置36の計画(robot_program/tests/plan_layout36_1116.json と同じもの、その場旋回なし・86.7秒、右コースの座標で左コースは鏡写し)。
+# 別の配置で走らせたいときは、このファイルを差し替えるか --rally-plan-path で渡す。
+DEFAULT_PLAN_PATH = Path(__file__).resolve().parents[1] / "et_rally_default_plan.json"
+
+_LAP_LABEL_RE = re.compile(r"^lap(\d+)")
+# 2026-10-29: turn_forward_compensation有効時の、IsDistanceEarned側の余裕(mm)。
+TURN_FORWARD_MARGIN_MM = 30
+# 2026-10-29: これより短い直進は、move_stop_lead_mm手前で終えずに計画どおりの距離を走る。
+# 手前で終える量(16mm)は巡航(約260mm/s)からの惰性に合わせた値で、短い直進は速度が
+# 出ず惰性もほとんどない。以前は最低1mmまで削っていたため、ゴール手前の20mmの直進が
+# 4mm(差し引き有効時は1mm)しか走らず、その分ゴールでスタート側に寄っていた。
+SHORT_MOVE_NO_LEAD_MM = 50.0
+
+
+def _read_angular_velocity():
+    """ハブのIMUの回転の速さ(x,y,z、度/秒)を読む。読めなければNone(2026-10-29、静止中のジャイロの
+    くせを短時間で測れるかの確認用。どの軸が旋回の軸かは、静止テストのログで確かめる)。"""
+    if runtime.hub is None:
+        return None
+    try:
+        values = runtime.hub.hub_imu_get_angular_velocity()
+        return tuple(float(value) for value in values)
+    except Exception:
+        return None
+
+
+def _read_imu_stationary_and_heading():
+    """ハブのIMUの「止まっている」判定と、四捨五入前の向き(度)を読む。読めなければ(None, None)。
+    2026-10-29: ハブ側(Pybricks由来のpbio)は、止まっていると判定している間だけジャイロのくせを
+    測り直す。静止テストでずれが消えないのは、その判定が出ていないからかを確かめるため。
+    get_angle()は向きを四捨五入して整数にしているので、細かい値はhub_imu_get_heading()から読む。"""
+    if runtime.hub is None:
+        return None, None
+    try:
+        stationary = bool(runtime.hub.hub_imu_is_stationary())
+    except Exception:
+        stationary = None
+    try:
+        heading = float(runtime.hub.hub_imu_get_heading())
+    except Exception:
+        heading = None
+    return stationary, heading
+
+
+def _read_acceleration():
+    """ハブのIMUの加速度(x,y,z、mm/s^2)。読めなければNone(静止判定のしきい値と比べる揺れの大きさの確認用)。"""
+    if runtime.hub is None:
+        return None
+    try:
+        return tuple(float(value) for value in runtime.hub.hub_imu_get_acceleration())
+    except Exception:
+        return None
+
+
+def _update_range(ranges, values):
+    """軸ごとの[最小, 最大]を更新する。"""
+    if ranges is None:
+        return [[value, value] for value in values]
+    for axis, value in enumerate(values):
+        ranges[axis][0] = min(ranges[axis][0], value)
+        ranges[axis][1] = max(ranges[axis][1], value)
+    return ranges
+
+
+def _format_range(ranges):
+    return "none" if ranges is None else "(%s)" % ",".join("%.3f" % (high - low) for low, high in ranges)
+
+
+def _coast_all_motors():
+    """車輪とアームを含む全モーターを脱力させる。ハブ側(Pybricks由来のpbio)は、全モーターが脱力して
+    いるときだけ「止まっている」と判定し、ジャイロのくせを測り直す(2026-10-29、imu.cの
+    pbio_imu_is_stationary)。etrobo_pythonのstop_all_motors(pup_motor_stop)を使い、読めなければ
+    各モーターのブレーキを外すだけにする。戻り値: stop_all_motorsを使えたらTrue。"""
+    try:
+        from etrobo_python.backends.raspike_art.device import stop_all_motors
+        stop_all_motors()
+        return True
+    except Exception:
+        for motor in (runtime.right_motor, runtime.left_motor, runtime.arm_motor):
+            if motor is not None:
+                motor.set_power(0)
+                motor.set_brake(False)
+        return False
+
+
+def _read_cpu_temp_c():
+    """Raspberry PiのCPU温度(℃)。ハブのジャイロの温度ではなく、本体が温まったかの目安。読めなければNone。"""
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as file:
+            return int(file.read().strip()) / 1000.0
+    except Exception:
+        return None
+
+
+class EtRallyPause(Behaviour):
+    """ブレーキをかけ、左右のエンコーダが止まり、かつmin_seconds以上経つまで待つ(2026-10-29、
+    スタート直後の直進確認で、前進と後退の間・後退のあとに止まるため)。止まったときの向きと位置をログに残す。
+
+    2026-10-29: ジャイロのずれの検証用に、車輪が止まった時点の向きと、待ち終わりの向きの差
+    (still_drift、止まっている間にジャイロの値がどれだけ動いたか)も記録する。
+    log_interval_secを指定すると、待っている間もその間隔で向きをログに残す。"""
+
+    STABLE_TICKS = 3
+    MAX_SECONDS = 2.0
+
+    def __init__(self, name, min_seconds=0.5, log_interval_sec=None, brake=True):
+        super().__init__(name)
+        self.min_seconds = min_seconds
+        # 2026-10-29: Falseなら車輪にブレーキをかけない(ジャイロの静止判定を邪魔しているかの確認用)。
+        # "coast_all"なら、アームも含む全モーターを脱力させる。"brake_all"なら、アームにもブレーキをかける。
+        self.brake = brake
+        # 長く止まるときは、車輪が止まらなくてもmin_secondsの1秒後には終える。
+        self.max_seconds = max(self.MAX_SECONDS, min_seconds + 1.0)
+        self.log_interval_sec = log_interval_sec
+        self.started = None
+
+    def update(self) -> Status:
+        runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
+        now = time.monotonic()
+        counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
+        heading = (-1) * runtime.course * runtime.gyro_sensor.get_angle()
+        if self.started is None:
+            if self.brake == "coast_all":
+                used = _coast_all_motors()
+                self.logger.info("%s.all motors coasting (stop_all_motors=%s)" % (self.__class__.__name__, used))
+            else:
+                motors = [runtime.right_motor, runtime.left_motor]
+                if self.brake == "brake_all" and runtime.arm_motor is not None:
+                    motors.append(runtime.arm_motor)
+                for motor in motors:
+                    motor.set_power(0)
+                    motor.set_brake(bool(self.brake))
+            self.started = now
+            self.prev = counts
+            self.stable = 0
+            self.still_heading = None
+            self.still_time = None
+            self.next_log = None
+            self.angv_sum = None
+            self.angv_n = 0
+            self.angv_total_sum = None
+            self.angv_total_n = 0
+            self.angv_values = set()
+            self.stationary_true = 0
+            self.stationary_n = 0
+            self.raw_heading_start = None
+            self.angv_range = None
+            self.accel_range = None
+            self.accel_sum = None
+            self.accel_n = 0
+            return Status.RUNNING
+        self.stable = self.stable + 1 if counts == self.prev else 0
+        self.prev = counts
+        elapsed = now - self.started
+        if self.still_heading is None and self.stable >= self.STABLE_TICKS:
+            self.still_heading = heading
+            self.still_time = now
+            if self.log_interval_sec:
+                self.next_log = now + self.log_interval_sec
+                angv = _read_angular_velocity()
+                self.logger.info("%s.angular velocity sample=%r cpu_temp=%s" % (
+                    self.__class__.__name__, angv, _read_cpu_temp_c()))
+        if self.next_log is not None:
+            # 静止中の回転の速さを毎ティック足し、ログの間隔ごとと、静止の始めからの平均を出す。
+            # 値が何種類出たか(angv_distinct)で、どのくらい細かく読めるかの目安にする。
+            angv = _read_angular_velocity()
+            if angv is not None:
+                if self.angv_sum is None:
+                    self.angv_sum = [0.0] * len(angv)
+                    self.angv_total_sum = [0.0] * len(angv)
+                for axis, value in enumerate(angv):
+                    self.angv_sum[axis] += value
+                    self.angv_total_sum[axis] += value
+                self.angv_n += 1
+                self.angv_total_n += 1
+                if len(self.angv_values) < 1000:
+                    self.angv_values.update(angv)
+                self.angv_range = _update_range(self.angv_range, angv)
+            accel = _read_acceleration()
+            if accel is not None:
+                self.accel_range = _update_range(self.accel_range, accel)
+                if self.accel_sum is None:
+                    self.accel_sum = [0.0] * len(accel)
+                for axis, value in enumerate(accel):
+                    self.accel_sum[axis] += value
+                self.accel_n += 1
+            stationary, raw_heading = _read_imu_stationary_and_heading()
+            if stationary is not None:
+                self.stationary_n += 1
+                if stationary:
+                    self.stationary_true += 1
+            if self.raw_heading_start is None and raw_heading is not None:
+                self.raw_heading_start = raw_heading
+        if self.next_log is not None and now >= self.next_log:
+            # 2026-10-29: ずれの速さとバッテリーの関係を見るため、電圧・電流も残す
+            # (power_log.pyと同じガードで、hub未接続でも落ちないようにする)。
+            battery_mv = battery_ma = -1
+            if runtime.hub is not None:
+                try:
+                    battery_mv = runtime.hub.get_battery_voltage()
+                    battery_ma = runtime.hub.get_battery_current()
+                except Exception:
+                    battery_mv = battery_ma = -1
+            if self.angv_n > 0:
+                angv_text = " angv_mean=(%s) angv_total_mean=(%s) n=%d angv_distinct=%d" % (
+                    ",".join("%+.4f" % (value / self.angv_n) for value in self.angv_sum),
+                    ",".join("%+.4f" % (value / self.angv_total_n) for value in self.angv_total_sum),
+                    self.angv_n, len(self.angv_values))
+            else:
+                angv_text = " angv=none"
+            # imu_stationary: この間隔のうち、ハブが「止まっている」と判定していた割合。
+            # raw_heading: 四捨五入前の向き(ハブの値そのまま、補正係数なし)と、静止の始めからの変化。
+            if self.stationary_n > 0:
+                stationary_text = " imu_stationary=%d/%d" % (self.stationary_true, self.stationary_n)
+            else:
+                stationary_text = " imu_stationary=none"
+            _, raw_heading = _read_imu_stationary_and_heading()
+            if raw_heading is not None and self.raw_heading_start is not None:
+                raw_text = " raw_heading=%+.3f raw_drift=%+.3f" % (raw_heading, raw_heading - self.raw_heading_start)
+            else:
+                raw_text = " raw_heading=none"
+            cpu_temp = _read_cpu_temp_c()
+            self.logger.info("%+06d %s.still %.0fs heading=%+.2f drift=%+.2f battery_mv=%d battery_ma=%d%s%s%s cpu_temp=%s" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, now - self.still_time,
+                heading, heading - self.still_heading, battery_mv, battery_ma, angv_text,
+                stationary_text, raw_text, "none" if cpu_temp is None else "%.1f" % cpu_temp))
+            # 2026-10-29: この間隔の、回転の速さ(度/秒)と加速度(mm/s^2)の最大と最小の差。ハブの静止判定の
+            # しきい値(hub_imu.cの既定値: 回転2.0度/秒、加速度2500mm/s^2)を揺れが超えているかの目安。
+            # accel_mean: この間隔の加速度の平均。重力の向きから、ハブの傾きの設定(etrobo_pythonが起動時に
+            # hub_imu_set_tilt(51.0)で設定)が実際の取り付けと合っているかを見る。合っていれば重力はほぼz軸だけに出る。
+            # tilt_xz/tilt_yz: 重力がz軸からx・y方向へ何度傾いているか。
+            if self.accel_n > 0:
+                ax, ay, az = (value / self.accel_n for value in self.accel_sum[:3])
+                accel_text = " accel_mean=(%+.1f,%+.1f,%+.1f) tilt_xz=%+.2f tilt_yz=%+.2f" % (
+                    ax, ay, az, math.degrees(math.atan2(ax, abs(az))), math.degrees(math.atan2(ay, abs(az))))
+            else:
+                accel_text = " accel_mean=none"
+            self.logger.info("%+06d %s.still %.0fs angv_range=%s accel_range=%s%s" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, now - self.still_time,
+                _format_range(self.angv_range), _format_range(self.accel_range), accel_text))
+            self.accel_sum = None
+            self.accel_n = 0
+            self.angv_range = None
+            self.accel_range = None
+            self.stationary_true = 0
+            self.stationary_n = 0
+            self.next_log += self.log_interval_sec
+            if self.angv_sum is not None:
+                self.angv_sum = [0.0] * len(self.angv_sum)
+            self.angv_n = 0
+        if elapsed < self.max_seconds and (elapsed < self.min_seconds or self.stable < self.STABLE_TICKS):
+            return Status.RUNNING
+        if self.still_heading is None:
+            still_text = " still=none"
+        else:
+            still_text = " still=%.2fs still_drift=%+.2f" % (now - self.still_time, heading - self.still_heading)
+        self.logger.info("%+06d %s.paused %.2fs heading=%+.2f%s loc=(%d,%d)" % (
+            runtime.plotter.get_distance(), self.__class__.__name__, elapsed, heading, still_text,
+            runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
+        return Status.SUCCESS
+
+    def terminate(self, new_status):
+        self.started = None
+
+
+class LogLapBoundary(Behaviour):
+    """周回の切り替わりでplotterの位置・方位をログに残す(2026-10-24、周回ごとの
+    位置ズレを診断するための目印。即SUCCESSを返すだけで、走行には影響しない)。"""
+
+    def __init__(self, name, lap_tag):
+        super().__init__(name)
+        self.lap_tag = lap_tag
+
+    def update(self) -> Status:
+        runtime.require("plotter")
+        self.logger.info("%+06d LAP_BOUNDARY %s loc=(%d,%d) degree=%d%s" % (
+            runtime.plotter.get_distance(), self.lap_tag,
+            runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(),
+            runtime.plotter.get_degree(), et_pose_text()))
+        # 2026-10-29: ETラリー用の向きの窓口を使っているときは、ずれの速さと差し引いた量も残す。
+        summary = getattr(runtime.gyro_sensor, "summary", None)
+        if summary is not None:
+            self.logger.info("LAP_BOUNDARY %s heading %s" % (self.lap_tag, summary()))
+        return Status.SUCCESS
 
 
 class DeferredStrategySequence(Sequence):
-    """Build motor behaviours only when this subtree starts running."""
+    """Build motor behaviours only when this subtree starts running.
 
-    def __init__(self, name, loader, initial_heading_deg=0.0, fallback_loader=None):
+    2026-11-05: steps_from_strategy に渡す追加の設定(旋回・円弧・直進など)は、個別の引数に並べず
+    strategy_kwargs にまとめて受け取る(値が None のものは渡さない = steps_from_strategy の既定値)。
+    以前は設定を1つ増やすたびに、ここと呼び出し側の何か所も直す作りだった。"""
+
+    def __init__(self, name, loader, initial_heading_deg=0.0, fallback_loader=None,
+                 turn_method='spin_encoder', compensation_enabled=False, **strategy_kwargs):
         super().__init__(name=name, memory=True)
         self._loader = loader
         # 経路をノードに変換できなかったとき(ETラリー開始時のエラー)に、代わりに使う固定ルート。
         self._fallback_loader = fallback_loader
         self._initial_heading_deg = initial_heading_deg
+        self._turn_method = turn_method
+        self._compensation_enabled = compensation_enabled
+        self._strategy_kwargs = {k: v for k, v in strategy_kwargs.items() if v is not None}
         self._loaded = False
 
     def _load_children(self):
@@ -36,16 +348,70 @@ class DeferredStrategySequence(Sequence):
         # 食い違い「unknown / invalid state」になる。
         if self._loaded:
             return
+        extra_kwargs = dict(self._strategy_kwargs)
         try:
+            # 2026-11-06: スタートでカメラから測った位置がずれていれば、最初のつなぎを引き直す(et_rally_start_pose.py)。
+            # 予定がなければ計画のまま。
+            plan_steps = self._loader()
+            if isinstance(plan_steps, tuple):
+                # 2026-11-15: (steps, 上書きする設定)。受信した計画が経路の道具の計画のときに使う。
+                plan_steps, overrides = plan_steps
+                if "initial_heading_deg" in overrides:
+                    self._initial_heading_deg = overrides["initial_heading_deg"]
+            if extra_kwargs.get("path_carry_error"):
+                # 2026-11-11: 止まったあとの走り出しで計画とのずれを引き継ぐため、各ステップの計画のコース上の姿勢を入れる
+                # (引き直しで差し替わる最初のつなぎには入らない。そこはスタートの取り込みが受け持つ)。
+                et_rally_start_pose.annotate_plan_course(plan_steps)
+            # 2026-11-11: 経過時間で周回数を決める(--rally-time-budget)。計画の exit(途中の周で切り上げるときの、
+            # 黄ゲートの抜けからガレージまでのつなぎ)のノードを作る関数を渡す(切り上げる周ごとに別のノードが要る)。
+            exit_plan = _PLAN_EXIT if extra_kwargs.get("time_budget_sec") else None
+            if exit_plan and exit_plan.get("steps"):
+                import copy as _copy
+                from ..et_rally_time_budget import estimate_steps, current_budget
+                exit_raw = exit_plan["steps"]
+                mark_i = next((i for i, st in enumerate(plan_steps) if st.get("marks")), None)
+                mark_pose = plan_steps[mark_i].get("_plan_course") if mark_i is not None else None
+                # 黄ゲートの最後の区間が止まらずに続く形で、切り上げのつなぎも同じ向きの直進・円弧で始まるなら、止まらずにつなぐ
+                prev = plan_steps[mark_i - 1] if mark_i else None
+                first = exit_raw[0] if exit_raw else None
+                cont_first = bool(prev is not None and first is not None and prev.get("type") in ("move", "arc")
+                                  and not prev.get("stop", True) and first.get("type") in ("move", "arc")
+                                  and bool(first.get("reverse", False)) == bool(prev.get("reverse", False)))
+                kw = {k: v for k, v in extra_kwargs.items()
+                      if k not in ("time_budget_sec", "time_margin_sec", "start_check_mm")}
+
+                def exit_factory(exit_raw=exit_raw, mark_pose=mark_pose, kw=kw, cont_first=cont_first):
+                    ex = _copy.deepcopy(exit_raw)
+                    if mark_pose is not None and kw.get("path_carry_error"):
+                        et_rally_start_pose.annotate_plan_course(ex, start=mark_pose)
+                    return steps_from_strategy(ex, initial_heading_deg=self._initial_heading_deg,
+                                               turn_method=self._turn_method,
+                                               compensation_enabled=self._compensation_enabled,
+                                               continue_first=cont_first, **kw)
+
+                est_exit = estimate_steps([dict(st, distance_mm=st.get("distance_mm") or
+                                                (float(st.get("radius_mm", 0.0)) * math.radians(abs(float(st.get("sweep_deg", 0.0))))))
+                                           for st in exit_raw])
+                extra_kwargs["exit_factory"] = exit_factory
+                extra_kwargs["exit_est_sec"] = est_exit
+                self.logger.info("time budget: %.1fs (margin %s), early exit to the garage after laps %s (%.1fs by plan)" % (
+                    current_budget(extra_kwargs["time_budget_sec"]), extra_kwargs.get("time_margin_sec"), exit_plan.get("laps"), est_exit))
+            elif extra_kwargs.get("time_budget_sec"):
+                self.logger.warning("time budget: the plan has no exit (needs a garage plan made by the new tool), running all laps")
             nodes = steps_from_strategy(
-                self._loader(), initial_heading_deg=self._initial_heading_deg)
+                et_rally_start_pose.apply_pending_rejoin(plan_steps, self.logger),
+                initial_heading_deg=self._initial_heading_deg,
+                turn_method=self._turn_method, compensation_enabled=self._compensation_enabled,
+                **extra_kwargs)
         except (KeyError, OSError, TypeError, ValueError) as error:
             self.logger.error("Strategy loading failed: %s" % error)
             nodes = [Failure(name="invalid strategy")]
             if self._fallback_loader is not None:
                 try:
                     nodes = steps_from_strategy(
-                        self._fallback_loader(), initial_heading_deg=self._initial_heading_deg)
+                        self._fallback_loader(), initial_heading_deg=self._initial_heading_deg,
+                        turn_method=self._turn_method, compensation_enabled=self._compensation_enabled,
+                        **extra_kwargs)
                     self.logger.error("ETラリー開始時にエラー(%s)。固定ルートでゴールへ向かいます" % error)
                 except (KeyError, OSError, TypeError, ValueError) as fallback_error:
                     self.logger.error("Fallback route failed: %s" % fallback_error)
@@ -58,6 +424,63 @@ class DeferredStrategySequence(Sequence):
         yield from super().tick()
 
 
+# 2026-11-05: 設定(config の項目名) → steps_from_strategy の引数名。設定を1つ増やすときは、ここに1行足す。
+_STRATEGY_KWARGS_FROM_CONFIG = (
+    ("turn_fine_tolerance_deg", "et_rally_turn_fine_tolerance_deg"),
+    ("turn_decel_deg", "et_rally_turn_decel_deg"),
+    ("turn_backlash_preload_deg", "et_rally_turn_backlash_preload_deg"),
+    ("turn_fine_trim", "et_rally_turn_fine_trim_enabled"),
+    ("turn_main_power", "et_rally_turn_main_power"),
+    ("turn_adaptive_lag_compensation", "et_rally_turn_adaptive_lag_compensation"),
+    ("turn_left_target_scale", "et_rally_turn_left_target_scale"),
+    ("turn_pre_stop", "et_rally_turn_pre_stop"),
+    ("start_check_mm", "et_rally_start_check_mm"),
+    ("straight_pause_sec", "et_rally_straight_pause_sec"),
+    ("straight_pause_min_mm", "et_rally_straight_pause_min_mm"),
+    ("gyro_still_sec", "et_rally_gyro_still_sec"),
+    ("gyro_still_sweep", "et_rally_gyro_still_sweep"),
+    ("turn_phase1_model", "et_rally_turn_phase1_model"),
+    ("turn_wheel_sync_gain", "et_rally_turn_wheel_sync_gain"),
+    ("turn_sync_decel", "et_rally_turn_sync_decel"),
+    ("straight_pause_labels", "et_rally_straight_pause_labels"),
+    ("move_short_lead_mm", "et_rally_move_short_lead_mm"),
+    ("path_lead_sec", "et_rally_path_lead_sec"),
+    ("path_arc_pid_i", "et_rally_path_arc_pid_i"),
+    ("path_arc_speed_scale", "et_rally_path_arc_speed_scale"),
+    ("path_small_arc", "et_rally_path_small_arc"),
+    ("path_arc_slip", "et_rally_path_arc_slip"),
+    ("path_resync", "et_rally_path_resync"),
+    ("path_lat_gain", "et_rally_path_lat_gain"),
+    ("path_lat_max_deg", "et_rally_path_lat_max_deg"),
+    ("path_arc_pid_p", "et_rally_path_arc_pid_p"),
+    ("path_ramp_mm", "et_rally_path_ramp_mm"),
+    ("path_inner_min_power", "et_rally_path_inner_min_power"),
+    ("path_ramp_sec", "et_rally_path_ramp_sec"),
+    ("path_power", "et_rally_path_power"),
+    ("path_line_power", "et_rally_path_line_power"),
+    ("path_wheel_log_ticks", "et_rally_path_wheel_log_ticks"),
+    ("path_ff_scale", "et_rally_path_ff_scale"),
+    ("path_stop_lead_mm", "et_rally_path_stop_lead"),
+    ("path_line_pid_p", "et_rally_path_line_pid_p"),
+    ("path_line_pid_d", "et_rally_path_line_pid_d"),
+    ("path_line_boost_power", "et_rally_path_line_boost_power"),
+    ("path_line_boost_sec", "et_rally_path_line_boost_sec"),
+    ("path_carry_error", "et_rally_path_carry_error"),
+    ("arm_down_at_garage", "et_rally_arm_down_at_garage"),
+    ("arm_stop_ticks", "et_rally_arm_stop_ticks"),
+    ("time_budget_sec", "et_rally_time_budget"),
+    ("time_margin_sec", "et_rally_time_margin"),
+    ("path_decel", "et_rally_path_decel"),
+    ("path_accel", "et_rally_path_accel"),
+    ("path_stop_ticks", "et_rally_path_stop_ticks"),
+)
+
+
+def strategy_kwargs_from_config(config):
+    """config から steps_from_strategy への追加の引数(設定されていない項目は None)。"""
+    return {arg: getattr(config, field, None) for arg, field in _STRATEGY_KWARGS_FROM_CONFIG}
+
+
 def build_execute_strategy(context, config, lap_number=None):
     # No.12は、PCが作成した全周回分のSEQを一度だけ実行する。
     source = config.et_rally_strategy_source
@@ -68,13 +491,24 @@ def build_execute_strategy(context, config, lap_number=None):
             [{"type": "turn", "target_heading_deg": RALLY_START_HEADING}],
             config.mission_mode,
         )[0]["target_heading_deg"]
+        def load_received():
+            # 2026-11-15: 経路の道具の計画(PC から丸ごと届いた、またはロボットが選んだ)があれば、ファイルで走るときと同じに読む
+            # (exit も読む)。最初の旋回の直前の向きもファイルのときと同じ 0。なければ従来の受信SEQ。
+            path = getattr(context, "strategy_plan_path", None)
+            if path:
+                return _load_plan_steps(path), {"initial_heading_deg": 0.0}
+            return full_start_to_gyro(context.strategy, config.mission_mode)
+
         return DeferredStrategySequence(
             name="execute_received_strategy",
-            loader=lambda: full_start_to_gyro(context.strategy, config.mission_mode),
+            loader=load_received,
             initial_heading_deg=start_heading,
             fallback_loader=(
                 (lambda: full_start_to_gyro(fallback_strategy(), config.mission_mode))
                 if getattr(config, "et_rally_fallback_enabled", False) else None),
+            turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
+            compensation_enabled=getattr(config, "et_rally_compensation_enabled", False),
+            **strategy_kwargs_from_config(config),
         )
     if source == "file":
         plan_path = _resolve_plan_path(config.et_rally_plan_path)
@@ -83,6 +517,9 @@ def build_execute_strategy(context, config, lap_number=None):
             loader=lambda: _load_plan_steps(plan_path),
             fallback_loader=(fallback_planner_steps
                              if getattr(config, "et_rally_fallback_enabled", False) else None),
+            turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
+            compensation_enabled=getattr(config, "et_rally_compensation_enabled", False),
+            **strategy_kwargs_from_config(config),
         )
     raise ValueError("Unknown ET rally strategy source: " + str(source))
 
@@ -95,9 +532,14 @@ def _resolve_plan_path(configured_path):
     return path if path.is_absolute() else PROJECT_ROOT / path
 
 
+_PLAN_EXIT = None   # 2026-11-11: 計画の exit(途中の周で切り上げてガレージへ向かうつなぎ)。_load_plan_steps が入れる
+
+
 def _load_plan_steps(plan_path):
+    global _PLAN_EXIT
     with open(plan_path, encoding="utf-8") as file:
         plan = json.load(file)
+    _PLAN_EXIT = plan.get("exit") if isinstance(plan, dict) else None
     if not isinstance(plan, dict) or "steps" not in plan:
         raise ValueError("Plan must contain steps")
     return plan["steps"]
@@ -112,44 +554,278 @@ def _finite_number(value, field_name):
     return value
 
 
+def _capped_power(step, power):
+    """2026-11-14: 計画の直進に出力の上限(max_power、狭い所)があれば、その値までに抑える。"""
+    cap = step.get("max_power")
+    if cap is None or step.get("type") != "move":
+        return power
+    return int(min(power, max(30.0, float(cap))))
+
+
+def _merge_consecutive_moves(steps):
+    """同じ向きの直進が旋回を挟まずに続くとき、1本の直進にまとめる。
+
+    2026-10-28: 計画では、ゲートの手前(entry)と通過(exit)が別の直進になっており、
+    2周目以降の赤ゲートのように向きが変わらないと直進が2本続く。直進ごとに
+    move_stop_lead_mm手前で終えると、1本目は止まらずに2本目へ続くため惰性が出ず、
+    その分(周回コースのログで約8mm/周)足りなくなっていた。まとめれば、手前で
+    終える処理は最後に1回だけになる。ラベルは1本目のものを残す(周回の区切りの判定に使う)。
+    """
+    merged = []
+    for step in steps:
+        prev = merged[-1] if merged else None
+        # 2026-11-11: アームを下げ始める印(garage-arm-down)の付いた直進は、まとめない(ここから下げ始めるため)。
+        # 2026-11-15: 前の直進が計画ではっきり止まる(stop: true)ときも、まとめない。止まって撮る較正の計画
+        # (15cm 進んで止まる×5)が750mm の1本になり、1回も止まらなかった。周回の計画(1114個)にはこの並びはない。
+        if (step["type"] == "move" and prev is not None and prev["type"] == "move"
+                and prev.get("stop") is not True
+                and step.get("label") != "garage-arm-down" and not step.get("marks")
+                and abs(step["target_heading_deg"] - prev["target_heading_deg"]) < 1e-6
+                and step.get("reverse", False) == prev.get("reverse", False)):
+            prev["distance_mm"] += step["distance_mm"]
+            # 2026-11-14: 出力の上限(狭い直進)は、まとめた直進のどちらかにあれば小さい方を使う
+            if step.get("max_power") is not None or prev.get("max_power") is not None:
+                prev["max_power"] = min(v for v in (step.get("max_power"), prev.get("max_power")) if v is not None)
+            # 2026-11-01: 後ろの直進が止まるかどうか(stop)を引き継ぐ。
+            if "stop" in step:
+                prev["stop"] = step["stop"]
+            continue
+        merged.append(dict(step))
+    return merged
+
+
+def _prepare_path_chains(steps):
+    """2026-11-01: 止まらずに続く直進・円弧のつながり(chain)を確定させる。
+
+    stop=Falseでも、次がturn・計画の終わり・前後の向きが変わる区間なら、止まる(stop=True)に直す
+    (前後の切り替えは、止まりきってからでないとできないため)。各区間に、止まるまでに後ろへ続く
+    距離(remaining_after_mm)と、前の区間から止まらずに続くか(continue_from_prev)を書き込む。
+    """
+    moving = ("move", "arc")
+    for i, step in enumerate(steps):
+        if step["type"] not in moving or step.get("stop", True):
+            continue
+        nxt = steps[i + 1] if i + 1 < len(steps) else None
+        if nxt is None or nxt["type"] not in moving or nxt.get("reverse", False) != step.get("reverse", False):
+            step["stop"] = True
+    remaining = 0.0
+    for i in range(len(steps) - 1, -1, -1):
+        step = steps[i]
+        if step["type"] not in moving:
+            remaining = 0.0
+            continue
+        if step.get("stop", True):
+            remaining = 0.0
+        step["remaining_after_mm"] = remaining
+        remaining += step["distance_mm"]
+    for i, step in enumerate(steps):
+        if step["type"] in moving:
+            prev = steps[i - 1] if i > 0 else None
+            step["continue_from_prev"] = bool(prev is not None and prev["type"] in moving and not prev.get("stop", True))
+    # 先読み用に、止まるまでに続く区間の形(kind, 長さ, 始めの向き, 向きの変化, 半径)を持たせる。
+    for i, step in enumerate(steps):
+        if step["type"] not in moving:
+            continue
+        profile = []
+        j = i
+        while steps[j]["type"] in moving and not steps[j].get("stop", True) and j + 1 < len(steps):
+            j += 1
+            nxt = steps[j]
+            sweep = nxt.get("sweep_deg", 0.0) if nxt["type"] == "arc" else 0.0
+            profile.append(("arc" if nxt["type"] == "arc" else "line", nxt["distance_mm"],
+                            nxt["target_heading_deg"] - sweep, sweep, nxt.get("radius_mm", 0.0)))
+        step["next_profile"] = profile
+
+
 def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
+                        # 2026-09(会話にもとづく): 発進・停止それぞれの直前直後だけを
+                        # 短く加減速する。区間全体をゆっくり加減速するのではない
+                        # (長い区間でも、この距離分しか加減速しない)。
+                        # 【要実機調整】30mm/半分のパワー、はまだ最初の見立てで、
+                        # 実測して詰める前提の値。
+                        move_accel_mm=30.0, move_accel_min_power=40,
+                        # 2026-10-28: 30mmでは減速が間に合わず、目標到達時も約340mm/sで
+                        # 走っていて、止まるまでに1〜2cm進んでいた(床の実測)。80mmに
+                        # 延ばして到達時の速度を下げ、惰性を小さくする。
+                        move_decel_mm=80.0, move_decel_min_power=40,
+                        # 2026-10-28: 減速しても残る惰性と、目標到達の判定の行き過ぎ
+                        # (20msごとの判定の刻み)の分だけ、直進を手前で終える量(mm)。
+                        # 2026-10-28: タイヤ径55.56・減速80mmで300mm直進を床で実測すると317mm
+                        # (ログ上も316mmで一致=タイヤ径は正しい)。目標到達時の行き過ぎ+惰性の
+                        # 約16mmを手前で止める。
+                        move_stop_lead_mm=16.0,
                         turn_main_power=SPIN_MAX_POWER,
                         turn_fine_max_power=60, turn_fine_min_power=50,
                         turn_fine_tolerance_deg=0.5,
+                        turn_decel_deg=0.0,
+                        turn_backlash_preload_deg=0.0,
+                        turn_fine_trim=True,
+                        turn_lag_compensation_deg=0.0,
+                        turn_adaptive_lag_compensation=False,
+                        turn_left_target_scale=1.0,
+                        turn_phase1_scale=(1.0, 1.0),
+                        turn_pre_stop=False,
+                        # 2026-10-29: 旋回で前へ出た量を、次の直進から差し引く(one_shotのみ値が渡る)。
+                        turn_forward_compensation=False,
+                        # 2026-10-29: 0より大きければ、経路の前に、スタートの向き(0度)へこの距離だけ
+                        # 前進→停止→同じ距離だけ後退→停止する(置いた向きがまっすぐかを目で確かめる用)。
+                        start_check_mm=0.0,
+                        # 2026-10-29: 0より大きければ、straight_pause_min_mm以上の直進の前後で、
+                        # この秒数だけ止まる(直進の始めと終わりの位置を測るため)。
+                        straight_pause_sec=0.0,
+                        straight_pause_min_mm=400.0,
+                        # 2026-10-31: ラベルの集まり。指定時は、そのラベルの直進の後だけstraight_pause_sec止まる。
+                        straight_pause_labels=None,
+                        # 2026-10-29: 0より大きければ、経路を走らずに、この秒数だけ止まったまま
+                        # 向きをログに残して終える(止まっているときのジャイロのずれの検証用)。
+                        gyro_still_sec=0.0,
+                        # 2026-10-29: Trueなら静止テストを、アーム(上/下)と車輪のブレーキ(あり/なし)の
+                        # 4つの状態で、gyro_still_secずつ順に行う(ハブの静止判定を邪魔しているものを探す)。
+                        gyro_still_sweep=False,
+                        # 2026-10-31: one_shotのphase1を「実際の角度 = 係数×指令 + 一定の流れ」で計算する
+                        # ((headingが増える向きの係数, 流れ), (減る向きの係数, 流れ))。Noneなら従来どおり。
+                        turn_phase1_model=None,
+                        # 2026-10-31: 0より大きければ、one_shotのphase1で左右の車輪を同時に同じだけ回す(係数=出力/エンコーダ度)。
+                        turn_wheel_sync_gain=None,
+                        # 2026-10-31: wheel_sync有効時のphase1終盤の減速(エンコーダ度, 出力)。Noneなら(15, 50)。
+                        turn_sync_decel=None,
+                        # 2026-10-31: SHORT_MOVE_NO_LEAD_MMより短い直進を、この距離(mm)だけ手前で終える。
+                        # Noneなら従来どおり計画の距離を走る。周回(1031b)のゴール手前の20mmの直進が、
+                        # 到達の行き過ぎ1mm+止まるまでの惰性8.5mmで約30mm進み、ゴールで右に15mmずれた。
+                        move_short_lead_mm=None,
+                        # 2026-11-01: 後退・円弧・止まらずに続く区間を含む計画(EtRallyPathSegment)で、目標の向きと
+                        # 曲がり具合を先読みする時間(秒、×今の速さ=先読みの距離)。車輪の速さが出力に追いつくまでの
+                        # 遅れの分だけ、曲がり始め・曲がり終わりを早める。従来の計画では使わない。Noneなら0.06。
+                        path_lead_sec=None,
+                        # 2026-11-01: 同じ計画で、円弧の中だけ使う向きのPIDのI。Noneなら0.6。
+                        path_arc_pid_i=None,
+                        # 2026-11-02: 同じ計画で、円弧の速さの倍率(外側の車輪が直進の何倍まで回るか)。Noneなら1.0。
+                        path_arc_speed_scale=None,
+                        path_small_arc=None,
+                        # 2026-11-03: 同じ計画で、計画の線からの横のずれを戻す強さ(1mmあたりの度)と上限(度)。
+                        # Noneなら0(従来どおり向きだけを追う)と8度。
+                        path_lat_gain=None,
+                        path_lat_max_deg=None,
+                        # 2026-11-03: 同じ計画で、走りを滑らかにする。円弧の中だけの向きのPIDのP(Noneなら直進と同じ)、
+                        # 目標の向き・左右の差を前後に平均する幅mm(Noneなら0=従来どおり)、
+                        # 前進で左右の出力をこれより下げない下限(Noneなら下限なし。0なら逆回ししない)。
+                        path_arc_pid_p=None,
+                        path_ramp_mm=None,
+                        path_inner_min_power=None,
+                        # 2026-11-03: 速度を上げる準備。平均の幅を時間で決める秒(Noneなら0=使わない)と、
+                        # EtRallyPathSegmentの区間だけの出力(Noneならmove_power=80。従来の直進・旋回には効かない)。
+                        path_ramp_sec=None,
+                        path_power=None,
+                        path_line_power=None,
+                        # 2026-11-03: 区間の始めから何tick分、毎tickの出力と実際の車輪の回りをログに出すか(Noneなら0=出さない)。
+                        path_wheel_log_ticks=None,
+                        # 2026-11-03: 円弧の左右の差(フィードフォワード)の倍率(Noneなら1.0)。
+                        path_ff_scale=None,
+                        # 2026-11-05: 円弧・直進の区間で止まるとき、計画の距離のこの距離(mm)手前で止め始める(Noneなら move_stop_lead_mm)。
+                        # 今日までのログ54回で、止め始めてから惰性で進む距離は速さによらず長い直進で平均約17.5mm(16〜20)。
+                        path_stop_lead_mm=None,
+                        # 2026-11-11: 同じ計画で、直進の区間だけの向きのPIDのP・D(Noneなら move_pid の値)と、
+                        # 直進の始めに出力を上乗せする出力・秒(Noneなら使わない)。試す用。
+                        path_line_pid_p=None,
+                        path_line_pid_d=None,
+                        path_line_boost_power=None,
+                        path_line_boost_sec=None,
+                        # 2026-11-11: 止まったあとの走り出しで、コース上の今の位置(カメラで直したもの)と計画の位置の差を引き継ぐ。
+                        path_carry_error=None,
+                        # 2026-11-11: EtRallyPathSegment だけの減速 (mm, 出力の下限)・加速 (mm, 始めの出力)・止まったとみなすtick数。
+                        path_decel=None, path_accel=None, path_stop_ticks=None,
+                        # 2026-11-11: 印(label 'garage-arm-down')の付いた直進からアームを下げ始める(走りと並行)。arm_stop_ticks はアームの止め方。
+                        arm_down_at_garage=None, arm_stop_ticks=None,
+                        # 2026-11-11: 経過時間で周回数を決める(--rally-time-budget)。持ち時間・余裕(秒)、
+                        # 切り上げのつなぎのノードを作る関数と、その見込みの時間。continue_first: 最初の区間が前から止まらずに続く。
+                        time_budget_sec=None, time_margin_sec=None, exit_factory=None, exit_est_sec=None,
+                        continue_first=False,
+                        # 2026-11-15: 速い急な円弧での滑りの割合(et_rally_path_segment.ARC_SLIP)。None/0 なら使わない。
+                        path_arc_slip=None,
+                        # 2026-11-15: 続く区間の始めに横のずれをコース上の位置から計算し直す(et_rally_path_segment.RESYNC)
+                        path_resync=None,
                         turn_pid=(0.2, 0.00075, 0.03),
                         caster_drag_mm_per_deg=0.0502,
                         lateral_drift_mm_per_deg_a=0.00496,
                         lateral_drift_mm_per_deg_b=0.01278,
                         lateral_drift_sign=1.0,
-                        initial_heading_deg=0.0):
+                        initial_heading_deg=0.0,
+                        turn_method='spin_encoder',
+                        compensation_enabled=False):
     """Convert a received or file-loaded strategy to behaviour tree nodes.
 
     走行にはETラリー専用のEtRallyRunByGyro/EtRallySpinAroundByEncoder
     (behaviours/et_rally_drive.py)を使い、共通のgyro_drive.pyのクラスは使わない。
     既定値はsample_comment.pyのsteps_from_planと同じ(実機で較正済みの値)。
     caster_drag_mm_per_deg/lateral_drift_mm_per_deg_a,bに0を渡すと、その補正を無効にできる。
+
+    turn_method(DD-19較正用): 'spin_pid'(無補正ベースライン、gyro_drive.SpinAround)/
+    'spin_encoder'(既定、DD-13採用のEtRallySpinAroundByEncoder)/'one_shot'(一発パルス仕上げ)/
+    'lqi'(LQI仕上げ)のいずれか。compensation_enabled=Falseで、両補正(DD-15/16)をまとめて無効化する
+    (caster_drag_mm_per_deg等の引数は無視される)。
     """
+    if turn_method not in RALLY_TURN_METHODS:
+        raise ValueError("Unknown rally turn method: " + str(turn_method))
     if not isinstance(strategy, list) or not strategy:
         raise ValueError("Strategy must be a non-empty list")
 
     # 検証済みの新しいdictに詰め替えてから、実機の癖の補正を掛ける。
     steps = []
+    path_mode = False
     for step in strategy:
         if not isinstance(step, dict):
             raise ValueError("Strategy step must be an object")
         step_type = step.get("type")
-        if step_type not in ("move", "turn"):
+        if step_type not in ("move", "turn", "arc"):
             raise ValueError("Unknown strategy step type: " + str(step_type))
         checked = {
             "type": step_type,
             "target_heading_deg": _finite_number(step.get("target_heading_deg"), "target_heading_deg"),
             "label": step.get("label"),
         }
+        if "_plan_course" in step:
+            # 2026-11-11: 計画のコース上の姿勢(annotate_plan_course)。止まったあとの走り出しでずれを引き継ぐのに使う。
+            checked["_plan_course"] = step["_plan_course"]
+        if step.get("max_power") is not None:
+            # 2026-11-14: 狭い所の直進の出力の上限(計画が書く)。出力を上限に張り付かせず、向きを直す余地を残す。
+            checked["max_power"] = _finite_number(step.get("max_power"), "max_power")
+        if step.get("marks"):
+            # 2026-11-11: 周の終わりの印(lapN-end)。経過時間で周回数を決めるとき(--rally-time-budget)の判断の場所。
+            checked["marks"] = list(step["marks"])
+        if step_type in ("move", "arc"):
+            # 2026-11-01: 後退(reverse)と、止まらずに次へ続ける(stop=False)の指定。
+            # どちらかが計画にあるとき(またはarcがあるとき)だけ、EtRallyPathSegmentで走る。
+            for key in ("reverse", "stop"):
+                if key in step and not isinstance(step[key], bool):
+                    raise ValueError(key + " must be true or false")
+            checked["reverse"] = step.get("reverse", False)
+            checked["stop"] = step.get("stop", True)
+            if "reverse" in step or "stop" in step:
+                path_mode = True
         if step_type == "move":
             distance = _finite_number(step.get("distance_mm"), "distance_mm")
             if int(round(distance)) <= 0:
                 raise ValueError("distance_mm must be greater than zero")
             checked["distance_mm"] = distance
+        elif step_type == "arc":
+            # 2026-11-01: 円弧。target_heading_degは終わりの向き、sweep_degは向きの変化(符号つき、
+            # 始めの向き = target_heading_deg - sweep_deg)、radius_mmは車体中心の半径。
+            radius = _finite_number(step.get("radius_mm"), "radius_mm")
+            sweep = _finite_number(step.get("sweep_deg"), "sweep_deg")
+            if radius <= 0.0:
+                raise ValueError("radius_mm must be greater than zero")
+            if not 0.0 < abs(sweep) <= 360.0:
+                raise ValueError("sweep_deg must be non-zero and within 360")
+            checked["radius_mm"] = radius
+            checked["sweep_deg"] = sweep
+            checked["distance_mm"] = radius * math.radians(abs(sweep))
+            path_mode = True
+        elif step_type == "turn":
+            # 検証専用(spin_encoder_dir_test)のときだけ使う、回転方向の明示指定(+1/-1、省略時0=自動)。
+            direction = step.get("direction", 0)
+            if direction not in (0, 1, -1):
+                raise ValueError("direction must be 0, 1 or -1")
+            checked["direction"] = direction
         steps.append(checked)
     # 横ズレはロボット固有の向き(物理的に常に右)に出る。runtime.courseが-1(右コース)だと
     # 「headingが増える向き」が物理的に逆になる(heading=-course*ジャイロ角)ため、
@@ -159,21 +835,181 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
         lateral_drift_mm_per_deg_a, lateral_drift_mm_per_deg_b = (
             lateral_drift_mm_per_deg_b, lateral_drift_mm_per_deg_a)
         lateral_drift_sign = -lateral_drift_sign
+    if not compensation_enabled:
+        # DD-19較正用ベースライン: DD-15(キャスター引きずり)・DD-16(横ズレ)を両方無効化する。
+        caster_drag_mm_per_deg = 0.0
+        lateral_drift_mm_per_deg_a = lateral_drift_mm_per_deg_b = 0.0
     steps = apply_caster_drag_compensation(
         steps, mm_per_deg=caster_drag_mm_per_deg, initial_heading_deg=initial_heading_deg)
     steps = apply_lateral_drift_compensation(
         steps, mm_per_deg_a=lateral_drift_mm_per_deg_a,
         mm_per_deg_b=lateral_drift_mm_per_deg_b, sign=lateral_drift_sign,
         initial_heading_deg=initial_heading_deg)
+    steps = _merge_consecutive_moves(steps)
+    # 2026-11-15: 速い急な円弧での滑りを、位置・円弧の進み・区間の終わりで割り引く(et_rally_path_segment.ARC_SLIP)
+    from ..behaviours import et_rally_path_segment as _ps
+    _ps.set_arc_slip(path_arc_slip or 0.0)
+    _ps.set_resync(bool(path_resync))
+    if path_mode:
+        _prepare_path_chains(steps)
+        if continue_first and steps and steps[0]["type"] in ("move", "arc"):
+            steps[0]["continue_from_prev"] = True
+
+    def check_legs(prefix, heading, check_mm):
+        # 指定の向きへcheck_mmだけ前進→停止→同じ距離だけ後退→停止する。
+        legs = []
+        for tag, reverse in (("forward", False), ("back", True)):
+            check_distance_mm = max(check_mm - move_stop_lead_mm, 1.0)
+            leg = Parallel(name="et_rally %s %s" % (prefix, tag), policy=ParallelPolicy.SuccessOnOne())
+            leg.add_children([
+                EtRallyRunByGyro(
+                    name="et_rally %s %s run" % (prefix, tag), target=heading, power=move_power,
+                    pid_p=move_pid[0], pid_i=move_pid[1], pid_d=move_pid[2],
+                    target_type=HeadingType.ABSOLUTE, distance_mm=check_distance_mm,
+                    accel_mm=move_accel_mm, accel_min_power=move_accel_min_power,
+                    decel_mm=move_decel_mm, decel_min_power=move_decel_min_power,
+                    reverse=reverse,
+                ),
+                IsDistanceEarned(name="et_rally %s %s dist" % (prefix, tag),
+                                 delta_dist=int(round(check_distance_mm))),
+            ])
+            legs.append(leg)
+            legs.append(EtRallyPause(name="et_rally %s %s pause" % (prefix, tag), min_seconds=1.0))
+        return legs
+
+    if gyro_still_sec and gyro_still_sec > 0:
+        # 静止テストだけを行い、経路は走らない(スタートの確認もしない)。
+        if not gyro_still_sweep:
+            return [EtRallyPause(name="et_rally gyro still", min_seconds=gyro_still_sec,
+                                 log_interval_sec=5.0)]
+        # 2026-10-29: 4状態(アーム上下×車輪ブレーキ有無)ではどれも静止判定が出なかった。ハブ側は全モーターが
+        # 脱力しているときだけ静止と判定するため、次の順に試す:
+        #   1. いつもの状態(アーム上・車輪ブレーキ)  2. アームを下げる
+        #   3. 全モーター脱力(2倍の時間): 静止判定が出て、ハブがくせを測り直し、ずれが止まるか
+        #   4. 全モーターにブレーキ: 脱力をやめた直後に、くせ(ずれの速さ)が変わるか
+        return [
+            EtRallyPause(name="et_rally gyro still arm_up brake", min_seconds=gyro_still_sec,
+                         log_interval_sec=5.0, brake=True),
+            ArmUpDownFull(name="et_rally gyro still arm down", direction=ArmDirection.DOWN),
+            EtRallyPause(name="et_rally gyro still arm_down settle", min_seconds=3.0, brake=False),
+            EtRallyPause(name="et_rally gyro still coast_all", min_seconds=2 * gyro_still_sec,
+                         log_interval_sec=5.0, brake="coast_all"),
+            EtRallyPause(name="et_rally gyro still brake_all", min_seconds=gyro_still_sec,
+                         log_interval_sec=5.0, brake="brake_all"),
+        ]
 
     nodes = []
+    if start_check_mm and start_check_mm > 0:
+        nodes.extend(check_legs("start check", 0.0, start_check_mm))
+    prev_lap = None
+    arm_down_node = None
+    lap_end_nodes = []   # (ノードの位置, 周, ステップの位置)
     for index, step in enumerate(steps):
         heading = step["target_heading_deg"]
         label = step["label"]
+        if label == "garage-arm-down" and arm_down_node is None:
+            arm_down_node = len(nodes)
+        for mark in step.get("marks", ()):
+            m_ = re.match(r"^lap(\d+)-end$", mark)
+            if m_:
+                lap_end_nodes.append((len(nodes), int(m_.group(1)), index))
         label_text = "" if label is None else " " + str(label)
 
-        if step["type"] == "move":
-            distance_mm = int(round(step["distance_mm"]))
+        # 周回ごとの位置ズレを診断するため、ラベル(lapN-color-entry/exit)の
+        # 周回番号が切り替わるタイミングで、位置ログだけ残す目印ノードを挟む。
+        lap_match = _LAP_LABEL_RE.match(label) if label else None
+        cur_lap = lap_match.group(1) if lap_match else None
+        if cur_lap is not None and cur_lap != prev_lap:
+            nodes.append(LogLapBoundary(
+                name="et_rally lap_boundary%d lap%s-start" % (index, cur_lap),
+                lap_tag="lap%s-start" % cur_lap))
+            prev_lap = cur_lap
+
+        # 2026-10-31: straight_pause_labels指定時は、そのラベルの直進の後だけ止まる(位置を測る地点だけ)。
+        # "before:ラベル"なら、その直進の前(前の旋回で向きを変え終えた後)に止まる。青ゲートの手前は
+        # 斜めの直進の後だと車体がゲートに対して斜めなので、ゲートに垂直に向き直した後で測るため。
+        if straight_pause_labels:
+            pause_on = step["type"] == "move" and straight_pause_sec and straight_pause_sec > 0 and label
+            pause_this_move = bool(pause_on and ("before:" + label) in straight_pause_labels)
+            pause_after_move = bool(pause_on and label in straight_pause_labels)
+        else:
+            pause_this_move = (step["type"] == "move" and straight_pause_sec and straight_pause_sec > 0
+                               and step["distance_mm"] >= straight_pause_min_mm)
+            pause_after_move = pause_this_move
+        if path_mode and step["type"] == "move":
+            # 2026-11-01: 止まらずに続く区間の途中では止まらない(前から続く区間の前、続く区間の後)。
+            if step.get("continue_from_prev"):
+                pause_this_move = False
+            if not step.get("stop", True):
+                pause_after_move = False
+        if pause_this_move:
+            nodes.append(EtRallyPause(name="et_rally pause before move%d%s" % (index, label_text),
+                                      min_seconds=straight_pause_sec))
+        if path_mode and step["type"] in ("move", "arc"):
+            # 2026-11-01: 後退・円弧・止まらずに続く区間を含む計画は、EtRallyPathSegmentで走る。
+            # 惰性の分を手前で終えるのは、止まる区間だけ(止まるまでに続く全体の距離で判定する)。
+            chain_mm = step["distance_mm"] + step.get("remaining_after_mm", 0.0)
+            if not step.get("stop", True):
+                stop_lead_mm = 0.0
+            elif chain_mm < SHORT_MOVE_NO_LEAD_MM:
+                stop_lead_mm = move_short_lead_mm or 0.0
+            else:
+                stop_lead_mm = move_stop_lead_mm if path_stop_lead_mm is None else path_stop_lead_mm
+            active_move_pid = (1.1, 0.1, 0.03) if turn_method == 'spin_pid' else move_pid
+            nodes.append(EtRallyPathSegment(
+                name="et_rally %s%d%s" % (step["type"], index, label_text),
+                kind="arc" if step["type"] == "arc" else "line",
+                end_heading_deg=heading,
+                length_mm=step["distance_mm"],
+                # 2026-11-12: 直進の区間だけ出力を下げて、向きを直す余地(両方の車輪を速くも遅くもできる)を残す試験用。
+                power=_capped_power(step, (int(path_line_power) if (path_line_power is not None and step["type"] == "move")
+                                           else (move_power if path_power is None else int(path_power)))),
+                pid_p=active_move_pid[0], pid_i=active_move_pid[1], pid_d=active_move_pid[2],
+                sweep_deg=step.get("sweep_deg", 0.0),
+                radius_mm=step.get("radius_mm", 0.0),
+                reverse=step.get("reverse", False),
+                stop=step.get("stop", True),
+                continue_from_prev=step.get("continue_from_prev", False),
+                remaining_after_mm=step.get("remaining_after_mm", 0.0),
+                stop_lead_mm=stop_lead_mm,
+                accel_mm=move_accel_mm if path_accel is None else float(path_accel[0]),
+                accel_min_power=move_accel_min_power if path_accel is None else int(path_accel[1]),
+                decel_mm=move_decel_mm if path_decel is None else float(path_decel[0]),
+                decel_min_power=move_decel_min_power if path_decel is None else int(path_decel[1]),
+                stop_stable_ticks=None if path_stop_ticks is None else int(path_stop_ticks),
+                next_profile=step.get("next_profile", ()),
+                lead_sec=0.06 if path_lead_sec is None else path_lead_sec,
+                arc_pid_i=0.6 if path_arc_pid_i is None else path_arc_pid_i,
+                arc_speed_scale=1.0 if path_arc_speed_scale is None else path_arc_speed_scale,
+                small_arc=path_small_arc,
+                lat_gain=0.0 if path_lat_gain is None else path_lat_gain,
+                lat_max_deg=8.0 if path_lat_max_deg is None else path_lat_max_deg,
+                arc_pid_p=path_arc_pid_p,
+                ramp_mm=0.0 if path_ramp_mm is None else path_ramp_mm,
+                inner_min_power=path_inner_min_power,
+                ramp_sec=0.0 if path_ramp_sec is None else path_ramp_sec,
+                wheel_log_ticks=0 if path_wheel_log_ticks is None else int(path_wheel_log_ticks),
+                ff_scale=1.0 if path_ff_scale is None else path_ff_scale,
+                line_pid_p=path_line_pid_p, line_pid_d=path_line_pid_d,
+                line_boost_power=path_line_boost_power,
+                line_boost_sec=0.0 if path_line_boost_sec is None else path_line_boost_sec,
+                plan_start=step.get("_plan_course") if path_carry_error else None,
+            ))
+            if pause_after_move:
+                nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),
+                                          min_seconds=straight_pause_sec))
+        elif step["type"] == "move":
+            # 惰性で進む分を見込み、手前で直進を終える(短すぎる区間でも最低1mmは走る)。
+            if step["distance_mm"] < SHORT_MOVE_NO_LEAD_MM:
+                run_distance_mm = step["distance_mm"]
+                if move_short_lead_mm:
+                    run_distance_mm = max(run_distance_mm - move_short_lead_mm, 1.0)
+            else:
+                run_distance_mm = max(step["distance_mm"] - move_stop_lead_mm, 1.0)
+            distance_mm = int(round(run_distance_mm))
+            # DD-19ベースライン: spin_pid指定時は直進PIDも、DD-14の調整値(4.0,0.6,0.06)ではなく
+            # sample.pyのRunByGyroと同じ値(1.1,0.1,0.03)に揃える。
+            active_move_pid = (1.1, 0.1, 0.03) if turn_method == 'spin_pid' else move_pid
             leg = Parallel(
                 name="et_rally move%d%s" % (index, label_text),
                 policy=ParallelPolicy.SuccessOnOne(),
@@ -184,34 +1020,157 @@ def steps_from_strategy(strategy, move_power=80, move_pid=(4.0, 0.6, 0.06),
                         name="et_rally run%d" % index,
                         target=heading,
                         power=move_power,
-                        pid_p=move_pid[0],
-                        pid_i=move_pid[1],
-                        pid_d=move_pid[2],
+                        pid_p=active_move_pid[0],
+                        pid_i=active_move_pid[1],
+                        pid_d=active_move_pid[2],
                         target_type=HeadingType.ABSOLUTE,
-                        distance_mm=step["distance_mm"],
+                        distance_mm=run_distance_mm,
+                        accel_mm=move_accel_mm,
+                        accel_min_power=move_accel_min_power,
+                        decel_mm=move_decel_mm,
+                        decel_min_power=move_decel_min_power,
+                        turn_forward_compensation=turn_forward_compensation,
                     ),
+                    # 差し引きが有効なときは、直進の終了はEtRallyRunByGyroが決める。
+                    # IsDistanceEarnedは、旋回で後ろへ下がった(差し引きが負の)場合でも
+                    # 先に終わらないよう、余裕を持たせた安全側の上限として残す。
                     IsDistanceEarned(
                         name="et_rally dist%d" % index,
-                        delta_dist=distance_mm,
+                        delta_dist=distance_mm + (TURN_FORWARD_MARGIN_MM if turn_forward_compensation else 0),
                     ),
                 ]
             )
             nodes.append(leg)
+            if pause_after_move:
+                nodes.append(EtRallyPause(name="et_rally pause after move%d%s" % (index, label_text),
+                                          min_seconds=straight_pause_sec))
         else:
-            nodes.append(
-                EtRallySpinAroundByEncoder(
-                    name="et_rally turn%d%s" % (index, label_text),
-                    target=heading,
-                    main_power=turn_main_power,
-                    fine_max_power=turn_fine_max_power,
-                    fine_min_power=turn_fine_min_power,
-                    pid_p=turn_pid[0],
-                    pid_i=turn_pid[1],
-                    pid_d=turn_pid[2],
-                    target_type=HeadingType.ABSOLUTE,
-                    fine_tolerance_deg=turn_fine_tolerance_deg,
+            turn_name = "et_rally turn%d%s" % (index, label_text)
+            if turn_method == 'spin_pid':
+                # DD-19ベースライン: DD-13以前の、フェーズ分けのない無補正PID旋回。
+                # PID値はturn_pid(既定0.2,0.00075,0.03)を使う。これはproduction(spin_encoder)の
+                # フェーズ2仕上げでも実際に使われ動作確認済みの値で、sample.py由来の値(0.4,0.001,0.03)
+                # は使わない。
+                # 許容誤差も、DD-19以降の改善(2度→0.5度)より前の2.0度に固定する
+                # (turn_fine_tolerance_degの既定0.5は改善後の値のため、ここでは使わない)。
+                nodes.append(
+                    SpinAround(
+                        name=turn_name,
+                        target=heading,
+                        max_power=turn_main_power,
+                        min_power=turn_fine_min_power,
+                        pid_p=turn_pid[0],
+                        pid_i=turn_pid[1],
+                        pid_d=turn_pid[2],
+                        target_type=HeadingType.ABSOLUTE,
+                        tolerance=2.0,
+                    )
                 )
-            )
+            elif turn_method == 'one_shot':
+                nodes.append(
+                    EtRallyTurnOneShot(
+                        name=turn_name,
+                        target=heading,
+                        target_type=HeadingType.ABSOLUTE,
+                        main_power=turn_main_power,
+                        fine_tolerance_deg=turn_fine_tolerance_deg,
+                        lag_compensation_deg=turn_lag_compensation_deg,
+                        adaptive_lag_compensation=turn_adaptive_lag_compensation,
+                        backlash_preload_deg=turn_backlash_preload_deg,
+                        left_target_scale=turn_left_target_scale,
+                        phase1_scale=turn_phase1_scale,
+                        pre_stop=turn_pre_stop,
+                        phase1_model=turn_phase1_model,
+                        wheel_sync_gain=turn_wheel_sync_gain,
+                        sync_decel=turn_sync_decel,
+                    )
+                )
+            elif turn_method == 'lqi':
+                nodes.append(
+                    EtRallyTurnLqi(
+                        name=turn_name,
+                        target=heading,
+                        target_type=HeadingType.ABSOLUTE,
+                        main_power=turn_main_power,
+                        fine_tolerance_deg=turn_fine_tolerance_deg,
+                    )
+                )
+            elif turn_method == 'spin_encoder_dir_test':
+                # 検証専用: 各turnステップの"direction"(+1/-1、省略時0=自動)で回転方向を強制する。
+                nodes.append(
+                    EtRallySpinAroundDirectionTest(
+                        name=turn_name,
+                        target=heading,
+                        main_power=turn_main_power,
+                        fine_max_power=turn_fine_max_power,
+                        fine_min_power=turn_fine_min_power,
+                        pid_p=turn_pid[0],
+                        pid_i=turn_pid[1],
+                        pid_d=turn_pid[2],
+                        target_type=HeadingType.ABSOLUTE,
+                        fine_tolerance_deg=turn_fine_tolerance_deg,
+                        decel_deg=turn_decel_deg,
+                        forced_direction=step.get("direction", 0),
+                    )
+                )
+            else:  # 'spin_encoder'(既定、DD-13)
+                nodes.append(
+                    EtRallySpinAroundByEncoder(
+                        name=turn_name,
+                        target=heading,
+                        main_power=turn_main_power,
+                        fine_max_power=turn_fine_max_power,
+                        fine_min_power=turn_fine_min_power,
+                        pid_p=turn_pid[0],
+                        pid_i=turn_pid[1],
+                        pid_d=turn_pid[2],
+                        target_type=HeadingType.ABSOLUTE,
+                        fine_tolerance_deg=turn_fine_tolerance_deg,
+                        decel_deg=turn_decel_deg,
+                        backlash_preload_deg=turn_backlash_preload_deg,
+                        fine_trim=turn_fine_trim,
+                        lag_compensation_deg=turn_lag_compensation_deg,
+                        adaptive_lag_compensation=turn_adaptive_lag_compensation,
+                        left_target_scale=turn_left_target_scale,
+                    )
+                )
+    if arm_down_at_garage and arm_down_node is not None:
+        # 2026-11-11: 印の付いた直進から最後までを、アームを下げる動きと並べる(両方終わったら終わり)。
+        from ..behaviours.et_rally_arm import EtRallyArmUpDown, CALIBRATION_ARM_POWER
+        tail = Sequence(name="et_rally drive to garage", memory=True)
+        tail.add_children(nodes[arm_down_node:])
+        both = Parallel(name="et_rally drive to garage + arm down", policy=ParallelPolicy.SuccessOnAll(synchronise=True))
+        both.add_children([tail, EtRallyArmUpDown("et_rally arm down at garage", ArmDirection.DOWN,
+                                                  stop_ticks=int(arm_stop_ticks or 3), power=CALIBRATION_ARM_POWER)])
+        nodes = nodes[:arm_down_node] + [both]
+    if time_budget_sec and exit_factory is not None and lap_end_nodes:
+        # 2026-11-11: 周の終わりごとに [判断 → 切り上げのつなぎ] / [残り] のセレクタを、後ろから入れ子に組む。
+        from ..et_rally_time_budget import EtRallyLapDecision, estimate_steps
+        laps_total = max(n for _, n, _ in lap_end_nodes) + 1
+        marks = sorted(lap_end_nodes)
+        exit_est = float(exit_est_sec or 0.0)
+        cur = None
+        for k in range(len(marks) - 1, -1, -1):
+            node_i, lap, step_i = marks[k]
+            prev_step_i = marks[k - 1][2] if k > 0 else 0
+            this_lap = estimate_steps(steps[prev_step_i:step_i])
+            if k + 1 < len(marks):
+                cont = estimate_steps(steps[step_i:marks[k + 1][2]]) + exit_est
+            else:
+                cont = estimate_steps(steps[step_i:])
+            tail_nodes = (nodes[node_i:marks[k + 1][0]] + [cur]) if cur is not None else nodes[node_i:]
+            rest = Sequence(name="et_rally after lap%d" % lap, memory=True)
+            rest.add_children(tail_nodes)
+            leave = Sequence(name="et_rally lap%d to garage" % lap, memory=True)
+            leave.add_children([EtRallyLapDecision("et_rally time budget lap%d" % lap, lap, laps_total, time_budget_sec,
+                                                   2.0 if time_margin_sec is None else time_margin_sec,
+                                                   this_lap, cont, exit_est)] + list(exit_factory()))
+            sel = Selector(name="et_rally lap%d end" % lap, memory=True)
+            sel.add_children([leave, rest])
+            cur = sel
+        nodes = nodes[:marks[0][0]] + [cur]
+        from ..et_rally_time_budget import EtRallyTimeBudgetDriveStart
+        nodes = [EtRallyTimeBudgetDriveStart("et_rally time budget drive start")] + nodes
     return nodes
 
 

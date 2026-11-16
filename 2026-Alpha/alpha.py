@@ -1,217 +1,114 @@
 """Robot-side race program entry point."""
-
 import sys
-
+import os
 import argparse
-
 import dataclasses
-
 import time
-
 import threading
-
 import signal
-
 from functools import wraps
-
 import math
-
 from enum import Enum, auto
-
 from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSensor, GyroSensor
-
 from simple_pid import PID
-
 from py_trees.trees import BehaviourTree
-
 from py_trees.behaviour import Behaviour
-
 from py_trees.common import ParallelPolicy, Status
-
 from py_trees.composites import Parallel, Sequence,Selector
-
 from py_trees import (
-
     display as display_tree,
-
     logging as log_tree
-
 )
-
 from py_etrobo_util import Video, TraceSide, TargetInterested, Plotter, SymmetricClamper, Color, ColorClassifier, LowPassFilter, BottleColor, Hint, HintType
-
 from robot_program.config import (
-
     MISSION_CHOICES,
-
     MANUAL_RALLY_MISSIONS,
-
     RaceConfig,
-
     config_for_mission,
-
     mission_requires_camera,
-
     mission_requires_qr,
-
 )
-
 from robot_program.context import RaceContext
-
 from robot_program.delivery_heading import RegisterDeliveryHeading, initial_delivery_heading
-
 from robot_program.decryption_key import read_decryption_key
-
 from robot_program.behaviours.device_control import ArmDirection, ArmUpDownFull, ResetDevice
-
+from robot_program.behaviours.et_rally_arm import arm_up_before_touch, make_arm_up_down
 from robot_program.features.sumo_bearing import initial_sumo_bearing
-
 from robot_program.features.sumo_bearing_motion import RegisterSumoBearing
-
 from robot_program.runtime import runtime as robot_runtime
-
 from robot_program.services.execution_safety import stop_motors, pending_features
-
 from robot_program.services.shutdown import Shutdown
-
 from robot_program.services.strategy_tree import WithStrategyExchange
 
-
-
 g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
-
 from robot_program.tree_builder import build_mission_children
 
-
-
 # constants for defining execution intervals
-
 from robot_program.timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
-
 VIDEO_INTERVAL = EXEC_INTERVAL
 
-
-
 # constants useful for behavior tree definition
-
 SPIN_MAX_POWER     = 57
-
 SPIN_MIN_POWER     = 47
-
 TRACELINE_TARGET_V = 75
 
-
-
 # Bottle Delivery後半単体試験で、入力名とプログラム内部の色を対応させる。
-
 BOTTLE_COLOR_NAMES = ('red', 'blue', 'yellow')
-
 BOTTLE_COLOR_VALUE_BY_NAME = {
-
     'red': BottleColor.RED.value,
-
     'blue': BottleColor.BLUE.value,
-
     'yellow': BottleColor.YELLOW.value,
-
 }
 
-
-
 # constants for specific action classes
-
 JUNCT_UPPER_THRESH = 50   # IsJunction
-
 JUNCT_LOWER_THRESH = 40   # IsJunction
-
 ROE_DEGEN          = 90   # TraceLineCam: span above this = line ~tangent
-
 CURV_MIN_ROWS_SEP  = 15   # TraceLineCam: need this many rows between near/far to trust the slope
 
-
-
 g_plotter = None
-
 g_hub = None
-
 g_arm_motor = None
-
 g_right_motor = None
-
 g_left_motor = None
-
 g_touch_sensor = None
-
 g_color_sensor = None
-
 g_sonar_sensor = None
-
 g_gyro_sensor = None
-
 g_video = None
-
 g_video_thread = None
-
 g_course = 0
 
 
-
-
-
 class JState(Enum):
-
     INITIAL = auto()
-
     JOINING = auto()
-
     JOINED = auto()
-
     FORKING = auto()
-
     FORKED = auto()
 
-
-
 class HeadingType(Enum):
-
     ABSOLUTE = "absolute"
-
     RELATIVE = "relative"
 
-
-
 g_plotter: Plotter = None
-
 g_hub: Hub = None
-
 g_arm_motor: Motor = None
-
 g_right_motor: Motor = None
-
 g_left_motor: Motor = None
-
 g_touch_sensor: TouchSensor = None
-
 g_color_sensor: ColorSensor = None
-
 g_sonar_sensor: SonarSensor = None
-
 g_gyro_sensor: GyroSensor = None
-
 g_course: int = 0
-
 g_key: str = None                   # written by ReadKey.update()
-
 g_bottle_color = BottleColor.NONE   # written by CatchBottle.update()
-
 g_hint1: str = None                 # written by IsQRDecoded
-
 g_hint2: str = None                 # written by IsQRDecoded
 
 
 
 class TheEnd(Behaviour):
-
     def __init__(self, name: str):
 
         super(TheEnd, self).__init__(name)
@@ -223,9 +120,7 @@ class TheEnd(Behaviour):
 
 
     def update(self) -> Status:
-
         if not self.running:
-
             self.running = True
 
             self.logger.info("%+06d %s.behavior tree exhausted. ctrl+C shall terminate the program" % (g_plotter.get_distance(), self.__class__.__name__))
@@ -233,77 +128,41 @@ class TheEnd(Behaviour):
         return Status.RUNNING
 
 
-
-
-
 class ReadKey(Behaviour):
-
     def __init__(self, name: str):
-
         super(ReadKey, self).__init__(name)
-
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-
         self.running = False
 
 
 
     def update(self) -> Status:
-
         if not self.running:
-
             self.running = True
-
             return Status.RUNNING
-
         else:
-
             global g_key
-
             g_key = input("Enter the given key for decryption: ")
-
             # check the length of the key, it should be 4 characters long
-
             if len(g_key) != 4:
-
                 self.logger.warning("%+06d %s.invalid key length: %d. key should be 4 characters long." % (g_plotter.get_distance(), self.__class__.__name__, len(g_key)))
-
                 return Status.RUNNING
-
             else:
-
                 # display the entered key and ask for confirmation
-
                 self.logger.info("%+06d %s.entered key: %s" % (g_plotter.get_distance(), self.__class__.__name__, g_key))
-
                 confirmation = input("Is the entered key correct? (y/n): ")
-
                 if confirmation.lower() == 'y':
-
                     self.logger.info("%+06d %s.key confirmed" % (g_plotter.get_distance(), self.__class__.__name__))
-
                     return Status.SUCCESS
-
                 else:
-
                     self.logger.info("%+06d %s.key rejected, please enter again" % (g_plotter.get_distance(), self.__class__.__name__))
-
                     return Status.RUNNING
 
-
-
-
-
 class IsTimePassed(Behaviour):
-
     def __init__(self, name: str, delta_time: int):
-
         super(IsTimePassed, self).__init__(name)
-
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-
         self.delta_time = delta_time
-
         self.running = False
 
         self.earned = False
@@ -311,9 +170,7 @@ class IsTimePassed(Behaviour):
 
 
     def update(self) -> Status:
-
         if not self.running:
-
             self.running = True
 
             self.orig_time = time.time()
@@ -329,317 +186,157 @@ class IsTimePassed(Behaviour):
             if not self.earned:
 
                 self.earned = True
-
                 self.logger.info("%+06d %s.delta time passed" % (g_plotter.get_distance(), self.__class__.__name__))
-
             return Status.SUCCESS
-
         else:
 
             return Status.RUNNING
-
 
 
 
 
 class IsDistanceEarned(Behaviour):
-
     def __init__(self, name: str, delta_dist: int):
-
         super(IsDistanceEarned, self).__init__(name)
-
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-
         self.delta_dist = delta_dist
-
         self.running = False
 
         self.earned = False
 
 
-
     def update(self) -> Status:
 
         if not self.running:
-
             self.running = True
 
             self.orig_dist = g_plotter.get_distance()
 
             self.logger.info("%+06d %s.accumulation started for delta=%d" % (self.orig_dist, self.__class__.__name__, self.delta_dist))
-
         cur_dist = g_plotter.get_distance()
-
         earned_dist = cur_dist - self.orig_dist
-
         if (earned_dist >= self.delta_dist or -earned_dist <= -self.delta_dist):
-
             if not self.earned:
-
                 self.earned = True
-
                 self.logger.info("%+06d %s.delta distance earned" % (cur_dist, self.__class__.__name__))
-
             return Status.SUCCESS
-
         else:
-
             return Status.RUNNING
-
-
-
 
 
 class IsColorDetected(Behaviour):
-
     def __init__(self, name: str, color: Color):
-
         super(IsColorDetected, self).__init__(name)
-
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-
         self.color = color
-
         self.prevColor = Color.UNKNOWN
-
         self.classifier = ColorClassifier()
-
         self.running = False
-
         self.detected = False
-
-
-
     def update(self) -> Status:
-
         cur_dist = g_plotter.get_distance()
-
         if not self.running:
-
             self.running = True
-
             self.logger.info("%+06d %s.detection started for color=%s" % (cur_dist, self.__class__.__name__, self.color.value))
-
         h, s, v = g_color_sensor.get_raw_color_hsv()
-
-
-
         detected_color = self.classifier.classify(h, s, v)
-
         if detected_color == self.color:
-
             if not self.detected:
-
                 self.detected = True
-
                 self.logger.info("%+06d %s.color=%s detected" % (cur_dist, self.__class__.__name__, self.color.value))
-
             return Status.SUCCESS
-
         else:
-
             if detected_color != self.prevColor:
-
                 # do not log UNKNOWN color to reduce log clutter
-
                 if detected_color != Color.UNKNOWN or self.prevColor != Color.UNKNOWN:
-
                     self.logger.info("%+06d %s.color changed from %s to %s" % (cur_dist, self.__class__.__name__, self.prevColor.value, detected_color.value))
-
                     self.prevColor = detected_color
-
             return Status.RUNNING
-
-
-
-
 
 class IsQRDecoded(Behaviour):
-
     def __init__(self, name: str):
-
         super(IsQRDecoded, self).__init__(name)
-
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-
         self.running = False
-
         self.detected = False
-
-
-
     def update(self) -> Status:
-
         global g_key, g_hint1, g_hint2
-
         if not self.running:
-
             self.running = True
-
             g_video.set_target_interested(TargetInterested.QRCODE)
-
             self.logger.info("%+06d %s.detection started for QR code" % (g_plotter.get_distance(), self.__class__.__name__))
-
         text = g_video.get_QR_text()
-
         if text != "":
-
             if not self.detected:
-
                 self.detected = True
-
                 hint_type, hint_text = Hint(text).resolve(password=g_key)
-
                 if hint_type == HintType.HINT1:
-
                     g_hint1 = hint_text
-
                 elif hint_type == HintType.HINT2:
-
                     g_hint2 = hint_text
-
                 self.logger.info("%+06d %s.QR code decoded: %s" % (g_plotter.get_distance(), self.__class__.__name__, hint_text))
-
                 g_video.set_target_interested(TargetInterested.LINE)  # set target back to default as it takes for camera to settle 
-
             return Status.SUCCESS
-
         else:
-
             return Status.RUNNING
-
-
-
-
-
 class IsSonarOn(Behaviour):
-
     def __init__(self, name: str, alert_dist: int):
-
         super(IsSonarOn, self).__init__(name)
-
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-
         self.alert_dist = alert_dist
-
         self.running = False
-
-
-
     def update(self) -> Status:
-
         if not self.running:
-
             self.running = True
-
             self.logger.info("%+06d %s.detection started for dist=%d" % (g_plotter.get_distance(), self.__class__.__name__, self.alert_dist))
-
-        
-
         dist = g_sonar_sensor.get_distance()
-
         if (dist <= self.alert_dist and dist > 0):
-
             self.logger.info("%+06d %s.alerted at dist=%d" % (g_plotter.get_distance(), self.__class__.__name__, dist))
-
             return Status.SUCCESS
-
         else:
-
             return Status.RUNNING
-
-
-
-
 
 class IsTouchOn(Behaviour):
-
     def __init__(self, name: str):
-
         super(IsTouchOn, self).__init__(name)
-
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-
         self.running = False
-
-
-
     def update(self) -> Status:
-
         if not self.running:
-
             self.running = True
-
             self.logger.info("%+06d %s.waiting for touch..." % (g_plotter.get_distance(), self.__class__.__name__))
-
         if g_touch_sensor.is_pressed():
-
             self.logger.info("%+06d %s.pressed" % (g_plotter.get_distance(), self.__class__.__name__))
-
+            # 2026-11-14: 競技の開始の時刻(ETラリーの持ち時間を 制限時間 − ここからの秒 で出す、--rally-time-total)
+            from robot_program import et_rally_time_budget
+            et_rally_time_budget.mark_race_start()
             return Status.SUCCESS
-
         else:
-
             return Status.RUNNING
 
-
-
-
-
 class StopNow(Behaviour):
-
     def __init__(self, name: str):
-
         super(StopNow, self).__init__(name)
-
         self.logger.debug("%s.__init__()" % (self.__class__.__name__))
-
-
-
     def update(self) -> Status:
-
         g_right_motor.set_power(0)
-
         g_right_motor.set_brake(True)
-
         g_left_motor.set_power(0)
-
         g_left_motor.set_brake(True)
-
         self.logger.info("%+06d %s.motors stopped" % (g_plotter.get_distance(), self.__class__.__name__))
-
         return Status.SUCCESS
 
-
-
-
-
 class RunAsInstructed(Behaviour):
-
     def __init__(self, name: str, pwm_l: int, pwm_r: int) -> None:
-
         super(RunAsInstructed, self).__init__(name)
-
         self.pwm_l = g_course * pwm_l
-
         self.pwm_r = g_course * pwm_r
-
         self.running = False
-
-
-
-
-
     def update(self) -> Status:
-
         if not self.running:
-
             self.running = True
-
             self.logger.info("%+06d %s.started with pwm=(%s, %s)" % (g_plotter.get_distance(), self.__class__.__name__, self.pwm_l, self.pwm_r))
-
         g_right_motor.set_power(self.pwm_r)
-
         g_left_motor.set_power(self.pwm_l)
 
         return Status.RUNNING
@@ -647,1851 +344,1274 @@ class RunAsInstructed(Behaviour):
 
 
 
-
 class TraceLine(Behaviour):
-
     def __init__(self, name: str, target: int, power: int, pid_p: float, pid_i: float, pid_d: float,
-
                  trace_side: TraceSide,
-
                  # low-pass filter parameters
-
                  cutoff_hz: float = 12.0, median_window: int = 0,
-
                  # adaptive speed parameters
-
                  power_min: int = None,          # floor speed; None = constant speed (old behaviour)
-
                  err_lo: float = 6.0,            # rolling |err| at/below which we run full speed
-
                  err_hi: float = 22.0,           # rolling |err| at/above which we run power_min
-
                  accel_per_s: float = 60.0,      # how fast we may speed up   (gentle)
-
                  decel_per_s: float = 180.0,     # how fast we may slow down  (quick = pseudo lookahead)
-
                  metric_hz: float = 2.0,
-
                  # ---- gain scheduling: interpolate gains on current speed ----
-
                  # give (Kp, Kd) at the slow (curve) end and the fast (straight) end;
-
                  # None -> no scheduling, the fixed pid_p/pid_d above are used everywhere.
-
                  gains_slow: tuple = None,       # (Kp, Kd) at power_min
-
                  gains_fast: tuple = None,       # (Kp, Kd) at power_max
-
                  # ---- line-lost recovery (outer-edge curve rescue) ----
-
                  recover_v: int = None,           # bright-rail v that means "line lost to floor"; None = off
-
                  recover_after: int = 3,          # consecutive lost samples before hard recovery
-
                  recover_turn: int = None         # recovery steering magnitude; None = power_max
-
                 ) -> None:
-
         super(TraceLine, self).__init__(name)
-
         # power is treated as the MAX/nominal speed. The PID output limit is
-
         # pinned to +/-power_max so steering authority does NOT shrink when the
-
         # base speed drops on a curve (that was the trap in the original code).
-
         self.power_max = power
-
         self.power_min = power if power_min is None else power_min
-
         self.power = power
-
         self.adapt = power_min is not None
-
         self.target = target
-
         self.pid = PID(pid_p, pid_i, pid_d, setpoint=target, sample_time=EXEC_INTERVAL, output_limits=(-self.power_max, self.power_max))
-
         self.trace_side = trace_side
-
         self.lpf = (LowPassFilter(cutoff_hz, EXEC_INTERVAL, median_window) if cutoff_hz else None) # when cutoff_hz = None, no low-pass filter is applied and the raw PID output is used
-
         # instability/curviness estimate = smoothed |tracking error|
-
         self.err_lo, self.err_hi = err_lo, err_hi
-
         self.metric_lpf = LowPassFilter(metric_hz, EXEC_INTERVAL)
-
         self.err_metric = 0.0
-
         # per-step power slew limits (asymmetric: brake fast, accelerate slow)
-
         self.accel_step = accel_per_s * EXEC_INTERVAL
-
         self.decel_step = decel_per_s * EXEC_INTERVAL
-
         # gain schedule: linearly interpolate (Kp, Kd) between the slow and fast
-
         # anchors as a function of self.power. Ki is left fixed at pid_i.
-
         self.gains_slow = gains_slow
-
         self.gains_fast = gains_fast
-
         self.schedule = (gains_slow is not None and gains_fast is not None
-
                          and self.power_max > self.power_min)
-
         # line-lost recovery
-
         self.recover_v = recover_v
-
         self.recover_after = recover_after
-
         self.recover_turn = recover_turn
-
         self._lost_count = 0
-
-
-
         self.running = False
 
-
-
     def update(self) -> Status:
-
         if not self.running:
-
             if self.lpf:
-
                 self.lpf.reset()
-
             self.metric_lpf.reset()
-
             self.running = True
-
             self.logger.info("%+06d %s.trace started with TS=%s" % (g_plotter.get_distance(), self.__class__.__name__, self.trace_side.name))
-
-
-
         h, s, v_raw = g_color_sensor.get_raw_color_hsv()
-
         v = self.lpf(v_raw) if self.lpf else v_raw
-
-
-
         # ---- adaptive base speed -------------------------------------------
-
         # Use the TRUE tracking error (target - raw v) as the instability metric,
-
         # smoothed so the speed reacts to course shape, not to every wobble.
-
         self.err_metric = self.metric_lpf(abs(self.target - v_raw))
-
         if self.adapt:
-
             # map smoothed |error| in [err_lo, err_hi] -> power in [max, min]
-
             frac = (self.err_metric - self.err_lo) / (self.err_hi - self.err_lo)
-
             frac = 0.0 if frac < 0.0 else (1.0 if frac > 1.0 else frac)
-
             target_power = self.power_max - frac * (self.power_max - self.power_min)
-
             # rate-limit the change (slow down quickly, speed up gently)
-
             dp = target_power - self.power
-
             if dp > self.accel_step:
-
                 dp = self.accel_step
-
             elif dp < -self.decel_step:
-
                 dp = -self.decel_step
-
             self.power += dp
-
         # ---- gain scheduling: gains track the current speed -----------------
-
         kp_now, kd_now = self.pid.Kp, self.pid.Kd
-
         if self.schedule:
-
             f = (self.power - self.power_min) / (self.power_max - self.power_min)
-
             f = 0.0 if f < 0.0 else (1.0 if f > 1.0 else f)
-
             kp_now = self.gains_slow[0] + f * (self.gains_fast[0] - self.gains_slow[0])
-
             kd_now = self.gains_slow[1] + f * (self.gains_fast[1] - self.gains_slow[1])
-
             self.pid.tunings = (kp_now, self.pid.Ki, kd_now)
-
         # ---- steering (PID already clamped to +/-power_max) ----------------
-
         if self.trace_side == TraceSide.NORMAL:
-
             turn = (-1) * g_course * int(self.pid(v))
-
         else: # TraceSide.OPPOSITE
-
             turn = g_course * int(self.pid(v))
-
-
-
         # ---- line-lost recovery --------------------------------------------
-
         # When the sensor pins at the bright rail, target=75 only yields a weak
-
         # clamped-P turn (Kp*(75-100) ~= -16), too gentle to curl back to a line
-
         # that curved away on an OUTER edge -> the robot drives off. Detect a
-
         # SUSTAINED bright-rail pin (not a 1-2 sample weave touch) and steer at
-
         # full authority in the direction P already (correctly) chose, until the
-
         # edge is reacquired. The dark rail already recovers on its own.
-
         if self.recover_v is not None:
-
             if v_raw >= self.recover_v:
-
                 self._lost_count += 1
-
             else:
-
                 self._lost_count = 0
-
             if self._lost_count >= self.recover_after and turn != 0:
-
                 mag = self.power_max if self.recover_turn is None else self.recover_turn
-
                 turn = int(math.copysign(mag, turn))
-
-
-
         # On a sharp slow curve, |turn| may exceed the reduced base speed, so the
-
         # inner wheel can go to zero/negative -> a tight pivot. That's desired.
-
         p = int(round(self.power))
         left  = max(-400, min(400, p + turn))    # motors cap at +-100
         right = max(-400, min(400, p - turn))
         g_right_motor.set_power(right)
-
         g_left_motor.set_power(left)
-
-
-
         # log raw v, filtered vf, error-metric, commanded power, gains, and turn
-
         #self.logger.info("%+06d %s.color sensor HSV=(%d, %d, %d) vf=%d, em=%d, pwr=%d, kp=%.3f, kd=%.3f, turn=%d" % (
-
         #    g_plotter.get_distance(), self.__class__.__name__,
-
         #    h, s, v_raw, int(v), int(self.err_metric), p, kp_now, kd_now, turn))
-
-
-
         return Status.RUNNING
-
-
-
-
 
 class SpinAndLocateLine(Behaviour):
-
     def __init__(self, name: str, target: int, max_power: int, min_power: int,
-
                  pid_p: float, pid_i: float, pid_d: float, trace_side: TraceSide) -> None:
-
         super(SpinAndLocateLine, self).__init__(name)
-
         self.target = target
-
         self.spin_direction = 1 if trace_side == TraceSide.NORMAL else -1
-
         self.pid_p = pid_p
-
         self.pid_i = pid_i
-
         self.pid_d = pid_d
-
         self.clamper = SymmetricClamper(min_power, max_power)
-
         self.move_away = True
-
         self.running = False
-
-
-
     def update(self) -> Status:
-
         # first to spin to move away from the line, then to locate the line by spinning in the opposite direction
-
         current_heading = (-1) * g_course * g_gyro_sensor.get_angle()
-
         if not self.running:
-
             # spin for 30 degrees to move away from the line
-
             self.target_heading = current_heading + self.spin_direction * 30
-
             self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL)
-
             self.running = True
-
             self.logger.info("%+06d %s.spin started at heading=%d for %d" % (g_plotter.get_distance(),
-
                                                                              self.__class__.__name__, current_heading, self.target_heading))
-
         if self.move_away:
-
             # spin in the normal direction to move away from the line
-
             error = float(self.target_heading) - current_heading
-
             # normalize error to [-180, 180]
-
             if error > 180.0:
-
                 error -= 360.0
-
             if error < -180.0:
-
                 error += 360.0
-
             if abs(error) < 2.0:
-
                 self.logger.info("%+06d %s.move away spin ended at heading=%d" % (g_plotter.get_distance(),
-
                                                                     self.__class__.__name__, current_heading))
-
                 self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target, sample_time=EXEC_INTERVAL)
-
                 self.spin_direction *= -1
-
                 self.move_away = False
-
                 return Status.RUNNING
-
             power = int(self.clamper.clamp(self.pid(current_heading)))
-
         else:             # spin in the opposite direction to locate the line
-
             h, s, v = g_color_sensor.get_raw_color_hsv()
-
             error = float(self.target) - v
-
             if abs(error) < 5.0:
-
                 self.logger.info("%+06d %s.line located at heading=%d" % (g_plotter.get_distance(),
-
                                                                     self.__class__.__name__, current_heading))        
-
                 return Status.SUCCESS
-
             power = int(self.clamper.clamp(self.pid(v))) * self.spin_direction * (-1)
-
         g_right_motor.set_power(g_course * power)
-
         g_left_motor.set_power((-1) * g_course * power)
-
         return Status.RUNNING    
-
-
-
-
 
 class SpinAround(Behaviour):
-
     def __init__(self, name: str, target: int, max_power: int, min_power: int,
-
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType) -> None:
-
         super(SpinAround, self).__init__(name)
-
         self.target = target
-
         self.target_type = target_type
-
         self.pid_p = pid_p
-
         self.pid_i = pid_i
-
         self.pid_d = pid_d
-
         self.clamper = SymmetricClamper(min_power, max_power)
-
         self.running = False
-
-
-
     def update(self) -> Status:
-
         current_heading = (-1) * g_course * g_gyro_sensor.get_angle()
-
         if not self.running:
-
             if self.target_type == HeadingType.RELATIVE:
-
                 self.target_heading = current_heading + self.target
-
             else:
-
                 self.target_heading = self.target
-
             self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL)
-
             self.running = True
-
             self.logger.info("%+06d %s.spin started at heading=%d for %d" % (g_plotter.get_distance(),
-
                                                                              self.__class__.__name__, current_heading, self.target_heading))
-
         error = float(self.target_heading) - current_heading
-
         # normalize error to [-180, 180]
-
         if error > 180.0:
-
             error -= 360.0
-
         if error < -180.0:
-
             error += 360.0
-
         if abs(error) < 2.0:
-
             self.logger.info("%+06d %s.spin ended at heading=%d" % (g_plotter.get_distance(),
-
                                                                     self.__class__.__name__, current_heading))
-
             return Status.SUCCESS
-
         power = int(self.clamper.clamp(self.pid(current_heading)))
-
         g_right_motor.set_power(g_course * power)
-
         g_left_motor.set_power((-1) * g_course * power)
-
         return Status.RUNNING    
 
-
-
-
-
 class RunByGyro(Behaviour):
-
     def __init__(self, name: str, target: int, power: int,
-
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType) -> None:
-
         super(RunByGyro, self).__init__(name)
-
         self.target = target
-
         self.target_type = target_type
-
         self.power = power
-
         self.pid_p = pid_p
-
         self.pid_i = pid_i
-
         self.pid_d = pid_d
-
         self.last_log_time = None
-
         self.running = False
-
-
-
     def update(self) -> Status:
-
         current_heading = (-1) * g_course * g_gyro_sensor.get_angle()
-
         # log every 1 second
-
         if self.last_log_time == None or time.time() - self.last_log_time >= 1.0:
-
             self.logger.info("%+06d %s.current heading=%d" % (g_plotter.get_distance(), self.__class__.__name__, current_heading))
-
             self.last_log_time = time.time()
-
         if not self.running:
-
             if self.target_type == HeadingType.RELATIVE:
-
                 self.target_heading = current_heading + self.target
-
             else:
-
                 self.target_heading = self.target
-
             self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-self.power, self.power))
-
             self.logger.info("%+06d %s.gyro run started toward heading=%d" % (g_plotter.get_distance(),
-
                                                                               self.__class__.__name__, self.target_heading))
-
             self.running = True
-
         turn = int(self.pid(current_heading))
-
         g_right_motor.set_power(self.power + g_course * turn)
-
         g_left_motor.set_power(self.power - g_course * turn)
-
         return Status.RUNNING
-
-
-
-
 
 class TraceLineCam(Behaviour):
-
     def __init__(self, name: str, power: int, pid_p: float, pid_i: float, pid_d: float,
-
                  gs_min: int, gs_max: int, trace_side: TraceSide,
-
                  tilt_ff_gain: float = 0.0,     # feed-forward turn per unit tilt
-
                  ff_cap: float = 8.0,           # hard clamp on |tilt_ff|
-
                  blind_hold_frames: int = 3,    # blind frames before easing the pivot
-
                  blind_turn_frac: float = 0.55, # fraction of power for the blind hold
-
                  ) -> None:
-
         super(TraceLineCam, self).__init__(name)
-
         self.power = power
-
         self.pid = PID(pid_p, pid_i, pid_d, setpoint=0, sample_time=EXEC_INTERVAL, output_limits=(-power, power))
-
         self.gs_min = gs_min
-
         self.gs_max = gs_max
-
         self._tilt_ff_gain = tilt_ff_gain
-
         self._ff_cap = ff_cap
-
         self._blind_hold_frames = blind_hold_frames
-
         self._blind_turn_frac = blind_turn_frac
-
         self._blind = 0
-
         self.trace_side = trace_side
-
         self.running = False
-
-
-
     def update(self) -> Status:
-
         if not self.running:
-
             self.running = True
-
             g_video.set_thresholds(self.gs_min, self.gs_max)
-
             g_video.set_target_interested(TargetInterested.LINE)
-
             if self.trace_side == TraceSide.NORMAL:
-
                 if g_course == -1: # right course
-
                     g_video.set_trace_side(TraceSide.RIGHT)
-
                 else:
-
                     g_video.set_trace_side(TraceSide.LEFT)
-
             elif self.trace_side == TraceSide.OPPOSITE: 
-
                 if g_course == -1: # right course
-
                     g_video.set_trace_side(TraceSide.LEFT)
-
                 else:
-
                     g_video.set_trace_side(TraceSide.RIGHT)
-
             else: # TraceSide.CENTER
-
                 g_video.set_trace_side(TraceSide.CENTER)
-
             self.logger.info("%+06d %s.trace started with TS=%s" % (g_plotter.get_distance(), self.__class__.__name__, self.trace_side.name))
-
-
-
         theta, fid, cap_t, odo_cap = g_video.get_theta_stamped()
-
         odo_now = g_plotter.get_distance()
-
-
-
         # ----- live tilt feed-forward (anti-cut) -----
-
         # Driven by the CURRENT frame's band tilt, not a buffered past value,
-
         # so it tracks the curve as it tightens and can't invert at the exit
-
         # the way the fixed delay did. Gated OFF when the band is degenerate
-
         # (line tangent / wall-clipped), exactly where tilt stops being a
-
         # trustworthy curvature signal (FID128: roe=60, n=5).
-
         tilt = g_video.get_line_tilt()
-
         roe  = g_video.get_range_of_edges()
-
         tilt_ff = 0.0
-
         ff_gated = (roe == 0
-
                     or roe > ROE_DEGEN
-
                     or g_video.get_band_sep() < CURV_MIN_ROWS_SEP)
-
         if not ff_gated:
-
             tilt_ff = self._tilt_ff_gain * tilt
-
             tilt_ff = max(-self._ff_cap, min(self._ff_cap, tilt_ff))   # don't let FF override the PID's sign
-
-
-
         # PID runs on theta; feed-forward is ADDED to the turn output.
-
         turn_pid = self.pid(theta)
-
         turn = turn_pid + tilt_ff
-
-
-
         # ----- blind-pivot cap -----
-
         # When the band is blind (no usable target) the PID is running on a
-
         # stale saturated theta -> full-power open-loop pivot. Keep rotating the
-
         # SAME direction but ease the magnitude so it doesn't spin past the line.
-
         if not g_video.is_target_insight():
-
             self._blind += 1
-
         else:
-
             self._blind = 0
-
         blind_capped = False
-
         if self._blind > self._blind_hold_frames:
-
             hold = self.power * self._blind_turn_frac
-
             if turn > hold:
-
                 turn = hold; blind_capped = True
-
             elif turn < -hold:
-
                 turn = -hold; blind_capped = True
-
-
-
         g_right_motor.set_power(self.power + int(turn))
-
         g_left_motor.set_power(self.power - int(turn))
-
-
-
         # ----- single per-tick line: FF, PID split, motors, frame state -----
-
         #p, i, d = self.pid.components
-
         #self.logger.info(
-
         #    "%+06d CAM fid=%06d theta=%+06.1f P=%+.1f I=%+.1f D=%+.1f "
-
         #    "tilt=%+05.2f ff=%+06.1f g=%d turn=%+d L=%d R=%d roe=%03d insight=%d bc=%d age=%.1f" % (
-
         #        odo_now, fid, theta, p, i, d,
-
         #        tilt, tilt_ff, int(ff_gated),
-
         #        int(turn), self.power + int(turn), self.power - int(turn),
-
         #        roe, int(g_video.is_target_insight()), int(blind_capped),
-
         #        (time.time() - cap_t) * 1000))
-
         return Status.RUNNING
-
-
-
-
 
 class IsJunction(Behaviour):
-
     def __init__(self, name: str, target_state: JState) -> None:
-
         super(IsJunction, self).__init__(name)
-
         self.target_state = target_state
-
         self.reached = False
-
         self.prev_roe = 0
-
         self.state:JState = JState.INITIAL
-
         self.running = False
-
-
-
     def update(self) -> Status:
-
         if not self.running:
-
             self.running = True
-
             self.logger.info("%+06d %s.scan started" % (g_plotter.get_distance(), self.__class__.__name__))
-
         roe = g_video.get_range_of_edges()
-
         if roe != 0:
-
             if self.state == JState.INITIAL:
-
                 if (self.target_state == JState.JOINING or self.target_state == JState.JOINED) and roe >= JUNCT_UPPER_THRESH and self.prev_roe <= JUNCT_LOWER_THRESH:
-
                     self.logger.info("%+06d %s.lines are joining" % (g_plotter.get_distance(), self.__class__.__name__))
-
                     self.state = JState.JOINING
-
                 elif (self.target_state == JState.FORKING or self.target_state == JState.FORKED) and roe >= JUNCT_LOWER_THRESH and self.prev_roe <= JUNCT_LOWER_THRESH:
-
                     self.logger.info("%+06d %s.lines are forking" % (g_plotter.get_distance(), self.__class__.__name__))
-
                     self.state = JState.FORKING
-
             elif self.state == JState.JOINING:
-
                 if roe <= JUNCT_LOWER_THRESH:
-
                     self.logger.info("%+06d %s.the join completed" % (g_plotter.get_distance(), self.__class__.__name__))
-
                     self.state = JState.JOINED
-
-                    
-
             elif self.state == JState.FORKING:
-
                 if roe <= JUNCT_LOWER_THRESH and self.prev_roe >= JUNCT_UPPER_THRESH:
-
                     self.logger.info("%+06d %s.the fork completed" % (g_plotter.get_distance(), self.__class__.__name__))
-
                     self.state = JState.FORKED
-
             else:
-
                 pass
-
         self.prev_roe = roe
-
-
-
         if not self.reached and self.state == self.target_state:
-
             self.reached = True
-
             self.logger.info("%+06d %s.target state reached" % (g_plotter.get_distance(), self.__class__.__name__))
-
             return Status.SUCCESS
-
         else:
-
             return Status.RUNNING
-
-
-
-
 
 class CatchBottle(Behaviour):
-
     """
-
     Drive up to a tape-wrapped bottle and trap it between the two front arms.
-
-
-
     IDENTIFY  - find the coloured band, latch its colour into g_bottle_color and
-
                 lock the video tracker onto that colour (kills colour flicker).
-
     APPROACH  - PID-steer on the band bearing (bottle_theta) at `power` until the
-
                 band's lower edge reaches the bottom of the frame, i.e. it starts
-
                 dropping into the camera blind spot (~220 mm ahead).
-
     CATCH     - the band is now blind. Hold the heading we held while still locked
-
                 on the bottle and run straight by gyro for `catch_run_mm` (150 mm
-
                 default) so the two front arms close over it, then stop.
-
     """
-
     IDENTIFY, APPROACH, CATCH = range(3)
-
-
-
     def __init__(self, name: str, power: int,
-
                  pid_p: float, pid_i: float, pid_d: float,
-
                  catch_run_mm: int = 150,
-
                  lock_color: 'BottleColor' = None,   # force a colour, else auto
-
                  identify_area: int = 400,           # min area to trust the colour
-
                  identify_frames: int = 3,           # consecutive solid frames
-
                  heading_avg_frames: int = 5,        # smooth heading before the run-in
-
                  ) -> None:
-
         super(CatchBottle, self).__init__(name)
-
         self.power = power
-
         self.pid_p, self.pid_i, self.pid_d = pid_p, pid_i, pid_d
-
         self.catch_run_mm = catch_run_mm
-
         self.lock_color = lock_color
-
         self.identify_area = identify_area
-
         self.identify_frames = identify_frames
-
         self.heading_avg_frames = heading_avg_frames
-
         self._state = self.IDENTIFY
-
         self._solid = 0
-
         self._heading_hist = []
-
         self._catch_start_odo = None
-
         self._target_heading = None
-
         self._blind_steer = 0
-
         self.pid = None
-
         self.running = False
-
-
-
     def _cur_heading(self) -> int:
-
         return (-1) * g_course * g_gyro_sensor.get_angle()
-
-
-
     def _steer_vision(self, theta: float) -> None:
-
         # vision-based: theta already encodes direction, no g_course factor
-
         turn = int(self.pid(theta))
-
         g_right_motor.set_power(self.power + turn)
-
         g_left_motor.set_power(self.power - turn)
-
-
-
     def update(self) -> Status:
-
         global g_bottle_color
-
-
-
         if not self.running:
-
             self.running = True
-
             g_video.set_target_interested(TargetInterested.BOTTLE)
-
             if self.lock_color is not None:
-
                 g_video.set_bottle_color(self.lock_color)
-
             self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=0,
-
                            sample_time=EXEC_INTERVAL,
-
                            output_limits=(-self.power, self.power))
-
             self.logger.info("%+06d %s.started" % (g_plotter.get_distance(), self.__class__.__name__))
 
-
-
         insight, color, bcx, btheta, bbottom, barea, in_blind = g_video.get_bottle_stamped()
-
-
 
         # ---------- IDENTIFY ----------
-
         if self._state == self.IDENTIFY:
-
             self._solid = self._solid + 1 if (insight and barea >= self.identify_area) else 0
-
             self._steer_vision(btheta if insight else 0.0)   # creep while identifying
-
             if self._solid >= self.identify_frames:
-
                 g_bottle_color = color
-
                 g_video.set_bottle_color(color)              # lock -> stable bearing
-
                 self.logger.info("%+06d %s.color=%s area=%d -> APPROACH" % (
-
                     g_plotter.get_distance(), self.__class__.__name__, color.name, barea))
-
                 self._state = self.APPROACH
-
             return Status.RUNNING
-
-
-
         # ---------- APPROACH ----------
-
         if self._state == self.APPROACH:
-
             if insight:
-
                 self._blind_steer = 0
-
                 self._steer_vision(btheta)
-
                 self._heading_hist.append(self._cur_heading())   # log heading while locked
-
                 if len(self._heading_hist) > self.heading_avg_frames:
-
                     self._heading_hist.pop(0)
-
             else:
-
                 self._blind_steer += 1                            # brief dropout: hold straight
-
                 g_right_motor.set_power(self.power)
-
                 g_left_motor.set_power(self.power)
-
-
-
             # band reached / passed the blind edge -> commit to the run-in
-
             if in_blind or (not insight and self._blind_steer > 8):
-
                 hist = self._heading_hist or [self._cur_heading()]
-
                 self._target_heading = sum(hist) / len(hist)
-
                 self._catch_start_odo = g_plotter.get_distance()
-
                 self.pid = PID(self.pid_p, self.pid_i, self.pid_d,
-
                                setpoint=self._target_heading,
-
                                sample_time=EXEC_INTERVAL,
-
                                output_limits=(-self.power, self.power))
-
                 self.logger.info("%+06d %s.blind edge, heading=%.1f -> CATCH(+%dmm)" % (
-
                     g_plotter.get_distance(), self.__class__.__name__,
-
                     self._target_heading, self.catch_run_mm))
-
                 self._state = self.CATCH
-
             return Status.RUNNING
-
-
-
         # ---------- CATCH (gyro run-in) ----------
-
         if self._state == self.CATCH:
-
             travelled = g_plotter.get_distance() - self._catch_start_odo
-
             if travelled >= self.catch_run_mm:
-
                 g_right_motor.set_power(0)
-
                 g_left_motor.set_power(0)
-
                 self.logger.info("%+06d %s.caught (ran %dmm, color=%s)" % (
-
                     g_plotter.get_distance(), self.__class__.__name__,
-
                     travelled, g_bottle_color.name))
-
                 return Status.SUCCESS
-
             turn = int(self.pid(self._cur_heading()))
-
             g_right_motor.set_power(self.power + g_course * turn)
-
             g_left_motor.set_power(self.power - g_course * turn)
-
             return Status.RUNNING
-
-
-
         return Status.RUNNING
 
-
-
-
-
 class IsBottleInsight(Behaviour):
-
     """
-
     Condition node: SUCCESS while a tape-wrapped bottle of `color` is in sight,
-
     FAILURE otherwise.
-
-
-
     - color == BottleColor.NONE  -> match any detected bottle colour.
-
     - color == a specific colour -> SUCCESS only when the detected band is that
-
       colour (and big enough to trust).
-
-
-
     Reads the same snapshot CatchBottle consumes (g_video.get_bottle_stamped()),
-
     so it stays consistent with whatever the BOTTLE detector decided this frame.
-
     A short debounce (`min_frames`) suppresses single-frame colour flicker; set
-
     it to 1 for an instantaneous check.
-
     """
-
     def __init__(self, name: str, color: 'BottleColor',
-
                  min_area: int = 150,     # ignore specks below this contour area
-
                  min_frames: int = 2,     # consecutive matching frames to assert SUCCESS
-
                  set_target: bool = True,  # put the camera in BOTTLE mode on first tick
-
                  ) -> None:
-
         super(IsBottleInsight, self).__init__(name)
-
         self.color = color
-
         self.min_area = min_area
-
         self.min_frames = min_frames
-
         self.set_target = set_target
-
         self._hits = 0
-
         self.running = False
-
-
-
     def update(self) -> Status:
-
         if not self.running:
-
             self.running = True
-
             if self.set_target:
-
                 g_video.set_target_interested(TargetInterested.BOTTLE)
-
             self.logger.info("%+06d %s.watching for color=%s" % (
-
                 g_plotter.get_distance(), self.__class__.__name__, self.color.name))
-
-
-
         insight, color, bcx, btheta, bbottom, barea, in_blind = g_video.get_bottle_stamped()
-
-
-
         match = (insight
-
                  and barea >= self.min_area
-
                  and (self.color == BottleColor.NONE or color == self.color))
-
-
 
         self._hits = self._hits + 1 if match else 0
 
-
-
         if self._hits >= self.min_frames:
-
             return Status.SUCCESS
-
         return Status.FAILURE
 
 
-
-
-
 class HasCaughtBottle(Behaviour):
-
     """
-
     Condition node: SUCCESS if the colour latched by CatchBottle (g_bottle_color)
-
     matches `color`, FAILURE otherwise.
 
-
-
     - color == BottleColor.NONE -> SUCCESS if ANY bottle has been caught
-
       (i.e. g_bottle_color is no longer NONE).
-
     - color == a specific colour -> SUCCESS only when that exact colour was caught.
 
-
-
     Pure read of g_bottle_color; no camera or motor side effects.
-
     """
-
     def __init__(self, name: str, color: 'BottleColor') -> None:
-
         super(HasCaughtBottle, self).__init__(name)
-
         self.color = color
 
-
-
     def update(self) -> Status:
-
         if self.color == BottleColor.NONE:
-
             caught = (g_bottle_color != BottleColor.NONE)
-
         else:
-
             caught = (g_bottle_color == self.color)
 
-
-
         self.logger.info("%+06d %s.want=%s caught=%s -> %s" % (
-
             g_plotter.get_distance(), self.__class__.__name__,
-
             self.color.name, g_bottle_color.name,
-
             "SUCCESS" if caught else "FAILURE"))
-
-
 
         return Status.SUCCESS if caught else Status.FAILURE
 
 
-
-
-
 def stop_before_backend_exit(callback):
-
     @wraps(callback)
-
     def guarded(*args, **kwargs):
-
         try:
-
             return callback(*args, **kwargs)
-
         except BaseException:
-
             # The backend has not yet stopped its USB receiver here.
-
             g_shutdown.stop("control callback exit")
-
             raise
-
     return guarded
 
 
-
-
-
 class TraverseBehaviourTree(object):
-
     # ETRoboから渡された実機参照を初回だけ保存し、以後はBTを周期実行する。
-
     def __init__(self, tree: BehaviourTree) -> None:
-
         self.tree = tree
-
         self.last_log_time = None
-
         self.running = False
-
     @stop_before_backend_exit
-
     def __call__(
-
         self,
-
         hub: Hub,
-
         arm_motor: Motor,
-
         right_motor: Motor,
-
         left_motor: Motor,
-
         touch_sensor: TouchSensor,
-
         color_sensor: ColorSensor,
-
         sonar_sensor: SonarSensor,
-
         gyro_sensor: GyroSensor,
-
     ) -> None:
-
         global g_hub, g_arm_motor, g_right_motor, g_left_motor, g_touch_sensor, g_color_sensor, g_sonar_sensor, g_gyro_sensor, g_plotter
-
         if not self.running:
-
             g_hub = hub
-
             g_arm_motor = arm_motor
-
             g_right_motor = right_motor
-
             g_left_motor = left_motor
-
             g_touch_sensor = touch_sensor
-
             g_color_sensor = color_sensor
-
             g_sonar_sensor = sonar_sensor
-
             g_gyro_sensor = gyro_sensor
-
             g_plotter = Plotter()
-
             robot_runtime.configure(
-
                 hub=hub,
-
                 arm_motor=arm_motor,
-
                 right_motor=right_motor,
-
                 left_motor=left_motor,
-
                 touch_sensor=touch_sensor,
-
                 color_sensor=color_sensor,
-
                 sonar_sensor=sonar_sensor,
-
                 gyro_sensor=gyro_sensor,
-
                 plotter=g_plotter,
-
                 video=g_video,
-
                 course=g_course,
-
             )
-
             if g_video is not None:
-
                 start_video_thread()
-
+            # 2026-11-15: ETラリー(最後の種目)の始めに、本体のカメラを閉じて子プロセスへ渡すための窓口
+            robot_runtime.release_camera = release_main_camera
             print(" -- TraverseBehaviorTree initialization complete")
-
             self.running = True
-
         else:
-
             if g_video_thread is not None and g_video_thread.error is not None:
-
                 raise RuntimeError("Camera processing failed") from g_video_thread.error
-
             self.tree.tick_once()
-
             if self.tree.status == Status.FAILURE:
-
                 errors = g_shutdown.stop("mission failed")
-
                 raise RuntimeError("Mission failed; motors stopped. " + "; ".join(errors))
-
             g_plotter.plot(hub, arm_motor, right_motor, left_motor, touch_sensor, color_sensor, sonar_sensor, gyro_sensor)
-
             # log estimated position every 1 second
-
             #if self.last_log_time == None or time.time() - self.last_log_time >= 1.0:
-
             #    print(" --  estimated position X=%d, Y=%d" % (g_plotter.get_loc_x(), g_plotter.get_loc_y()))
-
             #    self.last_log_time = time.time()
 
 
-
-
-
 class VideoThread(threading.Thread):
-
     def __init__(self):
-
         super().__init__(daemon=True)
-
         self._stop_event = threading.Event()
-
         self.prev_time = time.time()
-
         self.error = None
 
-
-
     def stop(self):
-
         self._stop_event.set()
 
-
-
     def run(self):
-
         try:
-
             self.process_frames()
-
         except Exception as error:
-
             self.error = error
-
             self._stop_event.set()
 
-
-
     def process_frames(self):
-
         while not self._stop_event.is_set():
-
             g_video.process(g_plotter, g_hub, g_arm_motor, g_right_motor, g_left_motor, g_color_sensor, g_sonar_sensor, g_gyro_sensor)
-
             current_time = time.time()
-
             elapsed_time = current_time - self.prev_time
-
             self.prev_time = current_time
-
             if elapsed_time < VIDEO_INTERVAL:
-
                 time.sleep(VIDEO_INTERVAL - elapsed_time)
 
 
-
-
-
 def build_behaviour_tree(
-
     mission_config=None,
-
     decryption_key=None,
-
     sumo_initial_bearing=180.0,
-
     bottle_color=None,
-
     rally_hint1=None,
-
     rally_hint2_gate_info=None,
-
     delivery_initial_heading=None,
-
 ) -> BehaviourTree:
-
     # alpha.pyには競技全体の基本順序を残し、各工程の詳細は機能別ファイルから取得する。
-
     root = Sequence(name="2026 alpha", memory=True)
-
     calibration = Sequence(name="calibration", memory=True)
-
     start = Parallel(name="start", policy=ParallelPolicy.SuccessOnOne())
 
-
-
+    # 2026-11-16(devTKとのマージ): 準備のアームは全ミッション共通なので devTK と同じ元の ArmUpDownFull に戻した
+    # (devSS の --rally-arm-stop-ticks 版はETラリーの中のアームの動きだけで使う)。
     calibration.add_children(
-
         [
-
             ArmUpDownFull(name="arm up", direction=ArmDirection.UP),
-
             ArmUpDownFull(name="arm down", direction=ArmDirection.DOWN),
-
             ResetDevice(name="device reset"),
-
             #ReadKey(name="read key"),
-
         ]
-
     )
-
+    if arm_up_before_touch(mission_config):
+        # 2026-11-03: --rally-arm-up-before-touch: タッチの前にアームを上げておく(タッチの後はジャイロの測り直しだけ)。
+        calibration.add_child(make_arm_up_down("arm up before touch", ArmDirection.UP, mission_config))
     start.add_children([IsTouchOn(name="touch start")])
 
-
-
     mission_context = RaceContext(
-
         bottle_color=bottle_color,
-
         decryption_key=decryption_key,
-
         hint1=rally_hint1,
-
         hint2_gate_info=rally_hint2_gate_info,
-
     )
-
     mission_config = mission_config or RaceConfig()
-
     if mission_config.mission_mode in ('bottle-rally', 'rally-sumo'):
-
         mission_context.strategy_requests_enabled = False
-
     if mission_config.enable_et_sumo or mission_config.enable_finish:
-
         # 既存ResetDevice完了直後に相撲用の方位対応だけを保存する。他工程の基準は変更しない。
-
         calibration.add_child(RegisterSumoBearing(
-
             "register sumo bearing after reset", mission_context, sumo_initial_bearing))
-
     calibration.add_child(RegisterDeliveryHeading(
-
         "register bottle heading after reset", mission_context,
-
         initial_delivery_heading(mission_config.mission_mode)
-
         if delivery_initial_heading is None else delivery_initial_heading))
-
     mission_children = build_mission_children(mission_context, mission_config)
-
     root.add_children(
-
         [
-
             calibration,
-
             start,
-
             *mission_children,
-
             TheEnd(name="end"),
-
         ]
-
     )
-
     if mission_config.enable_et_rally and mission_config.et_rally_laps > 0:
-
         # 初期化とタッチ待ちを含む全体を包み、タッチ前にTCP接続を確認できるようにする。
-
         # Hintの送信は従来どおりHint1/Hint2が揃った後だけ行う。
-
         root = WithStrategyExchange(root, mission_context, mission_config)
-
     return root
 
-
-
 def initialize_etrobo(backend: str) -> ETRobo:
-
     return (ETRobo(backend=backend)
-
             .add_hub('hub')
-
             .add_device('arm_motor', device_type=Motor, port='C')
-
             .add_device('right_motor', device_type=Motor, port='A')
-
             .add_device('left_motor', device_type=Motor, port='B')
-
             .add_device('touch_sensor', device_type=TouchSensor, port='D')
-
             .add_device('color_sensor', device_type=ColorSensor, port='E')
-
             .add_device('sonar_sensor', device_type=SonarSensor, port='F')
-
             .add_device('gyro_sensor', device_type=GyroSensor, port='')
-
     )
 
-
-
 def setup_thread(camera_enabled=True, preview_enabled=True):
-
     global g_video, g_video_thread
-
     if not camera_enabled:
-
         g_video = None
-
         g_video_thread = None
-
         print(" -- camera capture, processing and preview disabled")
-
         return
-
     g_video = Video(preview_enabled=preview_enabled)
-
     print(" -- camera preview enabled=%s" % preview_enabled)
 
 
-
-
-
 def start_video_thread():
-
     global g_video_thread
-
     # Device references are configured before camera processing starts.
-
     print(" -- starting VideoThread...")
-
     g_video_thread = VideoThread()
-
     g_video_thread.start()
 
-
-
 def _cleanup_thread_resources():
-
     global g_video, g_video_thread
-
     print(" -- stopping VideoThread...", flush=True)
-
     if g_video_thread is not None:
-
         g_video_thread.stop()
-
         if g_video_thread.ident is not None:
-
             g_video_thread.join(timeout=2.0)
-
             if g_video_thread.is_alive():
-
                 print(" -- camera thread did not stop within 2 seconds; skipping concurrent close", file=sys.stderr, flush=True)
-
                 return
-
         g_video_thread = None
-
     if g_video is not None:
-
         g_video.close()
-
     g_video = None
 
+def release_main_camera(timeout=2.0):
+    """2026-11-15: ETラリーの始めに、本体のカメラ(VideoThread と Video)を止めて閉じる。ETラリーは最後の種目なので開き直さない。
+    ETラリーのカメラは子プロセス(robot_program/et_rally_camera_proc.py)が開く(カメラは同時に1つのプロセスしか開けない。
+    同じプロセスで撮ると走りの制御が止まるので、本体が撮って渡す形にはしない)。走りの制御を止めないよう、裏のスレッドから呼ぶ。
+    戻り値: (閉じたか, 説明)。"""
+    global g_video, g_video_thread
+    t0 = time.time()
+    thread, video = g_video_thread, g_video
+    if thread is None and video is None:
+        return True, "no main camera"
+    if thread is not None:
+        thread.stop()
+        if thread.ident is not None:
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                return False, "VideoThread did not stop within %.1fs" % timeout
+        g_video_thread = None
+    if video is not None:
+        g_video = None
+        robot_runtime.video = None
+        try:
+            video.close()
+        except Exception as error:
+            return False, "Video.close failed: %r" % (error,)
+    return True, "closed in %.2fs" % (time.time() - t0)
 
 
 def cleanup_thread():
-
     # Native camera / X server calls can wait indefinitely.
-
     worker = threading.Thread(target=_cleanup_thread_resources,
-
                               name="camera-cleanup", daemon=True)
-
     worker.start()
-
     worker.join(timeout=5.0)
-
     if worker.is_alive():
-
         print(" -- camera cleanup timed out; exiting", file=sys.stderr, flush=True)
 
 
-
-
-
 def sig_handler(signum, frame) -> None:
-
     # Bypass the backend KeyboardInterrupt handler and its receiver join.
-
     if g_shutdown.requested:
-
         return
-
     g_shutdown.stop("signal %d" % signum)
-
     raise SystemExit(128 + signum)
 
 
-
-
-
 def read_bottle_color_for_final_mission(mission, color_argument, check_tree):
-
     # 通常ミッションでは色の手入力を使わない。
-
     if mission not in ('bottle-final', 'to-bottle', 'bottle-rally', 'bottle-sumo'):
-
         if color_argument is not None:
-
             raise ValueError(
-
                 '--bottle-color requires bottle-final, to-bottle, bottle-rally or bottle-sumo'
-
             )
-
         return None
 
-
-
     # コマンドで色を省略した場合だけ、走行開始前に端末から入力する。
-
     color_name = color_argument
-
     if color_name is None and not check_tree:
-
         color_name = input('Bottle color (red/blue/yellow): ').strip().lower()
 
-
-
     # ツリー表示だけの場合は分岐を実行しない。Contextには有効な仮値を入れておく。
-
     if color_name is None:
-
         color_name = 'red'
 
-
-
     if color_name not in BOTTLE_COLOR_VALUE_BY_NAME:
-
         raise ValueError('Bottle color must be red, blue, or yellow')
 
-
-
     print(' -- %s color=%s' % (mission, color_name))
-
     return BOTTLE_COLOR_VALUE_BY_NAME[color_name]
 
 
-
-
-
-def read_rally_drive_hints(mission, hint1, hint2_gate_info, check_tree):
-
+def read_rally_drive_hints(mission, hint1, hint2_gate_info, check_tree, plan_given=False):
     # QR工程を省く単体・結合モードだけ手入力Hintを受け付ける。
-
     if mission not in MANUAL_RALLY_MISSIONS:
-
         if hint1 is not None or hint2_gate_info is not None:
-
             raise ValueError(
-
                 '--rally-hint1 and --rally-hint2-gate-info require '
-
                 '--mission rally-drive, bottle-rally or rally-sumo'
-
             )
-
         return None, None
 
-
-
     # ツリー確認では通信を開始しないため、形式だけ満たす固定値を使用する。
-
-    if check_tree:
-
+    # 2026-11-05: --rally-plan-path を指定したとき(計画ファイルで走る)もHintは使わないので、同じ固定値で補う。
+    if check_tree or plan_given:
         return hint1 or '25,35', hint2_gate_info or '53,54/12,22'
-
     if not hint1 or not hint2_gate_info:
-
         raise ValueError(
-
             'This mission requires --rally-hint1 and '
-
             '--rally-hint2-gate-info'
-
         )
-
     return hint1, hint2_gate_info
 
 
-
-
-
 def _run_main(argv, startup_cleanup):
-
     global g_course, g_key, g_shutdown
-
     g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
-
     parser = argparse.ArgumentParser()
-
     parser.add_argument('course', choices=['right', 'left'], help='Course to run')
-
     parser.add_argument('--no-preview', action='store_true',
-
                         help='Disable camera preview while keeping capture and recognition active')
-
     parser.add_argument('--logfile', type=str, default=None, help='Path to log file')
-
     parser.add_argument('--check-tree', action='store_true',
-
                         help='Build and print the tree without opening devices or camera')
-
     parser.add_argument(
-
         '--mission',
-
         choices=MISSION_CHOICES,
-
         default='configured',
-
         help='Mission profile; configured uses the switches in RaceConfig',
-
     )
-
     parser.add_argument(
-
         '--bottle-color',
-
         choices=BOTTLE_COLOR_NAMES,
-
         default=None,
-
         help='Held bottle color for bottle-final, to-bottle, bottle-rally or bottle-sumo',
-
     )
-
     parser.add_argument(
         "--sumo-initial-bearing",
         type=float,
         default=None,
         help="Placement bearing for sumo, sumo-garage, sumo-align or sumo-turn-test: up=0, clockwise positive",
     )
-
     parser.add_argument(
         "--rally-hint1",
         default=None,
         help="Decoded Hint 1 coordinates for rally-drive, bottle-rally or rally-sumo",
     )
-
     parser.add_argument(
         "--rally-hint2-gate-info",
         default=None,
         help="Decoded Hint 2 coordinates for rally-drive, bottle-rally or rally-sumo",
     )
-
     parser.add_argument(
-
         '--rally-plan-path',
-
         default=None,
-
         help=('Run a fixed local plan.json ({"steps": [...]}) instead of the calculated '
-
               'route: no PC connection or hints are used to build the route (rally-drive '
-
               'test calibration, e.g. straight/spin runs). --rally-hint1/--rally-hint2-gate-info '
-
               'are still required by the argument checks but their values are ignored.'),
-
     )
-
+    parser.add_argument(
+        '--rally-turn-method',
+        choices=['spin_pid', 'spin_encoder', 'one_shot', 'lqi', 'spin_encoder_dir_test'],
+        default=None,
+        help=('DD-19 calibration: override which turn implementation rally-drive uses. '
+              'spin_pid is the uncalibrated baseline (gyro_drive.SpinAround, pre-DD-13). '
+              'spin_encoder_dir_test is test-only: honors a per-step "direction" (+1/-1) in the '
+              'plan JSON to force turn rotation direction instead of auto shortest-path. '
+              'Default: one_shot (2026-11-05).'),
+    )
+    parser.add_argument(
+        '--rally-compensation',
+        choices=['on', 'off'],
+        default=None,
+        help=('DD-19 calibration: off disables both caster-drag (DD-15) and lateral-drift '
+              '(DD-16) compensation. Default (unset) keeps the config value, which is off '
+              'since 2026-10-28; pass on to re-enable both.'),
+    )
+    parser.add_argument(
+        '--rally-gyro-tire-calibration',
+        choices=['on', 'off'],
+        default=None,
+        help=('DD-19 calibration: off disables both gyro-scale (DD-17 GYRO_SCALE_FACTOR) and '
+              'tire-diameter calibration for a clean baseline run. Default (unset) keeps on.'),
+    )
+    parser.add_argument(
+        '--rally-turn-tolerance-deg',
+        type=float,
+        default=None,
+        help=('DD-19 calibration: override the fine-phase tolerance for spin_encoder/one_shot/lqi '
+              '(default 0.5deg). Used to match spin_pid\'s fixed 2.0deg tolerance for an isolated '
+              'turn-method comparison. Default (unset) keeps each method\'s own default.'),
+    )
+    parser.add_argument(
+        '--rally-turn-decel-deg',
+        type=float,
+        default=None,
+        help=('DD-22/23 calibration: for spin_encoder, slow phase1 down to decel_power once the '
+              'remaining turn angle is below this many degrees, before braking (default 0=off, no '
+              'slowdown). Aims to reduce phase1 overshoot/inertia feeding into phase2 (suspected '
+              'backlash source).'),
+    )
+    parser.add_argument(
+        '--rally-turn-backlash-preload-deg',
+        type=float,
+        default=None,
+        help=('DD-22 calibration: for spin_encoder, when a turn reverses direction from the '
+              'previous one, add this many degrees to phase1\'s target encoder angle, to pre-take-up '
+              'mechanical backlash before the real rotation (default 0=off).'),
+    )
+    parser.add_argument(
+        '--rally-turn-fine-trim',
+        choices=['on', 'off'],
+        default=None,
+        help=('DD-22 calibration: for spin_encoder, off skips phase2 (gyro fine-trim) and ends the '
+              'turn after phase1 (encoder-only) alone. Used to check whether phase2 itself (e.g. an '
+              'overshoot correction reversing direction again) contributes to the drift. '
+              'Default (unset) keeps phase2 on.'),
+    )
+    parser.add_argument(
+        '--rally-turn-power',
+        type=int,
+        default=None,
+        help=('DD-22 calibration: for spin_encoder, override phase1\'s drive power (default 70). '
+              'Used to match the single-wheel encoder diagnostic\'s power for a fair comparison.'),
+    )
+    parser.add_argument(
+        '--rally-turn-lag-compensation-adaptive',
+        choices=['on', 'off'],
+        default=None,
+        help=('DD-22 calibration: for spin_encoder, use a running estimate (updated from each '
+              'turn\'s measured drag). Default: on (2026-11-05).'),
+    )
+    parser.add_argument(
+        '--rally-turn-left-target-scale',
+        type=float,
+        default=None,
+        help=('DD-22 calibration: for spin_encoder, multiply the left wheel\'s target encoder angle '
+              'by this factor, to correct the steady-state right/left effective-rotation difference '
+              '(measured ~0.9%%, right wheel turns the robot slightly more per encoder degree). '
+              'Default: 1.009 (2026-11-05).'),
+    )
+    parser.add_argument(
+        '--rally-turn-phase1-model',
+        default=None,
+        help=('one_shot only: "POS_GAIN,POS_FLOW,NEG_GAIN,NEG_FLOW". phase1 is commanded so that '
+              'GAIN x command + FLOW (deg, the rotation that continues after braking, scaled down '
+              'for turns under 40 deg) equals the target. COMMAND is the base wheel rotation before the '
+              'lag compensation, which still applies. Default: 0.961,6.9,0.913,8.9 (2026-11-05).'),
+    )
+    parser.add_argument(
+        '--rally-turn-wheel-sync',
+        type=float,
+        default=None,
+        help=('one_shot only: GAIN (power per encoder deg, e.g. 2). During phase1 the wheel that is ahead '
+              'is slowed and the one behind is sped up so both wheels turn the same amount at the same time '
+              'and stop together; the lag compensation is not applied. 0 or unset = off.'),
+    )
+    parser.add_argument(
+        '--rally-turn-sync-decel',
+        default=None,
+        help=('one_shot with --rally-turn-wheel-sync only: "DEG,POWER[,FRAC[,CRAWL]]". Both wheels slow to POWER '
+              'for the last DEG encoder degrees of phase1 (capped at FRAC of the turn, default 0.5) so the turn '
+              'coasts less after braking. CRAWL (deg/tick, both wheels together, default 0 = off): when the '
+              'wheels advance slower than this over 5 ticks, raise the power like a stall (2026-11-09: a 44 deg '
+              'turn crawled for 3.4 s). Default: 40,40.'),
+    )
+    parser.add_argument(
+        '--rally-turn-pre-stop',
+        choices=['on', 'off'],
+        default=None,
+        help=('one_shot only: on waits (brake) until both wheel encoders stop before phase1, '
+              'so a turn right after a straight starts from rest. Default: on (2026-11-05).'),
+    )
+    parser.add_argument(
+        '--rally-start-check-mm',
+        type=float,
+        default=None,
+        help=('Before the route, drive this many mm straight ahead at the start heading, stop, '
+              'drive the same distance back, stop, then start the route (to check the placement). '
+              'Default (unset) = none.'),
+    )
+    parser.add_argument(
+        '--rally-straight-pause-sec',
+        type=float,
+        default=None,
+        help=('Stop this many seconds before and after each straight of at least '
+              '--rally-straight-pause-min-mm (default 400). Default (unset) = no stop.'),
+    )
+    parser.add_argument('--rally-straight-pause-min-mm', type=float, default=None,
+                        help='Shortest straight that gets the stops of --rally-straight-pause-sec. Default 400.')
+    parser.add_argument('--rally-straight-pause-labels', default=None,
+                        help=('Comma-separated step labels (e.g. lap1-blue-entry). With --rally-straight-pause-sec, '
+                              'stop only after the straights with these labels (overrides '
+                              '--rally-straight-pause-min-mm). "before:LABEL" stops before that straight instead '
+                              '(after the preceding turn), e.g. before:lap1-blue-exit. Default (unset) = by length.'))
+    parser.add_argument(
+        '--rally-gyro-still-sec',
+        type=float,
+        default=None,
+        help=('Instead of the route, stand still this many seconds and log the heading every 5 s, '
+              'then end (to check gyro drift while stationary). Default (unset) = none.'),
+    )
+    parser.add_argument(
+        '--rally-gyro-still-sweep',
+        choices=['on', 'off'],
+        default=None,
+        help=('With --rally-gyro-still-sec: on runs the still test in four states (arm up/down x '
+              'wheel brake on/off), each for --rally-gyro-still-sec seconds. Default (unset) = off.'),
+    )
+    parser.add_argument(
+        '--rally-gyro-float',
+        choices=['on', 'off'],
+        default=None,
+        help=('During the ET rally, read the heading as the hub float value instead of the rounded '
+              'integer. Default: on (2026-11-05).'),
+    )
+    parser.add_argument(
+        '--rally-gyro-drift-comp',
+        choices=['on', 'off'],
+        default=None,
+        help=('During the ET rally, estimate the gyro drift rate while the wheels are stopped and '
+              'subtract it over time. Default (unset) = off.'),
+    )
+    parser.add_argument('--rally-gyro-drift-extra-sec', type=float, default=None,
+                        help=('With --rally-gyro-drift-comp on: seconds to stay still and measure the drift '
+                              'rate after the arm is up and has settled. Default (unset) = 2.'))
+    parser.add_argument('--rally-gyro-hub-recal-sec', type=float, default=None,
+                        help=('For the modified hub firmware: after raising the arm and waiting for it to '
+                              'settle, stand still with brakes this many seconds so the hub recalibrates '
+                              'the gyro bias. Default (unset) = none.'))
+    parser.add_argument('--rally-camera-tail-sec', type=float, default=None,
+                        help=('After the last ET rally segment stops, keep measuring the pose with the camera this many '
+                              'seconds and log it without correcting (needs --rally-camera-correct on). Default (unset) = none.'))
+    parser.add_argument('--rally-gyro-post-measure-sec', type=float, default=None,
+                        help=('After the last ET rally segment stops, stand still with brakes this many seconds and '
+                              'log the gyro rate and heading change (measure only). Default (unset) = none.'))
+    parser.add_argument(
+        '--rally-move-carry-i',
+        choices=['on', 'off'],
+        default=None,
+        help=('During the ET rally, start each straight with the heading PID integral left by the '
+              'previous straight (the left/right motor difference). Default: on (2026-11-05).'),
+    )
+    parser.add_argument(
+        '--rally-move-fine-power',
+        choices=['on', 'off'],
+        default=None,
+        help=('During the ET rally, drive the straight with fractional left/right power (the rounding '
+              'remainder is carried to the next tick) instead of truncating the heading PID output to '
+              'an integer. Default: on (2026-11-05).'),
+    )
+    parser.add_argument('--rally-move-pid-i', type=float, default=None,
+                        help=('During the ET rally, the I gain of the straight heading PID. '
+                              'Default: 2 for straights of arc/line plans, 8 for straights of stop-and-turn plans (2026-11-05).'))
+    parser.add_argument('--rally-move-short-lead', type=float, default=None,
+                        help=('During the ET rally, end straights shorter than 50mm this many mm early '
+                              '(the robot coasts on after the stop). Default (unset) = run the planned '
+                              'distance.'))
+    parser.add_argument('--rally-path-lead-sec', type=float, default=None,
+                        help=('During the ET rally, for plans with reverse/arc/non-stop segments only: look ahead '
+                              'this many seconds (x current speed) along the path for the heading target and the '
+                              'arc feed-forward, to make up for the wheel-speed lag. Default: 0.12 (2026-11-05).'))
+    parser.add_argument('--rally-path-arc-pid-i', type=float, default=None,
+                        help=('During the ET rally, for plans with arcs: the I gain of the heading PID used inside '
+                              'arcs only (straights keep --rally-move-pid-i). Default (unset) = 0.6.'))
+    parser.add_argument('--rally-path-arc-speed-scale', type=float, default=None,
+                        help=('During the ET rally, for plans with arcs: multiply the arc speed. 1.0 = the outer '
+                              'wheel does not exceed the straight-line power (default). Larger values make arcs '
+                              'faster (wheel powers are still kept within +-100).'))
+    parser.add_argument('--rally-path-lat-gain', type=float, default=None,
+                        help=('During the ET rally, for plans with arcs: steer back to the planned line. Degrees of '
+                              'heading correction per mm of sideways error (default 0 = heading only).'))
+    parser.add_argument('--rally-path-lat-max-deg', type=float, default=None,
+                        help='Upper limit of the --rally-path-lat-gain correction in degrees (default 8).')
+    parser.add_argument('--rally-path-arc-pid-p', type=float, default=None,
+                        help='Heading PID P used only inside arcs of path plans (default: same as straight moves).')
+    parser.add_argument('--rally-path-ramp-mm', type=float, default=None,
+                        help='Average the target heading / wheel difference over this distance so curvature changes gradually (default 0 = off).')
+    parser.add_argument('--rally-path-inner-min-power', type=float, default=None,
+                        help='Forward path segments: never drive either wheel below this power (0 = no reverse spin; default: no limit).')
+    parser.add_argument('--rally-path-ramp-sec', type=float, default=None,
+                        help='Like --rally-path-ramp-mm but in seconds x current speed (the larger of the two is used; default 0 = off).')
+    parser.add_argument('--rally-path-power', type=float, default=None,
+                        help='Cruise power for path-plan segments (arcs / chained moves) only (default 80).')
+    parser.add_argument('--rally-path-small-arc', type=str, default=None,
+                        help='RADIUS,SCALE: arcs with radius <= RADIUS mm use this power scale instead of --rally-path-arc-speed-scale (default: off).')
+    parser.add_argument('--rally-path-line-power', type=float, default=None,
+                        help='Cruise power for straight path segments only (default: same as --rally-path-power).')
+    parser.add_argument('--rally-path-wheel-log', type=float, default=None,
+                        help='Log commanded power and actual wheel rotation for the first N ticks of each path segment (default 0 = off).')
+    parser.add_argument('--rally-path-stop-lead', type=float, default=None,
+                        help=('Path segments: start stopping this many mm before the planned end of a stopping move of '
+                              '50 mm or longer (default 16; shorter ones use --rally-move-short-lead).'))
+    parser.add_argument('--rally-path-ff-scale', type=float, default=None,
+                        help='Multiply the arc left/right feedforward (half tread / radius) by this (default 1.0).')
+    parser.add_argument('--rally-start-pose-sec', type=float, default=None,
+                        help='Seconds of camera frames used for the start pose after the arm/gyro are ready (default 2.0).')
+    parser.add_argument('--rally-time-budget', type=float, default=None,
+                        help=('Decide the number of laps while driving: seconds available for the ET rally (competition: '
+                              '120 minus the time before the ET rally starts; tests: 70). Needs a garage plan with "exit". Default off.'))
+    parser.add_argument('--rally-time-total', type=float, default=None,
+                        help=('Competition time limit in seconds (120): the ET rally budget becomes this minus the seconds from '
+                              'the touch start to the ET rally start, measured by the robot. Overrides --rally-time-budget '
+                              '(which is then only used if the touch time is unknown). Default off.'))
+    parser.add_argument('--rally-camera-fix-heading', choices=['on', 'off'], default=None,
+                        help=('Camera correction: fit the position with the heading fixed to the gyro heading (the heading '
+                              'correction itself is unchanged). Default off.'))
+    parser.add_argument('--rally-path-resync', choices=['on', 'off'], default=None,
+                        help=('At the start of each continuing path segment, take the lateral offset from the course pose '
+                              '(camera-corrected) instead of the previous segment (default off).'))
+    parser.add_argument('--rally-path-arc-slip', type=float, default=None,
+                        help=('Slip ratio of fast tight arcs (radius < 190 mm): the travelled distance is reduced by this ratio '
+                              'for the position, the arc progress and the segment end (e.g. 0.075). Default off.'))
+    parser.add_argument('--rally-time-margin', type=float, default=None,
+                        help='Safety margin in seconds for --rally-time-budget (default 2.0).')
+    parser.add_argument('--rally-arm-down-at-garage', choices=('on', 'off'), default=None,
+                        help='Plans ending in the garage: lower the arm from the marked last straight (default on).')
+    parser.add_argument('--rally-path-decel', type=str, default=None,
+                        help='Path segments: slow down over the last MM before a stop, down to POWER (MM,POWER; default 80,40).')
+    parser.add_argument('--rally-path-accel', type=str, default=None,
+                        help='Path segments: speed up over the first MM after a stop, starting at POWER (MM,POWER; default 30,40).')
+    parser.add_argument('--rally-path-stop-ticks', type=float, default=None,
+                        help='Path segments: ticks with no wheel movement before a stop counts as finished (default 2).')
+    parser.add_argument('--rally-path-carry-error', choices=('on', 'off'), default=None,
+                        help=('After each stop, start the next path segment from the course pose (camera-corrected) instead of '
+                              'assuming the robot is exactly on the plan, so known errors are not forgotten (default on).'))
+    parser.add_argument('--rally-camera-far-confirm', type=float, default=None,
+                        help=('Running camera correction: accept a difference larger than 40 mm when this many consecutive images '
+                              'agree within 15 mm (up to 100 mm). Default 3; 0 = always reject.'))
+    parser.add_argument('--rally-path-line-pid-p', type=float, default=None,
+                        help='Heading PID P used only on straight path segments (default 3; 4 = old behaviour).')
+    parser.add_argument('--rally-path-line-pid-d', type=float, default=None,
+                        help='Heading PID D used only on straight path segments (default 0.12; 0.06 = old behaviour).')
+    parser.add_argument('--rally-path-line-boost', type=str, default=None,
+                        help=('POWER,SEC: at the start of forward straights of 150 mm or longer (after an arc or from a stop), '
+                              'raise the power to POWER for SEC seconds (not within 100 mm of the end). Default 100,0.3; "off" disables.'))
+    parser.add_argument('--rally-arm-stop-ticks', type=float, default=None,
+                        help='Stop the arm when it has moved slowly for this many consecutive ticks (about 3; default: old ArmUpDownFull).')
+    parser.add_argument('--rally-arm-power', type=float, default=None,
+                        help='With --rally-arm-stop-ticks: arm push power (default 35).')
+    parser.add_argument('--rally-pre-move-mm', type=float, default=None,
+                        help=('ET rally test closer to the competition: after the touch, drive this many mm forward to the start '
+                              'position, then measure the gyro / start pose and go (place the robot this far behind the start). '
+                              'Logs "ARRIVED AT START". Default: off.'))
+    parser.add_argument('--rally-arm-travel-deg', type=float, default=None,
+                        help=('With --rally-arm-stop-ticks: when the ET rally raises the arm from the bottom, stop after this many '
+                              'degrees (full travel is about 270; e.g. 260). Slows to power 20 for the last 40 degrees. '
+                              'Lets a higher --rally-arm-power be used without the gear slipping at the top. Default: off.'))
+    parser.add_argument('--rally-arm-up-before-touch', choices=['on', 'off'], default=None,
+                        help='Raise the arm before the touch start; after the touch only re-measure the gyro (default off).')
+    parser.add_argument('--rally-start-pose', choices=['on', 'off'], default=None,
+                        help=('While standing still at the ET rally start, measure the position and heading with the camera '
+                              '(markers and gray dots) and use them for the first segment: the heading offset goes into the gyro, '
+                              'a position offset re-plans the first connection (default off).'))
+    parser.add_argument('--rally-arm-while-driving', choices=['on', 'off'], default=None,
+                        help=('Raise the arm while driving when the plan file says the arm can be up before the legs are '
+                              'reached (et_rally_arm.must_be_up_sec >= --rally-arm-up-sec + 0.5); otherwise raise it at the '
+                              'start as before (default off).'))
+    parser.add_argument('--rally-camera-handover-test', choices=['on', 'off'], default=None,
+                        help=('rally-drive only: also run the main camera (VideoThread) like --mission full, and hand the camera '
+                              'over to the ET rally camera process at the ET rally start (default off).'))
+    parser.add_argument('--rally-camera-log', type=int, default=None,
+                        help=('During the ET rally run, save every N-th camera frame (JPEG) with the capture time and the '
+                              'course position to run_logs/et_camera_* (default: none).'))
+    parser.add_argument('--rally-camera-exposure', type=int, default=None,
+                        help=('With --rally-camera-log: fix the camera exposure (V4L2 units, 1 = 100 us; 50 = 5 ms). '
+                              'Default: automatic exposure.'))
+    parser.add_argument('--rally-camera-correct', default=None,
+                        help=('ET rally: correct the position and heading while driving with the camera (prototype). '
+                              'POS,HEAD = the fraction of the difference applied per image (e.g. 0.15,0), or "on" = 0.15,0. '
+                              'Only images taken on straight segments are used. Default: off.'))
+    parser.add_argument('--rally-arm-up-sec', type=float, default=None,
+                        help='Seconds the arm needs to go up, for --rally-arm-while-driving (default 3.0, provisional).')
+    parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
+                        help=('During the ET rally, gyro scale factor applied only to rotation in the '
+                              'heading-decreasing direction (left turns). Default: 1.0082 (2026-11-08, '
+                              'measured with 90 deg x 30 turns).'))
+    parser.add_argument('--rally-gyro-scale-pos', type=float, default=None,
+                        help=('During the ET rally, gyro scale factor applied only to rotation in the '
+                              'heading-increasing direction (right turns). Default: 1.0073 (2026-11-08, '
+                              'measured with 90 deg x 30 turns).'))
+    parser.add_argument('--rally-gyro-drift-settle-sec', type=float, default=None,
+                        help=('With --rally-gyro-drift-comp on: seconds to wait after raising the arm before '
+                              'measuring (the arm vibrates). Default (unset) = 1.'))
     parser.add_argument('--delivery-initial-heading', type=float, default=None,
-
                         help='Required for to-bottle: delivery-line heading=0, inward=90, mirrored by course')
-
     parser.add_argument(
         "--sumo-distance-mm",
         type=float,
         default=None,
         help="Prescribed straight distance for sumo-align (default: 1000mm)",
     )
-
     parser.add_argument(
         "--sumo-power",
         type=int,
         default=None,
         help="Straight PWM for sumo-align (default: 80)",
     )
-
     parser.add_argument(
         "--sumo-target-cx",
         type=float,
         default=None,
         help="Calibrated bottle center in the 320px image (default: 160)",
     )
-
     parser.add_argument(
         "--sumo-turn-angle",
         type=float,
         default=None,
         help="sumo-turn-test only: signed physical clockwise angle, 1..20 deg magnitude",
     )
-
     parser.add_argument(
         "--sumo-turn-power",
         type=int,
         default=None,
         help="sumo-turn-test only: main PWM 20..80 (default:75)",
     )
-
     parser.add_argument(
         "--sumo-turn-hold-sec",
         type=float,
         default=None,
         help="sumo-turn-test only: observe after braking for 0.5..3 sec (default:1)",
     )
-
     parser.add_argument(
         "--sumo-catch-distance-mm",
         type=float,
         default=None,
         help="sumo-catch-test only: required positive finite additional distance after alignment (mm), no upper cap",
     )
-
     parser.add_argument(
         "--sumo-catch-power",
         type=int,
         default=None,
         help="sumo-catch-test only: approach base PWM 15..100 (default:25)",
     )
-
     parser.add_argument(
         "--sumo-sensor-label",
         default=None,
@@ -2542,7 +1662,6 @@ def _run_main(argv, startup_cleanup):
         from robot_program.features.sumo_relative_push_settings import (
             RelativePushSettings,
         )
-
         try:
             RelativePushSettings(
                 push_distance_mm=args.sumo_push_distance_mm,
@@ -2570,7 +1689,6 @@ def _run_main(argv, startup_cleanup):
     if args.mission == "sumo-push-route-test" and args.sumo_push_calibration:
         from pathlib import Path
         from robot_program.features.sumo_push_geometry import PushCalibration, delta
-
         calibration_path = Path(args.sumo_push_calibration)
         if not calibration_path.is_absolute():
             calibration_path = Path(__file__).resolve().parent / calibration_path
@@ -2615,64 +1733,41 @@ def _run_main(argv, startup_cleanup):
         parser.error("sumo-sensor-test requires --sumo-sensor-label")
     if sensor_overrides and args.mission != "sumo-sensor-test":
         parser.error("--sumo-sensor-* options require sumo-sensor-test")
-
     if args.mission == "sumo-catch-test" and args.sumo_catch_distance_mm is None:
-
         parser.error(
             "sumo-catch-test requires --sumo-catch-distance-mm; measure the remaining approach distance"
         )
-
     if args.mission != "sumo-catch-test" and (
         args.sumo_catch_distance_mm is not None or args.sumo_catch_power is not None
     ):
-
         parser.error(
             "--sumo-catch-distance-mm and --sumo-catch-power require sumo-catch-test"
         )
-
     if args.mission == 'to-bottle':
-
         if args.delivery_initial_heading is None:
-
             if args.check_tree:
-
                 args.delivery_initial_heading = 0.0
-
             else:
-
                 parser.error('to-bottle requires --delivery-initial-heading for the physical placement')
-
         if not math.isfinite(args.delivery_initial_heading):
-
             parser.error('--delivery-initial-heading must be finite')
-
     elif args.delivery_initial_heading is not None:
-
         parser.error('--delivery-initial-heading is available only with --mission to-bottle')
-
     if args.mission in ("sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit") and args.sumo_initial_bearing is None:
         test_settings = config_for_mission(args.mission).sumo_stage_test
         args.sumo_initial_bearing = (test_settings.initial_bearing_left_deg
                                      if args.course == "left"
                                      else test_settings.initial_bearing_right_deg)
     try:
-
         sumo_initial_bearing = initial_sumo_bearing(
             args.mission, args.sumo_initial_bearing, -1 if args.course == "right" else 1
         )
-
     except ValueError as error:
-
         parser.error(str(error))
-
     g_course = -1 if args.course == 'right' else 1
 
-
-
     # 未実装ノードは明示警告するが、PendingFeature自身のSUCCESSで後続工程へ進める。
-
     print(" -- shutdown-v8 control interval=%.3fs mission=%s" % (EXEC_INTERVAL, args.mission))
-
     mission_config = config_for_mission(args.mission)
     mission_config = dataclasses.replace(
         mission_config,
@@ -2695,7 +1790,6 @@ def _run_main(argv, startup_cleanup):
                 turn_power=args.sumo_push_turn_power,
             ),
         )
-
     sumo_overrides = {
         key: value
         for key, value in (
@@ -2705,17 +1799,14 @@ def _run_main(argv, startup_cleanup):
         )
         if value is not None
     }
-
     if sumo_overrides and args.mission not in (
         "sumo-align",
         "sumo-catch-test",
         "sumo-push-route-test",
     ):
-
         parser.error(
             "--sumo-distance-mm, --sumo-power and --sumo-target-cx require sumo-align or sumo-catch-test"
         )
-
     turn_overrides = {
         key: value
         for key, value in (
@@ -2725,15 +1816,11 @@ def _run_main(argv, startup_cleanup):
         )
         if value is not None
     }
-
     if turn_overrides and args.mission != "sumo-turn-test":
-
         parser.error(
             "--sumo-turn-angle, --sumo-turn-power and --sumo-turn-hold-sec require sumo-turn-test"
         )
-
     try:
-
         mission_config = dataclasses.replace(
             mission_config,
             sumo_align=dataclasses.replace(mission_config.sumo_align, **sumo_overrides),
@@ -2752,11 +1839,8 @@ def _run_main(argv, startup_cleanup):
                 }
             ),
         )
-
     except ValueError as error:
-
         parser.error(str(error))
-
     try:
         mission_config = dataclasses.replace(
             mission_config,
@@ -2767,59 +1851,400 @@ def _run_main(argv, startup_cleanup):
     except ValueError as error:
         parser.error(str(error))
     if args.rally_plan_path is not None:
-
         # PC接続・Hint計算を一切使わず、指定したplan.json(steps形式)をそのまま実行する
-
         # (直進距離やキャスター引きずりの実機較正など、固定動作だけを試したいときに使う)。
-
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-
             parser.error(
                 "--rally-plan-path requires --mission rally-drive, bottle-rally or rally-sumo"
             )
-
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_strategy_source='file', et_rally_plan_path=args.rally_plan_path)
+    if args.rally_turn_method is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-method requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_method=args.rally_turn_method)
+    if args.rally_compensation is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-compensation requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_compensation_enabled=(args.rally_compensation == 'on'))
+    if args.rally_gyro_tire_calibration is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-gyro-tire-calibration requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(
             mission_config,
-            et_rally_strategy_source="file",
-            et_rally_plan_path=args.rally_plan_path,
-        )
-
+            et_rally_gyro_tire_calibration_enabled=(args.rally_gyro_tire_calibration == 'on'))
+    if args.rally_turn_tolerance_deg is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-tolerance-deg requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not math.isfinite(args.rally_turn_tolerance_deg):
+            parser.error('--rally-turn-tolerance-deg must be finite')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_fine_tolerance_deg=args.rally_turn_tolerance_deg)
+    if args.rally_turn_decel_deg is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-decel-deg requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not math.isfinite(args.rally_turn_decel_deg):
+            parser.error('--rally-turn-decel-deg must be finite')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_decel_deg=args.rally_turn_decel_deg)
+    if args.rally_turn_backlash_preload_deg is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-backlash-preload-deg requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not math.isfinite(args.rally_turn_backlash_preload_deg):
+            parser.error('--rally-turn-backlash-preload-deg must be finite')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_backlash_preload_deg=args.rally_turn_backlash_preload_deg)
+    if args.rally_turn_fine_trim is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-fine-trim requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_fine_trim_enabled=(args.rally_turn_fine_trim == 'on'))
+    if args.rally_turn_power is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-power requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_main_power=args.rally_turn_power)
+    if args.rally_arm_up_before_touch is not None:
+        # bottle-rally / rally-sumo は先の工程でアームを使うため、ETラリーだけを走る rally-drive に限る。
+        if mission_config.mission_mode != 'rally-drive':
+            parser.error('--rally-arm-up-before-touch requires --mission rally-drive')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_arm_up_before_touch=(args.rally_arm_up_before_touch == 'on'))
+    if args.rally_start_pose is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-start-pose requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_start_pose=(args.rally_start_pose == 'on'))
+    if args.rally_arm_while_driving is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-arm-while-driving requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_arm_while_driving=(args.rally_arm_while_driving == 'on'))
+    if args.rally_camera_fix_heading is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-camera-fix-heading requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_camera_fix_heading=(args.rally_camera_fix_heading == 'on'))
+    if args.rally_path_resync is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-resync requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_resync=(args.rally_path_resync == 'on'))
+    if args.rally_camera_handover_test is not None:
+        if mission_config.mission_mode != 'rally-drive':
+            parser.error('--rally-camera-handover-test requires --mission rally-drive')
+        mission_config = dataclasses.replace(mission_config,
+                                             et_rally_camera_handover_test=(args.rally_camera_handover_test == 'on'))
+    if args.rally_camera_log is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-camera-log requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 1 <= args.rally_camera_log <= 30:
+            parser.error('--rally-camera-log must be between 1 and 30')
+        mission_config = dataclasses.replace(mission_config, et_rally_camera_log_every=args.rally_camera_log)
+    if args.rally_camera_exposure is not None:
+        if args.rally_camera_log is None:
+            parser.error('--rally-camera-exposure requires --rally-camera-log')
+        if not 1 <= args.rally_camera_exposure <= 5000:
+            parser.error('--rally-camera-exposure must be between 1 and 5000')
+        mission_config = dataclasses.replace(mission_config, et_rally_camera_exposure=args.rally_camera_exposure)
+    if args.rally_camera_correct is not None:
+        try:
+            # 2026-11-11: "on" = 既定(位置0.15・向き0.1)。11/10は向きの補正が1°以上たまるのを誤りと見て0にしたが、
+            # 11/11に配置37(右回り中心)で向きが1周約0.4°ずつずれて青ゲートに当たり、向き0.1で解消した(たまっていたのは
+            # ジャイロの倍率の約0.1%のずれで、本当の向きのずれだった)。seedでも精度は悪くならなかった。
+            gains = (0.15, 0.1) if args.rally_camera_correct == 'on' else tuple(float(v) for v in args.rally_camera_correct.split(','))
+        except ValueError:
+            gains = ()
+        if len(gains) != 2 or not all(0.0 <= g <= 1.0 for g in gains):
+            parser.error('--rally-camera-correct must be "on" or POS,HEAD with values between 0 and 1')
+        if args.mission != 'rally-drive':
+            parser.error('--rally-camera-correct requires --mission rally-drive (for now)')
+        mission_config = dataclasses.replace(mission_config, et_rally_camera_correct=gains)
+    if args.rally_arm_up_sec is not None:
+        if not 0.5 <= args.rally_arm_up_sec <= 10.0:
+            parser.error('--rally-arm-up-sec must be between 0.5 and 10')
+        mission_config = dataclasses.replace(mission_config, et_rally_arm_up_sec=args.rally_arm_up_sec)
+    if args.rally_turn_lag_compensation_adaptive is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-lag-compensation-adaptive requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config,
+            et_rally_turn_adaptive_lag_compensation=(args.rally_turn_lag_compensation_adaptive == 'on'))
+    if args.rally_turn_left_target_scale is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-left-target-scale requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_left_target_scale=args.rally_turn_left_target_scale)
+    if args.rally_turn_phase1_model is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-phase1-model requires --mission rally-drive, bottle-rally or rally-sumo')
+        try:
+            pos_gain, pos_flow, neg_gain, neg_flow = (float(v) for v in args.rally_turn_phase1_model.split(','))
+        except ValueError:
+            parser.error('--rally-turn-phase1-model must be "POS_GAIN,POS_FLOW,NEG_GAIN,NEG_FLOW" (e.g. 0.961,6.9,0.913,8.9)')
+        if not (0.5 <= pos_gain <= 1.5 and 0.5 <= neg_gain <= 1.5
+                and 0.0 <= pos_flow <= 20.0 and 0.0 <= neg_flow <= 20.0):
+            parser.error('--rally-turn-phase1-model gains must be within 0.5..1.5 and flows within 0..20 deg')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_phase1_model=((pos_gain, pos_flow), (neg_gain, neg_flow)))
+    if args.rally_turn_wheel_sync is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-wheel-sync requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not (0.0 <= args.rally_turn_wheel_sync <= 20.0):
+            parser.error('--rally-turn-wheel-sync must be within 0..20')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_wheel_sync_gain=args.rally_turn_wheel_sync)
+    if args.rally_turn_sync_decel is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-sync-decel requires --mission rally-drive, bottle-rally or rally-sumo')
+        try:
+            sync_decel_values = [float(v) for v in args.rally_turn_sync_decel.split(',')]
+        except ValueError:
+            sync_decel_values = []
+        if not 2 <= len(sync_decel_values) <= 4:
+            parser.error('--rally-turn-sync-decel must be "DEG,POWER[,FRAC[,CRAWL]]" (e.g. 40,40 or 40,40,0.25,2)')
+        sync_decel_deg, sync_decel_power = sync_decel_values[:2]
+        if not (0.0 <= sync_decel_deg <= 200.0 and 35.0 <= sync_decel_power <= 100.0):
+            parser.error('--rally-turn-sync-decel DEG must be within 0..200 and POWER within 35..100')
+        if len(sync_decel_values) > 2 and not 0.0 <= sync_decel_values[2] <= 1.0:
+            parser.error('--rally-turn-sync-decel FRAC must be within 0..1')
+        if len(sync_decel_values) > 3 and not 0.0 <= sync_decel_values[3] <= 20.0:
+            parser.error('--rally-turn-sync-decel CRAWL must be within 0..20')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_sync_decel=(sync_decel_deg, int(sync_decel_power),
+                                                      *sync_decel_values[2:]))
+    if args.rally_turn_pre_stop is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-turn-pre-stop requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_turn_pre_stop=(args.rally_turn_pre_stop == 'on'))
+    if args.rally_start_check_mm is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-start-check-mm requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 50.0 <= args.rally_start_check_mm <= 2000.0:
+            parser.error('--rally-start-check-mm must be between 50 and 2000')
+        mission_config = dataclasses.replace(mission_config, et_rally_start_check_mm=args.rally_start_check_mm)
+    for option, value, low, high, field in (
+            ('--rally-straight-pause-sec', args.rally_straight_pause_sec, 0.5, 30.0, 'et_rally_straight_pause_sec'),
+            ('--rally-straight-pause-min-mm', args.rally_straight_pause_min_mm, 1.0, 3000.0,
+             'et_rally_straight_pause_min_mm'),
+            ('--rally-gyro-still-sec', args.rally_gyro_still_sec, 1.0, 600.0, 'et_rally_gyro_still_sec')):
+        if value is None:
+            continue
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error(option + ' requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not low <= value <= high:
+            parser.error('%s must be between %g and %g' % (option, low, high))
+        mission_config = dataclasses.replace(mission_config, **{field: value})
+    for option, value, field in (
+            ('--rally-gyro-float', args.rally_gyro_float, 'et_rally_gyro_float_heading'),
+            ('--rally-gyro-drift-comp', args.rally_gyro_drift_comp, 'et_rally_gyro_drift_compensation'),
+            ('--rally-move-carry-i', args.rally_move_carry_i, 'et_rally_move_carry_integral'),
+            ('--rally-move-fine-power', args.rally_move_fine_power, 'et_rally_move_fine_power')):
+        if value is None:
+            continue
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error(option + ' requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, **{field: value == 'on'})
+    if args.rally_straight_pause_labels is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-straight-pause-labels requires --mission rally-drive, bottle-rally or rally-sumo')
+        labels = tuple(v.strip() for v in args.rally_straight_pause_labels.split(',') if v.strip())
+        if not labels:
+            parser.error('--rally-straight-pause-labels must name at least one label')
+        mission_config = dataclasses.replace(mission_config, et_rally_straight_pause_labels=labels)
+    if args.rally_move_pid_i is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-move-pid-i requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.0 <= args.rally_move_pid_i <= 20.0:
+            parser.error('--rally-move-pid-i must be between 0 and 20')
+        mission_config = dataclasses.replace(mission_config, et_rally_move_pid_i=args.rally_move_pid_i)
+    if args.rally_move_short_lead is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-move-short-lead requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.0 <= args.rally_move_short_lead <= 40.0:
+            parser.error('--rally-move-short-lead must be between 0 and 40')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_move_short_lead_mm=args.rally_move_short_lead)
+    if args.rally_path_lead_sec is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-lead-sec requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.0 <= args.rally_path_lead_sec <= 0.5:
+            parser.error('--rally-path-lead-sec must be between 0 and 0.5')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_lead_sec=args.rally_path_lead_sec)
+    if args.rally_path_arc_pid_i is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-arc-pid-i requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.0 <= args.rally_path_arc_pid_i <= 20.0:
+            parser.error('--rally-path-arc-pid-i must be between 0 and 20')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_arc_pid_i=args.rally_path_arc_pid_i)
+    if args.rally_path_small_arc is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-small-arc requires --mission rally-drive, bottle-rally or rally-sumo')
+        try:
+            small_r, small_s = (float(v) for v in args.rally_path_small_arc.split(','))
+        except ValueError:
+            parser.error('--rally-path-small-arc must be RADIUS,SCALE (e.g. 90,0.85)')
+        if not 20.0 <= small_r <= 500.0 or not 0.5 <= small_s <= 2.0:
+            parser.error('--rally-path-small-arc: RADIUS must be 20-500 mm and SCALE 0.5-2.0')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_small_arc=(small_r, small_s))
+    if args.rally_path_arc_speed_scale is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-arc-speed-scale requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.5 <= args.rally_path_arc_speed_scale <= 2.0:
+            parser.error('--rally-path-arc-speed-scale must be between 0.5 and 2')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_arc_speed_scale=args.rally_path_arc_speed_scale)
+    if args.rally_path_lat_gain is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-lat-gain requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.0 <= args.rally_path_lat_gain <= 2.0:
+            parser.error('--rally-path-lat-gain must be between 0 and 2')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_lat_gain=args.rally_path_lat_gain)
+    if args.rally_path_lat_max_deg is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-lat-max-deg requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.0 <= args.rally_path_lat_max_deg <= 30.0:
+            parser.error('--rally-path-lat-max-deg must be between 0 and 30')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_lat_max_deg=args.rally_path_lat_max_deg)
+    for opt, attr, key in (('--rally-path-decel', 'rally_path_decel', 'et_rally_path_decel'),
+                           ('--rally-path-accel', 'rally_path_accel', 'et_rally_path_accel')):
+        value = getattr(args, attr)
+        if value is None:
+            continue
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('%s requires --mission rally-drive, bottle-rally or rally-sumo' % opt)
+        try:
+            mm, power = (float(v) for v in value.split(','))
+        except ValueError:
+            parser.error('%s must be MM,POWER (e.g. 40,40)' % opt)
+        if not 0.0 <= mm <= 300.0 or not 10.0 <= power <= 100.0:
+            parser.error('%s: MM must be 0-300 and POWER 10-100' % opt)
+        mission_config = dataclasses.replace(mission_config, **{key: (mm, power)})
+    if args.rally_arm_down_at_garage is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-arm-down-at-garage requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_arm_down_at_garage=(args.rally_arm_down_at_garage == 'on'))
+    if args.rally_path_carry_error is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-carry-error requires --mission rally-drive, bottle-rally or rally-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_path_carry_error=(args.rally_path_carry_error == 'on'))
+    if args.rally_path_line_boost is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-path-line-boost requires --mission rally-drive, bottle-rally or rally-sumo')
+        if args.rally_path_line_boost == 'off':
+            mission_config = dataclasses.replace(mission_config, et_rally_path_line_boost_power=None,
+                                                 et_rally_path_line_boost_sec=None)
+        else:
+            try:
+                boost_power, boost_sec = (float(v) for v in args.rally_path_line_boost.split(','))
+            except ValueError:
+                parser.error('--rally-path-line-boost must be POWER,SEC (e.g. 100,0.3) or off')
+            if not 30.0 <= boost_power <= 100.0 or not 0.0 < boost_sec <= 2.0:
+                parser.error('--rally-path-line-boost: POWER must be 30-100 and SEC 0-2')
+            mission_config = dataclasses.replace(mission_config, et_rally_path_line_boost_power=boost_power,
+                                                 et_rally_path_line_boost_sec=boost_sec)
+    for opt, attr, lo, hi in (('--rally-path-arc-pid-p', 'rally_path_arc_pid_p', 0.0, 20.0),
+                              ('--rally-path-line-pid-p', 'rally_path_line_pid_p', 0.0, 20.0),
+                              ('--rally-camera-far-confirm', 'rally_camera_far_confirm', 0.0, 10.0),
+                              ('--rally-start-pose-sec', 'rally_start_pose_sec', 0.5, 5.0),
+                              ('--rally-path-stop-ticks', 'rally_path_stop_ticks', 1.0, 10.0),
+                              ('--rally-time-budget', 'rally_time_budget', 10.0, 120.0),
+                              ('--rally-time-margin', 'rally_time_margin', 0.0, 20.0),
+                              ('--rally-time-total', 'rally_time_total', 30.0, 300.0),
+                              ('--rally-path-arc-slip', 'rally_path_arc_slip', 0.0, 0.2),
+                              ('--rally-path-line-pid-d', 'rally_path_line_pid_d', 0.0, 2.0),
+                              ('--rally-path-ramp-mm', 'rally_path_ramp_mm', 0.0, 200.0),
+                              ('--rally-path-inner-min-power', 'rally_path_inner_min_power', -100.0, 50.0),
+                              ('--rally-path-ramp-sec', 'rally_path_ramp_sec', 0.0, 1.0),
+                              ('--rally-path-power', 'rally_path_power', 30.0, 100.0),
+                              ('--rally-path-line-power', 'rally_path_line_power', 30.0, 100.0),
+                              ('--rally-path-wheel-log', 'rally_path_wheel_log', 0.0, 200.0),
+                              ('--rally-path-ff-scale', 'rally_path_ff_scale', 0.5, 2.0),
+                              ('--rally-path-stop-lead', 'rally_path_stop_lead', 0.0, 40.0),
+                              ('--rally-arm-stop-ticks', 'rally_arm_stop_ticks', 1.0, 20.0),
+                              ('--rally-arm-power', 'rally_arm_power', 10.0, 60.0),
+                              ('--rally-arm-travel-deg', 'rally_arm_travel_deg', 90.0, 400.0),
+                              ('--rally-pre-move-mm', 'rally_pre_move_mm', 5.0, 300.0)):
+        value = getattr(args, attr)
+        if value is None:
+            continue
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('%s requires --mission rally-drive, bottle-rally or rally-sumo' % opt)
+        if not lo <= value <= hi:
+            parser.error('%s must be between %g and %g' % (opt, lo, hi))
+        mission_config = dataclasses.replace(
+            mission_config, **{'et_rally_path_wheel_log_ticks' if attr == 'rally_path_wheel_log' else 'et_' + attr: value})
+    if mission_config.et_rally_time_total is not None and mission_config.et_rally_time_budget is None:
+        # 2026-11-14: 周回の判断のノードを作るため、持ち時間の仮の値を入れる。走るときは 制限時間 − 競技の開始からの秒 に置き換わる
+        # (タッチの時刻が分からないときだけこの値を使う。テストと同じ70秒)。
+        mission_config = dataclasses.replace(mission_config, et_rally_time_budget=70.0)
+    if args.rally_gyro_drift_extra_sec is not None:
+        if not 0.5 <= args.rally_gyro_drift_extra_sec <= 10.0:
+            parser.error('--rally-gyro-drift-extra-sec must be between 0.5 and 10')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_gyro_drift_extra_sec=args.rally_gyro_drift_extra_sec)
+    if args.rally_gyro_hub_recal_sec is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-gyro-hub-recal-sec requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 1.0 <= args.rally_gyro_hub_recal_sec <= 30.0:
+            parser.error('--rally-gyro-hub-recal-sec must be between 1 and 30')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_gyro_hub_recal_sec=args.rally_gyro_hub_recal_sec)
+    if args.rally_camera_tail_sec is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-camera-tail-sec requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.5 <= args.rally_camera_tail_sec <= 10.0:
+            parser.error('--rally-camera-tail-sec must be between 0.5 and 10')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_camera_tail_sec=args.rally_camera_tail_sec)
+    if args.rally_gyro_post_measure_sec is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-gyro-post-measure-sec requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 1.0 <= args.rally_gyro_post_measure_sec <= 30.0:
+            parser.error('--rally-gyro-post-measure-sec must be between 1 and 30')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_gyro_post_measure_sec=args.rally_gyro_post_measure_sec)
+    if args.rally_gyro_scale_neg is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-gyro-scale-neg requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.99 <= args.rally_gyro_scale_neg <= 1.02:
+            parser.error('--rally-gyro-scale-neg must be between 0.99 and 1.02')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_gyro_scale_neg=args.rally_gyro_scale_neg)
+    if args.rally_gyro_scale_pos is not None:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+            parser.error('--rally-gyro-scale-pos requires --mission rally-drive, bottle-rally or rally-sumo')
+        if not 0.99 <= args.rally_gyro_scale_pos <= 1.02:
+            parser.error('--rally-gyro-scale-pos must be between 0.99 and 1.02')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_gyro_scale_pos=args.rally_gyro_scale_pos)
+    if args.rally_gyro_drift_settle_sec is not None:
+        if not 0.0 <= args.rally_gyro_drift_settle_sec <= 30.0:
+            parser.error('--rally-gyro-drift-settle-sec must be between 0 and 30')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_gyro_drift_settle_sec=args.rally_gyro_drift_settle_sec)
+    if args.rally_gyro_still_sweep is not None:
+        if args.rally_gyro_still_sec is None:
+            parser.error('--rally-gyro-still-sweep requires --rally-gyro-still-sec')
+        mission_config = dataclasses.replace(
+            mission_config, et_rally_gyro_still_sweep=(args.rally_gyro_still_sweep == 'on'))
     try:
-
         bottle_color = read_bottle_color_for_final_mission(
-
             mission=args.mission,
-
             color_argument=args.bottle_color,
-
             check_tree=args.check_tree,
-
         )
-
     except ValueError as error:
-
         parser.error(str(error))
-
     try:
-
         rally_hint1, rally_hint2_gate_info = read_rally_drive_hints(
-
             mission=args.mission,
-
             hint1=args.rally_hint1,
-
             hint2_gate_info=args.rally_hint2_gate_info,
-
             check_tree=args.check_tree,
-
+            plan_given=args.rally_plan_path is not None,
         )
-
     except ValueError as error:
-
         parser.error(str(error))
-
     decryption_key = None
-
     tree = build_behaviour_tree(
         mission_config,
         decryption_key=decryption_key,
@@ -2829,150 +2254,85 @@ def _run_main(argv, startup_cleanup):
         rally_hint2_gate_info=rally_hint2_gate_info,
         delivery_initial_heading=args.delivery_initial_heading,
     )
-
     pending = pending_features(tree)
-
     if args.check_tree:
-
         print(display_tree.unicode_tree(tree))
-
     if pending:
-
         print(" -- WARNING: skipped unimplemented features: " + ", ".join(pending),
-
               file=sys.stderr)
-
     if args.check_tree:
-
         return 0
-
     from robot_program.config import INTEGRATION_MISSIONS
-
     if args.mission in INTEGRATION_MISSIONS and pending:
-
         parser.error('Integration verification cannot run with unimplemented features')
 
-
-
     if (mission_config.enable_et_rally
-
             and mission_config.et_rally_laps > 0
-
             and mission_config.et_rally_strategy_source == "received"):
-
         # 同じ通信サーバーを走行中も使う。ここではHintをキューへ投入しない。
-
         startup_cleanup.callback(tree.exchange.close)
-
         print(" -- Waiting for PC connection before password input...", flush=True)
-
         tree.exchange.wait_for_connection()
-
         print(" -- PC TCP connection confirmed", flush=True)
-
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-
             decryption_key = read_decryption_key()
-
             tree.context.decryption_key = decryption_key
-
             g_key = decryption_key
 
-
-
     previous_sigint = signal.signal(signal.SIGINT, sig_handler)
-
     previous_sigterm = signal.signal(signal.SIGTERM, sig_handler)
-
     previous_sigtstp = signal.signal(signal.SIGTSTP, sig_handler) if hasattr(signal, "SIGTSTP") else None
-
     try:
-
         # ET相撲の実行木は力士ボトル捕捉にカメラを必須とする。
-
         # config.pyだけが旧版のまま配備された場合でも、ET相撲有効時にvideo=Noneを渡さない。
-
         camera_enabled = (
             mission_requires_camera(mission_config) or mission_config.enable_et_sumo
         )
-
         print(
             " -- camera enabled=%s et_sumo=%s"
             % (camera_enabled, mission_config.enable_et_sumo)
         )
-
-        setup_thread(camera_enabled=camera_enabled, preview_enabled=not args.no_preview)
-
+        # 2026-11-15: 画面がない(SSH で起動、DISPLAY なし)ときは、映像の表示をしない。表示しようとすると cv2.imshow が
+        # "Can't initialize GTK backend" で止まり、カメラの処理ごと走行が止まっていた(--rally-camera-handover-test の実機)。
+        preview_enabled = not args.no_preview
+        if preview_enabled and camera_enabled and not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+            print(" -- no display (DISPLAY not set): camera preview disabled")
+            preview_enabled = False
+        setup_thread(camera_enabled=camera_enabled, preview_enabled=preview_enabled)
         if camera_enabled and g_video is None:
-
             # 走行開始後ではなくデバイスdispatch前に初期化不整合を検出する。
-
             raise RuntimeError("Camera initialization did not provide a Video instance")
-
         if mission_requires_qr(mission_config):
-
             g_video.require_qr_decoder()
-
         etrobo = initialize_etrobo(backend="raspike_art")
-
         etrobo.add_handler(TraverseBehaviourTree(tree))
-
         etrobo.dispatch(interval=EXEC_INTERVAL, logfile=args.logfile)
-
     finally:
-
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-
         if hasattr(signal, "SIGTSTP"):
-
             signal.signal(signal.SIGTSTP, signal.SIG_IGN)
-
         try:
-
             # Never send motor commands after dispatch has closed reception.
-
             print(" -- SHUTDOWN camera cleanup begin (no motor resend)", flush=True)
-
             cleanup_thread()
-
         finally:
-
             if previous_sigtstp is not None:
-
                 signal.signal(signal.SIGTSTP, previous_sigtstp)
-
             signal.signal(signal.SIGTERM, previous_sigterm)
-
             signal.signal(signal.SIGINT, previous_sigint)
-
         print(" -- exiting... shutdown-v8", flush=True)
-
     return 0
 
 
-
-
-
 def main(argv=None):
-
     # 接続待ち・キー入力中のCtrl+C/例外でもソケットを閉じる。
-
     from contextlib import ExitStack
-
     with ExitStack() as startup_cleanup:
-
         return _run_main(argv, startup_cleanup)
 
 
-
-
-
 if __name__ == '__main__':
-
     # 画面ログを実行ごとに保存する。既存--logfile(機器ログ)とは別。
-
     from robot_program.services.run_log import run_with_log
-
     sys.exit(run_with_log(main))
