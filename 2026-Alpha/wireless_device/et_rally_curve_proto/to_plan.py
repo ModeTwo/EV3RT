@@ -2,7 +2,7 @@
 右コースのファイル実行では gyro目標 = -planner角(1031bと同じ規約)。
 usage: to_plan.py c.json gates.json out_plan.json [laps]
 """
-import json, math, sys
+import json, math, os, sys
 
 c = json.load(open(sys.argv[1]))
 gates = json.load(open(sys.argv[2]))['gates']
@@ -270,7 +270,9 @@ def _first(bi):
             if sp_ is not None:
                 return (round(sp_[0], 2), round(sp_[1], 2))
     return None
-if garage:
+# 2026-11-16: 切り上げの道の選び方。'final_tail'(既定、上の決まり)/ 'tool'(道具の切り上げの道 c['exit'] を使う。比べる用)
+EXIT_MODE = os.environ.get('TO_PLAN_EXIT', 'final_tail')
+if garage and EXIT_MODE != 'tool':
     groups = {}
     for bi, b in enumerate(blocks):
         if b['kind'] == 'visit' and b['lap'] >= 1:

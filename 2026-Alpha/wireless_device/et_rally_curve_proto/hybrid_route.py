@@ -51,6 +51,14 @@ PARAMS = dict(
     # (平行で隣の列のゲートは間隔24.64cmが車体より短く、抜けきる・手前から入るの条件で数cm戻っていた)。0で無効。
     # start_any_gate: 赤をくぐり始めるまでは、赤以外のゲートをくぐってよい(色の順番は赤から数える)。
     same_laps=True, join_max_cm=8.0, start_any_gate=True,
+    # 2026-11-16(ユーザー: つなぎ目を道具の側で直す): そのまま続けてよい横のずれ(cm)。以前は 0.3 で、黄を斜めに抜けた円弧の
+    # 1.5mm の横のずれでも次の赤の入りへそのまま続け、短い直進で斜めに取り戻していた(計画ではゲートの中の円弧なしの折れ、
+    # その直進は当たり判定もしていなかった)。0.02 にすると、ずれのある組は普通のつなぎ方を探す。
+    join_lat_cm=0.3,
+    # 2026-11-16(ユーザー): つなぎの区間ごとの例外のすき間。広いすき間で作ったつなぎより、fast_margins の順(広い方から)のすき間で
+    # fast_gain_sec 以上速くなる区間だけ、その区間だけ狭くする(配置全体は狭くしない。つなぎは1周に1回なので、1周0.5秒以上速いとき)。
+    # 狭い配置でなければ下限は2cm(ユーザー)。空なら使わない。
+    fast_margins=[], fast_gain_sec=0.5,
     # final_min_clear_cm: 最後の周の黄(そのあとガレージへ向かう)の通り方は、脚とのすき間がこれ以上のものだけにする(0で無効)。
     # 2026-11-12 実機: 配置36で最後の黄だけ反対向きから25°斜めに通り抜ける計画(すき間1.70cm)になり、その手前で大きく
     # 回り込む円弧(カメラがほとんど床の点を見ない)の間に約2cm 右にずれて、右側が脚に当たった。ユーザー決定で2cmにする。
@@ -1447,6 +1455,8 @@ class Table:
         self.margin = None   # 2026-11-16: この区間だけのすき間(per_gate_margin で狭いゲートにつながる区間)。None なら全体の値
         self.margin_fallback = None   # 広いすき間でつなげない組だけ使うすき間(per_gate_conn_mode=fallback)
         self.fb_used = set()
+        self.fast_used = {}   # (e, s) -> 例外で使ったすき間(fast_margins)
+        self.fast_tried = set()
         self.via_first = via_first   # スタート・ゴールの区間: 組み合わせが少ないので、最初から遠回りも比べる
         nE, nS = len(ends), len(starts)
         Ea = [np.repeat(np.array(v, float), nS) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in ends])]
@@ -1471,7 +1481,7 @@ class Table:
             ux, uy = np.cos(th), np.sin(th)
             along = (sx - ex) * ux + (sy - ey) * uy
             lat = -(sx - ex) * uy + (sy - ey) * ux
-            mask = (ed != 0) & (ed == sd) & (np.abs(nd(eh - sh)) < 0.01) & (np.abs(lat) < 0.3) & (along <= 1e-6) & (along >= -JOIN_MAX_CM)
+            mask = (ed != 0) & (ed == sd) & (np.abs(nd(eh - sh)) < 0.01) & (np.abs(lat) < JOIN_LAT_CM) & (along <= 1e-6) & (along >= -JOIN_MAX_CM)
             for e, s in zip(*np.nonzero(mask)):
                 e, s = int(e), int(s)
                 self.C[e, s] = float(along[e, s]) / V_LINE * spd(ends[e][2])
@@ -1532,10 +1542,50 @@ class Table:
                 self.deferred.discard((e, s))
                 MARGIN_FRONT = MARGIN_REAR = self.margin_fallback
                 r = self._resolve(e, s) or True
+            if (FAST_MARGINS and self.done[e, s] and (e, s) not in self.fast_tried and (e, s) not in self.fb_used
+                    and self.C[e, s] < INF / 2 and (e, s) not in self.join):
+                r = self._try_fast(e, s, MARGIN_FRONT) or r
             return r
         finally:
             _EXEMPT_ON = False; _ALLOW_TAB = None
             MARGIN_FRONT, MARGIN_REAR = mf0, mr0
+
+    def _try_fast(self, e, s, m_now):
+        """2026-11-16: 広いすき間 m_now で確定したつなぎ (e,s) を、fast_margins の狭いすき間で作り直し、FAST_GAIN_SEC 以上速ければ
+        その区間だけ狭いすき間のつなぎにする(広い方から試し、条件を満たした最初のすき間)。当たりを無視した見込みの下限でも
+        FAST_GAIN_SEC 速くならない区間は試さない。戻り値: 変わったか。"""
+        global MARGIN_FRONT, MARGIN_REAR
+        self.fast_tried.add((e, s))
+        c0 = float(self.C[e, s])
+        if c0 - float(self.approx[e, s, 0]) < FAST_GAIN_SEC:
+            return False
+        saved = (c0, self.prims.get((e, s)), int(self.ptr[e, s]), (e, s) in self.deferred, (e, s) in self.pending)
+        for mg in FAST_MARGINS:
+            if mg >= m_now - 1e-9:
+                continue
+            MARGIN_FRONT = MARGIN_REAR = float(mg)
+            self.done[e, s] = False; self.ptr[e, s] = 0; self.C[e, s] = self.approx[e, s, 0]
+            self.deferred.discard((e, s)); self.pending.discard((e, s))
+            for _ in range(4):
+                self._resolve(e, s)
+                if self.done[e, s]:
+                    break
+            c1 = float(self.C[e, s]) if self.done[e, s] else INF
+            if c1 < INF / 2 and c0 - c1 >= FAST_GAIN_SEC:
+                self.fast_used[(e, s)] = float(mg)
+                MARGIN_FRONT = MARGIN_REAR = m_now
+                return True
+            # 戻す
+            self.C[e, s], pr, self.ptr[e, s], dfr, pnd = saved
+            if pr is not None:
+                self.prims[(e, s)] = pr
+            self.done[e, s] = True
+            if dfr:
+                self.deferred.add((e, s))
+            if pnd:
+                self.pending.add((e, s))
+        MARGIN_FRONT = MARGIN_REAR = m_now
+        return False
 
     def _resolve(self, e, s):
         ep, sp = self.ends[e], self.starts[s]
@@ -2221,7 +2271,11 @@ def main():
             visits[i] = dict(visits[i], prims=[('line', T[key].ends[e][0], q[2], q[3])] + list(visits[i]['prims'][1:]))
     blocks = []
     for i, (key, e, s) in enumerate(used):
-        blocks.append(dict(kind='conn', lap=None, color=None, prims=[ser(p) for p in T[key].prims[(e, s)]]))
+        # 2026-11-16: このつなぎで使ったすき間(例外 fast_margins・広いすき間でつなげなかった fallback のときだけ。なければ None)
+        cm_ = T[key].fast_used.get((e, s))
+        if cm_ is None and (e, s) in T[key].fb_used:
+            cm_ = T[key].margin_fallback
+        blocks.append(dict(kind='conn', lap=None, color=None, prims=[ser(p) for p in T[key].prims[(e, s)]], margin=cm_))
         if i < len(visits):
             v = visits[i]
             blocks.append(dict(kind='visit', lap=(i - len(visits) % 3) // 3 + 1, color=v['color'], mode=v['mode'], sign=v['sign'], off=v['off'], angle=v['angle'], angle_out=v['angle_out'],
@@ -2230,6 +2284,9 @@ def main():
         print(f'  lap1 {v["color"]:6s} {v["mode"]:2s} sign={v["sign"]:+d} off={v["off"]:+.1f} angle={v["angle"]:+.0f}/{v["angle_out"]:+.0f} ea={v["ea"]} ee={v["ee"]}')
     for key, e, s in used:
         _USED_PRIMS[(key, e, s)] = T[key].prims[(e, s)]
+    if FAST_MARGINS:
+        fu = sorted({('%s->%s' % key, T[key].fast_used[(e, s)]) for key, e, s in used if (e, s) in T[key].fast_used})
+        print('fast margins used: %s' % (fu or 'none'), flush=True)
     audit = route_audit([p for key, e, s in used for p in T[key].prims[(e, s)]], visits, used)
     print('audit: min clearance front %.2fcm rear %.2fcm (needed %.1f / %.1f), keepout hits %d' % (
         audit['min_front'], audit['min_rear'], MARGIN_FRONT, MARGIN_REAR, audit['keepout_hits']), flush=True)
