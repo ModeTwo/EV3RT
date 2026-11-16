@@ -436,3 +436,39 @@ def layer(prev, C, s_arr, e_arr, c_arr, n_e):
         if t < cur[e]:
             cur[e] = t; arg[e] = v
     return cur, be, arg
+
+
+@njit(cache=True)
+def run_costs(ax, ay, tha, bx, by, thb, rs, karc, vline, htread, tail):
+    """2026-11-16(計算時間): hybrid_route._best_run0 の候補(半径 rs × 形 0..7)の時間を、形を作らずに出す。
+    だめな候補は inf。足し方は _best_run0 と同じ順(円弧1、直進か真ん中の円弧、最後の円弧、最後の直進 tail)で、
+    長さ 1e-6 以下の部分は足さない(dubins_one が捨てるのと同じ)。"""
+    n = len(rs) * 8
+    out = np.full(n, np.inf)
+    k = 0
+    for i in range(len(rs)):
+        r = rs[i]
+        va = karc * vline / (1 + htread / r)
+        for w in range(8):
+            ok, a1, a2, a3, th1, th2, p1x, p1y, p2x, p2y, c1x, c1y, c2x, c2y, c3x, c3y = dubins_params(ax, ay, tha, bx, by, thb, r, w)
+            if ok:
+                c = 0.0
+                l1 = r * a1
+                if l1 > 1e-6:
+                    c += l1 / va
+                if w < 4:
+                    L = math.hypot(p2x - p1x, p2y - p1y)
+                    if L > 1e-6:
+                        c += L / vline
+                else:
+                    l2 = r * a2
+                    if l2 > 1e-6:
+                        c += l2 / va
+                l3 = r * a3
+                if l3 > 1e-6:
+                    c += l3 / va
+                if tail > 0:
+                    c += tail / vline
+                out[k] = c
+            k += 1
+    return out

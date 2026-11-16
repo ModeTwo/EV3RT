@@ -59,6 +59,12 @@ PARAMS = dict(
     # fast_gain_sec 以上速くなる区間だけ、その区間だけ狭くする(配置全体は狭くしない。つなぎは1周に1回なので、1周0.5秒以上速いとき)。
     # 狭い配置でなければ下限は2cm(ユーザー)。空なら使わない。
     fast_margins=[], fast_gain_sec=0.5,
+    # 2026-11-16(計算時間): 例外のすき間で選ばれた経路が、例外なしより何秒速いかの見込み(使ったつなぎの差 × 使った回数)が
+    # これ未満なら、例外を元に戻して解き直し、例外なしの経路を出す(run_layout.py が例外なしでもう1回計算しなくて済む)。
+    fast_keep_min_sec=0.0,   # run_layout.py は 1.0 にする(既定の 0 は使わない)
+    # 2026-11-16(計算時間): 遠回り・曲がってからつなぐの1本の走り(_best_run)でも、確実に当たる候補を numba で先に飛ばす。
+    # 結果は変わらない見込み(確かめてから既定にする)。
+    run_kernel=False,
     # final_min_clear_cm: 最後の周の黄(そのあとガレージへ向かう)の通り方は、脚とのすき間がこれ以上のものだけにする(0で無効)。
     # 2026-11-12 実機: 配置36で最後の黄だけ反対向きから25°斜めに通り抜ける計画(すき間1.70cm)になり、その手前で大きく
     # 回り込む円弧(カメラがほとんど床の点を見ない)の間に約2cm 右にずれて、右側が脚に当たった。ユーザー決定で2cmにする。
@@ -1395,6 +1401,8 @@ def _best_run0(A, hA, B, hB, m, tail, top=12):
     add = 0.0 if m > 0 else 180.0
     thA, thB = math.radians(hA + add), math.radians(hB + add)
     Bm = B - tail * tdir(thB) if tail > 0 else B
+    if RUN_KERNEL and hr_kernels.AVAILABLE and GATE_MODEL == 'rect':
+        return _best_run_k(A, hA, B, hB, m, tail, top, thA, thB, Bm)
     cands = []
     for r in RADII:
         for w in range(8):
@@ -1405,10 +1413,50 @@ def _best_run0(A, hA, B, hB, m, tail, top=12):
                 pr = pr + [('line', Bm, B, m)]
             cands.append((sum((prim_len(q) / (V_LINE if q[0] == 'line' else v_arc(q[2]))) for q in pr), pr))
     cands.sort(key=lambda c: c[0])
-    for _, pr in cands[:top]:
-        if all(prim_ok(q) for q in pr):
-            return pr
+    sel = cands[:top]
+    for c in sel:
+        if all(prim_ok(q) for q in c[1]):
+            return c[1]
     return None
+
+
+_RADII_ARR = None
+
+
+def _best_run_k(A, hA, B, hB, m, tail, top, thA, thB, Bm):
+    """2026-11-16(計算時間): _best_run0 と同じ候補・同じ順番を、numba で選ぶ。候補の時間は形を作らずに出し(run_costs)、
+    確実に脚に当たる候補は形を作らずに飛ばし(next_option)、形を作って prim_ok で調べるのは残った候補だけ。"""
+    global _RADII_ARR
+    if _RADII_ARR is None:
+        _RADII_ARR = np.array([float(r) for r in RADII], float)
+    costs = hr_kernels.run_costs(float(A[0]), float(A[1]), float(thA), float(Bm[0]), float(Bm[1]), float(thB), _RADII_ARR,
+                                 float(ARC_K), float(V_LINE), float(HALF_TREAD), float(tail))
+    idx = np.argsort(costs, kind='stable')
+    idx = idx[np.isfinite(costs[idx])][:top]
+    n = len(idx)
+    if n == 0:
+        return None
+    order = np.arange(n, dtype=np.int64)
+    approx = costs[idx]
+    fam = np.zeros(n, np.int64); ms = np.full(n, int(m), np.int64)
+    rs = _RADII_ARR[idx // 8]; ws = (idx % 8).astype(np.int64)
+    ds = 0 if tail > 0 else int(m)
+    ptr = 0
+    while True:
+        ptr = hr_kernels.next_option(
+            float(A[0]), float(A[1]), float(hA), float(B[0]), float(B[1]), float(hB), ds, order, ptr, approx, INF / 2,
+            fam, ms, rs, ws, float(tail), float(PIVOT_BACK_CM), float(FRONT), float(REAR - _RO), float(HALF_WIDTH),
+            float(MARGIN_FRONT), float(MARGIN_REAR), LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, float(_RECT_REACH),
+            int(m), 0.0)
+        if ptr >= n:
+            return None
+        pr = dubins_one(A, thA, Bm, thB, float(rs[ptr]), int(ws[ptr]), m)
+        if pr is not None:
+            if tail > 0:
+                pr = pr + [('line', Bm, B, m)]
+            if all(prim_ok(q) for q in pr):
+                return pr
+        ptr += 1
 
 
 def build_via(opt, ep, sp):
@@ -1456,6 +1504,7 @@ class Table:
         self.margin_fallback = None   # 広いすき間でつなげない組だけ使うすき間(per_gate_conn_mode=fallback)
         self.fb_used = set()
         self.fast_used = {}   # (e, s) -> 例外で使ったすき間(fast_margins)
+        self.fast_base = {}   # (e, s) -> 例外にする前の (時間, つなぎ)。fast_keep_min_sec で元に戻すとき用
         self.fast_tried = set()
         self.via_first = via_first   # スタート・ゴールの区間: 組み合わせが少ないので、最初から遠回りも比べる
         nE, nS = len(ends), len(starts)
@@ -1573,6 +1622,7 @@ class Table:
             c1 = float(self.C[e, s]) if self.done[e, s] else INF
             if c1 < INF / 2 and c0 - c1 >= FAST_GAIN_SEC:
                 self.fast_used[(e, s)] = float(mg)
+                self.fast_base[(e, s)] = (c0, saved[1])
                 MARGIN_FRONT = MARGIN_REAR = m_now
                 return True
             # 戻す
@@ -2013,7 +2063,7 @@ def main():
     sel_i = None
     global MARGIN_FRONT, MARGIN_REAR, OBLIQUE_POLICY
     used_margin = None
-    global _GRID_ON, _RO
+    global _GRID_ON, _RO, FAST_MARGINS
     for i_mg, mg in enumerate(MARGIN_LIST or [None]):
         if i_mg == 1 and NARROW_SAFEST:
             # 狭い配置(最初のすき間で通れない): 垂直に通れないゲートだけ斜めを使う(計算量を約1/8にする。ユーザー決定 2026-11-09)
@@ -2177,6 +2227,7 @@ def main():
         for t in T.values():
             t.allow_via = True
     saved = None; t_phase2 = None
+    fast_sol = None   # 2026-11-16: 例外のすき間を使った経路(fast_keep_min_sec で例外なしと比べる)
     while True:
         it += 1
         if saved is not None and time.time() - t_phase2 > VIA_BUDGET_SEC:
@@ -2250,6 +2301,32 @@ def main():
                     t.open_via()
                 print(f'phase 1 {total:.1f}s -> phase 2 (detours)  {time.time() - t0:.1f}s', flush=True)
                 continue
+            if FAST_MARGINS and FAST_KEEP_MIN_SEC > 0 and fast_sol is None \
+                    and any((e, s) in T[key].fast_used for key, e, s in used):
+                # 例外のすき間を使った経路が見つかった。例外を全部元に戻して例外なしでも解き直し、合計で
+                # FAST_KEEP_MIN_SEC 以上速いときだけ例外の経路に戻す(つなぎの判定はほぼ済んでいるので、解き直しは速い)
+                fast_sol = (total, list(used), list(visits),
+                            {k: {es: (float(t.C[es]), t.prims.get(es), t.fast_used[es]) for es in t.fast_used} for k, t in T.items()})
+                for t in T.values():
+                    for es, (c0, pr0) in t.fast_base.items():
+                        if es in t.fast_used:
+                            t.C[es] = c0
+                            if pr0 is not None:
+                                t.prims[es] = pr0
+                    t.fast_used.clear()
+                FAST_MARGINS = []
+                print('fast margins: %.1fs with exceptions, solving again without them' % total, flush=True)
+                continue
+            if fast_sol is not None:
+                gain = total - fast_sol[0]
+                if gain >= FAST_KEEP_MIN_SEC:
+                    total, used, visits, fst = fast_sol
+                    for k, d in fst.items():
+                        for es, (c1, pr1, mg) in d.items():
+                            T[k].C[es] = c1; T[k].prims[es] = pr1; T[k].fast_used[es] = mg
+                    print('fast margins kept (%.2fs faster than %.1fs without them)' % (gain, total + gain), flush=True)
+                else:
+                    print('fast margins dropped (only %.2fs faster)' % gain, flush=True)
             break
     print(f'TOTAL hybrid laps={LAPS}: {total:.1f}s (cost)  iterations={it} checks={sum(t.checks for t in T.values())} '
           f'compute {time.time() - t0:.1f}s', flush=True)
