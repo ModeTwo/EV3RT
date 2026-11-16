@@ -12,6 +12,19 @@ class WaitForStrategy(Behaviour):
         self.fallback_enabled = fallback_enabled
 
     def _fail_or_fallback(self, reason):
+        # 2026-11-15: PC の計画が届かなければ、ロボットが読んだヒントから前もって作った計画を探し、なければ
+        # スタートからガレージへ行くだけの予備の計画で走る(et_rally_plan_select.py)。旧い固定ルートより優先する。
+        try:
+            from ..et_rally_plan_select import select_on_robot
+            path, how = select_on_robot(self.context)
+            self.context.strategy_plan_path = str(path)
+            self.context.strategy_plan_source = "robot %s" % how
+            self.context.strategy_status = "ready"
+            self.context.strategy_fallback_used = True
+            self.logger.error("ETラリー: PC の計画がない(%s)。ロボットで選んだ計画で走ります: %s" % (reason, how))
+            return Status.SUCCESS
+        except Exception as error:
+            self.logger.error("ETラリー: ロボットでの計画の選び直しに失敗(%r)" % (error,))
         # ETラリー開始時にエラーが出たら、ミッションを止めず、固定ルートでゴールへ向かう。
         if not self.fallback_enabled:
             return Status.FAILURE

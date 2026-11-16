@@ -14,10 +14,16 @@ def build_et_sumo_phase(context, config):
 
 
 def build_sumo_after_delivery(context, config):
-    """カーブから既存の直線相撲へ接続。押し出しは捕捉後1000mm。"""
+    """カーブから直線相撲へ接続。前進距離は相撲制御器の仕様に従う。"""
     push = replace(config.sumo_relative_push, push_distance_mm=1000.0)
     config = replace(config, sumo_push_calibration=None, sumo_push_execute=True,
                      sumo_relative_push=push)
+    config = replace(config, sumo_align=replace(
+        config.sumo_align, distance_mm=1100.0
+    ))
     tree = build_sumo_push_tree(context, config)
     tree.engine.continuous_entry = True
+    tree.engine.delivery_green_on_right = (
+        config.mission_mode == "bottle-sumo"
+    )
     return tree

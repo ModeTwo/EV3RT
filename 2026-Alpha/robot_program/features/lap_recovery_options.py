@@ -2,6 +2,12 @@
 import math
 import os
 
+def dark_heading_mode():
+    value = os.environ.get('LAP_DARK_HEADING', 'off').lower()
+    if value not in ('off', 'on'):
+        raise ValueError('LAP_DARK_HEADING must be off or on')
+    return value
+
 def decision_offset_mm():
     value = os.environ.get('LAP_DECISION_OFFSET_MM', '145.21')
     if value not in ('100', '145.21'):

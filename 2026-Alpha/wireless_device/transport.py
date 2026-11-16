@@ -50,11 +50,13 @@ class StrategyJsonLogger:
 
 
 class RequestProcessor:
-    def __init__(self, calculate, strategy_log_dir=None, selected_laps=2):
+    def __init__(self, calculate, strategy_log_dir=None, selected_laps=2, plan_provider=None):
         # 経路計算は担当者が渡す関数へ委譲し、このモジュールでは実装しない。
         if type(selected_laps) is not int or selected_laps <= 0:
             raise ValueError("selected_laps must be a positive integer")
         self.calculate = calculate
+        # 2026-11-15: 経路の道具の計画を丸ごと送る(wireless_device/curve_plan_provider.py)。あれば calculate より優先する。
+        self.plan_provider = plan_provider
         self.cache = {}
         self.selected_laps = selected_laps
         self.strategy_logger = StrategyJsonLogger(strategy_log_dir)
@@ -88,6 +90,20 @@ class RequestProcessor:
             # 周回数は無線通信デバイス側の設定を正とする。走行体から届く
             # 旧payloadのlapsは互換性のため受信できるが、経路計算には使用しない。
             planning_payload = dict(payload, laps=self.selected_laps)
+            if self.plan_provider is not None:
+                # 2026-11-15: 経路の道具の計画を丸ごと(steps・exit・gates など)。ロボットは planFormat を見て、
+                # ファイルで走るときと同じように走る(robot_program/et_rally_plan_select.py)。
+                from .curve_plan_provider import PLAN_FORMAT
+                plan, source = self.plan_provider.provide(payload["hint1"], payload["hint2"])
+                LOG.info("Curve plan mission=%d source=%s steps=%d", mission_id, source, len(plan["steps"]))
+                result = make_message(
+                    "STRATEGY", mission_id, 0,
+                    {"planFormat": PLAN_FORMAT, "plan": plan, "source": source,
+                     "selectedLaps": self.selected_laps, "strategy": [], "headingFrame": HEADING_FRAME})
+                if len(self.cache) >= 16:
+                    del self.cache[next(iter(self.cache))]
+                self.cache[mission_id] = (fingerprint, result)
+                return result
             strategy = planner_to_full_start(
                 validate_strategy(self.calculate(planning_payload)), payload["course"])
             result = make_message(
@@ -107,11 +123,12 @@ class RequestProcessor:
         return result
 
 
-def run_client(host, port, calculate, stop_event, strategy_log_dir=None, selected_laps=2):
+def run_client(host, port, calculate, stop_event, strategy_log_dir=None, selected_laps=2, plan_provider=None):
     processor = RequestProcessor(
         calculate,
         strategy_log_dir=strategy_log_dir,
         selected_laps=selected_laps,
+        plan_provider=plan_provider,
     )
     counters = {}
     while not stop_event.is_set():

@@ -20,6 +20,9 @@ from .motor_control import StopNow
 # ジャイロ仕上げの出力(ETラリーと同じ値)。フェーズ1の出力(main_power)より大きくならないよう丸める。
 FINE_MAX_POWER = 60
 FINE_MIN_POWER = 50
+# 2026-11-16(devSSとのマージ): 回す量に使うタイヤ径。マージ前の EtRallySpinAroundByEncoder が使っていた
+# ET_RALLY_TIRE_DIAMETER(56.87)のまま固定する(devSS で ETラリーの値は 55.56 に変わり、旋回は直進と同じ径を使う形になったため)。
+LEGACY_TIRE_DIAMETER = 56.87
 
 
 class EncoderSpin(EtRallySpinAroundByEncoder):
@@ -34,7 +37,8 @@ class EncoderSpin(EtRallySpinAroundByEncoder):
             name=name, target=target, main_power=max_power,
             fine_max_power=fine_max, fine_min_power=fine_min,
             pid_p=pid_p, pid_i=pid_i, pid_d=pid_d, target_type=target_type,
-            fine_tolerance_deg=tolerance, fine_trim=fine_trim)
+            fine_tolerance_deg=tolerance, fine_trim=fine_trim,
+            tire_diameter_mm=LEGACY_TIRE_DIAMETER)
 
 
 class LocalEncoderSpin(EncoderSpin):

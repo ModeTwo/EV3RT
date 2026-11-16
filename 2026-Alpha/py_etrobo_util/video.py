@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 from .parallel_line_observation import observe_lap_line_candidate, observe_lap_line_with_white_sides
 from .vision_sessions import VisionSessions
+from . import et_rally_marker_detector
 try:
     import zxingcpp
 
@@ -114,6 +115,9 @@ class TargetInterested(Enum):
     LINE = "Line"
     QRCODE = "QR Code"
     BOTTLE = "Bottle"
+    # 2026-09追加: ETラリー区画の座標プリント(QR風の四角マーカー)を、
+    # デコードせず物体として検出するモード。et_rally_marker_detector.py参照。
+    ET_RALLY_MARKER = "ET Rally Marker"
 
 # capture format per interest: (fourcc, width, height, fps)
 # MJPG = compressed, high fps for line tracing; YUYV = uncompressed, fine
@@ -122,6 +126,9 @@ _CAP_CONFIG = {
     TargetInterested.LINE:   ("MJPG", IN_FRAME_WIDTH, IN_FRAME_HEIGHT, 30),
     TargetInterested.BOTTLE: ("MJPG", IN_FRAME_WIDTH, IN_FRAME_HEIGHT, 30),
     TargetInterested.QRCODE: ("YUYV", IN_FRAME_WIDTH_QR, IN_FRAME_HEIGHT_QR, 5),
+    # LINE/BOTTLEと同じ低解像度・高フレームレート設定。QRのような細かい文字を
+    # 読む必要がなく、瞬間的な検出を優先するため。
+    TargetInterested.ET_RALLY_MARKER: ("MJPG", IN_FRAME_WIDTH, IN_FRAME_HEIGHT, 30),
 }
 
 class BottleColor(Enum):
@@ -191,10 +198,21 @@ class Video(object):
         self._sumo_alignment_observation = None
         self._sumo_alignment_detector_session = None
         self._sumo_alignment_detector = None
+        # ETラリー開始位置の青い丸検出
+        self._rally_blue_detector = None
+        self._rally_blue_detector_session = None
         self._sumo_recording = None
         self._sumo_recording_telemetry = None
         # (insight, color, cx, theta, bottom_row, area, in_blindspot)
         self._bottle_stamped = (False, BottleColor.NONE, int(FRAME_WIDTH/2), 0.0, 0, 0, False)
+
+        # ----- internal state for TargetInterested.ET_RALLY_MARKER
+        # QRと同様、検出処理(CLAHE・適応二値化・角検出)がBOTTLE/LINEより重いため、
+        # 専用の裏スレッドで処理し、撮影ループ(VideoThread)を止めない。
+        self._marker_frame_lock = threading.Lock()
+        self._latest_marker_frame = None   # (frame, session, frame_id) 検出待ちの最新フレーム
+        self._marker_worker_lock = threading.Lock()
+        self._marker_is_detecting = False
 
         # ----- frame id as the common key across the producer and consumers in logging
         self.frame_id = 0
@@ -364,6 +382,30 @@ class Video(object):
                         self._detected_text = text
                         self._last_decode_time = time.time()
 
+    def _marker_detection_worker(self) -> None:
+        while not self._worker_stop.is_set():
+            with self._marker_frame_lock:
+                packet = self._latest_marker_frame
+                self._latest_marker_frame = None
+            if packet is None:
+                self._worker_stop.wait(0.005)
+                continue
+            frame, session, frame_id = packet
+            if self._vision_sessions.capture_token() != (session, 'et_rally_marker'):
+                continue
+            with self._marker_worker_lock:
+                self._marker_is_detecting = True
+            try:
+                markers = et_rally_marker_detector.detect(frame)
+            except Exception as error:
+                self._vision_sessions.publish_marker(session, frame_id, None)
+                print("WARN et_rally_marker detection failed: %r" % (error,))
+                continue
+            finally:
+                with self._marker_worker_lock:
+                    self._marker_is_detecting = False
+            self._vision_sessions.publish_marker(session, frame_id, markers)
+
     def process(self,
                 plotter: Plotter,
                 hub: Hub,
@@ -453,9 +495,13 @@ class Video(object):
             img_orig = cv2.resize(frame_169, (FRAME_WIDTH, FRAME_HEIGHT),
                                  interpolation=cv2.INTER_AREA if capture_mode == 'sumo_align' else cv2.INTER_LINEAR)
             if capture_mode == "sumo_align":
-                self._process_sumo_alignment(img_orig, capture_session, sumo_metadata)
+                self._process_sumo_alignment(
+                    img_orig, capture_session, sumo_metadata
+                )
+            elif capture_mode == "rally_blue":
+                self._process_rally_blue(img_orig, capture_session)
             else:
-                img_hsv  = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HSV)
+                img_hsv = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HSV)
 
                 # Track the locked colour once identified, else scan all four.
                 if self._bottle_lock_color is not None:
@@ -550,6 +596,24 @@ class Video(object):
                                             self.bottle_bottom_row, self.bottle_area, in_blind)
                     if capture_mode == 'bottle':
                         self._vision_sessions.publish_bottle(capture_session, self.frame_id, self._bottle_stamped)
+
+        elif self.target_interested == TargetInterested.ET_RALLY_MARKER:
+            # ---- ET_RALLY_MARKER: QRと同じく、重い検出処理は裏スレッドへ渡す ----
+            # 撮影フォーマットはLINE/BOTTLEと同じ640x480 MJPGなので、そのままのframeを渡す
+            # (LINE用のFRAME_WIDTH=320への縮小は、ラインの近距離検出向けの設定であり、
+            # 数十cm先のマーカーの模様を見るこの用途には解像度を落としすぎるため使わない)。
+            img_orig = frame.copy()
+            with self._marker_frame_lock:
+                if capture_mode == 'et_rally_marker':
+                    self._latest_marker_frame = (frame.copy(), capture_session, self.frame_id)
+
+            with self._marker_worker_lock:
+                detecting = self._marker_is_detecting
+            session, frame_id, markers = self._vision_sessions.get_marker()
+            self.target_insight = bool(markers)
+            if markers:
+                cx, cy = markers[0]["center"]
+                cv2.circle(img_orig, (int(cx), int(cy)), 6, (0, 0, 255), -1)
 
         else: # TargetInterested.LINE
             merge_geometry = None
@@ -817,7 +881,6 @@ class Video(object):
                         except queue.Full:
                             print('LAP_IMAGE_DROPPED frame=%d' % self.frame_id, flush=True)
                     self._lap_latest = observation
-
         self._record_sumo_alignment_frame(frame, img_orig, capture_session,
                                           capture_mode, sumo_capture_time, sumo_metadata)
         # Recognition and observations above remain active without a display.
@@ -863,7 +926,6 @@ class Video(object):
         """同一LINEフレームの未補正の近点/遠点。320x180画像座標。"""
         with self._theta_lock:
             return getattr(self, '_line_geometry_stamped', None)
-
     def get_theta_stamped(self):
         with self._theta_lock:
             return self._theta_stamped   # (theta, frame_id, capture_time, odo_mm)
@@ -886,10 +948,8 @@ class Video(object):
         if color == BottleColor.BLACK:
             mask[:int(FRAME_HEIGHT * 0.30), :] = 0
         return mask
-
     def begin_sumo_alignment_recording(self, telemetry_reader, *, output_dir=None):
         from robot_program.features.sumo_align_recording import SumoAlignRecording
-
         previous = self._sumo_recording
         if previous is not None and not previous.finished.is_set():
             raise RuntimeError("Previous sumo recording is still finishing")
@@ -973,6 +1033,108 @@ class Video(object):
                 )
         recording.submit(raw, detected, row)
 
+    def begin_rally_blue_read(self):
+        """青い丸の画像認識を開始する。"""
+        self.set_target_interested(
+            TargetInterested.BOTTLE,
+            observation_mode="rally_blue",
+        )
+        return self._vision_sessions.capture_token()[0]
+
+
+    def get_rally_blue_observation(self, session):
+        """指定セッションの青い丸検出結果を取得する。"""
+        current_session, frame_id, observation = (
+            self._vision_sessions.get_rally_blue()
+        )
+
+        if current_session != session:
+            return None
+
+        if self._vision_sessions.capture_token() != (
+            session, "rally_blue"
+        ):
+            return None
+
+        return observation
+
+
+    def end_rally_blue_read(self, session):
+        """青い丸の画像認識を終了する。"""
+        if self._vision_sessions.capture_token() == (
+            session, "rally_blue"
+        ):
+            self.set_target_interested(TargetInterested.LINE)
+
+    def _process_rally_blue(self, image, session):
+        """カメラスレッドで青い丸を検出する。"""
+        from robot_program.features.sumo_blue_detector import (
+            SumoBlueDetector,
+        )
+
+        if self._vision_sessions.capture_token() != (
+            session, "rally_blue"
+        ):
+            return
+
+        if self._rally_blue_detector_session != session:
+            self._rally_blue_detector = SumoBlueDetector()
+            self._rally_blue_detector_session = session
+
+        result = self._rally_blue_detector.step(image)
+
+        # Save one actual detector input per observation session.
+        detector = self._rally_blue_detector
+        detector.debug_frame_count = getattr(detector, "debug_frame_count", 0) + 1
+        if detector.debug_frame_count == 10:
+            try:
+                from pathlib import Path
+                from datetime import datetime
+                import json
+
+                folder = Path(__file__).resolve().parents[1] / "work" / "rally-blue-debug"
+                folder.mkdir(parents=True, exist_ok=True)
+                prefix = folder / (
+                    datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+                    + "-session-" + str(session)
+                )
+                hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+                mask = cv2.inRange(
+                    hsv,
+                    np.array(detector.HSV_LOWER, dtype=np.uint8),
+                    np.array(detector.HSV_UPPER, dtype=np.uint8),
+                )
+                kernel = np.ones((3, 3), np.uint8)
+                cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+                cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+                for suffix, data in (
+                    ("-input.png", image),
+                    ("-mask.png", mask),
+                    ("-cleaned.png", cleaned),
+                ):
+                    if not cv2.imwrite(str(prefix) + suffix, data):
+                        raise RuntimeError("image save failed: " + suffix)
+                Path(str(prefix) + "-result.json").write_text(
+                    json.dumps(result, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                print("RALLY_BLUE DEBUG SAVED " + str(prefix))
+            except Exception as error:
+                print("RALLY_BLUE DEBUG SAVE FAILED: " + str(error))
+
+        observation = dict(
+            result,
+            session=session,
+            frame_id=self.frame_id,
+            t=time.monotonic(),
+        )
+
+        self._vision_sessions.publish_rally_blue(
+            session,
+            self.frame_id,
+            observation,
+        )
+    
     def begin_sumo_alignment_read(
         self, *, gyro_reader, distance_reader, preserve_history=False
     ):
@@ -1025,7 +1187,6 @@ class Video(object):
             SumoBlackDetector,
             pixel_bearing,
         )
-
         if self._sumo_alignment_detector_session != session:
             if self._sumo_alignment_detector is None or not request[3]:
                 self._sumo_alignment_detector = SumoBlackDetector()
@@ -1154,6 +1315,20 @@ class Video(object):
         self.set_target_interested(TargetInterested.BOTTLE)
         return self._vision_sessions.capture_token()[0]
 
+    def prepare_et_rally_marker_camera(self):
+        """PrepareHintCameraと同じ考え方: 移動中にカメラモード切替だけ先に済ませておき、
+        旋回直後の読み取り開始時に切替コストがかからないようにする。"""
+        self.set_target_interested(TargetInterested.ET_RALLY_MARKER, observation_mode="et_rally_marker_prepare")
+
+    def begin_et_rally_marker_read(self):
+        self.set_target_interested(TargetInterested.ET_RALLY_MARKER)
+        return self._vision_sessions.capture_token()[0]
+
+    def get_et_rally_marker_observation(self):
+        """(session, frame_id, markers)を返す。marketsはet_rally_marker_detector.detect()の
+        戻り値と同じ形式のlist(未検出/未着手ならNoneまたは空list)。"""
+        return self._vision_sessions.get_marker()
+
     def get_bottle_observation(self):
         session, frame_id, observation = self._vision_sessions.get_bottle()
         if observation is None:
@@ -1170,7 +1345,11 @@ class Video(object):
         return
 
     def set_target_interested(self, target_interested: TargetInterested, *, observation_mode=None) -> None:
-        mode = {TargetInterested.QRCODE: 'qr', TargetInterested.BOTTLE: 'bottle'}.get(target_interested, 'line')
+        mode = {
+            TargetInterested.QRCODE: 'qr',
+            TargetInterested.BOTTLE: 'bottle',
+            TargetInterested.ET_RALLY_MARKER: 'et_rally_marker',
+        }.get(target_interested, 'line')
         self._vision_sessions.start(observation_mode or mode)
         self.target_interested = target_interested
         with self._frame_lock:
@@ -1178,6 +1357,8 @@ class Video(object):
         with self._result_lock:
             self._detected_text = ''
             self._detected_corners = None
+        with self._marker_frame_lock:
+            self._latest_marker_frame = None
         cfg = _CAP_CONFIG.get(target_interested)
         if cfg is not None and cfg != self._cap_cfg:
             with self._pending_lock:
@@ -1186,6 +1367,9 @@ class Video(object):
         if target_interested == TargetInterested.QRCODE and not hasattr(self, '_detection_thread'):
             self._detection_thread = threading.Thread(target=self._detection_worker, daemon=True)
             self._detection_thread.start()
+        if target_interested == TargetInterested.ET_RALLY_MARKER and not hasattr(self, '_marker_detection_thread'):
+            self._marker_detection_thread = threading.Thread(target=self._marker_detection_worker, daemon=True)
+            self._marker_detection_thread.start()
 
     def close(self):
         if self._closed:
@@ -1214,6 +1398,9 @@ class Video(object):
         worker = getattr(self, '_detection_thread', None)
         if worker is not None:
             worker.join(timeout=2.0)
+        marker_worker = getattr(self, '_marker_detection_thread', None)
+        if marker_worker is not None:
+            marker_worker.join(timeout=2.0)
         if self.cap is not None:
             self.cap.release()
         if self.preview_enabled:

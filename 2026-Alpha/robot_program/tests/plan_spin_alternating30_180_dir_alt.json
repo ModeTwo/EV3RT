@@ -1,0 +1,155 @@
+{
+  "note": "alternating 0/180deg x30, EXPLICIT forced alternating direction (+1/-1) via spin_encoder_dir_test. Fixes the shortest-path ambiguity seen in plan_spin_alternating30_180.json.",
+  "steps": [
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0,
+      "direction": 1
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0,
+      "direction": -1
+    }
+  ]
+}

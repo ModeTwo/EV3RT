@@ -1,0 +1,503 @@
+"""ETラリー専用: カメラを別のプロセスで動かす(2026-11-10)。
+
+同じプロセスの中のスレッドでカメラの画像を取り込むと、PyPy では1度に1つの処理しか動けないため、
+20msごとの走りの制御が最大200ms止まる(ロボットでの計測: スレッドだと20ms周期が30ms超え 6秒で7〜26回、
+別のプロセスなら0回)。そのため、カメラは子プロセス(このファイルを -m で起動)が持ち、
+親(走りの制御)とは1行のJSONだけをやり取りする。
+
+子プロセスがすること:
+  - 撮る: 640x480 MJPG。撮った直後の time.monotonic() を時刻にする(親と同じ時計)。
+  - 保存(save): every_n 枚に1枚を JPEG で folder に保存し、meta.jsonl に {file, t, n} を書く。
+  - 位置(detect): スタートで止まっている間、灰色の点とマーカーから位置と向きを出して親へ送る。
+親からの命令(標準入力に1行ずつ): "save 1" / "save 0" / "detect 1" / "detect 0" / "quit"。
+子からの知らせ(標準出力に1行ずつのJSON): ev=ready / pose / error / stopped。
+親が終わって標準入力が閉じたら、子も終わる。
+"""
+import json
+import os
+import platform
+import sys
+import threading
+import time
+from collections import deque
+
+if platform.python_implementation() == 'CPython':
+    sys.path.append('/usr/lib/python3/dist-packages')
+elif platform.python_implementation() == 'PyPy':
+    sys.path.append('/usr/local/lib/pypy3/dist-packages')
+
+
+# ---------------- 親(走りの制御)側 ----------------
+class CameraProcess:
+    """子プロセスを起動して、知らせを裏のスレッドで受け取る。受け取った知らせは poll() で取り出す。"""
+
+    def __init__(self, folder=None, every_n=5, quality=90, exposure=None, calib_path=None, mirror=False, gates=None,
+                 defer_open=False):
+        import subprocess
+        from pathlib import Path
+        # defer_open(2026-11-15): カメラを開かずに準備だけして待つ。open_camera() で開く(本体がカメラを閉じたあと)。
+        cfg = dict(folder=None if folder is None else str(folder), every_n=int(every_n), quality=int(quality),
+                   exposure=exposure, calib_path=None if calib_path is None else str(calib_path), mirror=bool(mirror),
+                   gates=gates, defer_open=bool(defer_open))
+        self.defer_open = bool(defer_open)
+        self.opened = not self.defer_open
+        root = Path(__file__).resolve().parents[1]
+        self.proc = subprocess.Popen([child_python(), '-m', 'robot_program.et_rally_camera_proc', json.dumps(cfg)],
+                                     cwd=str(root), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, bufsize=1, universal_newlines=True)
+        self.folder = None if folder is None else Path(folder)
+        if self.folder is not None:
+            self.folder.mkdir(parents=True, exist_ok=True)   # 子がカメラを開く前に、親が位置の記録を書き始めることがある
+        self.events = deque()
+        self.ready = None
+        self.stopped = None
+        self.lock = threading.Lock()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
+
+    def _read(self):
+        for line in self.proc.stdout:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            with self.lock:
+                if ev.get('ev') == 'ready':
+                    self.ready = ev
+                elif ev.get('ev') == 'stopped':
+                    self.stopped = ev
+                self.events.append(ev)
+
+    def send(self, command):
+        try:
+            self.proc.stdin.write(command + '\n')
+            self.proc.stdin.flush()
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def open_camera(self):
+        """defer_open のとき、子にカメラを開かせる(2回目以降は何もしない)。"""
+        if self.opened:
+            return True
+        self.opened = self.send('open')
+        return self.opened
+
+    def poll(self):
+        with self.lock:
+            out = list(self.events)
+            self.events.clear()
+        return out
+
+    def alive(self):
+        return self.proc.poll() is None
+
+    def close(self, timeout=2.0):
+        self.send('quit')
+        try:
+            self.proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self.proc.wait(timeout)
+        except Exception:
+            self.proc.kill()
+        self.reader.join(0.5)
+        return self.stopped
+
+
+def child_python():
+    """子プロセスを動かすPython。ロボットのPyPyはnumpyを使う処理がとても遅い(numpyの読み込み3.2秒など)ので、
+    普通のPython(/usr/bin/python3、2026-11-10に python3-numpy・python3-opencv を入れた)があればそちらを使う。
+    環境変数 ET_CAMERA_PYTHON で指定もできる。"""
+    env = os.environ.get('ET_CAMERA_PYTHON')
+    if env:
+        return env
+    if platform.python_implementation() == 'PyPy' and os.path.exists('/usr/bin/python3'):
+        return '/usr/bin/python3'
+    return sys.executable
+
+
+_shared = None
+
+
+def shared(**kwargs):
+    """ETラリーの間に使う1つの子プロセス。なければ kwargs で起動する。"""
+    global _shared
+    if _shared is None or not _shared.alive():
+        _shared = CameraProcess(**kwargs)
+    return _shared
+
+
+def current():
+    return _shared if _shared is not None and _shared.alive() else None
+
+
+def close_shared():
+    global _shared
+    p, _shared = _shared, None
+    return None if p is None else p.close()
+
+
+# ---------------- 子プロセス側 ----------------
+def _child(cfg):
+    out_lock = threading.Lock()
+
+    def say(**ev):
+        with out_lock:
+            sys.stdout.write(json.dumps(ev) + '\n')
+            sys.stdout.flush()
+
+    try:
+        import cv2
+    except ImportError as error:
+        say(ev='error', what='cannot import cv2 in %s (%r)' % (sys.executable, error))
+        return
+    state = dict(save=False, detect=False, track=False, quit=False, mirror=bool(cfg.get('mirror')))
+
+    def commands():
+        for line in sys.stdin:
+            parts = line.split()
+            if not parts:
+                continue
+            if parts[0] == 'quit':
+                break
+            if parts[0] == 'gates' and len(parts) > 1:
+                # 2026-11-15: ゲートの位置を入れ直す(受信した計画のとき、ETラリーの始めに届く)。走りの流れの中で入れる。
+                try:
+                    state['gates'] = json.loads(line.split(None, 1)[1])
+                except ValueError:
+                    pass
+                continue
+            if parts[0] == 'open':
+                # 2026-11-15: defer_open のとき、本体(alpha.py の VideoThread)がカメラを閉じてから開く
+                state['open'] = True
+                continue
+            if parts[0] == 'pitch' and len(parts) > 1:
+                # 2026-11-11: 走行中の補正(track)で使うカメラに、この下向き(度)を足して作り直す
+                # (スタート位置の取り込みで当てはめた値。カメラの角度が較正ファイルからずれていても走行中に合わせる)。
+                try:
+                    state['extra_pitch'] = float(parts[1]); state['cam_reset'] = True
+                except ValueError:
+                    pass
+                continue
+            if parts[0] in ('save', 'detect', 'track') and len(parts) > 1:
+                state[parts[0]] = parts[1] == '1'
+                if parts[0] == 'detect' and len(parts) > 2:   # "detect 1 1" = 左コース(見た左右を逆にする)
+                    state['mirror'] = parts[2] == '1'
+        state['quit'] = True   # 親が終わった(標準入力が閉じた)ときも終わる
+
+    threading.Thread(target=commands, daemon=True).start()
+    cam = None
+    cam_start = None
+    if cfg.get('defer_open'):
+        # 2026-11-15: 本番(--mission full)では、ETラリーの前の工程で本体がカメラを開いている(カメラは同時に1つのプロセスしか
+        # 開けない)。ここでは開かずに、重い準備(cv2・numpy の読み込み、スタートの広い範囲の対応表)だけ済ませて待ち、
+        # ETラリーの始めに本体が閉じてから届く "open" で開く。開いて使えるまで約1秒で、ジャイロの測り直し(約3秒)の間に収まる。
+        try:
+            from robot_program import et_rally_start_pose as sp
+            cam_start = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S,
+                                        top_x=sp.START_WIDE_X, top_y=sp.START_WIDE_Y)
+            sp.set_gate_legs(cfg.get('gates'))
+        except Exception:
+            cam_start = None
+        state['prebuilt'] = True
+        say(ev='waiting', prebuilt=cam_start is not None)
+        while not state.get('open') and not state['quit']:
+            time.sleep(0.02)
+        if state['quit']:
+            say(ev='stopped', frames=0, saved=0, detected=0, tracked=0)
+            return
+        say(ev='opening')
+    # 2026-11-13: 走行中にぶつかってカメラのUSBが一度切れると、つなぎ直したカメラは video1 になる(video0 は
+    # そのとき動いていたプログラムが持っていた)。0 だけを開いていたので、次の走りでカメラなしになった。
+    # 0〜3 を順に試し、開けて1枚読めた番号を使う(10番台はラズパイの変換用でカメラではない)。
+    cap = None
+    for index in (0, 1, 2, 3):
+        c = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        if not c.isOpened():
+            c.release()
+            continue
+        c.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        c.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        c.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        c.set(cv2.CAP_PROP_FPS, 30)
+        # 露出は最初の1枚を読む前に決める(元の順番。読んだあとに変えると遅くなるカメラがあるかもしれないため)
+        if cfg.get('exposure') is not None:
+            c.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+            c.set(cv2.CAP_PROP_EXPOSURE, float(cfg['exposure']))
+        else:
+            c.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+        ok, _ = c.read()
+        state['device'] = index
+        if ok:
+            cap = c
+            if index != 0:
+                say(ev='note', what='camera opened as video%d (not video0)' % index)
+            break
+        c.release()
+    if cap is None:
+        cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+    holder = dict(cap=cap)   # 2026-11-13: 走行中に開き直したとき差し替える
+
+    def set_exposure():
+        c = holder['cap']
+        if cfg.get('exposure') is not None:
+            c.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+            c.set(cv2.CAP_PROP_EXPOSURE, float(cfg['exposure']))
+        else:
+            c.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+
+    def reopen():
+        """2026-11-13: カメラのUSBが切れて(接触不良・ぶつかった衝撃)つながり直すと、別の番号(video1 など)になり、
+        開いたままの古い番号からは二度と画像が来なかった(スタートで0枚、補正なしで走ってゲートに当たった)。
+        画像が来なくなったら閉じて、video0〜3 から開けて1枚読める番号を探し直す。見つかるまで繰り返す。"""
+        try:
+            holder['cap'].release()
+        except Exception:
+            pass
+        while not state['quit']:
+            for index in (0, 1, 2, 3):
+                c = cv2.VideoCapture(index, cv2.CAP_V4L2)
+                if not c.isOpened():
+                    c.release()
+                    continue
+                c.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                c.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                c.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                c.set(cv2.CAP_PROP_FPS, 30)
+                holder['cap'] = c
+                set_exposure()
+                ok, _ = c.read()
+                if ok:
+                    state['device'] = index
+                    return True
+                c.release()
+            time.sleep(0.2)
+        return False
+
+    set_exposure()
+    if not cap.isOpened():
+        # 2026-11-13: 開けなくても終わらない。読む側が0.5秒ごとに開き直しを試す(つながり直すのを待つ)
+        say(ev='error', what='camera not opened (will keep trying)')
+    folder = cfg.get('folder')
+    meta = None
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+        meta = open(os.path.join(folder, 'meta.jsonl'), 'a', encoding='utf-8')
+    cnt = dict(n=0, saved=0, detected=0, tracked=0)
+    latest = dict(frame=None, t=0.0, n=0)
+    lock = threading.Lock()
+    ready_ev = threading.Event()
+
+    def reader():
+        """2026-11-10: 画像を読み続けて、一番新しい1枚と時刻だけを持つ。位置の計算(1枚0.2〜0.5秒)と同じ流れで読むと、
+        カメラにたまった古い画像を読み、読んだ時刻を撮った時刻としてしまっていた(走行中の補正が実機でほとんど入らなかった原因)。
+        保存もここで行う(保存する画像の時刻も正しくなる)。"""
+        first = True
+        last_ok = time.monotonic()
+        skip_until = 0
+        while not state['quit']:
+            ok, frame = holder['cap'].read()
+            t = time.monotonic()
+            if not ok or frame is None:
+                if t - last_ok > 0.5:
+                    t0 = t
+                    if reopen():
+                        say(ev='reopened', device=state.get('device'), lost_sec=round(time.monotonic() - last_ok, 2),
+                            search_sec=round(time.monotonic() - t0, 2))
+                        last_ok = time.monotonic()
+                        skip_until = cnt['n'] + 5   # 露出が効くまで数枚捨てる
+                    continue
+                time.sleep(0.005)
+                continue
+            last_ok = t
+            cnt['n'] += 1
+            n = cnt['n']
+            if n <= skip_until:
+                if n == skip_until:
+                    set_exposure()
+                continue
+            if n in (1, 5):
+                # 撮り始める前に設定した露出は効かないことがある(ロボットで、露出50の指定なのに真っ白)。
+                # 撮り始めてからもう一度設定し、効くまで数枚待ってから「使える」と知らせる。
+                set_exposure()
+                continue
+            if first and n >= 10:
+                first = False
+                say(ev='ready', t=t, device=state.get('device'), auto=holder["cap"].get(cv2.CAP_PROP_AUTO_EXPOSURE), exposure=holder["cap"].get(cv2.CAP_PROP_EXPOSURE),
+                    gain=holder["cap"].get(cv2.CAP_PROP_GAIN), shape=list(frame.shape), brightness=round(float(frame[::8, ::8].mean()), 1))
+            if first:
+                continue
+            with lock:
+                latest.update(frame=frame, t=t, n=n)
+            ready_ev.set()
+            if state['save'] and meta is not None and n % cfg['every_n'] == 0:
+                name = 'frame_%05d.jpg' % n
+                cv2.imwrite(os.path.join(folder, name), frame, [cv2.IMWRITE_JPEG_QUALITY, cfg['quality']])
+                meta.write(json.dumps({'file': name, 't': round(t, 4), 'n': n}) + '\n')
+                cnt['saved'] += 1
+                if cnt['saved'] % 25 == 0:
+                    meta.flush()
+
+    rt = threading.Thread(target=reader, daemon=True)
+    rt.start()
+    done_n = 0
+    while not state['quit']:
+        if state.get('gates') is not None:
+            try:
+                from robot_program import et_rally_start_pose as sp
+                sp.set_gate_legs(state.pop('gates'))
+            except Exception:
+                state.pop('gates', None)
+        if not (state['track'] or state['detect']):
+            if cam_start is None and not state.get('prebuilt'):
+                # 2026-11-12: スタートの広い範囲の対応表(約56万点)は作るのが重く、測り始めの時間を食っていた
+                # (2秒で3〜4枚)。待っている間に先に作っておく。
+                state['prebuilt'] = True
+                try:
+                    from robot_program import et_rally_start_pose as sp
+                    cam_start = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S,
+                                                top_x=sp.START_WIDE_X, top_y=sp.START_WIDE_Y)
+                    sp.set_gate_legs(cfg.get('gates'))
+                except Exception:
+                    cam_start = None
+                continue
+            time.sleep(0.01)
+            continue
+        if not ready_ev.wait(0.1):
+            continue
+        with lock:
+            frame, t, n = latest['frame'], latest['t'], latest['n']
+        if frame is None or n == done_n:
+            time.sleep(0.003)
+            continue
+        done_n = n
+        age = time.monotonic() - t
+        if state.pop('cam_reset', False):
+            cam = None
+        if state['track'] and not state['detect']:
+            # 走行中の補正(et_rally_camera_correct.py)。見つけたもの(車体の座標)だけを送り、
+            # 地図への結びつけは親が撮った時刻の位置で行う。
+            try:
+                from robot_program import et_rally_start_pose as sp
+                if cam is None:
+                    cam = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S,
+                                          extra_pitch_deg=state.get('extra_pitch', 0.0))
+                    sp.set_gate_legs(cfg.get('gates'))
+                dets = sp.detect_ground(cam, frame)
+                if dets['markers'] or len(dets['dots']) >= 2:
+                    say(ev='dets', t=t, n=n, age=round(age, 3),
+                        markers=[{'xy': [round(v, 2) for v in m['xy']], 'rot': round(m['rot'], 3)} for m in dets['markers']],
+                        dots=[[round(v, 2) for v in d] for d in dets['dots']])
+                cnt['tracked'] += 1
+            except Exception as error:
+                say(ev='error', what='track failed: %r' % (error,))
+                state['track'] = False
+        if state['detect']:
+            try:
+                from robot_program import et_rally_start_pose as sp
+                # 2026-11-12: スタートは広い範囲で見つけ、今の範囲で足りないときだけ外側も使う(choose_start_fit)。
+                # 走行中の補正の cam とは別に持つ(範囲が違うため)。
+                if cam_start is None:
+                    cam_start = sp.GroundCamera(cfg.get('calib_path'), top_s=sp.FAST_TOP_S,
+                                                top_x=sp.START_WIDE_X, top_y=sp.START_WIDE_Y)
+                    sp.set_gate_legs(cfg.get('gates'))
+                if folder and cnt['detected'] % 4 == 0 and cnt['detected'] < 24:
+                    # 2026-11-14: スタートで測った画像を数枚残す(配置36 で1つも測れなかった回の原因が調べられなかった)。
+                    # 2秒で約12枚測るうち4枚に1枚、最大6枚。
+                    try:
+                        name = 'start_%05d.jpg' % n
+                        cv2.imwrite(os.path.join(folder, name), frame, [cv2.IMWRITE_JPEG_QUALITY, cfg.get('quality', 90)])
+                        if meta is not None:
+                            meta.write(json.dumps({'file': name, 't': round(t, 4), 'n': n, 'start': True}) + '\n')
+                            meta.flush()
+                    except Exception:
+                        pass
+                dets = sp.detect_ground(cam_start, frame)
+                r, r0, wide = sp.choose_start_fit(cam_start, dets, mirror=state['mirror'])
+                if r is not None:
+                    r = dict(r, wide=wide)
+                else:
+                    r0 = None
+                say(ev='pose', t=t, n=n, r=_plain(r), r0=_plain(r0))
+                cnt['detected'] += 1
+            except Exception as error:   # 較正ファイルがないなど。1回だけ知らせて、位置を出すのはやめる
+                say(ev='error', what='detect failed: %r' % (error,))
+                state['detect'] = False
+    rt.join(1.0)
+    holder["cap"].release()
+    if meta is not None:
+        meta.close()
+    say(ev='stopped', frames=cnt['n'], saved=cnt['saved'], detected=cnt['detected'], tracked=cnt['tracked'])
+
+
+def _plain(r):
+    if r is None:
+        return None
+    out = {}
+    for k, v in r.items():
+        if isinstance(v, (tuple, list)):
+            out[k] = [float(x) for x in v]
+        elif isinstance(v, (int, float)):
+            out[k] = float(v)
+    return out
+
+
+def _check():
+    """ロボットで動かす確認(モーターは使わない): 子プロセスで撮影・保存・位置の計算をしている間、
+    20msごとの処理が乱れないかを測る。  python -m robot_program.et_rally_camera_proc --check"""
+    def loop(sec):
+        gaps = []
+        s = last = nxt = time.monotonic()
+        x = 0
+        while time.monotonic() - s < sec:
+            for i in range(3000):
+                x += i * i
+            nxt += 0.02
+            d = nxt - time.monotonic()
+            if d > 0:
+                time.sleep(d)
+            now = time.monotonic()
+            gaps.append(now - last)
+            last = now
+        g = sorted(gaps)
+        return 'mean %.1fms max %.1fms over30ms %d/%d' % (1000 * sum(g) / len(g), 1000 * g[-1], sum(v > .03 for v in g), len(g))
+
+    from pathlib import Path
+    folder = Path(__file__).resolve().parents[1] / 'run_logs' / ('et_camera_check_' + time.strftime('%Y%m%dT%H%M%S'))
+    p = CameraProcess(folder=folder, every_n=2, exposure=50)
+    t0 = time.monotonic()
+    while p.alive() and p.ready is None and time.monotonic() - t0 < 10:
+        time.sleep(0.05)
+    print('camera ready after %.2fs: %s' % (time.monotonic() - t0, p.ready or p.poll()))
+    print('no work  :', loop(3))
+    p.send('save 1')
+    print('saving   :', loop(6))
+    p.send('save 0')
+    p.poll()
+    p.send('detect 1')
+    print('detecting:', loop(4))
+    ev = p.poll()
+    poses = [e for e in ev if e.get('ev') == 'pose']
+    print('pose results %d (with pose %d), errors %s' % (len(poses), sum(1 for e in poses if e.get('r')),
+                                                        [e.get('what') for e in ev if e.get('ev') == 'error']))
+    if poses and poses[-1].get('r'):
+        print('last pose:', [round(v, 1) for v in poses[-1]['r']['pose']])
+    p.send('detect 0')
+    p.poll()
+    p.send('track 1')
+    print('tracking :', loop(4))
+    ev = p.poll()
+    dets = [e for e in ev if e.get('ev') == 'dets']
+    ages = sorted(e.get('age', 0.0) for e in dets) or [0.0]
+    print('track results %d, image age median %.3fs max %.3fs' % (len(dets), ages[len(ages) // 2], ages[-1]))
+    p.send('track 0')
+    print('stopped:', p.close(), 'images in', folder)
+
+
+if __name__ == '__main__':
+    if sys.argv[1:] == ['--check']:
+        _check()
+    else:
+        _child(json.loads(sys.argv[1]))

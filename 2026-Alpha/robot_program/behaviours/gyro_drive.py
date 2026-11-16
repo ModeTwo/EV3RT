@@ -13,6 +13,7 @@ from py_etrobo_util import SymmetricClamper
 from ..runtime import runtime
 from ..types import HeadingType
 from ..path_tracking import PathTracking, curvature_turn
+from ..power_log import OscillationTracker, log_power_state
 
 
 from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
@@ -42,6 +43,7 @@ class SpinAround(Behaviour):
         pid_d: float,
         target_type: HeadingType,
         tolerance: float = 0.5,
+        normalize_error: bool = True,
     ) -> None:
         super().__init__(name)
         self.target = target
@@ -50,10 +52,12 @@ class SpinAround(Behaviour):
         self.pid_i = pid_i
         self.pid_d = pid_d
         self.tolerance = tolerance
+        self.normalize_error = normalize_error
         self.clamper = SymmetricClamper(min_power, max_power)
         self.running = False
         self.target_heading = 0.0
         self.pid = None
+        self.oscillation = OscillationTracker()
 
     def update(self) -> Status:
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
@@ -71,6 +75,7 @@ class SpinAround(Behaviour):
                 sample_time=EXEC_INTERVAL,
             )
             self.running = True
+            self.oscillation = OscillationTracker()
             self.logger.info(
                 "%+06d %s.spin started at heading=%d for %d"
                 % (
@@ -81,14 +86,21 @@ class SpinAround(Behaviour):
                 )
             )
 
-        error = _normalize_heading_error(self.target_heading - current_heading)
+        raw_error = self.target_heading - current_heading
+        error = (
+            _normalize_heading_error(raw_error)
+            if self.normalize_error
+            else raw_error
+        )
         if abs(error) < self.tolerance:
             self.logger.info(
-                "%+06d %s.spin ended at heading=%d"
+                "%+06d %s.spin ended at heading=%d reversals=%d samples=%d"
                 % (
                     runtime.plotter.get_distance(),
                     self.__class__.__name__,
                     current_heading,
+                    self.oscillation.reversal_count,
+                    self.oscillation.sample_count,
                 )
             )
             return Status.SUCCESS
@@ -100,8 +112,12 @@ class SpinAround(Behaviour):
         elif raw_power * error < 0.0:
             raw_power = -raw_power
         power = int(self.clamper.clamp(raw_power))
-        runtime.right_motor.set_power(runtime.course * power)
-        runtime.left_motor.set_power(-runtime.course * power)
+        right_power = runtime.course * power
+        left_power = -runtime.course * power
+        runtime.right_motor.set_power(right_power)
+        runtime.left_motor.set_power(left_power)
+        log_power_state(self.__class__.__name__, right_power, left_power)
+        self.oscillation.update(power)
         return Status.RUNNING
 
     def terminate(self, new_status: Status) -> None:
@@ -230,8 +246,11 @@ class RunByGyro(Behaviour):
             self.running = True
 
         turn = int(self.pid(current_heading))
-        runtime.right_motor.set_power(self.power + runtime.course * turn)
-        runtime.left_motor.set_power(self.power - runtime.course * turn)
+        right_power = self.power + runtime.course * turn
+        left_power = self.power - runtime.course * turn
+        runtime.right_motor.set_power(right_power)
+        runtime.left_motor.set_power(left_power)
+        log_power_state(self.__class__.__name__, right_power, left_power)
         return Status.RUNNING
 
 

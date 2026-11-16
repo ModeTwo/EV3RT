@@ -1,0 +1,7 @@
+{
+  "note": "straight 300mm then 0-degree turn (stop). 2026-10-28: measure real stop distance on the floor vs run summary / fwd_mm",
+  "steps": [
+    {"type": "move", "target_heading_deg": 0.0, "distance_mm": 300.0},
+    {"type": "turn", "target_heading_deg": 0.0}
+  ]
+}

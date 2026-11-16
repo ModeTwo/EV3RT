@@ -19,7 +19,7 @@ class DeliverySumoTests(unittest.TestCase):
     def test_final_delivery_then_continuous_sumo_both_courses(self):
         for course in (-1, 1):
             for color in (BottleColor.RED, BottleColor.BLUE, BottleColor.YELLOW):
-                runtime.course = course
+                runtime.course = 0
                 cfg = config_for_mission('bottle-sumo')
                 self.assertFalse(mission_requires_qr(cfg))
                 tree = alpha.build_behaviour_tree(cfg, bottle_color=color)
@@ -32,7 +32,9 @@ class DeliverySumoTests(unittest.TestCase):
                 self.assertEqual(sumo.engine.settings.distance_mm, 1000)
                 self.assertEqual(sumo.engine.push_settings.push_distance_mm, 1000)
                 self.assertTrue(sumo.engine.execute)
-                self.assertEqual(sumo.engine.approach_offset_from_reset_deg, -90 * course)
+                runtime.course = course
+                sumo.initialise()
+                self.assertEqual(sumo.engine.approach_offset_from_reset_deg, 90 * course)
                 self.assertLess(names.index('BOTTLE'), names.index(sumo.name))
                 self.assertIn('Integration range complete brake', names)
 

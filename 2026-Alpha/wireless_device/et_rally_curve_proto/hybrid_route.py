@@ -1,0 +1,2346 @@
+"""試作: 前進の円弧・後退・その場の旋回を、つなぎ区間ごとに混ぜて選ぶ経路の探索(4周+ゴール)。
+
+ゲートの通り方は F(前進)/B(後退)/FB(前進→後退の往復)/BF、どちら側から、手前と奥の余り(ext)、
+ゲートの中での横の位置(offsets)の組み合わせ。つなぎ区間(前のゲートの終わりの姿勢→次のゲートの始めの姿勢)は、
+  1. 1本の走り(前進または後退の Dubins 経路: 円弧-直進-円弧 / 円弧-円弧-円弧)
+  2. その場の旋回を使うもの(旋回-直進-旋回、旋回-直進-円弧、円弧-直進-旋回)
+  3. 中継を1つ経由するもの(1と2で当たらないときだけ: 旋回-直進-旋回-直進-旋回、走り-走り)
+から、当たらずに最短のものを選ぶ。止まる(前後の切り替え・旋回の前・ゴール)直前は直進で終える(tail_cm)。
+順番どおりのゲート以外の線は横切らない(同じ色の重複はよいが、色の順番が変わる走行は規則違反)。
+
+探索は「当たり判定を後回しにする」動的計画法: まず当たりを無視した時間で最短経路を出し、使ったつなぎ区間だけ
+厳密に判定する。当たっていたら、その区間の次の候補に替えて解き直す(使わない区間は判定しない)。
+
+時間(秒)と精度の重みは設定で変えられる(HR_PARAMS=設定JSONのパス、または HR_<名前>=値)。
+usage: hybrid_route.py gates.json out_curved.json    (出力は curve_route.py と同じ形式。to_plan.py に渡せる)
+"""
+import json, math, sys, os, time
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hr_kernels   # numba があれば重い計算を速くする(なければ numpy 版のまま)
+
+# ---------------- 設定 ----------------
+PARAMS = dict(
+    laps=4,
+    # 車体と当たり判定(cm)
+    front=7.5, rear=17.9, half_width=7.0, margin_front=2.0, margin_rear=2.0,   # 11/03: 車体の実測(車軸から前7.5・後ろ17.9cm、幅14cm、左右は同じとした)。11/02: すき間は前後とも2.0cm(以前は1.5cm、その前は後ろ0.4cm)。実機で決め直す
+    # 経路の形
+    radii=[30.0, 25.0, 20.0, 15.0, 12.0, 10.0, 8.0], tail_cm=4.0,   # 2026-11-11: 25・30cmも候補に   # 2026-11-09: 8cmを追加(50配置で平均-3.7秒、実機は未確認)
+    ext=[0.0, 4.0, 8.0, 14.0, 22.0, 35.0], offsets=[0.0], angles=[0.0],   # 11/02: 横のずらしは使わない(反対側の支柱に近づくため)
+    # 斜めの通過: 'split' = 真ん中で向きを変える(斜めに入って垂直に抜ける/垂直に入って斜めに抜ける)、
+    # 'straight' = 入りから抜けまで同じ斜め、'both' = 両方。split の向きを変える円弧の半径(cm)は split_radii。
+    oblique_mode='split', split_radii=[20.0, 15.0, 10.0],
+    # 斜めの使い方: 'safest' = そのゲートを(その側から・その通り方で)真ん中を垂直に通れないときだけ、
+    # 通過の間の一番近い柱までの距離が最大になる角度と円弧の半径を1つ選ぶ(angle_scan の範囲)。'all' = angles をどこでも使う。
+    oblique_policy='safest', angle_scan=[-30.0, 30.0, 1.0],
+    # True: 入りも抜けも斜めの通過も候補にする(入りの側にも抜けの側にもとなりのT字があるゲートのため。11/02 seed758743)
+    oblique_both=True,
+    # スタート: 'default' = 今のスタート位置(向き0)、'goal' = 今のゴール地点(向き180、フィールドの方を向く)、
+    # 'goal_mid' = 今のゴール地点のXで、Yはユーザーの呼び方のY4とY3の列の中点(y = 2.5P、向き180)。2026-11-08 検討用
+    # 2026-11-09 ユーザー決定: スタートは今のゴール地点で向き180(フィールドを向く)を既定に。ゴールは同じ場所(goal_at='default')、ガレージは goal_at='garage'
+    start_at='goal',
+    # ゴール: 'default' = 今のゴール地点(向き90)、'garage' = ガレージ(以前の planner config の GOAL_SHIFT_CM=(-61,-115) の位置を
+    # 右コースにしたもの、向き goal_heading)。2026-11-08 検討用(ガレージの正確な範囲は未確認)
+    goal_at='default', goal_heading=0.0,
+    # ゴールで止まるときの向きの候補(度)。空なら goal_heading だけ。2026-11-09: ガレージは向きの決まりがないので複数を比べるため
+    goal_headings=[],
+    # 2026-11-09 ユーザーの指摘の反映:
+    # same_laps: 2周目から最後の1つ前の周までを、同じ通り方・同じ場所にする(最初の周の入りと最後の周の抜けだけ自由)。
+    # join_max_cm: 前のゲートの抜けと次のゲートの入りが同じ向きの一直線で、抜けが入りよりこの長さまで先のとき、戻らずにそのまま続ける
+    # (平行で隣の列のゲートは間隔24.64cmが車体より短く、抜けきる・手前から入るの条件で数cm戻っていた)。0で無効。
+    # start_any_gate: 赤をくぐり始めるまでは、赤以外のゲートをくぐってよい(色の順番は赤から数える)。
+    same_laps=True, join_max_cm=8.0, start_any_gate=True,
+    # final_min_clear_cm: 最後の周の黄(そのあとガレージへ向かう)の通り方は、脚とのすき間がこれ以上のものだけにする(0で無効)。
+    # 2026-11-12 実機: 配置36で最後の黄だけ反対向きから25°斜めに通り抜ける計画(すき間1.70cm)になり、その手前で大きく
+    # 回り込む円弧(カメラがほとんど床の点を見ない)の間に約2cm 右にずれて、右側が脚に当たった。ユーザー決定で2cmにする。
+    final_min_clear_cm=2.0,
+    # final_yellow_visits: 最後の周の黄に使ってよい通り方 [sign, mode, angle, angle_out] の一覧(空なら絞らない。比べる用)
+    final_yellow_visits=[],
+    # 2段階探索の2段目: 色ごとに使う通り方 [sign, mode, angle, angle_out] だけに絞る(空なら絞らない)
+    visit_filter={},
+    # 狭い配置の判定(2026-11-09): この順にすき間を試し、3色ともゲートを通る候補がある最初のすき間で探索する。
+    # 候補を作るだけなので約1秒で分かる。空なら margin_front/margin_rear のまま。
+    margin_list=[],
+    # narrow_safest: 狭い配置は垂直に通れないゲートだけ斜めにする(本番の計算用)。事前計算では False にして斜めも全部使う。
+    # candidates_only: すき間の判定だけして終わる(全配置から狭い配置を洗い出す用)。
+    narrow_safest=True, candidates_only=False,
+    # 2026-11-14: True = 最初のすき間(margin_list[0])で通れないとき、同じすき間で safest + angles の斜め(全部のゲート)を試す。
+    # 配置606・841 で、赤を5〜10°傾けて通るとすき間2.6→3.1cm、赤の前後の曲げ戻しがなくなり8周で約0.5秒速かった。
+    # ふつうの配置(最初のすき間で通れる)と、それでも通れない狭い配置(A〜F)は変わらない。
+    narrow_oblique_grid=False,
+    # 2026-11-14: 狭い配置(最初のすき間で通れず、すき間を下げたとき)だけ、車体の後ろの端から rear_open_cm(cm)の部分は
+    # 脚の T字の部品とは当たらない(後ろは真ん中にボール、その横は T字より高い空間。ユーザーの実測: T字と当たりうるのは後ろの端から
+    # 10cm より前)ものとし、その部分は脚の支柱(太さ leg_dia、ゲートの幅のばらつきの範囲)とのすき間だけを見る。0で無効。
+    rear_open_cm=0.0,
+    # 2026-11-14: rear_open_cm を使う配置の形。'u' = 赤と黄が隣の行(列)に重なって並び、青がその端をふさぐ「コの字」(狭い配置の形A・B)だけ。
+    # 'any' = 狭い配置すべて。ユーザー決定: 形C〜F は今の経路(すき間1.5cm でもよい、速い方)のまま。
+    rear_open_shape='u',
+    # 2026-11-14: margin_list のこの番号から始める(選んだすき間で経路が作れなかったときの作り直しで使う。ふつうは0)
+    margin_skip=0,
+    # start_prelude: スタートのあと、赤の前に黄を1回通ってから赤へ行く形も候補にする(黄と赤が縦に並ぶ配置で、黄を抜けてそのまま赤を通れる。2026-11-09)
+    start_prelude=True,
+    # 2026-11-15 ユーザー(配置619・121): 最後の黄からガレージへのつなぎで、赤も抜けてよい(順番どおり。黄を後退で戻るより速いことがある)。
+    # 切り上げは最後の周の道を使うので、切り上げにも効く
+    final_via_red=True,
+    # 2026-11-16: 中継の候補の試し方(上の _pick_vias)と、最初から遠回りも使うか
+    via_group_tries=0, via_early=False,
+    # 2026-11-16: 直接つなげない区間で「曲がってからつなぐ」を試す(Table._arc_first)。候補の数
+    visit_filter_laps_only=False, arc_first_run_top=60,
+    exit_early=[],
+    defer_via=False,
+    per_gate_margin=False, per_gate_conn_cm=None,
+    # 'all' = つなぎは全部 per_gate_conn_cm、'adjacent' = 狭いゲートにつながる区間だけ狭いゲートのすき間、ほかは per_gate_conn_cm
+    per_gate_conn_mode='all',
+    out_arc_angles=[],
+    # 2026-11-16 ユーザー: 真ん中からカーブで抜ける通り方の半径(cm)。空なら使わない
+    exit_arc_radii=[],
+    arc_first=False, arc_first_tries=200, arc_first_lines=[0.0, 8.0, 16.0, 20.0, 24.0, 28.0, 32.0, 40.0],
+    # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
+    keepout_body=True, start_exempt_cm=20.0,
+    # 進入禁止の長方形(右コースのplanner座標cm、[xmin, xmax, ymin, ymax]、±1e9で無限)。None なら plannerの設定(左コース)を左右反転した今の3つ。
+    # 'planner' なら以前の暫定の3つ。11/05 ユーザーの説明(規約の追加分)による今の3つ(P=24.64、y=4P がスタートとゴールの列):
+    #  ① スタートとゴールの列の点から外へ40cmより先(y > 4P+40)
+    #  ② スタートとゴールの列と1つ内側の列の範囲(y >= 3P)で、ゴール側の列の点から外へ40cmより先(x > 4P+40)
+    #  ③ スタート側の列の点から外へ34cmより先(x < -34)
+    keepout=[[-1e9, 1e9, 138.56, 1e9], [138.56, 1e9, 73.92, 1e9], [-1e9, -34.0, -1e9, 1e9]],
+    allow_reverse=True, allow_pivot=True,
+    # ゲートの脚の当たり判定(2026-11-05、ユーザーの実測): 'rect' = 床に寝たT字の管(長さ leg_len・直径 leg_dia、
+    # ゲートの線と直角)を長方形として扱う。ゲートは組み方で幅が変わる(外側の幅 最大 gate_outer_max、内側の幅 最小
+    # gate_inner_min)ので、2つの格子の点の真ん中に左右対称に置いたとき、脚が来うる範囲全体を1つの長方形にする
+    # (狭くても広くても当たらないように)。'cap' = 以前の形(格子の点を中心に ±4cm の線 + 半径1cm)。
+    gate_model='rect', leg_len=7.5, leg_dia=2.5, gate_inner_min=22.7, gate_outer_max=29.5,
+    # アームを下げたままの車体(2026-11-06): 車体の前の端からアームが前に出る長さと、その部分の横幅の半分(cm)。
+    # 計画に「アームが上がっていないと脚に当たる最初の点」までの距離と時間を書くのに使う(経路そのものは変えない)。
+    # 仮の値(TODO: 実機で測る)。
+    arm_front_cm=5.0, arm_half_width_cm=7.0,
+    # 時間: 直進 cm/s、円弧は arc_k*v_line/(1+half_tread/r)、後退は rev_speed_scale 倍の速さ
+    # 2026-11-11: 出力100(既定)の実測に合わせる: 直進 462mm/s、円弧 半径8cmで197・12cmで234mm/s(arc_k 0.738/0.753)、
+    # 後退は前進の約0.9倍。止まる時間 t_stop は、止まる・走り出す約0.38秒に区間ごとの細かい時間を足して0.6秒。
+    # 2026-11-12: lead_sec 0.08(既定)の seed 6周×3本、約280区間の実測に当てはめ直し: 46.2/0.745 → 42.3/0.823。
+    # 実際の直進は巡航461mm/s+1本ごとに約0.07秒(円弧から出た後の加速。短い直進ほど平均が遅い)、円弧は r8 211・r10 234・
+    # r12 242mm/s。この道具は区間ごとの足し算を持たないので、直進を遅め・円弧を速めにして合計を合わせた
+    # (seedで 旧53.1秒 → 新55.4秒、実機55.9秒)。
+    v_line=42.3, arc_k=0.823, half_tread=5.85, rev_speed_scale=0.9,
+    # 2026-11-11: その場旋回の時間を実測(出力70)に合わせる: 54°で約1.1秒、90°で約1.2秒、135°で約1.5秒 → 0.87秒+1°あたり0.0047秒
+    # (以前は仮の 0.7+0.012。出力50の実測は約2.3秒/回だった)。
+    t_stop=0.6, t_turn0=0.87, t_turn_deg=0.0047,
+    # 精度の重み(秒に換算して時間に足す。0なら時間だけで選ぶ)
+    pen_stop=0.0, pen_pivot=0.0, pen_rev_m=0.0, pen_arc_100deg=0.0,
+    # 中継
+    wp_step=8.0, wp_headings=12, wp_tries=60, via_max_tries=40,
+    # True: 遠回りなしで経路が見つかっても、遠回りで速くなる区間がないか探す(最速の取りこぼしを防ぐ)
+    via_always=True, via_budget_sec=60.0,   # 2026-11-11: 遠回りで速くなる区間を毎回探す(時間の上限は実際の時計なので、並べて計算するときは1本1スレッドに)
+    # その場の旋回の中心が車軸からどれだけ後ろか(cm)。10/31の左右同期の旋回で約0.5cm(測り直し予定)
+    pivot_back_cm=0.5,
+    # 2026-11-14: つなぎの区間だけのすき間の基準(cm)。None なら、ゲートの通過と同じ(margin_list で決まった値)。
+    conn_margin_cm=None,   # 2段目(遠回りで速くなるか)の時間の上限。超えたら1段目の経路を使う
+    # 2026-11-11(ユーザーの指示): ゲートを抜けたとみなす距離(cm)。車体の後ろの端(後退なら前の端)の角が、ゲートの2つの点の
+    # 中心を結ぶ線を、線に垂直にこの距離だけ越えるまで直進で抜ける。規則は「ロボットが完全にゲートを通過すること」で、
+    # ゲートには幅があり置き方にもむらがあるため、灰色の点の端(半径2.2cm、直径約44mm)から2cm = 4.2cm にした(以前は2.0cm)。
+    pass_cm=4.2,
+    # 2026-11-11(ユーザーの実測): ガレージエリア。今のスタート地点から、フィールドと逆向き(+x)に [x0, x1] cm、
+    # Y5の方向(-y)に [y0, y1] cm の長方形。goal_at='garage' のとき、止まる向き(goal_headings)ごとに、車体の箱
+    # (車軸から前 front・後ろ rear、幅 half_width×2)がこの長方形の真ん中に来るように車軸の位置を決める。
+    # 箱が長方形の内側に garage_margin_cm 以上の余裕で入らない向きは使わない(24.5×30cmなので、車体25.4cmは
+    # フィールドと平行な向き ±90 でしか入らない)。空なら以前の1点(スタートから +61, -115)。
+    garage_area=[45.5, 70.0, 100.0, 130.0], garage_margin_cm=1.0,
+    # 2026-11-11(ユーザー): 規則は「走行体の一部がガレージエリアにかかっていればよい」。'overlap' では、車体の箱が
+    # エリアに x・y とも garage_overlap_cm 以上食い込む位置で止める(止まる位置のずれ: 今日の実測で前後約2.5cm・左右約1.6cm)。
+    # 向き(goal_headings、空なら 0/90/180/-90)ごとに、フィールドに近い角・フィールド側の辺の真ん中・スタート側の辺の真ん中・
+    # エリアの真ん中の4か所を候補にし、一番速いものを選ばせる。'inside' は車体全体を入れる(上の garage_margin_cm)。
+    garage_rule='overlap', garage_overlap_cm=6.0,
+    # 2026-11-11(ユーザー): Y方向(Y5の方向)の食い込みはもう2cm増やす(配置37の実機で止まった位置がぎりぎりに見えた)。
+    garage_overlap_y_cm=8.0,
+    # 2026-11-11: 中継の点を置く範囲 [x0, x1, y0, y1](cm)を上書きする(空なら下の BOUNDS)。入ってはいけない範囲を動かして試すとき用。
+    wp_bounds=[],
+    # 2026-11-11: 止まった状態(前後の切り替え・スタート)から走り出すつなぎは、まずこの長さ(cm)の直進で走り出してから円弧に入る。
+    # 止まった状態から半径8cmの円弧に入ると、車輪が向きの変化に追いつかず、内側の車輪が逆回りしてその場旋回のようになり
+    # 遅かった(配置37: 122mmの円弧に約1〜1.3秒、走りながらなら約0.5秒)。その場旋回のあとに円弧へ入るときも同じ長さの直進を挟む。
+    # 0で無効(従来どおり)。
+    lead_cm=4.0,
+)
+if os.environ.get('HR_PARAMS'):
+    PARAMS.update(json.load(open(os.environ['HR_PARAMS'], encoding='utf-8')))
+for k in list(PARAMS):
+    v = os.environ.get('HR_' + k.upper())
+    if v is not None:
+        d = PARAMS[k]
+        PARAMS[k] = ([float(x) for x in v.split(',')] if isinstance(d, list) else
+                     (v == '1' if isinstance(d, bool) else type(d)(v)))
+globals().update({k.upper(): v for k, v in PARAMS.items()})
+
+P = 24.64
+POST_R, ARM = 1.0, 4.0
+PM, CLR = PASS_CM, 0.5   # PM: 抜けの距離(上の pass_cm)。CLR: 入りで先の端の角が線の手前に来る距離
+INF = 1e9
+TAU = 2 * math.pi
+START = np.array([2 * 2 * P - (4 * P + 17.8), 3.5 * P]); START_H = 0.0
+GOAL = np.array([2 * 2 * P - (0 * P - 14.9), 3.5 * P]); GOAL_H = 90.0
+if START_AT == 'goal':
+    START = GOAL.copy(); START_H = 180.0
+elif START_AT == 'goal_mid':
+    START = np.array([GOAL[0], 2.5 * P]); START_H = 180.0
+GARAGE_BOX = None
+if GOAL_AT == 'garage':
+    _s0 = np.array([2 * 2 * P - (0 * P - 14.9), 3.5 * P])   # 今のスタート地点(新スタート)
+    GOAL = np.array([_s0[0] + 61.0, _s0[1] - 115.0]); GOAL_H = float(GOAL_HEADING)
+    if GARAGE_AREA:
+        _a = [float(v) for v in GARAGE_AREA]
+        GARAGE_BOX = (_s0[0] + _a[0], _s0[0] + _a[1], _s0[1] - _a[3], _s0[1] - _a[2])   # (x0, x1, y0, y1)
+
+
+def garage_overlap_goals(h):
+    """'overlap': 向き h で、車体の箱がエリアに x・y とも GARAGE_OVERLAP_CM 以上食い込む車軸の位置の候補(4か所)。
+    フィールドとスタートは、エリアから見て x の小さい側・y の大きい側にある。"""
+    x0, x1, y0, y1 = GARAGE_BOX
+    D = float(GARAGE_OVERLAP_CM)
+    Dy = float(GARAGE_OVERLAP_Y_CM)
+    c, sn = math.cos(math.radians(h)), math.sin(math.radians(h))
+    half_len = (FRONT + REAR) / 2.0
+    ex = abs(c) * half_len + abs(sn) * HALF_WIDTH
+    ey = abs(sn) * half_len + abs(c) * HALF_WIDTH
+    off = (FRONT - REAR) / 2.0
+    near_x = x0 + D - ex          # 車体の x の大きい側の端が、エリアのフィールド側の辺から D 入る
+    near_y = y1 - Dy + ey         # 車体の y の小さい側の端が、エリアのスタート側の辺から Dy 入る
+    mid_x, mid_y = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    out = []
+    for bx, by in ((near_x, near_y), (near_x, mid_y), (mid_x, near_y), (mid_x, mid_y)):
+        out.append(np.array([bx - off * c, by - off * sn]))
+    return out
+
+
+def garage_goal(h):
+    """向き h(度)で止まるとき、車体の箱がガレージの真ん中に来る車軸の位置。入らなければ None。"""
+    x0, x1, y0, y1 = GARAGE_BOX
+    c, sn = abs(math.cos(math.radians(h))), abs(math.sin(math.radians(h)))
+    half_len = (FRONT + REAR) / 2.0
+    ex, ey = c * half_len + sn * HALF_WIDTH, sn * half_len + c * HALF_WIDTH
+    if ex > (x1 - x0) / 2.0 - GARAGE_MARGIN_CM + 1e-9 or ey > (y1 - y0) / 2.0 - GARAGE_MARGIN_CM + 1e-9:
+        return None
+    off = (FRONT - REAR) / 2.0   # 車軸から見た車体の真ん中(前が+)
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    return np.array([cx - off * math.cos(math.radians(h)), cy - off * math.sin(math.radians(h))])
+_mx = lambda x: 4 * P - x
+KEEPOUT = [(_mx(INF), _mx(-17.0), -INF, -37.0),
+           (_mx(INF), _mx(4 * P + 17.8 + 14.0), -INF, INF),
+           (_mx(-28.0), INF, 0.0, INF)]
+if PARAMS['keepout'] != 'planner':
+    KEEPOUT = [tuple(float(v) for v in r) for r in PARAMS['keepout']]
+BOUNDS = (-31.0, 126.0, -36.0, 4 * P + 40)
+if GOAL_AT == 'garage':
+    BOUNDS = (-31.0, 180.0, -45.0, 4 * P + 40)   # ガレージまでの中継の点も置けるように
+if WP_BOUNDS:
+    BOUNDS = tuple(float(v) for v in WP_BOUNDS)
+
+
+def nd(a):
+    return (a + 180.0) % 360.0 - 180.0
+
+
+def v_arc(r):
+    return ARC_K * V_LINE / (1 + HALF_TREAD / r)
+
+
+def spd(m):
+    return 1.0 if m > 0 else 1.0 / REV_SPEED_SCALE
+
+
+def turn_cost(deg):
+    return 0.0 if deg < 0.3 else T_TURN0 + T_TURN_DEG * deg
+
+
+# ---------------- ゲート ----------------
+class Gate:
+    def __init__(self, color, a, b):
+        self.color = color
+        self.pa = np.array([a[0] * P, a[1] * P], float); self.pb = np.array([b[0] * P, b[1] * P], float)
+        self.c = (self.pa + self.pb) / 2
+        self.t = (self.pb - self.pa) / np.linalg.norm(self.pb - self.pa)
+        self.n = np.array([-self.t[1], self.t[0]])
+
+
+GJ = json.load(open(sys.argv[1], encoding='utf-8'))['gates']
+GATES = {c: Gate(c, GJ[c]['a'], GJ[c]['b']) for c in ('red', 'blue', 'yellow')}
+CAP = np.array([p + g.n * ARM * (2 * t - 1) for g in GATES.values() for p in (g.pa, g.pb) for t in np.linspace(0, 1, 9)])
+
+
+def _make_legs():
+    """脚の長方形: (中心, ゲートの線の向き u, 直角の向き v, u方向の半分, v方向の半分) のリスト。"""
+    legs = []
+    gap = np.linalg.norm(next(iter(GATES.values())).pb - next(iter(GATES.values())).pa)
+    off_min = (GATE_INNER_MIN + LEG_DIA - gap) / 2      # 脚の中心が格子の点から外へずれる量(一番狭いとき)
+    off_max = (GATE_OUTER_MAX - LEG_DIA - gap) / 2      # 同(一番広いとき)
+    s0, s1 = off_min - LEG_DIA / 2, off_max + LEG_DIA / 2   # 外向きの座標で、脚が来うる範囲
+    for g in GATES.values():
+        for p, out in ((g.pa, -g.t), (g.pb, g.t)):
+            legs.append((p + out * (s0 + s1) / 2, out, g.n, (s1 - s0) / 2, LEG_LEN / 2))
+    return legs
+
+
+LEGS = _make_legs()
+LEG_C = np.array([l[0] for l in LEGS]); LEG_U = np.array([l[1] for l in LEGS]); LEG_V = np.array([l[2] for l in LEGS])
+LEG_HU = np.array([l[3] for l in LEGS]); LEG_HV = np.array([l[4] for l in LEGS])
+# 車軸から車体の一番遠い角 + 脚の中心から角まで + すき間の下限(poses_clear で遠い脚を外すのに使う。少し余裕を足す)
+_RECT_REACH = math.hypot(max(FRONT, REAR), HALF_WIDTH) + float(np.hypot(LEG_HU, LEG_HV).max()) + max(MARGIN_FRONT, MARGIN_REAR) + 1.0
+LEG_CORNERS = np.array([c + u * a * hu + v * b * hv for c, u, v, hu, hv in LEGS for a in (-1, 1) for b in (-1, 1)])
+_LEG_CORNERS4 = LEG_CORNERS.reshape(-1, 4, 2)
+# 2026-11-14: 脚の支柱だけの長方形(T字の長方形と同じ中心・ゲートの線の向きの範囲、直角の向きは支柱の太さの半分)。rear_open_cm で使う
+POST_HV = np.full(len(LEGS), LEG_DIA / 2.0)
+_POST_CORNERS4 = np.array([c + u * a * hu + v * b * LEG_DIA / 2.0 for c, u, v, hu, hv in LEGS for a in (-1, 1) for b in (-1, 1)]).reshape(-1, 4, 2)
+_RO = 0.0   # 今使っている rear_open_cm(main で狭い配置のときだけ入れる)
+if GATE_MODEL == 'rect':
+    POST_R = 0.0   # 長方形そのものとの距離なので、点の太さは使わない
+GSEG = [(g.pa, g.pb, g.color) for g in GATES.values()]
+
+
+# ---------------- 当たり判定 ----------------
+def _rect_clear(px, py, h_rad, x0, x1, keep=None, hw=None, posts=False):
+    """gate_model='rect': 車体の箱 x∈[x0,x1], |y|<=HW と、脚の長方形の最小のすき間(配列)。
+    凸な長方形どうしの距離 = 片方の角からもう片方までの距離の最小(脚の角→車体、車体の角→脚の両方を見る)。
+    keep: 見る脚の番号の配列(None なら全部)。hw: 箱の横幅の半分(None なら車体の HALF_WIDTH)。
+    posts: True なら T字ではなく支柱だけの長方形(rear_open_cm 用)。"""
+    hw = HALF_WIDTH if hw is None else hw
+    lhv_all, c4_all = (POST_HV, _POST_CORNERS4) if posts else (LEG_HV, _LEG_CORNERS4)
+    if hr_kernels.AVAILABLE and keep is None and np.ndim(x0) == 0 and np.ndim(x1) == 0:
+        return hr_kernels.rect_clear(px, py, np.cos(h_rad), np.sin(h_rad), float(x0), float(x1), float(hw),
+                                     LEG_C, LEG_U, LEG_V, LEG_HU, lhv_all, c4_all)
+    n = len(px)
+    c = np.cos(h_rad); s = np.sin(h_rad)
+    if keep is None:
+        corners, lc, lu, lv, lhu, lhv = c4_all.reshape(-1, 2), LEG_C, LEG_U, LEG_V, LEG_HU, lhv_all
+    else:
+        corners = c4_all[keep].reshape(-1, 2)
+        lc, lu, lv, lhu, lhv = LEG_C[keep], LEG_U[keep], LEG_V[keep], LEG_HU[keep], lhv_all[keep]
+    # 脚の角 → 車体の箱
+    dx = corners[None, :, 0] - px[:, None]; dy = corners[None, :, 1] - py[:, None]
+    lx = dx * c[:, None] + dy * s[:, None]; ly = -dx * s[:, None] + dy * c[:, None]
+    x0a = np.broadcast_to(np.asarray(x0, float), (n,))[:, None]; x1a = np.broadcast_to(np.asarray(x1, float), (n,))[:, None]
+    d1 = np.hypot(np.maximum(np.maximum(x0a - lx, lx - x1a), 0.0), np.maximum(np.abs(ly) - hw, 0.0)).min(1)
+    # 車体の箱の角 → 脚の長方形
+    cx = np.stack([x0a[:, 0], x0a[:, 0], x1a[:, 0], x1a[:, 0]], 1); cy = np.array([-hw, hw, -hw, hw])[None, :]
+    wx = px[:, None] + cx * c[:, None] - cy * s[:, None]; wy = py[:, None] + cx * s[:, None] + cy * c[:, None]
+    rx = wx[:, :, None] - lc[None, None, :, 0]; ry = wy[:, :, None] - lc[None, None, :, 1]
+    du = np.abs(rx * lu[None, None, :, 0] + ry * lu[None, None, :, 1]) - lhu[None, None, :]
+    dv = np.abs(rx * lv[None, None, :, 0] + ry * lv[None, None, :, 1]) - lhv[None, None, :]
+    d2 = np.hypot(np.maximum(du, 0.0), np.maximum(dv, 0.0)).min(axis=(1, 2))
+    return np.minimum(d1, d2)
+
+
+def rear_clear(px, py, h_rad, x0, x1, keep=None):
+    """車体の後ろ側の箱 x∈[x0,x1] のすき間。rear_open_cm を使っているときは、後ろの端から _RO の部分は支柱だけと見る
+    (x0+_RO より前は T字、x0 からは支柱)。支柱は T字の長方形の内側なので、前の部分は T字だけ見ればよい。"""
+    if _RO <= 0:
+        return _rect_clear(px, py, h_rad, x0, x1, keep)
+    xt = (np.asarray(x0, float) + _RO) if np.ndim(x0) else x0 + _RO
+    return np.minimum(_rect_clear(px, py, h_rad, xt, x1, keep), _rect_clear(px, py, h_rad, x0, x1, keep, posts=True))
+
+
+def body_clear(px, py, h_rad):
+    """車体全体(前の端から後ろの端まで)と脚のすき間(rear_open_cm を含む)。検査(check_plan)・監査用。"""
+    return np.minimum(_rect_clear(px, py, h_rad, 0.0, FRONT), rear_clear(px, py, h_rad, -REAR, 0.0))
+
+
+def _rect_clear_front_rear(px, py, h_rad, keep):
+    """_rect_clear(…, 0, FRONT, keep) と _rect_clear(…, -REAR, 0, keep) を1回で(脚の角の座標の変換を共有して速くする。値は同じ)。
+    2026-11-14: rear_open_cm を使っているときは、後ろは rear_clear と同じ(T字は後ろの端から _RO 前まで、支柱は後ろの端まで)。"""
+    c = np.cos(h_rad); s = np.sin(h_rad)
+    if _RO > 0:
+        cf = _rect_clear(px, py, h_rad, 0.0, FRONT, keep)
+        return cf, rear_clear(px, py, h_rad, -REAR, 0.0, keep)
+    if hr_kernels.AVAILABLE:
+        return hr_kernels.rect_front_rear(px, py, c, s, LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, keep,
+                                          float(FRONT), float(REAR), float(HALF_WIDTH))
+    corners = LEG_CORNERS.reshape(-1, 4, 2)[keep].reshape(-1, 2)
+    lc, lu, lv, lhu, lhv = LEG_C[keep], LEG_U[keep], LEG_V[keep], LEG_HU[keep], LEG_HV[keep]
+    dx = corners[None, :, 0] - px[:, None]; dy = corners[None, :, 1] - py[:, None]
+    lx = dx * c[:, None] + dy * s[:, None]; ly = -dx * s[:, None] + dy * c[:, None]
+    ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
+    d1f = np.hypot(np.maximum(np.maximum(0.0 - lx, lx - FRONT), 0.0), ey).min(1)
+    d1r = np.hypot(np.maximum(np.maximum(-REAR - lx, lx - 0.0), 0.0), ey).min(1)
+    # 車体の箱の角: 前の箱 (0,-HW),(0,HW),(FRONT,-HW),(FRONT,HW)、後ろの箱 (-REAR,-HW),(-REAR,HW),(0,-HW),(0,HW)
+    cx = np.array([0.0, 0.0, FRONT, FRONT, -REAR, -REAR])[None, :]; cy = np.array([-HALF_WIDTH, HALF_WIDTH] * 3)[None, :]
+    wx = px[:, None] + cx * c[:, None] - cy * s[:, None]; wy = py[:, None] + cx * s[:, None] + cy * c[:, None]
+    rx = wx[:, :, None] - lc[None, None, :, 0]; ry = wy[:, :, None] - lc[None, None, :, 1]
+    du = np.abs(rx * lu[None, None, :, 0] + ry * lu[None, None, :, 1]) - lhu[None, None, :]
+    dv = np.abs(rx * lv[None, None, :, 0] + ry * lv[None, None, :, 1]) - lhv[None, None, :]
+    dd = np.hypot(np.maximum(du, 0.0), np.maximum(dv, 0.0)).min(2)
+    d2f = dd[:, 0:4].min(1); d2r = dd[:, [4, 5, 0, 1]].min(1)
+    return np.minimum(d1f, d2f), np.minimum(d1r, d2r)
+
+
+def box_clear(px, py, h_rad, x0, x1):
+    """姿勢(配列)の車体の箱 x∈[x0,x1], |y|<=HW と支柱の最小すき間(配列)。x0,x1 はスカラーか配列。"""
+    if GATE_MODEL == 'rect':
+        return _rect_clear(np.asarray(px, float), np.asarray(py, float), np.asarray(h_rad, float), x0, x1)
+    c = np.cos(h_rad)[:, None]; s = np.sin(h_rad)[:, None]
+    dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
+    lx = dx * c + dy * s; ly = -dx * s + dy * c
+    x0 = np.asarray(x0, float).reshape(-1, 1) if np.ndim(x0) else x0
+    x1 = np.asarray(x1, float).reshape(-1, 1) if np.ndim(x1) else x1
+    ex = np.maximum(np.maximum(x0 - lx, lx - x1), 0.0)
+    ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
+    return np.min(np.hypot(ex, ey), axis=1) - POST_R
+
+
+_BODY_REACH = math.hypot(max(FRONT, REAR), HALF_WIDTH) + POST_R + max(MARGIN_FRONT, MARGIN_REAR) + 0.5
+
+
+def poses_clear(px, py, h_deg):
+    """姿勢ごとに、前の部分と後ろの部分のすき間が足りているか(bool配列)。"""
+    if GATE_MODEL == 'rect':
+        h = np.radians(np.asarray(h_deg, float)); px = np.asarray(px, float); py = np.asarray(py, float)
+        # どの姿勢でも、車軸から車体の一番遠い角 + 脚の半対角線 + すき間の下限 より遠い脚は、足りないすき間の原因になりえないので見ない
+        if hr_kernels.AVAILABLE:
+            keep, near = hr_kernels.poses_near(px, py, LEG_C, float(_RECT_REACH))
+            out = np.ones(len(px), bool)
+            if len(near):
+                cf, cr = _rect_clear_front_rear(px[near], py[near], h[near], keep)
+                out[near] = (cf >= MARGIN_FRONT) & (cr >= MARGIN_REAR)
+            return out
+        dm = np.hypot(px[:, None] - LEG_C[None, :, 0], py[:, None] - LEG_C[None, :, 1])
+        keep = np.flatnonzero(dm.min(0) <= _RECT_REACH)
+        out = np.ones(len(px), bool)
+        if len(keep) == 0:
+            return out
+        near = np.flatnonzero(dm[:, keep].min(1) <= _RECT_REACH)   # どの脚からも遠い姿勢は計算しない
+        if len(near) == 0:
+            return out
+        cf, cr = _rect_clear_front_rear(px[near], py[near], h[near], keep)
+        out[near] = (cf >= MARGIN_FRONT) & (cr >= MARGIN_REAR)
+        return out
+    # 車体の近く(車軸から車体の一番遠い角+支柱+すき間)にある支柱の点だけで判定する
+    rr = _BODY_REACH
+    sel = CAP[(CAP[:, 0] > px.min() - rr) & (CAP[:, 0] < px.max() + rr) & (CAP[:, 1] > py.min() - rr) & (CAP[:, 1] < py.max() + rr)]
+    if len(sel) == 0:
+        return np.ones(len(px), bool)
+    h = np.radians(h_deg)
+    c = np.cos(h)[:, None]; s = np.sin(h)[:, None]
+    dx = sel[None, :, 0] - px[:, None]; dy = sel[None, :, 1] - py[:, None]
+    lx = dx * c + dy * s; ly = -dx * s + dy * c
+    ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
+    ef = np.maximum(np.maximum(-lx, lx - FRONT), 0.0)
+    er = np.maximum(np.maximum(-REAR - lx, lx), 0.0)
+    cf = np.min(np.hypot(ef, ey), axis=1) - POST_R
+    cr = np.min(np.hypot(er, ey), axis=1) - POST_R
+    return (cf >= MARGIN_FRONT) & (cr >= MARGIN_REAR)
+
+
+def poses_ok(px, py, h_deg):
+    return bool(np.all(poses_clear(np.asarray(px, float), np.asarray(py, float), np.asarray(h_deg, float))))
+
+
+_piv_int = {}
+
+
+def _pivot_axle(p, h_from, hs):
+    """その場の旋回で、回る中心が車軸の PIVOT_BACK_CM 後ろにあるときの、向き hs での車軸の位置。"""
+    hs = np.asarray(hs, float)
+    if PIVOT_BACK_CM == 0:
+        return np.full(len(hs), p[0]), np.full(len(hs), p[1])
+    qx = p[0] - PIVOT_BACK_CM * math.cos(math.radians(h_from)); qy = p[1] - PIVOT_BACK_CM * math.sin(math.radians(h_from))
+    return qx + PIVOT_BACK_CM * np.cos(np.radians(hs)), qy + PIVOT_BACK_CM * np.sin(np.radians(hs))
+
+
+def pivot_interval(p, h):
+    """点pで向きhから、その場で回れる最大の角度(左回り, 右回り)。"""
+    key = (round(float(p[0]), 3), round(float(p[1]), 3), round(float(h), 3))
+    if key not in _piv_int:
+        ks = np.arange(1, 182)
+        hs = np.concatenate([h + ks, h - ks])
+        ax, ay = _pivot_axle(p, h, hs)
+        ok = poses_clear(ax, ay, hs)
+        res = []
+        for part in (ok[:181], ok[181:]):
+            bad = np.flatnonzero(~part)
+            res.append(181 if len(bad) == 0 else int(bad[0]))
+        _piv_int[key] = tuple(res)
+    return _piv_int[key]
+
+
+_KO_CORNERS = None
+_START_EXEMPT = None
+_EXEMPT_ON = False   # スタートから最初のゲートへのつなぎ区間を判定している間だけ True
+# 2026-11-15: つなぎの区間ごとに、横切ってよいゲートの色(最後の黄→ガレージは赤も抜けてよい。final_via_red)。判定している間だけ入れる
+_ALLOW_TAB = None
+
+
+def body_keepout(px, py, hdeg):
+    """姿勢(配列)のどれかで、車体の箱が進入禁止の長方形にかかるか。"""
+    if not KEEPOUT:
+        return False
+    return bool(np.any(body_keepout_mask(px, py, hdeg)))
+
+
+_BODY_OUTLINE = None   # 車体の箱の輪郭の点(車体の座標、cm)
+
+
+def body_keepout_mask(px, py, hdeg):
+    """姿勢ごとに、車体の箱が進入禁止の長方形にかかるか(bool配列)。1つずつ呼ぶより速いように、まとめて計算する。"""
+    global _KO_CORNERS, _START_EXEMPT, _BODY_OUTLINE
+    px = np.asarray(px, float); py = np.asarray(py, float)
+    if not KEEPOUT:
+        return np.zeros(len(px), bool)
+    if not KEEPOUT_BODY:
+        return in_keepout(px, py)
+    h = np.radians(np.asarray(hdeg, float))
+    if _KO_CORNERS is None:
+        _KO_CORNERS = [[(x, y) for x in (x0, x1) for y in (y0, y1) if abs(x) < INF / 2 and abs(y) < INF / 2]
+                       for x0, x1, y0, y1 in KEEPOUT]
+    if _BODY_OUTLINE is None:
+        _BODY_OUTLINE = (np.concatenate([np.linspace(-REAR, FRONT, 14), np.full(8, FRONT), np.linspace(FRONT, -REAR, 14), np.full(8, -REAR)]),
+                         np.concatenate([np.full(14, HALF_WIDTH), np.linspace(HALF_WIDTH, -HALF_WIDTH, 8), np.full(14, -HALF_WIDTH),
+                                         np.linspace(-HALF_WIDTH, HALF_WIDTH, 8)]))
+    xs, ys = _BODY_OUTLINE
+    ch = np.cos(h); sh = np.sin(h)
+    c = ch[:, None]; sn = sh[:, None]
+    if not hr_kernels.AVAILABLE:
+        bx = px[:, None] + xs * c - ys * sn; by = py[:, None] + xs * sn + ys * c
+    if _START_EXEMPT is None:
+        sb = [(START[0] + a * math.cos(math.radians(START_H)) - b * math.sin(math.radians(START_H)),
+               START[1] + a * math.sin(math.radians(START_H)) + b * math.cos(math.radians(START_H)))
+              for a, b in zip(xs, ys)]
+        _START_EXEMPT = {k for k, (x0, x1, y0, y1) in enumerate(KEEPOUT) if any(x0 < x < x1 and y0 < y < y1 for x, y in sb)}
+    near_start = np.hypot(px - START[0], py - START[1]) <= START_EXEMPT_CM
+    out = np.zeros(len(px), bool)
+    reach = math.hypot(max(FRONT, REAR), HALF_WIDTH) + 1.0   # 車軸から車体の一番遠い点(少し余裕)
+    for k, (x0, x1, y0, y1) in enumerate(KEEPOUT):
+        if px.max() + reach < x0 or px.min() - reach > x1 or py.max() + reach < y0 or py.min() - reach > y1:
+            continue   # どの姿勢でも車体が届かない
+        if hr_kernels.AVAILABLE:
+            hit = hr_kernels.keepout_hit(px, py, ch, sh, xs, ys, float(x0), float(x1), float(y0), float(y1),
+                                         np.array(_KO_CORNERS[k], float).reshape(-1, 2), float(FRONT), float(REAR), float(HALF_WIDTH))
+        else:
+            hit = np.any((bx > x0) & (bx < x1) & (by > y0) & (by < y1), axis=1)
+            for cx, cy in _KO_CORNERS[k]:   # 長方形の角が車体の中に入る場合
+                lx = (cx - px) * ch + (cy - py) * sh; ly = -(cx - px) * sh + (cy - py) * ch
+                hit |= (lx > -REAR) & (lx < FRONT) & (np.abs(ly) < HALF_WIDTH)
+        if k in _START_EXEMPT and _EXEMPT_ON:
+            hit &= ~near_start
+        out |= hit
+    return out
+
+
+def in_keepout(px, py):
+    bad = np.zeros(len(px), bool)
+    for x0, x1, y0, y1 in KEEPOUT:
+        bad |= (px > x0) & (px < x1) & (py > y0) & (py < y1)
+    return bad
+
+
+def _orient(ax, ay, bx, by, cx, cy):
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+
+def crosses_gate(xs, ys, allow=None):
+    """折れ線(xs,ys)がゲートの線を横切るか(allowの色は除く)。"""
+    ax, ay, bx, by = xs[:-1], ys[:-1], xs[1:], ys[1:]
+    for pa, pb, col in GSEG:
+        if col == allow or col == _ALLOW_TAB or (_EXEMPT_ON and START_ANY_GATE and col != 'red'):
+            continue
+        if hr_kernels.AVAILABLE:
+            if hr_kernels.seg_cross(xs, ys, float(pa[0]), float(pa[1]), float(pb[0]), float(pb[1])):
+                return True
+            continue
+        o1 = _orient(ax, ay, bx, by, pa[0], pa[1]); o2 = _orient(ax, ay, bx, by, pb[0], pb[1])
+        o3 = _orient(pa[0], pa[1], pb[0], pb[1], ax, ay); o4 = _orient(pa[0], pa[1], pb[0], pb[1], bx, by)
+        if np.any((o1 * o2 < 0) & (o3 * o4 < 0)):
+            return True
+    return False
+
+
+_line_memo = {}   # (始点, 終点, 前後, allow, スタートの除外中か) -> 当たらないか。同じ直線を何度も調べるので覚えて使い回す
+
+
+def line_ok(a, b, m, allow=None):
+    key = (float(a[0]), float(a[1]), float(b[0]), float(b[1]), m, allow, _EXEMPT_ON, _ALLOW_TAB, MARGIN_FRONT, MARGIN_REAR)
+    ok = _line_memo.get(key)
+    if ok is None:
+        ok = _line_memo[key] = _line_check(a, b, m, allow)
+    return ok
+
+
+def _line_check(a, b, m, allow=None):
+    v = b - a; L = float(np.hypot(*v))
+    if L < 1e-6:
+        return True
+    h = math.atan2(v[1], v[0]) + (0 if m > 0 else math.pi)
+    if m > 0:
+        f0, f1, r0, r1 = 0.0, L + FRONT, -REAR, L
+    else:
+        f0, f1, r0, r1 = -L, FRONT, -L - REAR, 0.0
+    n = max(2, int(L / 2) + 1)
+    xs = np.linspace(a[0], b[0], n); ys = np.linspace(a[1], b[1], n)
+    if crosses_gate(xs, ys, allow) or np.any(in_keepout(xs, ys)):
+        return False
+    px, py, hh = np.array([a[0]]), np.array([a[1]]), np.array([h])
+    if box_clear(px, py, hh, f0, f1)[0] < MARGIN_FRONT:
+        return False
+    if (rear_clear(px, py, hh, r0, r1)[0] if (_RO > 0 and GATE_MODEL == 'rect') else box_clear(px, py, hh, r0, r1)[0]) < MARGIN_REAR:
+        return False
+    nb = max(2, int(L) + 1)
+    return not body_keepout(np.linspace(a[0], b[0], nb), np.linspace(a[1], b[1], nb), np.full(nb, math.degrees(h)))
+
+
+def nL(phi):
+    return np.array([-math.sin(phi), math.cos(phi)])
+
+
+def tdir(phi):
+    return np.array([math.cos(phi), math.sin(phi)])
+
+
+def ccw(x):
+    x = x % TAU
+    return 0.0 if x > TAU - 1e-7 else x
+
+
+def arc_prim(p, theta, s, sweep, r, m):
+    """点pで進む向き(動く向き)theta、s=+1左/-1右に sweep(rad) の円弧。m=+1前進/-1後退。"""
+    return ('arc', p + s * r * nL(theta), r, theta, s, sweep, m, p)
+
+
+def arc_end(pr):
+    _, c, r, theta, s, sweep, m, p0 = pr
+    th = theta + s * sweep
+    return c - s * r * nL(th), th
+
+
+def arc_samples(pr, step=1.0):
+    _, c, r, theta, s, sweep, m, p0 = pr
+    n = max(2, int(r * sweep / step) + 1, int(math.degrees(sweep)) + 1)   # 向き1°ごとにも(後ろの角は車軸より大きく振れる)
+    th = theta + s * sweep * np.arange(n + 1) / n
+    xs = c[0] + s * r * np.sin(th); ys = c[1] - s * r * np.cos(th)
+    hb = np.degrees(th) + (0 if m > 0 else 180)
+    return xs, ys, hb
+
+
+_arc_memo = {}   # (始点, 向き, 半径, 回る向き, 前後, allow) -> [当たらないと確かめた角度, 当たる最初の角度]
+
+
+def arc_ok(pr, allow=None):
+    """円弧が当たらないか。同じ始点・半径・回る向きの円弧は、どこまで当たらないかを覚えて使い回す。"""
+    if pr[5] < 1e-6:
+        return True
+    _, c, r, theta, sgn, sweep, m, p0 = pr
+    key = (round(float(p0[0]), 3), round(float(p0[1]), 3), round(float(theta), 6), r, sgn, m, allow, _EXEMPT_ON, _ALLOW_TAB, MARGIN_FRONT, MARGIN_REAR)
+    memo = _arc_memo.get(key)
+    if memo is not None:
+        if memo[1] is not None and sweep >= memo[1] - 1e-9:
+            return False
+        if sweep <= memo[0] + 1e-9:
+            return True
+    ok, fail_at = _arc_check(pr, allow)
+    if memo is None:
+        memo = _arc_memo[key] = [0.0, None]
+    if ok:
+        memo[0] = max(memo[0], sweep)
+    else:
+        memo[1] = fail_at if memo[1] is None else min(memo[1], fail_at)
+    return ok
+
+
+def _arc_check(pr, allow=None):
+    """(当たらないか, 当たる最初の角度rad)"""
+    _, c, r, theta, sgn, sweep, m, p0 = pr
+    xs, ys, hb = arc_samples(pr)
+    n = len(xs) - 1
+    okp = poses_clear(xs, ys, hb)
+    if KEEPOUT:
+        okp &= ~body_keepout_mask(xs, ys, hb)
+    bad = np.flatnonzero(~okp)
+    if len(bad):
+        return False, sweep * max(bad[0] - 1, 0) / n
+    if KEEPOUT and np.any(in_keepout(xs, ys)):
+        return False, 0.0
+    if crosses_gate(xs, ys, allow):
+        return False, 0.0
+    return True, None
+
+
+def _arc_ok_old(pr, allow=None):
+    if pr[5] < 1e-6:
+        return True
+    xs, ys, hb = arc_samples(pr)
+    if not poses_ok(xs, ys, hb):
+        return False
+    if np.any(in_keepout(xs, ys)) or body_keepout(xs, ys, hb):
+        return False
+    return not crosses_gate(xs, ys, allow)
+
+
+_pivot_cache = {}
+
+
+def pivot_ok(p, h_from, h_to):
+    dd = nd(h_to - h_from)
+    if abs(dd) < 0.3:
+        return True
+    key = (round(float(p[0]), 2), round(float(p[1]), 2), round(h_from, 2), round(h_to, 2), _EXEMPT_ON, MARGIN_FRONT, MARGIN_REAR)
+    if key not in _pivot_cache:
+        hs = h_from + dd * np.linspace(0, 1, int(abs(dd)) + 2)
+        ax, ay = _pivot_axle(p, h_from, hs)
+        _pivot_cache[key] = poses_ok(ax, ay, hs) and not body_keepout(ax, ay, hs)
+    return _pivot_cache[key]
+
+
+def prim_ok(pr):
+    if pr[0] == 'line':
+        return line_ok(pr[1], pr[2], pr[3])
+    if pr[0] == 'arc':
+        return arc_ok(pr)
+    return pivot_ok(pr[1], pr[2], pr[3])
+
+
+def prim_len(pr):
+    if pr[0] == 'line':
+        return float(np.hypot(*(pr[2] - pr[1])))
+    if pr[0] == 'arc':
+        return pr[2] * pr[5]
+    return 0.0
+
+
+def prim_m(pr):
+    return pr[3] if pr[0] == 'line' else (pr[6] if pr[0] == 'arc' else None)
+
+
+def seq_cost(dE, prims, dS):
+    """前のゲートの最後の走りの向きdE(0=止まっている)、つなぎのプリミティブ、次のゲートの最初の走りの向きdS(0=ゴール)。
+    時間+重み。止まる直前が直進(tail_cm以上)でなければINF。"""
+    t = 0.0; stops = 0; pivots = 0; rev = 0.0; arcdeg = 0.0
+    cur = dE            # 今の動きの向き(0=止まっている)
+    last = 'visit'      # 止まる直前の区間('visit'は通過の直進)
+    last_len = INF
+    pending_pivot = False
+
+    def stop_here():
+        nonlocal stops, cur
+        if cur != 0:
+            if not (last == 'visit' or (last == 'line' and last_len >= TAIL_CM - 1e-6)):
+                return False
+            stops += 1
+        cur = 0
+        return True
+
+    for pr in prims:
+        if pr[0] == 'pivot':
+            deg = abs(nd(pr[3] - pr[2]))
+            if deg < 0.3:
+                continue
+            if not stop_here():
+                return INF
+            t += turn_cost(deg); pivots += 1
+            continue
+        L = prim_len(pr)
+        if L < 1e-6:
+            continue
+        m = prim_m(pr)
+        if cur != 0 and cur != m:
+            if not stop_here():
+                return INF
+        t += (L / V_LINE if pr[0] == 'line' else L / v_arc(pr[2])) * spd(m)
+        if m < 0:
+            rev += L
+        if pr[0] == 'arc':
+            arcdeg += math.degrees(pr[5])
+        cur = m; last = pr[0]; last_len = L
+    if dS == 0 or (cur != 0 and cur != dS):
+        if not stop_here():
+            return INF
+    return (t + T_STOP * stops + PEN_STOP * stops + PEN_PIVOT * pivots + PEN_REV_M * rev / 100.0
+            + PEN_ARC_100DEG * arcdeg / 100.0)
+
+
+# ---------------- Dubins(配列) ----------------
+WORDS = [('CSC', 1, 1), ('CSC', 1, -1), ('CSC', -1, 1), ('CSC', -1, -1),
+         ('CCC', 1, 1), ('CCC', 1, -1), ('CCC', -1, 1), ('CCC', -1, -1)]
+
+
+def _ccw_v(x):
+    x = np.mod(x, TAU)
+    return np.where(x > TAU - 1e-7, 0.0, x)
+
+
+def dubins_vec(x0, y0, t0, x1, y1, t1, r):
+    """8つの形の (円弧の角度の合計rad, 直進の長さcm)。だめなものは角度INF。shape (8, N)。"""
+    if hr_kernels.AVAILABLE and np.ndim(x0) == 1:
+        return hr_kernels.dubins_vec(*[np.asarray(v, float) for v in (x0, y0, t0, x1, y1, t1)], float(r), float(INF))
+    A, L = [], []
+    for kind, s1, s2 in WORDS:
+        if kind == 'CSC':
+            c1x = x0 - s1 * r * np.sin(t0); c1y = y0 + s1 * r * np.cos(t0)
+            c2x = x1 - s2 * r * np.sin(t1); c2y = y1 + s2 * r * np.cos(t1)
+            dx, dy = c2x - c1x, c2y - c1y
+            D = np.hypot(dx, dy); k = (s1 - s2) * r
+            ok = D > abs(k) + 1e-9
+            Ds = np.where(ok, D, 1.0)
+            phi = np.arctan2(dy, dx) + np.arcsin(np.clip(k / Ds, -1, 1))
+            l = np.sqrt(np.maximum(Ds ** 2 - k ** 2, 0))
+            a = _ccw_v(s1 * (phi - t0)) + _ccw_v(s2 * (t1 - phi))
+        else:
+            s, sg = s1, s2
+            c1x = x0 - s * r * np.sin(t0); c1y = y0 + s * r * np.cos(t0)
+            c3x = x1 - s * r * np.sin(t1); c3y = y1 + s * r * np.cos(t1)
+            dx, dy = c3x - c1x, c3y - c1y
+            D = np.hypot(dx, dy)
+            ok = (D > 1e-9) & (D < 4 * r)
+            al = np.arctan2(dy, dx); be = np.arccos(np.clip(D / (4 * r), -1, 1))
+            c2x = c1x + 2 * r * np.cos(al + sg * be); c2y = c1y + 2 * r * np.sin(al + sg * be)
+            th1 = np.arctan2(-(c1x - c2x) / (2 * s * r), (c1y - c2y) / (2 * s * r))
+            th2 = np.arctan2(-(c3x - c2x) / (2 * s * r), (c3y - c2y) / (2 * s * r))
+            a = _ccw_v(s * (th1 - t0)) + _ccw_v(-s * (th2 - th1)) + _ccw_v(s * (t1 - th2))
+            l = np.zeros_like(a)
+        A.append(np.where(ok, a, INF)); L.append(np.where(ok, l, 0.0))
+    return np.array(A), np.array(L)
+
+
+_arc_limit_memo = {}
+
+
+def _arc_limit(p, th, s, r, m):
+    """点 p から動く向き th で円弧を描いたとき、確実に当たる最初の角度(rad)。当たらなければ INF。
+    2026-11-09: 同じ始点・半径・回る向きの円弧は何度も出てくるので1周分を1回だけ調べ、当たる候補は形を作らずに捨てる。
+    1°おきの点が2つ続けて当たる所だけを見るので、通れる円弧を捨てることはない(判定は1°以下の間隔のため)。"""
+    key = (round(float(p[0]), 3), round(float(p[1]), 3), round(float(th), 6), r, s, m, _EXEMPT_ON, MARGIN_FRONT, MARGIN_REAR)
+    v = _arc_limit_memo.get(key)
+    if v is None:
+        n = 360
+        ths = th + s * (TAU * 359.0 / 360.0) * np.arange(n) / (n - 1)
+        cx = p[0] - s * r * math.sin(th); cy = p[1] + s * r * math.cos(th)
+        xs = cx + s * r * np.sin(ths); ys = cy - s * r * np.cos(ths)
+        hb = np.degrees(ths) + (0 if m > 0 else 180)
+        bad = ~poses_clear(xs, ys, hb)
+        if KEEPOUT:
+            bad |= body_keepout_mask(xs, ys, hb)
+        both = np.flatnonzero(bad[:-1] & bad[1:])
+        v = _arc_limit_memo[key] = float(both[0]) * (TAU * 359.0 / 360.0) / (n - 1) if len(both) else INF
+    return v
+
+
+_LIMIT_MARGIN = math.radians(3.0)
+
+
+def _dubins_fast(A, thA, B, thB, r, w, m):
+    ok, a1, a2, a3, th1, th2, p1x, p1y, p2x, p2y, c1x, c1y, c2x, c2y, c3x, c3y = hr_kernels.dubins_params(
+        float(A[0]), float(A[1]), float(thA), float(B[0]), float(B[1]), float(thB), float(r), w)
+    if not ok:
+        return None
+    kind, s1, s2 = WORDS[w]
+    last_s = s2 if kind == 'CSC' else s1
+    arc1 = ('arc', np.array([c1x, c1y]), r, thA, s1, a1, m, A)
+    p1 = np.array([p1x, p1y]); p2 = np.array([p2x, p2y])
+    if kind == 'CSC':
+        prims = [arc1, ('line', p1, p2, m), ('arc', np.array([c2x, c2y]), r, th2, s2, a3, m, p2)]
+    else:
+        prims = [arc1, ('arc', np.array([c2x, c2y]), r, th1, -s1, a2, m, p1), ('arc', np.array([c3x, c3y]), r, th2, s1, a3, m, p2)]
+    return [q for q in prims if prim_len(q) > 1e-6]
+
+
+def dubins_one(A, thA, B, thB, r, w, m):
+    """形wの Dubins 経路(プリミティブの列)。だめならNone。thA/thB は動く向き。"""
+    if hr_kernels.AVAILABLE:
+        return _dubins_fast(A, thA, B, thB, r, w, m)
+    kind, s1, s2 = WORDS[w]
+    if kind == 'CSC':
+        c1 = A + s1 * r * nL(thA); c2 = B + s2 * r * nL(thB)
+        D = float(np.hypot(*(c2 - c1))); k = (s1 - s2) * r
+        if D <= abs(k) + 1e-9:
+            return None
+        phi = math.atan2(*(c2 - c1)[::-1]) + math.asin(k / D)
+        p1 = c1 - s1 * r * nL(phi); p2 = c2 - s2 * r * nL(phi)
+        prims = [arc_prim(A, thA, s1, ccw(s1 * (phi - thA)), r, m), ('line', p1, p2, m),
+                 arc_prim(p2, phi, s2, ccw(s2 * (thB - phi)), r, m)]
+    else:
+        s, sg = s1, s2
+        c1 = A + s * r * nL(thA); c3 = B + s * r * nL(thB)
+        D = float(np.hypot(*(c3 - c1)))
+        if not (1e-9 < D < 4 * r):
+            return None
+        al = math.atan2(*(c3 - c1)[::-1]); be = math.acos(D / (4 * r))
+        c2 = c1 + 2 * r * tdir(al + sg * be)
+        p1 = (c1 + c2) / 2; p2 = (c2 + c3) / 2
+        v1 = (c1 - p1) / (s * r); th1 = math.atan2(-v1[0], v1[1])
+        v2 = (c3 - p2) / (s * r); th2 = math.atan2(-v2[0], v2[1])
+        prims = [arc_prim(A, thA, s, ccw(s * (th1 - thA)), r, m),
+                 arc_prim(p1, th1, -s, ccw(-s * (th2 - th1)), r, m),
+                 arc_prim(p2, th2, s, ccw(s * (thB - th2)), r, m)]
+    p, th = arc_end(prims[-1])
+    if np.hypot(*(p - B)) > 1e-3 or abs(nd(math.degrees(th - thB))) > 1e-3:
+        return None
+    return [q for q in prims if prim_len(q) > 1e-6]
+
+
+# ---------------- 姿勢とゲートの通り方 ----------------
+DIRS = (1, -1) if ALLOW_REVERSE else (1,)
+
+
+def _rot(v, deg):
+    c, sn = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+    return np.array([v[0] * c - v[1] * sn, v[0] * sn + v[1] * c])
+
+
+def _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r):
+    """ゲートの通過のプリミティブ。入りは向き a_in の直進で車軸が C(ゲートの線上)に着くまで、
+    a_in != a_out なら C から半径 r の円弧で a_out に向きを変え、a_out の直進で抜ける。
+    入りの条件: 先の端の角が線の CLR 手前、抜けの条件: 後の端の角が線を PM 越える(線に垂直な距離)。"""
+    u_in, u_out = _rot(base_u, a_in), _rot(base_u, a_out)
+    ci, si = math.cos(math.radians(a_in)), abs(math.sin(math.radians(a_in)))
+    co, so = math.cos(math.radians(a_out)), abs(math.sin(math.radians(a_out)))
+    S = C - u_in * ((lead * ci + HALF_WIDTH * si + CLR) / ci + ea)
+    need = trail * co + HALF_WIDTH * so + PM
+    prims = [('line', S, C, m)]
+    P2 = C
+    if abs(a_out - a_in) > 1e-9:
+        th_in = math.atan2(u_in[1], u_in[0]); th_out = math.atan2(u_out[1], u_out[0])
+        dd = nd(math.degrees(th_out - th_in))
+        sgn = 1 if dd > 0 else -1
+        arc = arc_prim(C, th_in, sgn, math.radians(abs(dd)), r, m)
+        P2, _ = arc_end(arc)
+        prims.append(arc)
+    d2 = float(np.dot(P2 - C, base_u))
+    L = (need - d2) / co
+    if L < 0 or L + ee < 0:
+        return None
+    E = P2 + u_out * (L + ee)
+    prims.append(('line', P2, E, m))
+    return prims
+
+
+def _pass_arc_exit(g, C, base_u, a_in, lead, trail, m, ea, R, turn):
+    """2026-11-16 ユーザー: 車軸がゲートの線の真ん中に来たら、そのまま半径 R の円弧(カーブ)を走り始めて抜ける。
+    円弧は、後ろの端(後退なら前の端)が線を PM 越えるまで。戻り値 (prims, 回った角度deg) か None。"""
+    u_in = _rot(base_u, a_in)
+    ci, si = math.cos(math.radians(a_in)), abs(math.sin(math.radians(a_in)))
+    S = C - u_in * ((lead * ci + HALF_WIDTH * si + CLR) / ci + ea)
+    th = math.atan2(u_in[1], u_in[0])
+    for deg in range(1, 121):
+        arc = arc_prim(C, th, turn, math.radians(deg), float(R), m)
+        P, th2 = arc_end(arc)
+        hb = th2 if m > 0 else th2 + math.pi     # 車体の向き
+        d = np.array([math.cos(hb), math.sin(hb)]); n = np.array([-d[1], d[0]])
+        # 後ろの端(動く向きと反対の端)の2つの角
+        back = -trail if m > 0 else trail
+        cs = [P + d * back + n * HALF_WIDTH, P + d * back - n * HALF_WIDTH]
+        if min(float(np.dot(c - C, base_u)) for c in cs) >= PM:
+            return [('line', S, C, m), arc], float(deg)
+    return None
+
+def _visit_candidates(g, pairs_override=None, only=None):
+    """ゲートの通り方の候補。斜め(angles が0以外)は、車軸の中心がゲートの真ん中を通るときだけ(横のずれは0)。"""
+    out = []
+    modes = ['F', 'B', 'FB', 'BF'] if ALLOW_REVERSE else ['F']
+    pairs = [(0.0, 0.0)]
+    for a in ([] if pairs_override is not None else ANGLES):
+        if abs(a) < 1e-9:
+            continue
+        if OBLIQUE_MODE in ('split', 'both'):
+            pairs += [(a, 0.0), (0.0, a)]
+        if OBLIQUE_MODE in ('straight', 'both'):
+            pairs.append((a, a))
+    if pairs_override is None and OUT_ARC_ANGLES:
+        # 2026-11-16 ユーザー: ゲートの真ん中を過ぎたらすぐ大きく曲がって抜ける(抜けの角度を angles より大きく。円弧は split_radii)
+        for a in OUT_ARC_ANGLES:
+            pairs += [(0.0, float(a)), (0.0, -float(a))]
+    for sg in (1, -1):
+        base_u = g.n * sg
+        for a_in, a_out, *rr in (pairs_override if pairs_override is not None else pairs):
+            oblique = abs(a_in) > 1e-9 or abs(a_out) > 1e-9
+            radii = (rr if rr else SPLIT_RADII) if abs(a_in - a_out) > 1e-9 else [0.0]
+            for off in (OFFSETS if not oblique else [0.0]):
+                C = g.c + g.t * off
+                for mode in modes:
+                    if only is not None and (sg, mode) not in only:
+                        continue
+                    if mode in ('F', 'FB'):
+                        lead, trail, m = FRONT, REAR, 1
+                    else:
+                        lead, trail, m = REAR, FRONT, -1
+                    for r in radii:
+                        for ea in EXT:
+                            # 2026-11-16: exit_early(負の値)= 後ろの端が線を越えきる前につなぎへ移る(端の行で外へ抜けてすぐ曲がるため。
+                            # 曲がる側と反対へ後ろが振れるので、つなぎの当たり判定で脚とのすき間を確かめる)
+                            for ee in (list(EXT) + list(EXIT_EARLY) if mode in ('F', 'B') else EXT):
+                                if mode in ('F', 'B'):
+                                    prims = _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r)
+                                    if prims is None:
+                                        continue
+                                elif oblique:
+                                    # 斜めの往復: 斜めの通過(抜けの余りなし)で抜けきったら止まり、同じ道を後退で戻って、
+                                    # 入りの点からさらに ee だけ戻る(戻りも行きと同じ道なので、柱とのすき間も同じ)
+                                    fwd = _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, 0.0, r)
+                                    if fwd is None:
+                                        continue
+                                    back = [_retrace(q) for q in reversed(fwd)]
+                                    S0 = fwd[0][1]; u_in = _rot(base_u, a_in)
+                                    prims = fwd + back + ([('line', S0, S0 - u_in * ee, -m)] if ee > 0 else [])
+                                else:
+                                    # 往復(垂直だけ): 抜けきったら戻って、元の側へ抜けきる
+                                    u = base_u
+                                    S = C - u * (lead + CLR + ea); T = C + u * (trail + PM)
+                                    E = C - u * ((FRONT if mode == 'FB' else REAR) + CLR + ee)
+                                    prims = [('line', S, T, m), ('line', T, E, -m)]
+                                ok = True
+                                for q in prims:
+                                    if q[0] == 'line' and not line_ok(q[1], q[2], q[3], allow=g.color):
+                                        ok = False; break
+                                    if q[0] == 'arc' and not arc_ok(q, allow=g.color):
+                                        ok = False; break
+                                if not ok:
+                                    continue
+                                t = sum((prim_len(q) / (V_LINE if q[0] == 'line' else v_arc(q[2]))) * spd(prim_m(q)) for q in prims)
+                                rv = sum(prim_len(q) for q in prims if prim_m(q) < 0)
+                                if mode in ('FB', 'BF'):
+                                    t += T_STOP + PEN_STOP
+                                t += PEN_REV_M * rv / 100.0
+                                S = prims[0][1]
+                                last = prims[-1]
+                                E = last[2]
+                                hS = nd(math.degrees(math.atan2(*(prims[0][2] - prims[0][1])[::-1])) + (0 if prims[0][3] > 0 else 180))
+                                hE = nd(math.degrees(math.atan2(*(last[2] - last[1])[::-1])) + (0 if last[3] > 0 else 180))
+                                out.append(dict(color=g.color, mode=mode, sign=sg, off=off, angle=a_in, angle_out=a_out, ea=ea, ee=ee,
+                                                prims=prims, legs=[(q[1], q[2], q[3]) for q in prims if q[0] == 'line'], cost=t,
+                                                start=(S, hS, prims[0][3]), end=(E, hE, last[3])))
+    if pairs_override is None and EXIT_ARC_RADII:
+        # 2026-11-16 ユーザー: 真ん中からカーブを走り始めて抜ける通り方(_pass_arc_exit)
+        for sg in (1, -1):
+            base_u = g.n * sg
+            for a_in in sorted(set([0.0] + [float(a) for a in ANGLES])):
+                for mode in [mo for mo in ('F', 'B') if mo in modes]:
+                    if only is not None and (sg, mode) not in only:
+                        continue
+                    lead, trail, m = (FRONT, REAR, 1) if mode == 'F' else (REAR, FRONT, -1)
+                    for R in EXIT_ARC_RADII:
+                        for turn in (1, -1):
+                            for ea in EXT:
+                                res = _pass_arc_exit(g, g.c, base_u, a_in, lead, trail, m, ea, R, turn)
+                                if res is None:
+                                    continue
+                                prims, deg = res
+                                if not line_ok(prims[0][1], prims[0][2], m, allow=g.color) or not arc_ok(prims[1], allow=g.color):
+                                    continue
+                                t = sum((prim_len(q) / (V_LINE if q[0] == 'line' else v_arc(q[2]))) * spd(m) for q in prims)
+                                if m < 0:
+                                    t += PEN_REV_M * sum(prim_len(q) for q in prims) / 100.0
+                                S = prims[0][1]
+                                E, th2 = arc_end(prims[1])
+                                hS = nd(math.degrees(math.atan2(*(prims[0][2] - prims[0][1])[::-1])) + (0 if m > 0 else 180))
+                                hE = nd(math.degrees(th2) + (0 if m > 0 else 180))
+                                out.append(dict(color=g.color, mode=mode, sign=sg, off=0.0, angle=a_in, angle_out=round(turn * deg, 1), ea=ea, ee=0.0,
+                                                exit_arc_r=float(R), prims=prims, legs=[(prims[0][1], prims[0][2], m)], cost=t,
+                                                start=(S, hS, m), end=(E, hE, m)))
+    return out
+
+
+def pass_clearance(prims):
+    """通過の間(プリミティブ列)の、車体と支柱の一番小さいすき間(前と後ろの小さい方、cm)。"""
+    xs, ys, hs = [], [], []
+    for q in prims:
+        if q[0] == 'line':
+            L = prim_len(q)
+            k = np.linspace(0, 1, max(2, int(L / 0.5) + 1))
+            h = math.degrees(math.atan2(*(q[2] - q[1])[::-1])) + (0 if q[3] > 0 else 180)
+            xs.append(q[1][0] + (q[2][0] - q[1][0]) * k); ys.append(q[1][1] + (q[2][1] - q[1][1]) * k)
+            hs.append(np.full(len(k), h))
+        elif q[0] == 'arc':
+            ax, ay, ah = arc_samples(q, 0.5)
+            xs.append(ax); ys.append(ay); hs.append(ah)
+    px, py, hh = np.concatenate(xs), np.concatenate(ys), np.radians(np.concatenate(hs))
+    if GATE_MODEL == 'rect':
+        cf = _rect_clear(px, py, hh, 0.0, FRONT); cr = rear_clear(px, py, hh, -REAR, 0.0)
+        return float(min(cf.min() - MARGIN_FRONT, cr.min() - MARGIN_REAR))
+    c = np.cos(hh)[:, None]; sn = np.sin(hh)[:, None]
+    dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
+    lx = dx * c + dy * sn; ly = -dx * sn + dy * c
+    ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
+    cf = np.hypot(np.maximum(np.maximum(-lx, lx - FRONT), 0.0), ey) - POST_R
+    cr = np.hypot(np.maximum(np.maximum(-REAR - lx, lx), 0.0), ey) - POST_R
+    return float(min(cf.min() - MARGIN_FRONT, cr.min() - MARGIN_REAR))
+
+
+OBLIQUE_CHOICE = []   # 記録: (色, 側, 通り方, 入り, 抜け, 半径, すき間)
+FINAL_YELLOW_COST = None   # 最後の周の黄の通り方の費用(すき間の足りないものは INF)。main で決める
+
+
+def _retrace(q):
+    """プリミティブを逆向きにたどる(後退と前進を入れ替える)。"""
+    if q[0] == 'line':
+        return ('line', q[2], q[1], -q[3])
+    _, c, r, theta, sgn, sweep, m, p0 = q
+    p_end, th_end = arc_end(q)
+    return arc_prim(p_end, th_end + math.pi, -sgn, sweep, r, -m)
+
+
+_GRID_ON = False   # narrow_oblique_grid で、最初のすき間をやり直している間だけ True(main)
+
+
+def visit_candidates(g):
+    if OBLIQUE_POLICY != 'safest':
+        return _visit_candidates(g)
+    perp = _visit_candidates(g, pairs_override=[(0.0, 0.0)])
+    have = {(v['sign'], v['mode']) for v in perp}
+    modes = ['F', 'B'] if ALLOW_REVERSE else ['F']
+    modes = ['F', 'B', 'FB', 'BF'] if ALLOW_REVERSE else ['F']
+    missing = [(sg, mo) for sg in (1, -1) for mo in modes if (sg, mo) not in have]
+    out = list(perp)
+    lo, hi, step = ANGLE_SCAN
+    angles = [a for a in np.arange(lo, hi + 1e-9, step) if abs(a) > 1e-9]
+    for sg, mo in missing:
+        base_u = g.n * sg
+        lead, trail, m = (FRONT, REAR, 1) if mo in ('F', 'FB') else (REAR, FRONT, -1)
+        # 入りを斜め / 抜けを斜め の両方から、通過の間の一番近い柱までの距離が最大のものを1つだけ選ぶ
+        best = None
+        # 候補: 入りだけ斜め / 抜けだけ斜め / (OBLIQUE_BOTH なら)入りも抜けも斜め(同じ角度の1本の線と、4°刻みの違う角度)
+        trials = [(a, 0.0, r) for a in angles for r in SPLIT_RADII] + [(0.0, a, r) for a in angles for r in SPLIT_RADII]
+        if OBLIQUE_BOTH:
+            trials += [(a, a, 0.0) for a in angles]
+            coarse = [a for a in angles if abs(round(a) % 4) < 1e-9]
+            trials += [(a1, a2, 20.0) for a1 in coarse for a2 in coarse if abs(a1 - a2) > 1e-9]
+        for a_in, a_out, r in trials:
+            prims = _pass_prims(g, g.c, base_u, a_in, a_out, lead, trail, m, 0.0, 0.0, r)
+            if prims is None:
+                continue
+            cl = pass_clearance(prims)
+            # すき間が1mm以内で同じなら、斜めが片側だけの方、次に角度が小さい方を選ぶ
+            pref = (int(abs(a_in) > 1e-9) + int(abs(a_out) > 1e-9), max(abs(a_in), abs(a_out)))
+            if best is None or cl > best[0] + 0.1 or (cl > best[0] - 0.1 and pref < best[4]):
+                best = (cl, a_in, a_out, r, pref)
+        if best is None or best[0] < 0:
+            continue
+        OBLIQUE_CHOICE.append((g.color, sg, mo, float(best[1]), float(best[2]), best[3], round(best[0] + MARGIN_FRONT, 2)))
+        out += _visit_candidates(g, pairs_override=[(best[1], best[2], best[3])], only={(sg, mo)})
+    if _GRID_ON:
+        grid = []
+        for a in ANGLES:
+            if abs(a) < 1e-9:
+                continue
+            if OBLIQUE_MODE in ('split', 'both'):
+                grid += [(a, 0.0), (0.0, a)]
+            if OBLIQUE_MODE in ('straight', 'both'):
+                grid.append((a, a))
+        if grid:
+            out += _visit_candidates(g, pairs_override=grid)
+    return out
+
+
+def pose_key(p):
+    return (round(float(p[0][0]), 3), round(float(p[0][1]), 3), round(float(p[1]), 3), p[2])
+
+
+# ---------------- つなぎ区間の候補(当たりを無視した時間を配列で) ----------------
+# 候補 = (族, m, r, 形 or 回る向き)。族: 'run' 1本の走り / 'PLP' 旋回-直進-旋回 / 'PLA' 旋回-直進-円弧 / 'ALP' 円弧-直進-旋回
+OPTS = []
+for m in DIRS:
+    for r in RADII:
+        for w in range(8):
+            OPTS.append(('run', m, r, w))
+if ALLOW_PIVOT:
+    for m in DIRS:
+        OPTS.append(('PLP', m, 0.0, 0))
+        for r in RADII:
+            for s1 in (1, -1):
+                OPTS.append(('PLA', m, r, s1))
+                OPTS.append(('ALP', m, r, s1))
+
+
+def _tc(deg):
+    return np.where(deg < 0.3, 0.0, T_TURN0 + T_TURN_DEG * deg)
+
+
+def _piv_bad(dd, lmax, rmax):
+    """向きの変化dd(符号つき、deg)が、その場で回れる範囲を超えるか(配列)。"""
+    a = np.abs(dd)
+    ok = (a < 0.3) | ((dd > 0) & (lmax >= dd - 0.5)) | ((dd < 0) & (rmax >= -dd - 0.5)) | \
+         ((np.abs(a - 180) < 0.5) & ((lmax >= 180) | (rmax >= 180)))
+    return ~ok
+
+
+def approx_costs(E, S):
+    """E, S: 姿勢の配列 (x, y, 車体の向きdeg, 走りの向き 0/±1)。戻り値 (N, len(OPTS))。"""
+    ex, ey, eh, ed, el, er = E; sx, sy, sh, sd, sl, sr = S
+    N = len(ex)
+    out = np.full((N, len(OPTS)), INF)
+    dcache = {}
+    for j, (fam, m, r, w) in enumerate(OPTS):
+        add = 0.0 if m > 0 else 180.0
+        stopE_run = (ed != 0) & (ed != m)
+        stopS_run = (sd == 0) | (sd != m)
+        restE = (ed == 0) | (ed != m)          # 止まった状態から走り出す(LEAD_CM の直進を先に置く)
+        lead = LEAD_CM * restE
+        if fam == 'run':
+            if (m, r) not in dcache:
+                thE = np.radians(eh + add); thS = np.radians(sh + add)
+                tx = sx - TAIL_CM * stopS_run * np.cos(thS); ty = sy - TAIL_CM * stopS_run * np.sin(thS)
+                fx = ex + lead * np.cos(thE); fy = ey + lead * np.sin(thE)
+                dcache[(m, r)] = dubins_vec(fx, fy, thE, tx, ty, thS, r)
+            A, L = dcache[(m, r)]
+            a, l = A[w], L[w]
+            t = (r * a / v_arc(r) + (l + TAIL_CM * stopS_run + lead) / V_LINE) * spd(m)
+            st = stopE_run.astype(float) + stopS_run
+            c = t + (T_STOP + PEN_STOP) * st + PEN_ARC_100DEG * np.degrees(a) / 100.0 \
+                + (PEN_REV_M * (r * a + l + TAIL_CM * stopS_run) / 100.0 if m < 0 else 0.0)
+            out[:, j] = np.where(a >= INF / 2, INF, c)
+        elif fam == 'PLP':
+            vx, vy = sx - ex, sy - ey
+            L = np.hypot(vx, vy)
+            hl = np.degrees(np.arctan2(vy, vx)) + add
+            pbad = _piv_bad(nd(hl - eh), el, er) | _piv_bad(-nd(sh - hl), sl, sr)
+            pe = np.abs(nd(hl - eh)); ps = np.abs(nd(sh - hl))
+            stE = (ed != 0) & ~((pe < 0.3) & (ed == m))
+            stS = ~((ps < 0.3) & (sd == m))
+            c = _tc(pe) + _tc(ps) + L / V_LINE * spd(m) + (T_STOP + PEN_STOP) * (stE.astype(float) + stS) \
+                + PEN_PIVOT * ((pe >= 0.3).astype(float) + (ps >= 0.3)) + (PEN_REV_M * L / 100.0 if m < 0 else 0.0)
+            out[:, j] = np.where((L < TAIL_CM) | pbad, INF, c)
+        elif fam == 'PLA':
+            s1 = w
+            thB = np.radians(sh + add)
+            bx = sx - TAIL_CM * stopS_run * np.cos(thB); by = sy - TAIL_CM * stopS_run * np.sin(thB)
+            c2x = bx - s1 * r * np.sin(thB); c2y = by + s1 * r * np.cos(thB)
+            D = np.hypot(c2x - ex, c2y - ey)
+            ok = D > r + 1e-9
+            phi = np.arctan2(c2y - ey, c2x - ex) - np.arcsin(np.clip(s1 * r / np.where(ok, D, 1.0), -1, 1))
+            p2x = c2x + s1 * r * np.sin(phi); p2y = c2y - s1 * r * np.cos(phi)
+            a2 = _ccw_v(s1 * (thB - phi))
+            L = np.hypot(p2x - ex, p2y - ey)
+            pbad = _piv_bad(nd(np.degrees(phi) + add - eh), el, er)
+            pe = np.abs(nd(np.degrees(phi) + add - eh))
+            stE = (ed != 0) & ~((pe < 0.3) & (ed == m))
+            c = _tc(pe) + (L / V_LINE + r * a2 / v_arc(r) + TAIL_CM * stopS_run / V_LINE) * spd(m) \
+                + (T_STOP + PEN_STOP) * (stE.astype(float) + stopS_run) + PEN_PIVOT * (pe >= 0.3) \
+                + PEN_ARC_100DEG * np.degrees(a2) / 100.0 + (PEN_REV_M * (L + r * a2) / 100.0 if m < 0 else 0.0)
+            need_lead = restE | (pe >= 0.3)
+            out[:, j] = np.where(ok & ~pbad & ~(need_lead & (L < LEAD_CM)), c, INF)
+        else:  # ALP
+            s1 = w
+            thA = np.radians(eh + add)
+            fx = ex + lead * np.cos(thA); fy = ey + lead * np.sin(thA)
+            c1x = fx - s1 * r * np.sin(thA); c1y = fy + s1 * r * np.cos(thA)
+            D = np.hypot(sx - c1x, sy - c1y)
+            ok = D > r + 1e-9
+            phi = np.arctan2(sy - c1y, sx - c1x) + np.arcsin(np.clip(s1 * r / np.where(ok, D, 1.0), -1, 1))
+            p1x = c1x + s1 * r * np.sin(phi); p1y = c1y - s1 * r * np.cos(phi)
+            a1 = _ccw_v(s1 * (phi - thA))
+            L = np.hypot(sx - p1x, sy - p1y)
+            pbad = _piv_bad(-nd(sh - (np.degrees(phi) + add)), sl, sr)
+            ps = np.abs(nd(sh - (np.degrees(phi) + add)))
+            stS = ~((ps < 0.3) & (sd == m))
+            c = _tc(ps) + ((L + lead) / V_LINE + r * a1 / v_arc(r)) * spd(m) \
+                + (T_STOP + PEN_STOP) * (stopE_run.astype(float) + stS) + PEN_PIVOT * (ps >= 0.3) \
+                + PEN_ARC_100DEG * np.degrees(a1) / 100.0 + (PEN_REV_M * (L + r * a1) / 100.0 if m < 0 else 0.0)
+            out[:, j] = np.where(ok & (L >= TAIL_CM) & ~pbad, c, INF)
+    return out
+
+
+_OPT_FAM = np.array([{'run': 0, 'PLP': 1, 'PLA': 2, 'ALP': 3}[o[0]] for o in OPTS], np.int64)
+_OPT_M = np.array([o[1] for o in OPTS], np.int64)
+_OPT_R = np.array([float(o[2]) for o in OPTS], float)
+_OPT_W = np.array([int(o[3]) for o in OPTS], np.int64)
+
+
+def build_opt(opt, ep, sp):
+    """候補をプリミティブの列にする。ep/sp = (点, 車体の向きdeg, 走りの向き)。"""
+    fam, m, r, w = opt
+    E, hE, dE = ep; S, hS, dS = sp
+    add = 0.0 if m > 0 else 180.0
+    stopS = dS == 0 or dS != m
+    restE = (dE == 0 or dE != m) and LEAD_CM > 0
+    if fam == 'run':
+        thE = math.radians(hE + add); thS = math.radians(hS + add)
+        B = S - TAIL_CM * tdir(thS) if stopS else S
+        F = E + LEAD_CM * tdir(thE) if restE else E
+        prims = dubins_one(F, thE, B, thS, r, w, m)
+        if prims is None:
+            return None
+        return ([('line', E, F, m)] if restE else []) + prims + ([('line', B, S, m)] if stopS else [])
+    if fam == 'PLP':
+        hl = math.degrees(math.atan2(*(S - E)[::-1])) + add
+        return [('pivot', E, hE, nd(hl)), ('line', E, S, m), ('pivot', S, nd(hl), hS)]
+    if fam == 'PLA':
+        s1 = w; thB = math.radians(hS + add)
+        B = S - TAIL_CM * tdir(thB) if stopS else S
+        c2 = B + s1 * r * nL(thB); D = float(np.hypot(*(c2 - E)))
+        if D <= r + 1e-9:
+            return None
+        phi = math.atan2(*(c2 - E)[::-1]) - math.asin(s1 * r / D)
+        p2 = c2 - s1 * r * nL(phi)
+        pe = abs(nd(math.degrees(phi) + add - hE))
+        if (restE or pe >= 0.3) and float(np.hypot(*(p2 - E))) < LEAD_CM:
+            return None
+        pr = [('pivot', E, hE, nd(math.degrees(phi) + add)), ('line', E, p2, m),
+              arc_prim(p2, phi, s1, ccw(s1 * (thB - phi)), r, m)]
+        return pr + ([('line', B, S, m)] if stopS else [])
+    s1 = w; thA = math.radians(hE + add)
+    F = E + LEAD_CM * tdir(thA) if restE else E
+    c1 = F + s1 * r * nL(thA); D = float(np.hypot(*(S - c1)))
+    if D <= r + 1e-9:
+        return None
+    phi = math.atan2(*(S - c1)[::-1]) + math.asin(s1 * r / D)
+    p1 = c1 - s1 * r * nL(phi)
+    return ([('line', E, F, m)] if restE else []) + [arc_prim(F, thA, s1, ccw(s1 * (phi - thA)), r, m), ('line', p1, S, m),
+            ('pivot', S, nd(math.degrees(phi) + add), hS)]
+
+
+# ---------------- 中継(1と2が全部当たるときだけ) ----------------
+_WPT = None
+_WPP = None
+_via_from, _via_to = {}, {}
+
+
+def _wp():
+    global _WPT, _WPP
+    if _WPT is None:
+        pts, poses = [], []
+        for x in np.arange(BOUNDS[0], BOUNDS[1] + 0.1, WP_STEP):
+            for y in np.arange(BOUNDS[2], BOUNDS[3] + 0.1, WP_STEP):
+                if in_keepout(np.array([x]), np.array([y]))[0]:
+                    continue
+                hs = np.arange(WP_HEADINGS) * 360.0 / WP_HEADINGS
+                okh = [h for h in hs if poses_ok(np.array([x]), np.array([y]), np.array([h]))]
+                if okh:
+                    pts.append((x, y))       # 旋回の中継の候補(必要な角度だけ回れるかは、組み立てたあとに判定する)
+                poses += [(x, y, h) for h in okh]
+        _WPT = np.array(pts); _WPP = np.array(poses)
+    return _WPT, _WPP
+
+
+def via_options(ep, sp, limit=INF):
+    """中継の候補を、当たりを無視した時間の順に返す: [(cost, ('via', ...))]
+    limit: これより速い候補だけ要るとき(2026-11-09)。E→中継→S の直線距離を最高の速さで走っても limit に届かない
+    中継の姿勢は、Dubins を計算しない(limit より速い候補は変わらない)。6周・ガレージで Dubins が計算の約4割だった。"""
+    E, hE, dE = ep; S, hS, dS = sp
+    pts, poses = _wp()
+    out = []
+    if ALLOW_PIVOT and len(pts):
+        X, Y = pts[:, 0], pts[:, 1]
+        for m1 in DIRS:
+            for m2 in DIRS:
+                h1 = np.degrees(np.arctan2(Y - E[1], X - E[0])) + (0 if m1 > 0 else 180)
+                h2 = np.degrees(np.arctan2(S[1] - Y, S[0] - X)) + (0 if m2 > 0 else 180)
+                L1 = np.hypot(X - E[0], Y - E[1]); L2 = np.hypot(S[0] - X, S[1] - Y)
+                pe = np.abs(nd(h1 - hE)); pw = np.abs(nd(h2 - h1)); ps = np.abs(nd(hS - h2))
+                c = _tc(pe) + _tc(pw) + _tc(ps) + (L1 * spd(m1) + L2 * spd(m2)) / V_LINE + (T_STOP + PEN_STOP) * 3 \
+                    + PEN_PIVOT * 3
+                c = np.where((L1 < TAIL_CM) | (L2 < TAIL_CM), INF, c)
+                for i in np.argsort(c)[:WP_TRIES]:
+                    out.append((float(c[i]), ('viaP', m1, m2, (float(X[i]), float(Y[i])))))
+    if len(poses):
+        X, Y, H = poses[:, 0], poses[:, 1], poses[:, 2]
+        keep = None   # None = 全部の姿勢を使い、結果を _via_from/_via_to に残す
+        if limit < INF / 2:
+            d = np.hypot(X - E[0], Y - E[1]) + np.hypot(X - S[0], Y - S[1])
+            keep = np.flatnonzero(d / (V_LINE * max(1.0, REV_SPEED_SCALE)) < limit)
+            X, Y, H = X[keep], Y[keep], H[keep]
+        for m1 in (DIRS if len(X) else ()):
+            for m2 in DIRS:
+                cusp = m1 != m2
+                add1 = 0 if m1 > 0 else 180; add2 = 0 if m2 > 0 else 180
+                stopE = dE != 0 and dE != m1
+                stopS = dS == 0 or dS != m2
+                k1 = (round(float(E[0]), 3), round(float(E[1]), 3), round(hE, 3), m1, cusp)
+                if k1 in _via_from:
+                    best1 = _via_from[k1] if keep is None else _via_from[k1][keep]
+                else:
+                    best1 = np.full(len(X), INF)
+                    t1 = np.radians(H + add1)
+                    tx = X - TAIL_CM * cusp * np.cos(t1); ty = Y - TAIL_CM * cusp * np.sin(t1)
+                    for r in RADII:
+                        A, L = dubins_vec(np.full(len(X), E[0]), np.full(len(X), E[1]),
+                                          np.full(len(X), math.radians(hE + add1)), tx, ty, t1, r)
+                        best1 = np.minimum(best1, (r * A / v_arc(r) + L / V_LINE).min(0) * spd(m1))
+                    if keep is None:
+                        _via_from[k1] = best1
+                k2 = (round(float(S[0]), 3), round(float(S[1]), 3), round(hS, 3), m2, stopS)
+                if k2 in _via_to:
+                    best2 = _via_to[k2] if keep is None else _via_to[k2][keep]
+                else:
+                    best2 = np.full(len(X), INF)
+                    ts = math.radians(hS + add2)
+                    bx = S[0] - TAIL_CM * stopS * math.cos(ts); by = S[1] - TAIL_CM * stopS * math.sin(ts)
+                    for r in RADII:
+                        A, L = dubins_vec(X, Y, np.radians(H + add2), np.full(len(X), bx), np.full(len(X), by),
+                                          np.full(len(X), ts), r)
+                        best2 = np.minimum(best2, (r * A / v_arc(r) + L / V_LINE).min(0) * spd(m2))
+                    if keep is None:
+                        _via_to[k2] = best2
+                c = best1 + best2 + (TAIL_CM * cusp * spd(m1) + TAIL_CM * stopS * spd(m2)) / V_LINE \
+                    + (T_STOP + PEN_STOP) * (float(stopE) + cusp + stopS)
+                for i in np.argsort(c)[:WP_TRIES]:
+                    if c[i] < INF / 2:
+                        out.append((float(c[i]), ('viaR', m1, m2, (float(X[i]), float(Y[i]), float(H[i])))))
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+_run_cache = {}
+_arcfirst_memo = {}   # 2026-11-16: 抜けの姿勢 -> 曲がってからつなぐの円弧の候補
+
+
+def _best_run(A, hA, B, hB, m, tail, top=12):
+    key = (round(float(A[0]), 3), round(float(A[1]), 3), round(hA, 3), round(float(B[0]), 3), round(float(B[1]), 3),
+           round(hB, 3), m, tail, _EXEMPT_ON, _ALLOW_TAB, top, MARGIN_FRONT, MARGIN_REAR)
+    if key not in _run_cache:
+        _run_cache[key] = _best_run0(A, hA, B, hB, m, tail, top)
+    return _run_cache[key]
+
+
+def _best_run0(A, hA, B, hB, m, tail, top=12):
+    """A→B の1本の走り(当たらない最短)。tail>0なら最後を直進tailで終える。"""
+    add = 0.0 if m > 0 else 180.0
+    thA, thB = math.radians(hA + add), math.radians(hB + add)
+    Bm = B - tail * tdir(thB) if tail > 0 else B
+    cands = []
+    for r in RADII:
+        for w in range(8):
+            pr = dubins_one(A, thA, Bm, thB, r, w, m)
+            if pr is None:
+                continue
+            if tail > 0:
+                pr = pr + [('line', Bm, B, m)]
+            cands.append((sum((prim_len(q) / (V_LINE if q[0] == 'line' else v_arc(q[2]))) for q in pr), pr))
+    cands.sort(key=lambda c: c[0])
+    for _, pr in cands[:top]:
+        if all(prim_ok(q) for q in pr):
+            return pr
+    return None
+
+
+def build_via(opt, ep, sp):
+    E, hE, dE = ep; S, hS, dS = sp
+    if opt[0] == 'viaP':
+        _, m1, m2, (x, y) = opt
+        Wp = np.array([x, y])
+        h1 = nd(math.degrees(math.atan2(y - E[1], x - E[0])) + (0 if m1 > 0 else 180))
+        h2 = nd(math.degrees(math.atan2(S[1] - y, S[0] - x)) + (0 if m2 > 0 else 180))
+        return [('pivot', E, hE, h1), ('line', E, Wp, m1), ('pivot', Wp, h1, h2), ('line', Wp, S, m2), ('pivot', S, h2, hS)]
+    _, m1, m2, (x, y, h) = opt
+    Wp = np.array([x, y])
+    stopS = dS == 0 or dS != m2
+    r1 = _best_run(E, hE, Wp, h, m1, TAIL_CM if m1 != m2 else 0.0)
+    if r1 is None:
+        return None
+    r2 = _best_run(Wp, h, S, hS, m2, TAIL_CM if stopS else 0.0)
+    if r2 is None:
+        return None
+    return r1 + r2
+
+
+# ---------------- 表(つなぎ区間ごとの候補の状態) ----------------
+def _pick_vias(lst):
+    """試す中継の候補。2026-11-16: 見込みの時間の順に VIA_MAX_TRIES 個だけだと、後退を含む候補が上位を埋めて、前進だけで回る
+    遠回り(端の行のゲートを外へ抜けて折り返すなど)を試さないことがあった。via_group_tries > 0 なら、(種類, 前後1, 前後2) の組ごとに
+    その数ずつ試す(見込みの順は保つ)。"""
+    if VIA_GROUP_TRIES <= 0:
+        return lst[:VIA_MAX_TRIES]
+    cnt, out = {}, []
+    for c0, opt in lst:
+        k = (opt[0], opt[1], opt[2])
+        if cnt.get(k, 0) < VIA_GROUP_TRIES:
+            cnt[k] = cnt.get(k, 0) + 1
+            out.append((c0, opt))
+    return out
+
+
+class Table:
+    def __init__(self, ends, starts, is_start=False, via_first=False, allow_gate=None):
+        self.ends, self.starts = ends, starts
+        self.is_start = is_start
+        self.allow_gate = allow_gate   # この区間で横切ってよいゲートの色(None なし)
+        self.margin = None   # 2026-11-16: この区間だけのすき間(per_gate_margin で狭いゲートにつながる区間)。None なら全体の値
+        self.margin_fallback = None   # 広いすき間でつなげない組だけ使うすき間(per_gate_conn_mode=fallback)
+        self.fb_used = set()
+        self.via_first = via_first   # スタート・ゴールの区間: 組み合わせが少ないので、最初から遠回りも比べる
+        nE, nS = len(ends), len(starts)
+        Ea = [np.repeat(np.array(v, float), nS) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in ends])]
+        Sa = [np.tile(np.array(v, float), nE) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in starts])]
+        ac = approx_costs(Ea, Sa).reshape(nE, nS, len(OPTS))
+        self.order = np.argsort(ac, axis=2)
+        self.approx = np.take_along_axis(ac, self.order, axis=2)
+        self.ptr = np.zeros((nE, nS), int)
+        self.C = self.approx[:, :, 0].copy()
+        self.done = np.zeros((nE, nS), bool)
+        self.prims = {}
+        self.via = {}
+        self.checks = 0
+        self.allow_via = via_first
+        self.pending = set()   # 1と2が全部当たり、中継はまだ試していない区間
+        self.deferred = set()  # defer_via で見込みの下限だけ入れて後回しにした区間
+        self.join = set()      # (e, s): 戻らずにそのまま続ける(self.C は重なる分だけ負の時間)
+        if JOIN_MAX_CM > 0.0 and not is_start and starts and ends and starts[0][2] != 0:
+            ex, ey, eh, ed = [np.array(v, float)[:, None] for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) for p in ends])]
+            sx, sy, sh, sd = [np.array(v, float)[None, :] for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) for p in starts])]
+            th = np.radians(eh + np.where(ed > 0, 0.0, 180.0))
+            ux, uy = np.cos(th), np.sin(th)
+            along = (sx - ex) * ux + (sy - ey) * uy
+            lat = -(sx - ex) * uy + (sy - ey) * ux
+            mask = (ed != 0) & (ed == sd) & (np.abs(nd(eh - sh)) < 0.01) & (np.abs(lat) < 0.3) & (along <= 1e-6) & (along >= -JOIN_MAX_CM)
+            for e, s in zip(*np.nonzero(mask)):
+                e, s = int(e), int(s)
+                self.C[e, s] = float(along[e, s]) / V_LINE * spd(ends[e][2])
+                self.done[e, s] = True
+                self.prims[(e, s)] = []
+                self.join.add((e, s))
+
+    def _best_via(self, e, s, ep, sp, limit):
+        """遠回りの候補のうち、limit より速く当たらない最初のもの。(cost, prims) か (INF, None)。"""
+        for c0, opt in _pick_vias(via_options(ep, sp, limit)):
+            if c0 >= limit:
+                break
+            pr = build_via(opt, ep, sp)
+            self.checks += 1
+            if pr is not None and all(prim_ok(q) for q in pr):
+                c = seq_cost(ep[2], pr, sp[2])
+                if c < limit:
+                    return c, pr
+        return INF, None
+
+    def open_via(self):
+        """2段目: 直接つなげなかった区間に、遠回りの見込みの時間(当たりを無視)を入れて、解き直せるようにする。"""
+        global _EXEMPT_ON, _ALLOW_TAB
+        self.allow_via = True
+        for (pe, ps) in self.pending:
+            _EXEMPT_ON = self.is_start; _ALLOW_TAB = self.allow_gate   # via_options は当たりを見ないので、すき間は関係しない
+            try:
+                if (pe, ps) not in self.via:
+                    self.via[(pe, ps)] = via_options(self.ends[pe], self.starts[ps])
+            finally:
+                _EXEMPT_ON = False; _ALLOW_TAB = None
+            v = self.via[(pe, ps)]
+            self.C[pe, ps] = v[0][0] if v else INF
+            self.done[pe, ps] = not v
+        self.pending = set()
+
+    def resolve(self, e, s):
+        """(e,s) の今の候補を厳密に判定し、当たらない最初の候補に確定する。"""
+        global _EXEMPT_ON, _ALLOW_TAB, MARGIN_FRONT, MARGIN_REAR
+        if self.done[e, s]:
+            return False
+        _EXEMPT_ON = self.is_start; _ALLOW_TAB = self.allow_gate
+        mf0, mr0 = MARGIN_FRONT, MARGIN_REAR
+        fb = self.margin_fallback is not None and (e, s) not in self.fb_used
+        m_use = self.margin
+        if (e, s) in self.fb_used:
+            m_use = self.margin_fallback
+        if m_use is not None:
+            MARGIN_FRONT = MARGIN_REAR = m_use
+        try:
+            r = self._resolve(e, s)
+            if fb and not (self.C[e, s] < INF / 2) and self.done[e, s]:
+                # 2026-11-16: 広いすき間でつなげなかったときだけ、狭いすき間でやり直す(per_gate_conn_mode=fallback)
+                self.fb_used.add((e, s))
+                self.pending.discard((e, s))
+                self.done[e, s] = False; self.ptr[e, s] = 0
+                self.C[e, s] = self.approx[e, s, 0]
+                self.deferred.discard((e, s))
+                MARGIN_FRONT = MARGIN_REAR = self.margin_fallback
+                r = self._resolve(e, s) or True
+            return r
+        finally:
+            _EXEMPT_ON = False; _ALLOW_TAB = None
+            MARGIN_FRONT, MARGIN_REAR = mf0, mr0
+
+    def _resolve(self, e, s):
+        ep, sp = self.ends[e], self.starts[s]
+        old = self.C[e, s]
+        fast = hr_kernels.AVAILABLE and GATE_MODEL == 'rect'
+        while self.ptr[e, s] < len(OPTS) and self.approx[e, s, self.ptr[e, s]] < INF / 2:
+            if fast:
+                # 2026-11-09: 確実に柱に当たる円弧-直進-円弧の候補を、形を作らずにまとめて飛ばす(通れる候補は飛ばさない)
+                self.ptr[e, s] = hr_kernels.next_option(
+                    float(ep[0][0]), float(ep[0][1]), float(ep[1]), float(sp[0][0]), float(sp[0][1]), float(sp[1]), int(sp[2]),
+                    self.order[e, s], int(self.ptr[e, s]), self.approx[e, s], INF / 2, _OPT_FAM, _OPT_M, _OPT_R, _OPT_W,
+                    # rear_open_cm のとき、ここ(確実に当たる候補を飛ばすだけ)は後ろを短くして T字だけで見る(ゆるい側。最後の判定は prim_ok)
+                    float(TAIL_CM), float(PIVOT_BACK_CM), float(FRONT), float(REAR - _RO), float(HALF_WIDTH), float(MARGIN_FRONT), float(MARGIN_REAR),
+                    LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, float(_RECT_REACH), int(ep[2]), float(LEAD_CM))
+                if not (self.ptr[e, s] < len(OPTS) and self.approx[e, s, self.ptr[e, s]] < INF / 2):
+                    break
+            opt = OPTS[self.order[e, s, self.ptr[e, s]]]
+            pr = build_opt(opt, ep, sp)
+            self.checks += 1
+            if pr is not None and all(prim_ok(q) for q in pr):
+                c = seq_cost(ep[2], pr, sp[2])
+                if c < INF / 2:
+                    if self.via_first:
+                        cv, pv = self._best_via(e, s, ep, sp, c)
+                        if pv is not None:
+                            c, pr = cv, pv
+                    self.C[e, s] = c; self.done[e, s] = True; self.prims[(e, s)] = pr
+                    return abs(c - old) > 1e-9
+            self.ptr[e, s] += 1
+        # 2026-11-16: defer_via: 直接つなげなかったら、まず遠回り・曲がってからつなぐの見込みの下限(当たりを無視)だけを入れて
+        # 後回しにする。経路の探索がまだこの区間を使うときだけ、次の resolve で重い探索をする(使わない区間の探索を省く)。
+        if DEFER_VIA and (self.allow_via or ARC_FIRST) and (e, s) not in self.deferred:
+            lb = INF
+            if self.allow_via:
+                if (e, s) not in self.via:
+                    self.via[(e, s)] = via_options(ep, sp)
+                if self.via[(e, s)]:
+                    lb = self.via[(e, s)][0][0]
+            if ARC_FIRST:
+                lb = min(lb, self._arc_first_lb(ep, sp))
+            self.deferred.add((e, s))
+            if lb < INF / 2:
+                self.C[e, s] = lb
+                return abs(lb - old) > 1e-9
+        # 2026-11-16: 曲がってからつなぐ(arc_first)。直接つなげないときに試す(中継の格子では入らない狭い所の折り返し)
+        arc_best = self._arc_first(ep, sp) if ARC_FIRST else None
+        # 中継(1段目は使わない。経路が見つからないときだけ2段目で使う)
+        if not self.allow_via:
+            if arc_best is not None:
+                self.C[e, s], self.prims[(e, s)] = arc_best; self.done[e, s] = True
+                return True
+            self.C[e, s] = INF; self.done[e, s] = True; self.pending.add((e, s))
+            return True
+        if (e, s) not in self.via:
+            self.via[(e, s)] = via_options(ep, sp)
+        for c0, opt in _pick_vias(self.via[(e, s)]):
+            if arc_best is not None and c0 >= arc_best[0]:
+                break
+            pr = build_via(opt, ep, sp)
+            self.checks += 1
+            if pr is not None and all(prim_ok(q) for q in pr):
+                c = seq_cost(ep[2], pr, sp[2])
+                if c < INF / 2:
+                    if arc_best is not None and arc_best[0] <= c:
+                        break
+                    self.C[e, s] = c; self.done[e, s] = True; self.prims[(e, s)] = pr
+                    return True
+        if arc_best is not None:
+            self.C[e, s], self.prims[(e, s)] = arc_best; self.done[e, s] = True
+            return True
+        self.C[e, s] = INF; self.done[e, s] = True
+        return True
+
+    def _arc_first(self, ep, sp):
+        """2026-11-16: 抜けた姿勢から円弧で向きを変え(体の向きが45°の倍数になるまで)、そこから1本の走りでつなぐ。
+        端の行のゲートを外へ前進で抜けて折り返す所(半径8cm で横を向き、すぐ大きい半径で戻る)は、中継の点の格子(8cm おき)では
+        高さが合わず作れなかった。(cost, prims) か None。"""
+        E, hE, dE = ep; S, hS, dS = sp
+        m = dE if dE != 0 else 1
+        if m not in DIRS:
+            return None
+        stopS = dS == 0 or dS != m
+        th0 = math.radians(hE + (0 if m > 0 else 180))
+        cands = []
+        E0 = np.asarray(E, float)
+        key = (round(float(E0[0]), 3), round(float(E0[1]), 3), round(float(hE), 3), m, _ALLOW_TAB, _EXEMPT_ON, MARGIN_FRONT, MARGIN_REAR, _RO)
+        arcs = _arcfirst_memo.get(key)
+        if arcs is None:
+            arcs = _arcfirst_memo[key] = self._arc_first_arcs(E0, hE, th0, m)
+        S0 = np.asarray(S, float)
+        for Ls, prl, W, hW, tarc in arcs:
+            c0 = tarc + float(np.hypot(*(S0 - W))) / V_LINE
+            cands.append((c0, prl, W, hW))
+        cands.sort(key=lambda x: x[0])
+        best = None
+        for c0, prl, W, hW in cands[:ARC_FIRST_TRIES]:
+            if best is not None and c0 >= best[0]:
+                break
+            self.checks += 1
+            if not all(prim_ok(q) for q in prl):
+                continue
+            # 狭い所では短い(半径の小さい)走りほど当たるので、長い候補まで全部見る
+            r2 = _best_run(W, hW, np.asarray(S, float), hS, m, TAIL_CM if stopS else 0.0, top=ARC_FIRST_RUN_TOP)
+            if r2 is None:
+                continue
+            prs = prl + r2
+            if not all(prim_ok(q) for q in r2):
+                continue
+            c = seq_cost(dE, prs, dS)
+            if c < INF / 2 and (best is None or c < best[0]):
+                best = (c, prs)
+        return best
+
+    def _arc_first_lb(self, ep, sp):
+        """曲がってからつなぐの見込みの下限(円弧まで + 円弧の終わりから次の入りまでの直線)。"""
+        E, hE, dE = ep; S, hS, dS = sp
+        m = dE if dE != 0 else 1
+        if m not in DIRS:
+            return INF
+        th0 = math.radians(hE + (0 if m > 0 else 180))
+        E0 = np.asarray(E, float)
+        key = (round(float(E0[0]), 3), round(float(E0[1]), 3), round(float(hE), 3), m, _ALLOW_TAB, _EXEMPT_ON, MARGIN_FRONT, MARGIN_REAR, _RO)
+        arcs = _arcfirst_memo.get(key)
+        if arcs is None:
+            arcs = _arcfirst_memo[key] = self._arc_first_arcs(E0, hE, th0, m)
+        S0 = np.asarray(S, float)
+        return min((tarc + float(np.hypot(*(S0 - W))) / V_LINE for _, _, W, _, tarc in arcs), default=INF)
+
+    def _arc_first_arcs(self, E0, hE, th0, m):
+        """2026-11-16: _arc_first の円弧の部分(次のゲートの入り方によらない)。抜けの姿勢ごとに1回だけ計算して _arcfirst_memo に覚える。
+        戻り値: [(直進の長さ, [直進, 円弧], 円弧の終わりの点, その向き, 直進+円弧の時間)]"""
+        out = []
+        Lmax = float(max(ARC_FIRST_LINES)) if ARC_FIRST_LINES else 0.0
+        for r in RADII:
+            for sg in (1, -1):
+                t0 = (-sg * hE) % 45.0
+                if t0 < 1e-6:
+                    t0 = 45.0
+                sweeps = []
+                sw = t0
+                while sw <= 180.0 + 1e-6:
+                    sweeps.append(sw); sw += 45.0
+                for sw in sweeps:
+                    found = None
+                    Ls = 0.0
+                    while Ls <= Lmax + 1e-9:
+                        P0 = E0 + Ls * tdir(th0)
+                        if _arc_limit(P0, th0, sg, float(r), m) >= math.radians(sw) - 1e-9:
+                            pr = arc_prim(P0, th0, sg, math.radians(sw), float(r), m)
+                            self.checks += 1
+                            if prim_ok(pr):
+                                found = (Ls, pr)
+                                break
+                        Ls += 1.0
+                    if found is None:
+                        continue
+                    Ls, pr = found
+                    L2 = Ls - 0.5
+                    if L2 >= 0:
+                        P2 = E0 + L2 * tdir(th0)
+                        pr2 = arc_prim(P2, th0, sg, math.radians(sw), float(r), m)
+                        if prim_ok(pr2):
+                            Ls, pr = L2, pr2
+                    P0 = E0 + Ls * tdir(th0)
+                    pre = [('line', E0, P0, m)] if Ls > 1e-9 else []
+                    if pre and not prim_ok(pre[0]):
+                        continue
+                    W, _ = arc_end(pr)
+                    tarc = (Ls + float(r) * math.radians(sw) * V_LINE / v_arc(float(r))) / V_LINE
+                    out.append((Ls, pre + [pr], W, nd(hE + sg * sw), tarc))
+        return out
+
+
+def arm_must_be_up(prims):
+    """走り出しから順に prims(つなぎ・通過の順)をたどり、アームを下げたままの部分(車体の前の端から ARM_FRONT_CM、
+    横幅 ±ARM_HALF_WIDTH_CM)と脚のすき間が下限(MARGIN_FRONT)を切る最初の点を探す。
+    戻り値: dict(cm=そこまでの走った距離, sec=そこまでの見込みの時間) か、最後まで当たらなければ None。
+    時間は直進・円弧の速さとその場旋回の時間だけで数える(止まる時間を入れないので、実際より短め=安全側)。"""
+    dist = 0.0; tsec = 0.0
+    x0, x1 = FRONT, FRONT + ARM_FRONT_CM
+    for q in prims:
+        if q[0] == 'line':
+            L = prim_len(q); n = max(2, int(L / 0.5) + 1); k = np.linspace(0, 1, n)
+            h = math.atan2(*(q[2] - q[1])[::-1]) + (0 if q[3] > 0 else math.pi)
+            px = q[1][0] + (q[2][0] - q[1][0]) * k; py = q[1][1] + (q[2][1] - q[1][1]) * k; hh = np.full(n, h)
+            ds = L * k; dt = L / V_LINE * spd(q[3]) * k; seg_d, seg_t = L, L / V_LINE * spd(q[3])
+        elif q[0] == 'arc':
+            px, py, hd = arc_samples(q, 0.5); hh = np.radians(hd)
+            L = prim_len(q); k = np.linspace(0, 1, len(px))
+            ds = L * k; dt = L / v_arc(q[2]) * spd(q[6]) * k; seg_d, seg_t = L, L / v_arc(q[2]) * spd(q[6])
+        else:
+            dd = nd(q[3] - q[2])
+            if abs(dd) < 0.3:
+                continue
+            hd = q[2] + dd * np.linspace(0, 1, int(abs(dd)) + 2)
+            px, py = _pivot_axle(q[1], q[2], hd); hh = np.radians(hd)
+            ds = np.zeros(len(px)); dt = turn_cost(abs(dd)) * np.linspace(0, 1, len(px)); seg_d, seg_t = 0.0, turn_cost(abs(dd))
+        c = _rect_clear(np.asarray(px, float), np.asarray(py, float), np.asarray(hh, float), x0, x1, hw=ARM_HALF_WIDTH_CM)
+        bad = np.flatnonzero(c < MARGIN_FRONT)
+        if len(bad):
+            i = int(bad[0])
+            return dict(cm=round(float(dist + ds[i]), 1), sec=round(float(tsec + dt[i]), 2))
+        dist += seg_d; tsec += seg_t
+    return None
+
+
+def arm_can_be_down(prims):
+    """2026-11-11: ガレージへの最後のつなぎ(prims)で、アームを下げた部分(arm_must_be_up と同じ形)と脚のすき間が、
+    その点から最後まで下限(MARGIN_FRONT)を切らない、一番手前の点までの距離(cm、prims の始めから)。
+    最後まで当たらなければ 0(つなぎの始め = 黄ゲートを抜けた直後から下げてよい)。"""
+    dist = 0.0; last_bad = None
+    x0, x1 = FRONT, FRONT + ARM_FRONT_CM
+    for q in prims:
+        if q[0] == 'line':
+            L = prim_len(q); n = max(2, int(L / 0.5) + 1); k = np.linspace(0, 1, n)
+            h = math.atan2(*(q[2] - q[1])[::-1]) + (0 if q[3] > 0 else math.pi)
+            px = q[1][0] + (q[2][0] - q[1][0]) * k; py = q[1][1] + (q[2][1] - q[1][1]) * k; hh = np.full(n, h)
+            ds = L * k; seg_d = L
+        elif q[0] == 'arc':
+            px, py, hd = arc_samples(q, 0.5); hh = np.radians(hd)
+            L = prim_len(q); ds = L * np.linspace(0, 1, len(px)); seg_d = L
+        else:
+            dd = nd(q[3] - q[2])
+            if abs(dd) < 0.3:
+                continue
+            hd = q[2] + dd * np.linspace(0, 1, int(abs(dd)) + 2)
+            px, py = _pivot_axle(q[1], q[2], hd); hh = np.radians(hd)
+            ds = np.zeros(len(px)); seg_d = 0.0
+        c = _rect_clear(np.asarray(px, float), np.asarray(py, float), np.asarray(hh, float), x0, x1, hw=ARM_HALF_WIDTH_CM)
+        bad = np.flatnonzero(c < MARGIN_FRONT)
+        if len(bad):
+            last_bad = float(dist + ds[int(bad[-1])])
+        dist += seg_d
+    return dict(cm=0.0 if last_bad is None else round(min(last_bad + 1.0, dist), 1), total_cm=round(dist, 1))
+
+
+def route_audit(conn_prims, visits, used):
+    """できた経路全体を細かく(直進0.5cm・円弧と旋回1°)調べ、柱までの一番小さいすき間と、進入禁止へのはみ出しを出す。"""
+    allp = []
+    for i, (key, e, s) in enumerate(used):
+        allp.append(('conn', key))
+        if i < len(visits):
+            allp.append(('visit', visits[i]))
+    xs, ys, hs = [], [], []
+    def add_prims(prims):
+        for q in prims:
+            if q[0] == 'line':
+                L = prim_len(q); k = np.linspace(0, 1, max(2, int(L / 0.5) + 1))
+                h = math.degrees(math.atan2(*(q[2] - q[1])[::-1])) + (0 if q[3] > 0 else 180)
+                xs.append(q[1][0] + (q[2][0] - q[1][0]) * k); ys.append(q[1][1] + (q[2][1] - q[1][1]) * k); hs.append(np.full(len(k), h))
+            elif q[0] == 'arc':
+                ax, ay, ah = arc_samples(q, 0.5); xs.append(ax); ys.append(ay); hs.append(ah)
+            else:
+                dd = nd(q[3] - q[2])
+                if abs(dd) >= 0.3:
+                    hh = q[2] + dd * np.linspace(0, 1, int(abs(dd)) + 2)
+                    ax, ay = _pivot_axle(q[1], q[2], hh); xs.append(ax); ys.append(ay); hs.append(hh)
+    for i, (key, e, s) in enumerate(used):
+        add_prims(_USED_PRIMS[(key, e, s)])
+        if i < len(visits):
+            add_prims(visits[i]['prims'])
+    px, py, hh = np.concatenate(xs), np.concatenate(ys), np.concatenate(hs)
+    h = np.radians(hh)
+    if GATE_MODEL == 'rect':
+        cf = _rect_clear(px, py, h, 0.0, FRONT); cr = rear_clear(px, py, h, -REAR, 0.0)
+    else:
+        c = np.cos(h)[:, None]; sn = np.sin(h)[:, None]
+        dx = CAP[None, :, 0] - px[:, None]; dy = CAP[None, :, 1] - py[:, None]
+        lx = dx * c + dy * sn; ly = -dx * sn + dy * c
+        ey = np.maximum(np.abs(ly) - HALF_WIDTH, 0.0)
+        cf = (np.hypot(np.maximum(np.maximum(-lx, lx - FRONT), 0.0), ey) - POST_R).min(1)
+        cr = (np.hypot(np.maximum(np.maximum(-REAR - lx, lx), 0.0), ey) - POST_R).min(1)
+    ko = sum(1 for i in range(0, len(px), 4) if body_keepout(px[i:i + 1], py[i:i + 1], hh[i:i + 1]))
+    i = int(np.argmin(np.minimum(cf, cr)))
+    return dict(min_front=float(cf.min()), min_rear=float(cr.min()), keepout_hits=ko,
+                worst_pose=[float(px[i]), float(py[i]), float(hh[i])])
+
+
+_USED_PRIMS = {}
+
+
+def solve_same_laps(T, vs, ends):
+    """2周目〜最後の1つ前の周を同じ通り方にする最短。赤の入りの姿勢 s_r ごとに「s_r から1周して s_r に戻る時間」と
+    「s_r から最後の周を走ってゴールする時間」を出し、1周目で s_r に着く時間と合わせて一番短い s_r を選ぶ。
+    戻り値: (合計, used, picks)。経路がなければ (INF, None, None)。"""
+    def layer(prev, tab, color, c_over=None):
+        s_arr, e_arr, c_arr = vs[color]
+        if c_over is not None:
+            c_arr = c_over
+        if hr_kernels.AVAILABLE:
+            return hr_kernels.layer(prev, tab.C, s_arr, e_arr, c_arr, len(ends[color]))
+        M = prev[:, None] + tab.C
+        bs = M.min(0); be = M.argmin(0)
+        tot = bs[s_arr] + c_arr
+        cur = np.full(len(ends[color]), INF); arg = np.full(len(ends[color]), -1)
+        order = np.argsort(tot)
+        ue, first = np.unique(e_arr[order], return_index=True)
+        win = order[first]
+        cur[ue] = tot[win]; arg[ue] = win
+        return cur, be, arg
+    p0, be_r, arg_r = layer(np.zeros(1), T[('START', 'red')], 'red')
+    pre = None
+    if ('START', 'yellow') in T:
+        y0, be_y0, arg_y0 = layer(np.zeros(1), T[('START', 'yellow')], 'yellow')
+        p0b, be_r2, arg_r2 = layer(y0, T[('yellow', 'red')], 'red')
+        pre = p0b < p0
+        p0 = np.where(pre, p0b, p0)
+    p1, be_b, arg_b = layer(p0, T[('red', 'blue')], 'blue')
+    p2, be_y, arg_y = layer(p1, T[('blue', 'yellow')], 'yellow')
+    Tyr = T[('yellow', 'red')].C
+    M = p2[:, None] + Tyr
+    P = M.min(0); P_e = M.argmin(0)
+    srs = np.flatnonzero(P < INF / 2)
+    if not len(srs):
+        return INF, None, None
+    # 2周目以降: s_r ごとに同時に計算する
+    kmap = np.full(Tyr.shape[1], -1); kmap[srs] = np.arange(len(srs))
+    s_arr, e_arr, c_arr = vs['red']
+    cur = np.full((len(srs), len(ends['red'])), INF)
+    keep = kmap[s_arr] >= 0
+    np.minimum.at(cur, (kmap[s_arr[keep]], e_arr[keep]), c_arr[keep])
+    def batch(cur, a, b, c_arr=None):
+        s_arr, e_arr, c0 = vs[b]
+        c_arr = c0 if c_arr is None else c_arr
+        if hr_kernels.AVAILABLE:
+            bs = hr_kernels.min_over_e(cur, T[(a, b)].C)
+            return np.minimum(hr_kernels.visit_min(bs, s_arr, e_arr, c_arr, len(ends[b])), INF)
+        bs = (cur[:, :, None] + T[(a, b)].C).min(1)
+        tot = bs[:, s_arr] + c_arr
+        order = np.argsort(e_arr, kind='stable')
+        ue, first = np.unique(e_arr[order], return_index=True)
+        out = np.full((len(srs), len(ends[b])), INF)
+        out[:, ue] = np.minimum.reduceat(tot[:, order], first, axis=1)
+        return out
+    cur_b = batch(cur, 'red', 'blue')
+    cur = batch(cur_b, 'blue', 'yellow')
+    # 最後の周の黄は、すき間の足りない通り方を除いた費用で選ぶ(final_min_clear_cm)
+    cur_f = batch(cur_b, 'blue', 'yellow', FINAL_YELLOW_COST) if FINAL_YELLOW_COST is not None else cur
+    cyc = (cur + Tyr[:, srs].T).min(1)
+    goal = T[('yellow', 'GOAL')].C.min(1)
+    suf = (cur_f + goal[None, :]).min(1)
+    score = P[srs] + (LAPS - 2) * cyc + suf
+    k = int(np.argmin(score)); total = float(score[k])
+    if total >= INF / 2:
+        return INF, None, None
+    sr = int(srs[k])
+    # 復元: s_r から赤→青→黄を走る
+    s_arr, e_arr, c_arr = vs['red']
+    tot = np.where(s_arr == sr, c_arr, INF)
+    order = np.argsort(tot)
+    ue, first = np.unique(e_arr[order], return_index=True)
+    cur1 = np.full(len(ends['red']), INF); arg1 = np.full(len(ends['red']), -1)
+    cur1[ue] = tot[order[first]]; arg1[ue] = order[first]
+    q1, be1, arg2 = layer(cur1, T[('red', 'blue')], 'blue')
+    q2, be2, arg3 = layer(q1, T[('blue', 'yellow')], 'yellow')
+    if FINAL_YELLOW_COST is not None:
+        q2f, be2f, arg3f = layer(q1, T[('blue', 'yellow')], 'yellow', FINAL_YELLOW_COST)
+    else:
+        q2f, be2f, arg3f = q2, be2, arg3
+
+    def trace(e_y, final=False):
+        a3, b2 = (arg3f, be2f) if final else (arg3, be2)
+        vy = int(a3[e_y]); sy = int(vs['yellow'][0][vy]); eb = int(b2[sy])
+        vb = int(arg2[eb]); sb = int(vs['blue'][0][vb]); er = int(be1[sb])
+        vr = int(arg1[er])
+        return vr, er, vb, sb, eb, vy, sy, e_y
+    e_c = int(np.argmin(q2 + Tyr[:, sr])); e_g = int(np.argmin(q2f + goal))
+    # 1周目
+    e_y1 = int(P_e[sr]); vy = int(arg_y[e_y1]); sy = int(vs['yellow'][0][vy]); eb = int(be_y[sy])
+    vb = int(arg_b[eb]); sb = int(vs['blue'][0][vb]); er = int(be_b[sb])
+    if pre is not None and pre[er]:
+        # スタート→黄→赤
+        vr = int(arg_r2[er]); s0 = int(vs['red'][0][vr]); ey0 = int(be_r2[s0]); vy0 = int(arg_y0[ey0]); sy0 = int(vs['yellow'][0][vy0])
+        used = [(('START', 'yellow'), 0, sy0), (('yellow', 'red'), ey0, s0)]
+        picks = [('yellow', vy0)]
+    else:
+        vr = int(arg_r[er]); s0 = int(vs['red'][0][vr])
+        used = [(('START', 'red'), 0, s0)]
+        picks = []
+    used += [(('red', 'blue'), er, sb), (('blue', 'yellow'), eb, sy), (('yellow', 'red'), e_y1, sr)]
+    picks += [('red', vr), ('blue', vb), ('yellow', vy)]
+    for lap in range(LAPS - 1):
+        last = lap == LAPS - 2
+        vr, er, vb, sb, eb, vy, sy, ey = trace(e_g, final=True) if last else trace(e_c)
+        used += [(('red', 'blue'), er, sb), (('blue', 'yellow'), eb, sy)]
+        used.append((('yellow', 'GOAL'), ey, int(np.argmin(T[('yellow', 'GOAL')].C[ey]))) if last else (('yellow', 'red'), ey, sr))
+        picks += [('red', vr), ('blue', vb), ('yellow', vy)]
+    return total, used, picks
+
+
+def is_u_shape():
+    """赤と黄が平行で、ゲートの線と直角の向きに格子1つずれて同じ範囲に重なり、青がその片方の端の外側で2つの脚の
+    すぐ外をふさぐ(コの字。狭い配置の形A・B)か。"""
+    g = {c: [tuple(int(round(v / P)) for v in GATES[c].pa), tuple(int(round(v / P)) for v in GATES[c].pb)] for c in ('red', 'blue', 'yellow')}
+    R, Y, B = sorted(g['red']), sorted(g['yellow']), sorted(g['blue'])
+    ax = 0 if R[0][1] == R[1][1] else 1          # 赤の線が x 向き(同じ y)なら 0
+    if (Y[0][1] == Y[1][1]) != (ax == 0) or (B[0][1] == B[1][1]) == (ax == 0):
+        return False                               # 黄が赤と平行でない、または青が赤と平行
+    off = tuple(Y[0][k] - R[0][k] for k in (0, 1))
+    if Y[1] != tuple(R[1][k] + off[k] for k in (0, 1)) or off[ax] != 0 or abs(off[1 - ax]) != 1:
+        return False                               # 同じ範囲で隣の行(列)に重なっていない
+    for end, d in ((0, -1), (1, 1)):               # 端の外側に青
+        out = [list(R[end]), list(Y[end])]
+        for p in out:
+            p[ax] += d
+        if sorted(tuple(p) for p in out) == B:
+            return True
+    return False
+
+
+def _retry_lower_margin(sel_i):
+    """2026-11-14: 選んだすき間(margin_list[sel_i])で経路が作れなかったとき、次のすき間から作り直す(別のプロセスで最初から。
+    覚えた当たり判定などを残さないため)。すき間の候補は「3色ともゲートを通る候補があるか」だけで選ぶので、つなぎが作れずに
+    止まることがあった(配置33: 後ろの端を支柱だけで見ると2.5cm で候補はあるが、青へのつなぎが1本もない)。"""
+    if not MARGIN_LIST or sel_i is None or sel_i + 1 >= len(MARGIN_LIST):
+        return
+    import subprocess
+    print('retry with the next margin %.1f' % MARGIN_LIST[sel_i + 1], flush=True)
+    env = dict(os.environ, HR_MARGIN_SKIP=str(sel_i + 1))
+    sys.exit(subprocess.call([sys.executable] + sys.argv, env=env))
+
+
+def main():
+    t0 = time.time()
+    sel_i = None
+    global MARGIN_FRONT, MARGIN_REAR, OBLIQUE_POLICY
+    used_margin = None
+    global _GRID_ON, _RO
+    for i_mg, mg in enumerate(MARGIN_LIST or [None]):
+        if i_mg == 1 and NARROW_SAFEST:
+            # 狭い配置(最初のすき間で通れない): 垂直に通れないゲートだけ斜めを使う(計算量を約1/8にする。ユーザー決定 2026-11-09)
+            OBLIQUE_POLICY = 'safest'
+        if i_mg == 1 and REAR_OPEN_CM > 0 and (REAR_OPEN_SHAPE == 'any' or is_u_shape()):
+            # 2026-11-14: 狭い配置(A〜F)だけ、後ろの端から rear_open_cm は支柱とのすき間だけを見る(ユーザー決定)
+            _RO = float(REAR_OPEN_CM)
+            print('narrow: rear %.1fcm checked against the posts only' % _RO, flush=True)
+        if i_mg < MARGIN_SKIP:
+            continue   # 2026-11-14: 前のすき間で経路が作れず、作り直している(_retry_lower_margin)
+        sel_i = i_mg
+        if mg is not None:
+            MARGIN_FRONT = MARGIN_REAR = float(mg)
+            used_margin = float(mg)
+            for memo in (_line_memo, _arc_memo, _pivot_cache, _piv_int, _run_cache, _arc_limit_memo):
+                memo.clear()
+        cands = {c: visit_candidates(g) for c, g in GATES.items()}
+        if all(cands.values()):
+            break
+        if i_mg == 0 and NARROW_OBLIQUE_GRID:
+            # 2026-11-14: 最初のすき間(3cm)で通れないとき、同じすき間で「垂直に通れないときの細かい角度(safest) + angles の斜めを
+            # 全部のゲートに」を試す(狭い配置 G〜K: 9配置すべてが3cm に届き、周回は同じか+1、計算時間はほぼ同じ)。
+            # これでも通れなければ、この先は従来どおり(すき間を下げて safest だけ。狭い配置 A〜F は変わらない)。
+            OBLIQUE_POLICY = 'safest'; _GRID_ON = True
+            cands = {c: visit_candidates(g) for c, g in GATES.items()}
+            if all(cands.values()):
+                print('narrow: oblique grid at the first margin', flush=True)
+                break
+            _GRID_ON = False
+            OBLIQUE_CHOICE.clear()
+            # 2026-11-16: 細かい角度の試しが通れなかったら、斜めの方針を元に戻す(戻していなかったので、narrow_safest=False でも
+            # 狭い配置は safest(1つだけ)のままになっていた)
+            OBLIQUE_POLICY = PARAMS['oblique_policy']
+    if used_margin is not None:
+        print('margin selected: %.1f' % used_margin, flush=True)
+    conn_margin = CONN_MARGIN_CM
+    gm = {}
+    # 2026-11-16 ユーザー: ゲートごとのすき間(per_gate_margin)。狭い配置(最初のすき間で通れないゲートがある)でも、通れるゲートは
+    # 最初のすき間(3cm)から順に、通れる一番大きいすき間で通り方の候補を作り直す。つなぎは per_gate_conn_cm(なければ最初のすき間)。
+    # 今までは1つでも狭いゲートがあると、全部のゲートとつなぎが狭いすき間になっていた。
+    if PER_GATE_MARGIN and MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0] - 1e-9:
+        gm = {}
+        for c, g in GATES.items():
+            gm[c] = used_margin
+            for mg in MARGIN_LIST:
+                if mg <= used_margin + 1e-9:
+                    break
+                MARGIN_FRONT = MARGIN_REAR = float(mg)
+                for memo in (_line_memo, _arc_memo, _pivot_cache, _piv_int, _run_cache, _arc_limit_memo):
+                    memo.clear()
+                v = visit_candidates(g)
+                if v:
+                    cands[c] = v; gm[c] = float(mg)
+                    break
+        MARGIN_FRONT = MARGIN_REAR = used_margin
+        for memo in (_line_memo, _arc_memo, _pivot_cache, _piv_int, _run_cache, _arc_limit_memo):
+            memo.clear()
+        if conn_margin is None:
+            conn_margin = PER_GATE_CONN_CM if PER_GATE_CONN_CM is not None else MARGIN_LIST[0]
+        print('per-gate margin: %s (connections %.1f)' % ({c: m for c, m in gm.items()}, float(conn_margin)), flush=True)
+    # 2026-11-14: つなぎの区間(スタートからを含む)だけ、すき間の基準を別にする(ゲートの通り方の候補は上で決めた基準のまま)。
+    # ゲートの通過では2.5cm が要る配置でも、つなぎは脚から離して通れることが多い。その時間の差を見るため。
+    if conn_margin is not None and used_margin is not None and float(conn_margin) > used_margin:
+        MARGIN_FRONT = MARGIN_REAR = float(conn_margin)
+        for memo in (_line_memo, _arc_memo, _pivot_cache, _piv_int, _run_cache, _arc_limit_memo):
+            memo.clear()
+        print('connection margin: %.1f (gate passes %.1f)' % (MARGIN_FRONT, used_margin), flush=True)
+    if CANDIDATES_ONLY:
+        json.dump(dict(margin=used_margin, counts={c: len(v) for c, v in cands.items()}), open(sys.argv[2], 'w'))
+        return
+    LAP_MASK = {}
+    if VISIT_FILTER:
+        for c in cands:
+            if c not in VISIT_FILTER:   # 2026-11-14: 書いていない色は絞らない
+                continue
+            allow_v = {tuple(x) for x in VISIT_FILTER.get(c, [])}
+            if VISIT_FILTER_LAPS_ONLY and c == 'yellow':
+                # 2026-11-16: 周回の通り方だけ絞り、最後の黄(ガレージへ向かう前)はどの通り方でもよい(費用で絞る。下の FINAL_YELLOW_COST)
+                LAP_MASK[c] = np.array([(v['sign'], v['mode'], v['angle'], v['angle_out']) in allow_v for v in cands[c]])
+                continue
+            cands[c] = [v for v in cands[c] if (v['sign'], v['mode'], v['angle'], v['angle_out']) in allow_v]
+    print('candidates', {c: len(v) for c, v in cands.items()}, f'{time.time() - t0:.1f}s', flush=True)
+    for oc in OBLIQUE_CHOICE:
+        print('  oblique', oc, flush=True)
+    for c in cands:
+        if not cands[c]:
+            print(f'NO ROUTE: no way through {c}'); return
+    ends, starts, eidx, sidx = {}, {}, {}, {}
+    for c in cands:
+        ends[c], starts[c], eidx[c], sidx[c] = [], [], {}, {}
+        for v in cands[c]:
+            for pose, lst, idx, key in ((v['start'], starts[c], sidx[c], 's'), (v['end'], ends[c], eidx[c], 'e')):
+                k = pose_key(pose)
+                if k not in idx:
+                    idx[k] = len(lst); lst.append(pose)
+                v[key] = idx[k]
+    start_pose = [(START, START_H, 0)]
+    goal_pose = [(GOAL, float(h), 0) for h in GOAL_HEADINGS] if GOAL_HEADINGS else [(GOAL, GOAL_H, 0)]
+    if GARAGE_BOX is not None and GARAGE_RULE == 'overlap':
+        goal_pose = [(g, h, 0) for h in (GOAL_HEADINGS or [0.0, 90.0, 180.0, -90.0]) for g in garage_overlap_goals(float(h))]
+        goal_pose = [(g, float(h), z) for g, h, z in goal_pose]
+        print('garage (overlap x >= %.1fcm, y >= %.1fcm) box x %.1f..%.1f y %.1f..%.1f, %d goal candidates' % (
+            (GARAGE_OVERLAP_CM, GARAGE_OVERLAP_Y_CM) + GARAGE_BOX + (len(goal_pose),)), flush=True)
+    elif GARAGE_BOX is not None:
+        goal_pose = [(garage_goal(float(h)), float(h), 0) for h in (GOAL_HEADINGS or [GOAL_H])
+                     if garage_goal(float(h)) is not None]
+        if not goal_pose:
+            raise SystemExit('garage: the body does not fit in the garage area in any of goal_headings')
+        print('garage box x %.1f..%.1f y %.1f..%.1f, goals %s' % (GARAGE_BOX + (
+            [(round(float(g[0][0]), 1), round(float(g[0][1]), 1), g[1]) for g in goal_pose],)), flush=True)
+    T = {('START', 'red'): Table(start_pose, starts['red'], is_start=True, via_first=True),
+         ('red', 'blue'): Table(ends['red'], starts['blue']),
+         ('blue', 'yellow'): Table(ends['blue'], starts['yellow']),
+         ('yellow', 'red'): Table(ends['yellow'], starts['red']),
+         ('yellow', 'GOAL'): Table(ends['yellow'], goal_pose, via_first=True, allow_gate='red' if FINAL_VIA_RED else None)}
+    if START_PRELUDE:
+        T[('START', 'yellow')] = Table(start_pose, starts['yellow'], is_start=True, via_first=True)
+    if PER_GATE_MARGIN and PER_GATE_CONN_MODE in ('adjacent', 'fallback') and gm and used_margin is not None:
+        for (ka, kb), tab in T.items():
+            lo = min([gm.get(ka, INF), gm.get(kb, INF)])
+            if lo < INF / 2 and lo < MARGIN_FRONT - 1e-9:
+                if PER_GATE_CONN_MODE == 'fallback':
+                    tab.margin_fallback = float(lo)
+                else:
+                    tab.margin = float(lo)
+        print('table margins:', {'%s->%s' % k: ((t.margin if t.margin is not None else MARGIN_FRONT), t.margin_fallback) for k, t in T.items()}, flush=True)
+    print('tables', {k: v.C.shape for k, v in T.items()}, f'{time.time() - t0:.1f}s', flush=True)
+    seq = ['red', 'blue', 'yellow'] * LAPS
+    vs = {c: (np.array([v['s'] for v in cands[c]]), np.array([v['e'] for v in cands[c]]),
+              np.array([v['cost'] for v in cands[c]])) for c in cands}
+    VS_COST0 = {c: vs[c][2].copy() for c in vs}
+    for c, mk in LAP_MASK.items():
+        vs[c] = (vs[c][0], vs[c][1], np.where(mk, vs[c][2], INF))
+    global FINAL_YELLOW_COST
+    FINAL_YELLOW_COST = None
+    if FINAL_MIN_CLEAR_CM and FINAL_MIN_CLEAR_CM > 0:
+        if not (SAME_LAPS and LAPS >= 3):
+            print('final_min_clear_cm: used only with same_laps and laps >= 3 (ignored)', flush=True)
+        else:
+            mf, mr = MARGIN_FRONT, MARGIN_REAR
+            MARGIN_FRONT = MARGIN_REAR = 0.0
+            clr = np.array([pass_clearance(v['prims']) for v in cands['yellow']])
+            MARGIN_FRONT, MARGIN_REAR = mf, mr
+            ok = clr >= FINAL_MIN_CLEAR_CM - 1e-9
+            if FINAL_YELLOW_VISITS:
+                allow_f = {tuple(x) for x in FINAL_YELLOW_VISITS}
+                ok &= np.array([(v['sign'], v['mode'], v['angle'], v['angle_out']) in allow_f for v in cands['yellow']])
+            if ok.any():
+                FINAL_YELLOW_COST = np.where(ok, VS_COST0['yellow'], INF)
+                print('final yellow: %d/%d ways through with clearance >= %.1fcm' % (ok.sum(), len(ok), FINAL_MIN_CLEAR_CM), flush=True)
+            else:
+                print('final yellow: no way through with clearance >= %.1fcm (best %.2fcm), not restricted' % (
+                    FINAL_MIN_CLEAR_CM, clr.max()), flush=True)
+    it = 0
+    phase = 1
+    # 2026-11-09: 狭い配置(最初のすき間では通れなかった配置)は、遠回りなしでは経路がないことが多いので、最初から遠回りも使う
+    if (MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]) or VIA_EARLY:
+        # 2026-11-16: via_early なら、どの配置でも最初から遠回りも使う(直接つなげない区間は、その場で遠回りを試す。
+        # 端の行のゲートを前進で抜けて折り返す周は遠回りでしかつながらず、遠回りなしの経路が見つかると試されなかった)
+        phase = 2
+        for t in T.values():
+            t.allow_via = True
+    saved = None; t_phase2 = None
+    while True:
+        it += 1
+        if saved is not None and time.time() - t_phase2 > VIA_BUDGET_SEC:
+            total, used, visits, prims = saved
+            for k in T:
+                T[k].prims = prims[k]
+            print(f'phase 2 over budget ({VIA_BUDGET_SEC:.0f}s): keep phase 1 route', flush=True)
+            break
+        prev = np.zeros(1); prev_c = 'START'; back = []
+        used = None
+        if SAME_LAPS and LAPS >= 3:
+            total, used, picks = solve_same_laps(T, vs, ends)
+            if used is not None:
+                visits = [cands[c][v] for c, v in picks]
+        for color in (() if SAME_LAPS and LAPS >= 3 else seq):
+            tab = T[(prev_c, color)]
+            M = prev[:, None] + tab.C
+            bs = M.min(0); be = M.argmin(0)
+            s_arr, e_arr, c_arr = vs[color]
+            tot = bs[s_arr] + c_arr
+            # 抜けの姿勢ごとに、時間が一番短い通り方を選ぶ(同じ時間なら argsort で先に来る方。1つずつ上書きしていた以前と同じ結果)
+            cur = np.full(len(ends[color]), INF); arg = np.full(len(ends[color]), -1)
+            order = np.argsort(tot)
+            ue, first = np.unique(e_arr[order], return_index=True)
+            win = order[first]
+            cur[ue] = tot[win]; arg[ue] = win
+            back.append((prev_c, color, be, arg))
+            prev, prev_c = cur, color
+        if not (SAME_LAPS and LAPS >= 3):
+            tab = T[(prev_c, 'GOAL')]
+            M = prev + tab.C.min(1)
+            e_last = int(np.argmin(M)); total = float(M[e_last])
+        if total >= INF / 2:
+            bad = next((f'{a}->{b}' for a, b, _, arg in back if np.all(arg < 0)), 'goal')
+            if phase == 1 and any(t.pending for t in T.values()):
+                # 2段目: 中継を使えば通れるかもしれない区間を、当たりを無視した時間に戻して解き直す
+                phase = 2
+                for t in T.values():
+                    t.open_via()
+                print(f'phase 2 (detours)  {time.time() - t0:.1f}s', flush=True)
+                continue
+            print(f'NO ROUTE (stopped at {bad})  checks={sum(t.checks for t in T.values())} {time.time() - t0:.1f}s')
+            # 2026-11-13: same_laps では bad がいつも 'goal' になり、どこで行き詰まったか分からなかった。区間ごとに、
+            # つながる(当たらない)組み合わせの数を出す(0 の区間が原因)。
+            for k_, t_ in T.items():
+                print('  table %s->%s: %d of %d connections possible' % (k_[0], k_[1], int(np.sum(t_.C < INF / 2)), t_.C.size), flush=True)
+            _retry_lower_margin(sel_i)
+            return
+        # 経路を復元して、使ったつなぎ区間を厳密に判定する
+        if used is None:
+            used = [(('yellow', 'GOAL'), e_last, int(np.argmin(tab.C[e_last])))]
+            visits = []
+            e = e_last
+            for prev_c, color, be, arg in reversed(back):
+                vi = arg[e]; v = cands[color][vi]
+                visits.append(v)
+                s = v['s']; ep = int(be[s])
+                used.append(((prev_c, color), ep, s))
+                e = ep
+            used.reverse(); visits.reverse()
+        changed = False
+        for key, e, s in used:
+            changed |= T[key].resolve(e, s)
+        if not changed:
+            if phase == 1 and VIA_ALWAYS and any(t.pending for t in T.values()):
+                # 遠回りなしで経路が見つかっても、直接つなげなかった区間を遠回りで試し、速くなるなら採る
+                saved = (total, list(used), list(visits), {k: dict(T[k].prims) for k in T})
+                t_phase2 = time.time()
+                phase = 2
+                for t in T.values():
+                    t.open_via()
+                print(f'phase 1 {total:.1f}s -> phase 2 (detours)  {time.time() - t0:.1f}s', flush=True)
+                continue
+            break
+    print(f'TOTAL hybrid laps={LAPS}: {total:.1f}s (cost)  iterations={it} checks={sum(t.checks for t in T.values())} '
+          f'compute {time.time() - t0:.1f}s', flush=True)
+
+    def ser(p):
+        if p[0] == 'line':
+            return dict(t='line', a=p[1].tolist(), b=p[2].tolist(), m=p[3])
+        if p[0] == 'arc':
+            xs, ys, _ = arc_samples(p, 2.0)
+            return dict(t='arc', pts=[[float(a), float(b)] for a, b in zip(xs, ys)], m=p[6], r=p[2],
+                        deg=math.degrees(p[5]), th0=math.degrees(p[3]), s=p[4])
+        return dict(t='pivot', p=[float(p[1][0]), float(p[1][1])], deg=abs(nd(p[3] - p[2])), h_from=p[2], h_to=p[3])
+
+    # そのまま続ける区間: 次のゲートの最初の直進を、前のゲートの抜けの点から始める(重なる分を二重に走らない)
+    visits = list(visits)
+    for i, (key, e, s) in enumerate(used):
+        if (e, s) in T[key].join and i < len(visits):
+            q = visits[i]['prims'][0]
+            visits[i] = dict(visits[i], prims=[('line', T[key].ends[e][0], q[2], q[3])] + list(visits[i]['prims'][1:]))
+    blocks = []
+    for i, (key, e, s) in enumerate(used):
+        blocks.append(dict(kind='conn', lap=None, color=None, prims=[ser(p) for p in T[key].prims[(e, s)]]))
+        if i < len(visits):
+            v = visits[i]
+            blocks.append(dict(kind='visit', lap=(i - len(visits) % 3) // 3 + 1, color=v['color'], mode=v['mode'], sign=v['sign'], off=v['off'], angle=v['angle'], angle_out=v['angle_out'],
+                               prims=[ser(p) for p in v['prims']]))
+    for i, v in enumerate(visits[:3]):
+        print(f'  lap1 {v["color"]:6s} {v["mode"]:2s} sign={v["sign"]:+d} off={v["off"]:+.1f} angle={v["angle"]:+.0f}/{v["angle_out"]:+.0f} ea={v["ea"]} ee={v["ee"]}')
+    for key, e, s in used:
+        _USED_PRIMS[(key, e, s)] = T[key].prims[(e, s)]
+    audit = route_audit([p for key, e, s in used for p in T[key].prims[(e, s)]], visits, used)
+    print('audit: min clearance front %.2fcm rear %.2fcm (needed %.1f / %.1f), keepout hits %d' % (
+        audit['min_front'], audit['min_rear'], MARGIN_FRONT, MARGIN_REAR, audit['keepout_hits']), flush=True)
+    seq = []
+    for i, (key, e, s) in enumerate(used):
+        seq += list(T[key].prims[(e, s)])
+        if i < len(visits):
+            seq += list(visits[i]['prims'])
+    arm = arm_must_be_up(seq)
+    print('arm: must be up by %s (arm front %.1fcm, half width %.1fcm)' % (
+        'never' if arm is None else '%.1fcm / %.2fs' % (arm['cm'], arm['sec']), ARM_FRONT_CM, ARM_HALF_WIDTH_CM), flush=True)
+    arm_down = None
+    if GOAL_AT == 'garage' and used:
+        key, e, s_ = used[-1]
+        arm_down = arm_can_be_down(list(T[key].prims[(e, s_)]))
+        print('arm: can be down from %.1fcm of the last connection (%.1fcm)' % (arm_down['cm'], arm_down['total_cm']), flush=True)
+    # 2026-11-11: 途中の周で切り上げてガレージへ向かうためのつなぎ(exit)。1〜(LAPS-1)周目の黄ゲートの抜けが同じ姿勢のときだけ、
+    # その姿勢から GOAL(ガレージ)までの一番速い当たらないつなぎを、('yellow','GOAL') の表で求める
+    # (6周目の黄はガレージへ行きやすい別の通り方になることがあるため、最後のつなぎとは別に要る)。
+    exit_info = None
+    if GOAL_AT == 'garage' and used:
+        es = [e for (key, e, s_) in used if key == ('yellow', 'red')]
+        # 2026-11-12: 1周目だけ黄の抜けが違う配置(50配置のうち13)では、切り上げのつなぎを作っていなかった
+        # (10周で作ると時間で切り上げられず全部走ってしまう)。一番多い抜け(2周目以降の同じ通り方)の周だけで作る。
+        ex_laps = []
+        # スタートのあと赤の前に黄を1回通る形(start_prelude)では、最初の ('yellow','red') は周に数えない
+        if es and used[0][0] == ('START', 'yellow'):
+            es = es[1:]
+        if es:
+            e0 = max(set(es), key=lambda x: (es.count(x), max(i for i, y in enumerate(es) if y == x)))
+            ex_laps = [i + 1 for i, x in enumerate(es) if x == e0]
+        if ex_laps:
+            # 2026-11-13 ユーザー: 切り上げは速いものを優先。今までは「黄からまっすぐ → 赤を抜けて → 黄を後退で戻って」の順に試し、
+            # 最初に見つかったものを使っていた。3つとも作り、道具の見込みが一番短いものを使う(どれも脚とのすき間は本線と同じ基準)。
+            cands = []
+            tab = T[('yellow', 'GOAL')]
+            best = None
+            for s_ in range(len(tab.starts)):
+                for _ in range(4):
+                    if tab.done[e0, s_]:
+                        break
+                    tab.resolve(e0, s_)
+                    if not tab.done[e0, s_] or (e0, s_) in tab.pending:
+                        tab.open_via()
+                if tab.done[e0, s_] and tab.C[e0, s_] < INF / 2 and (e0, s_) in tab.prims:
+                    if best is None or tab.C[e0, s_] < best[0]:
+                        best = (float(tab.C[e0, s_]), s_)
+            if best is not None:
+                cands.append((best[0], 'direct', list(tab.prims[(e0, best[1])]), {}))
+            # 2026-11-13 ユーザー: 黄を抜けたら、そのまま次の赤も抜けてからガレージへ向かう
+            # (配置33: 黄を下から上へ抜けると赤との間の狭い所に出るが、赤まで一直線に抜ければ外へ出られる)。
+            # 切り上げの印は黄の抜けのまま(ロボットの判断の場所は変えない)。つなぎ = 黄→赤のつなぎ + 赤の通り方 + 赤→ガレージ。
+            ir = next((i for i, (key, e, s_) in enumerate(used) if key == ('yellow', 'red') and e == e0 and i < len(visits)), None)
+            if ir is not None:
+                key, e, s_ = used[ir]
+                vr = visits[ir]
+                head = list(T[key].prims[(e, s_)]) + list(vr['prims'])
+                tr = Table(ends['red'], goal_pose, via_first=True)
+                er = vr['e']; best_r = None
+                for g in range(len(tr.starts)):
+                    for _ in range(4):
+                        if tr.done[er, g]:
+                            break
+                        tr.resolve(er, g)
+                        if not tr.done[er, g] or (er, g) in tr.pending:
+                            tr.open_via()
+                    if tr.done[er, g] and tr.C[er, g] < INF / 2 and (er, g) in tr.prims:
+                        if best_r is None or tr.C[er, g] < best_r[0]:
+                            best_r = (float(tr.C[er, g]), g)
+                if best_r is not None:
+                    cost = float(T[key].C[e, s_]) + float(vr['cost']) + best_r[0]
+                    cands.append((cost, 'via_red', head + list(tr.prims[(er, best_r[1])]), dict(via_red=True)))
+            # 2026-11-13 ユーザー(配置33): 黄を抜けた所から、そのまま後退して黄の手前側へ戻り(黄を逆向きにもう一度通る。
+            # 同じ色の重複はよい)、そこからガレージへ向かう。最後の周の「黄で戻ってからガレージ」と同じ考え方。
+            pt0, h0 = np.asarray(ends['yellow'][e0][0], float), float(ends['yellow'][e0][1])
+            u = np.array([math.cos(math.radians(h0)), math.sin(math.radians(h0))])
+            best_b = None
+            for L in (35.0, 45.0, 55.0, 70.0):
+                back = ('line', pt0, pt0 - L * u, -1)
+                if pass_clearance([back]) < 0.0 or body_keepout(*[np.array(v) for v in zip(pt0, pt0 - L * u)], np.array([h0, h0])):
+                    continue
+                tb = Table([(pt0 - L * u, h0, -1)], goal_pose, via_first=True)
+                for g in range(len(tb.starts)):
+                    for _ in range(4):
+                        if tb.done[0, g]:
+                            break
+                        tb.resolve(0, g)
+                        if not tb.done[0, g] or (0, g) in tb.pending:
+                            tb.open_via()
+                    if tb.done[0, g] and tb.C[0, g] < INF / 2 and (0, g) in tb.prims:
+                        c = L / (V_LINE * REV_SPEED_SCALE) + 2 * T_STOP + float(tb.C[0, g])
+                        if best_b is None or c < best_b[0]:
+                            best_b = (c, L, list(tb.prims[(0, g)]))
+            if best_b is not None:
+                c, L, tail = best_b
+                cands.append((c, 'back_through_yellow', [('line', pt0, pt0 - L * u, -1)] + tail, dict(back_through_yellow=L)))
+            for c, kind, _ep, _x in sorted(cands, key=lambda v: v[0]):
+                print('exit candidate: %s %.1fs' % (kind, c), flush=True)
+            if cands:
+                c, kind, ep, extra = min(cands, key=lambda v: v[0])
+                exit_info = dict(cost=round(c, 2), laps=ex_laps, prims=[ser(p) for p in ep], arm_down=arm_can_be_down(ep), kind=kind, **extra)
+                print('exit: from laps %s yellow, %s, to the garage %.1fs (arm down from %.1fcm)' % (
+                    ex_laps, kind, c, exit_info['arm_down']['cm']), flush=True)
+            else:
+                print('exit: NO path from the yellow exit to the garage (no early exit)%s' % (
+                    '' if ir is None else ' (also none through red: red exit %s)' % (
+                        [round(float(v), 1) for v in ends['red'][visits[ir]['e']][0]] + [round(float(ends['red'][visits[ir]['e']][1]), 1)],)), flush=True)
+        else:
+            print('exit: no yellow exits, no early exit to the garage', flush=True)
+    json.dump(dict(total=total, params=PARAMS, margin=MARGIN_FRONT, rear_open=_RO, narrow=bool(MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0]), audit=audit, arm=arm, arm_down=arm_down, exit=exit_info, blocks=blocks), open(sys.argv[2], 'w'))
+
+
+if __name__ == '__main__':
+    main()

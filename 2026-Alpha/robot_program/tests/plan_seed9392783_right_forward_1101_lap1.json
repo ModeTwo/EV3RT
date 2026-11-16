@@ -1,0 +1,188 @@
+{
+  "note_1101": "2026-11-01 試作: その場の旋回も後退もなしで、前進の直進と円弧(半径10cm)だけでつないだ経路(1周+ゴール)。wireless_device/et_rally_curve_proto/forward_route.py → to_plan.py で作成。止まるのはゴールだけ。近似式の見積もりで走行部分 15.7 秒。",
+  "gates": {
+    "mode": "random",
+    "seed": 9392783,
+    "course": "right",
+    "red": {
+      "a": [
+        2,
+        2
+      ],
+      "b": [
+        1,
+        2
+      ]
+    },
+    "blue": {
+      "a": [
+        3,
+        1
+      ],
+      "b": [
+        3,
+        2
+      ]
+    },
+    "yellow": {
+      "a": [
+        3,
+        4
+      ],
+      "b": [
+        2,
+        4
+      ]
+    }
+  },
+  "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution (gyro = -planner angle), same as plan_seed9392783_right_1031b.json. arc: target_heading_deg is the end heading, sweep_deg the signed heading change in the same frame (start = end - sweep), radius_mm the radius of the robot-centre path.",
+  "laps": 1,
+  "total_distance_mm": 3861.3,
+  "move_count": 7,
+  "arc_count": 9,
+  "turn_count": 1,
+  "steps": [
+    {
+      "type": "arc",
+      "target_heading_deg": 22.96,
+      "sweep_deg": 22.96,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 22.96,
+      "distance_mm": 486.1,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": 67.04,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 275.0,
+      "reverse": false,
+      "stop": false,
+      "label": "lap1-red"
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 106.57,
+      "sweep_deg": 16.57,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -98.29,
+      "sweep_deg": -204.87,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 0.0,
+      "sweep_deg": 98.29,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 315.0,
+      "reverse": false,
+      "stop": false,
+      "label": "lap1-blue"
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -113.42,
+      "sweep_deg": -113.42,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -113.42,
+      "distance_mm": 649.5,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": -156.58,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 275.0,
+      "reverse": false,
+      "stop": false,
+      "label": "lap1-yellow"
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -5.7,
+      "sweep_deg": -95.7,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -5.7,
+      "distance_mm": 320.2,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -90.0,
+      "sweep_deg": -84.3,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 40.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": "goal"
+    }
+  ]
+}

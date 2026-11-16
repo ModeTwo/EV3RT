@@ -78,9 +78,10 @@ class SumoPushStage(Behaviour):
 class SumoPushSequence(Sequence):
     """工程の順序を管理し、制御器の更新を制御周期内で1回に制限する。"""
 
-    def __init__(self, engine):
+    def __init__(self, engine, config=None):
         super().__init__(name=engine.name, memory=True)
         self.engine = engine
+        self.config = config
         self.tick_engine = engine.tick_once
         self.engine_ticked_this_cycle = False
         self.engine_started = False
@@ -96,6 +97,20 @@ class SumoPushSequence(Sequence):
     def initialise(self):
         # 同じツリーを再実行するときは、前回の成功/失敗状態を使い回さない。
         self.engine_started = False
+        if self.config is not None:
+            from ..runtime import runtime
+            if runtime.course not in (-1, 1):
+                raise RuntimeError("sumo course is not configured")
+            if self.config.mission_mode in ("sumo-stage-all", "sumo-stage-push"):
+                test = self.config.sumo_stage_test
+                offset = (test.approach_offset_left_deg if runtime.course == 1
+                          else test.approach_offset_right_deg)
+            elif self.config.mission_mode == "sumo-push-route-test":
+                offset = 0.0
+            else:
+                # LAPスタートを0°、時計回りを正とする。右コースは-90°。
+                offset = 90.0 * runtime.course
+            self.engine.approach_offset_from_reset_deg = offset
 
     def tick(self):
         # Sequenceは一工程成功時に次の子も同周期に実行する。共有制御器を
@@ -111,20 +126,9 @@ class SumoPushSequence(Sequence):
 
 def build_sumo_push_tree(context, config):
     """規定接近 → 捕捉 → 必要なら旋回 → 押し出しのツリーを構築。"""
-    from ..runtime import runtime
-
     engine = build_sumo_push_route(context, config)
-    # 単体は開始向きを0°、結合で利用するときはスタート基準で
-    # LEFT=-90° / RIGHT=+90°。相撲の床面方位登録とは別の値。
-    if config.mission_mode in ("sumo-stage-all", "sumo-stage-push"):
-        test = config.sumo_stage_test
-        engine.approach_offset_from_reset_deg = (
-            test.approach_offset_left_deg if runtime.course == 1
-            else test.approach_offset_right_deg
-        )
-    else:
-        engine.approach_offset_from_reset_deg = (
-            0.0 if config.mission_mode == "sumo-push-route-test"
-            else -90.0 * runtime.course
-        )
-    return SumoPushSequence(engine)
+    engine.immediate_rally_handoff = (
+        config.mission_mode in ("sumo-stage-all", "bottle-sumo", "full")
+    )
+    # ツリー構築時はコース未設定。開始時に確定する。
+    return SumoPushSequence(engine, config)

@@ -1,0 +1,220 @@
+{
+  "note_1102": "2026-11-02 試作: hybrid_route.py(前進の円弧・止まって後退・その場の旋回を区間ごとに選ぶ、柱とのすき間2.0cm、斜めは垂直で通れないときだけ)で作った1周+ゴールの経路。近似式の見積もりで走行部分 13.4 秒。経路の中で柱に一番近い所は前2.95cm・後ろ2.49cm。",
+  "gates": {
+    "mode": "random",
+    "seed": 9392783,
+    "course": "right",
+    "red": {
+      "a": [
+        2,
+        2
+      ],
+      "b": [
+        1,
+        2
+      ]
+    },
+    "blue": {
+      "a": [
+        3,
+        1
+      ],
+      "b": [
+        3,
+        2
+      ]
+    },
+    "yellow": {
+      "a": [
+        3,
+        4
+      ],
+      "b": [
+        2,
+        4
+      ]
+    }
+  },
+  "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution (gyro = -planner angle), same as plan_seed9392783_right_1031b.json. arc: target_heading_deg is the end heading, sweep_deg the signed heading change in the same frame (start = end - sweep), radius_mm the radius of the robot-centre path.",
+  "laps": 1,
+  "total_distance_mm": 3265.1,
+  "move_count": 11,
+  "arc_count": 9,
+  "turn_count": 1,
+  "steps": [
+    {
+      "type": "arc",
+      "target_heading_deg": 22.96,
+      "sweep_deg": 22.96,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 22.96,
+      "distance_mm": 486.1,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": 67.04,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 80.0,
+      "reverse": false,
+      "stop": false,
+      "label": "lap1-red"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 335.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 137.93,
+      "sweep_deg": 47.93,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 137.93,
+      "distance_mm": 128.9,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 172.0,
+      "sweep_deg": 34.07,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 172.0,
+      "distance_mm": 189.7,
+      "reverse": true,
+      "stop": false,
+      "label": "lap1-blue"
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -180.0,
+      "sweep_deg": 8.0,
+      "radius_mm": 200.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -180.0,
+      "distance_mm": 67.2,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 28.97,
+      "sweep_deg": -151.03,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 28.97,
+      "distance_mm": 245.8,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": 61.03,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 220.0,
+      "reverse": true,
+      "stop": false,
+      "label": "lap1-yellow"
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 95.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -150.78,
+      "sweep_deg": 119.22,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -150.78,
+      "distance_mm": 365.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": -90.0,
+      "sweep_deg": 60.78,
+      "radius_mm": 100.0,
+      "reverse": true,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": -90.0,
+      "distance_mm": 40.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -90.0,
+      "label": "goal"
+    }
+  ]
+}

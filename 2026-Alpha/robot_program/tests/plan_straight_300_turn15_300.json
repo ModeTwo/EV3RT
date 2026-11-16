@@ -1,0 +1,9 @@
+{
+  "note": "2026-10-30: straight 300mm at 0 deg, turn to 15 deg, straight 300mm at 15 deg, stop. Expected end point (start = origin, forward = +y, the 15-degree side = +x): x = 300*sin15 = 77.6mm, y = 300 + 300*cos15 = 589.8mm. Checks the small-turn displacement (like the turns before the red gate).",
+  "steps": [
+    {"type": "move", "target_heading_deg": 0.0, "distance_mm": 300.0},
+    {"type": "turn", "target_heading_deg": 15.0},
+    {"type": "move", "target_heading_deg": 15.0, "distance_mm": 300.0},
+    {"type": "turn", "target_heading_deg": 15.0}
+  ]
+}

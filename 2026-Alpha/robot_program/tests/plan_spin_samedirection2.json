@@ -1,0 +1,13 @@
+{
+  "note": "2026-10-31: same-direction 90deg x2 (end heading 180). Separates a fixed pivot offset (displacement depends only on the final heading) from per-turn slip (grows with the number of turns).",
+  "steps": [
+    {
+      "type": "turn",
+      "target_heading_deg": 90.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 180.0
+    }
+  ]
+}

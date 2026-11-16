@@ -1,0 +1,35 @@
+{
+  "note_1102": "円弧の入りと出口のテスト(A2): 直進300mm→半径200mmで右に90°の円弧→直進300mmで止まる(途中は止まらない)。止まった位置と向きを測り、見込みとログを比べる。円弧の途中の向きの遅れ(err_max)はログに出る。",
+  "expected_end": {
+    "front_mm": 500.0,
+    "right_mm": 500.0,
+    "heading_deg": 90.0
+  },
+  "steps": [
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": 90.0,
+      "radius_mm": 200.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    }
+  ]
+}

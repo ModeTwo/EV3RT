@@ -8,10 +8,11 @@ from ..runtime import runtime
 
 class FloorMotionRecorder(Behaviour):
     """Bounded diagnostic-only samples; emit after the motion branch ends."""
-    def __init__(self, lap, bottle_heading_recorder=None):
+    def __init__(self, lap, bottle_heading_recorder=None, *, defer_output=False):
         super().__init__('record lap floor samples')
         self.lap = lap
         self.bottle_heading_recorder = bottle_heading_recorder
+        self.defer_output = defer_output
     def initialise(self):self.samples=deque(maxlen=500);self.total=0
     def update(self):
         if not self.lap.running and not self.lap.handoff_complete:return Status.RUNNING
@@ -34,6 +35,11 @@ class FloorMotionRecorder(Behaviour):
         self.samples.append((time.monotonic(),progress,gyro,hsv,phase));self.total+=1
         return Status.RUNNING
     def terminate(self,status):
+        if self.defer_output and status == Status.INVALID and self.lap.handoff_complete:
+            return
+        self.report()
+
+    def report(self):
         self.logger.info('LAP_FLOOR_RECORD total=%d retained=%d dropped=%d sample_period=control_tick' %
                          (self.total,len(self.samples),self.total-len(self.samples)))
         for mono,progress,gyro,hsv,phase in self.samples:
@@ -44,6 +50,16 @@ class FloorMotionRecorder(Behaviour):
         self.logger.info('LAP_TRACE_MOTOR_RECORD total=%d retained=%d dropped=%d' % (total,len(commands),total-len(commands)))
         for mono,progress,left,right,heading,error,line,correction,mode in commands:
             self.logger.info('LAP_TRACE_MOTOR mono_sec=%.6f progress_mm=%.1f left=%d right=%d heading=%.2f error=%.2f line_delta=%.2f gyro_delta=%.2f mode=%s' % (mono,progress,left,right,heading,error,line,correction,mode))
+
+class FlushLapFloorDiagnostics(Behaviour):
+    """Write the deferred floor data after the whole test has stopped."""
+    def __init__(self, recorder):
+        super().__init__('dump deferred lap floor diagnostics')
+        self.recorder = recorder
+    def update(self):
+        if self.recorder.lap.handoff_complete:
+            self.recorder.report()
+        return Status.SUCCESS
 
 
 class DumpTransitionDiagnostics(Behaviour):

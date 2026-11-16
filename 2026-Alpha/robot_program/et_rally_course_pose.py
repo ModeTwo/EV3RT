@@ -1,0 +1,324 @@
+"""ETラリー専用: コース上の自分の位置(経路を作る道具の座標)を持つ(2026-11-08、走りながらのカメラ補正の土台)。
+
+今の走り(et_rally_path_segment.py)は、止まらずに続く区間のつながりの中でだけ「計画の線からのずれ」を持ち、
+止まる区間のあとは計画どおりの点にいるとみなして数え直す。コース上のどこにいるかは持っていない。
+カメラでマーカーを見て位置を直すには、撮った瞬間にコース上のどこにいたかが要るので、ここで持つ。
+
+- 位置の元: EtRallyHeading の位置の積算(et_loc。エンコーダと四捨五入前の向き、その場旋回中は動かさない)。
+  走り出しの時点の et_loc を、コース上の走り出しの姿勢(スタートで測った位置、なければ計画のスタート)に合わせる。
+- 座標: x はゴール側が+、y はスタートとゴールの列の側が+(mm)、向きは左回りが+(度)。et_rally_start_pose.py と同じ。
+  et_loc は plotter と同じ形(x += d·sin(a)、y += d·cos(a)、a = ジャイロの向き)なので、
+  スタートの向き h0(START_HEADING_DEG)のとき、(u, v) = (et_loc の dy, course × et_loc の dx) を h0 だけ回したものがコースの dx, dy、
+  コースの向き = h0 + course × ジャイロの向き(ジャイロの0がスタートの向き)。
+- 補正量(camera_correction): カメラで分かったずれを足す(今は足すだけの入れ物。使い方は実機のデータを見て決める)。
+- 履歴: 直近約2秒の (時刻, x, y, 向き, 走った距離) を残す。撮った時刻の位置を引くため。
+
+ログ: et_pose_text() に " course=(x,y,向き)" を足す(区間の終わりのログに出る)。
+"""
+
+import math
+import time
+from collections import deque
+
+from py_trees.behaviour import Behaviour
+from py_trees.common import Status
+
+from .runtime import runtime
+
+_anchor = None            # dict(plot=(x0, y0), plan=(x, y), course=±1)
+_correction = [0.0, 0.0, 0.0]
+_history = deque(maxlen=1000)   # 2026-11-10: 時刻で HISTORY_SEC 秒分を持つ(200件では1tickに何度も呼ばれて約0.5秒分しか残らず、
+                                # カメラの子プロセスから0.2〜0.5秒遅れて届く画像の位置が引けなかった)
+HISTORY_SEC = 3.0
+HISTORY_MIN_DT = 0.004
+_last = None
+_recorder = None          # 2026-11-10: 走行中の画像と突き合わせるため、位置を時刻つきでファイルに残す(dict(file=, last_t=))
+
+
+def _on_pose(gyro, heading):
+    """EtRallyHeading.get_angle から呼ばれる(heading はジャイロの向き)。"""
+    global _last
+    if _anchor is None:
+        return
+    c = _anchor["course"]
+    dpx = gyro.pose_x - _anchor["plot"][0]
+    dpy = gyro.pose_y - _anchor["plot"][1]
+    cos_h0, sin_h0 = _anchor["rot"]
+    u, v = dpy, c * dpx
+    x = _anchor["plan"][0] + u * cos_h0 - v * sin_h0 + _correction[0]
+    y = _anchor["plan"][1] + u * sin_h0 + v * cos_h0 + _correction[1]
+    h = _anchor["h0"] + c * heading + _correction[2]
+    try:
+        dist = runtime.plotter.get_distance()
+    except Exception:
+        dist = None
+    _last = (time.monotonic(), x, y, h, dist)
+    if not _history or _last[0] - _history[-1][0] >= HISTORY_MIN_DT:
+        _history.append(_last)
+        while _history and _last[0] - _history[0][0] > HISTORY_SEC:
+            _history.popleft()
+    rec = _recorder
+    if rec is not None and _last[0] - rec["last_t"] >= 0.009:
+        rec["last_t"] = _last[0]
+        rec["file"].write("%.4f %.2f %.2f %.3f %s\n" % (_last[0], x, y, h, "" if dist is None else dist))
+
+
+def anchor(plan_pose, logger=None):
+    """今の et_loc を、コース上の姿勢 plan_pose=(x, y, 向き度) に合わせる。向きはジャイロ側で合わせてある前提
+    (スタートの取り込みで set_heading_offset 済み、なければ計画のスタートの向き)。"""
+    from .et_rally_start_pose import START_HEADING_DEG
+    global _anchor, _last
+    gyro = runtime.gyro_sensor
+    if not hasattr(gyro, "pose_listener"):
+        if logger is not None:
+            logger.warning("course pose: EtRallyHeading not installed, not tracked")
+        return False
+    gyro.get_angle()   # ここまでの位置を確定させる
+    _anchor = dict(plot=(gyro.pose_x, gyro.pose_y), plan=(float(plan_pose[0]), float(plan_pose[1])),
+                   course=1 if getattr(runtime, "course", -1) == 1 else -1, h0=START_HEADING_DEG,
+                   rot=(math.cos(math.radians(START_HEADING_DEG)), math.sin(math.radians(START_HEADING_DEG))))
+    _correction[:] = [0.0, 0.0, 0.0]
+    _history.clear()
+    _last = None
+    gyro.pose_listener = _on_pose
+    gyro.get_angle()
+    if logger is not None:
+        logger.info("course pose: anchored at (%.1f, %.1f), heading %+.2f deg" % (
+            plan_pose[0], plan_pose[1], _last[3] if _last else float("nan")))
+    return True
+
+
+def release():
+    global _anchor, _last
+    gyro = runtime.gyro_sensor
+    if getattr(gyro, "pose_listener", None) is _on_pose:
+        gyro.pose_listener = None
+    _anchor = None
+    _last = None
+    _history.clear()
+
+
+def current():
+    """(時刻, x, y, 向き度, 走った距離) か None。"""
+    return _last
+
+
+def at(t):
+    """時刻 t の姿勢(前後の記録の間を直線でつなぐ)。新しい側の外なら最後の記録(0.05秒まで)。
+    それより外・古い側の外・履歴がなければ None(2026-11-10: 以前は一番近い端を返していて、遅れて届いた画像に
+    違う位置を使っていた)。"""
+    hist = list(_history)
+    if not hist or t < hist[0][0] or t > hist[-1][0] + 0.05:
+        return None
+    for a, b in zip(hist, hist[1:]):
+        if a[0] <= t <= b[0]:
+            k = 0.0 if b[0] == a[0] else (t - a[0]) / (b[0] - a[0])
+            dh = (b[3] - a[3] + 180.0) % 360.0 - 180.0
+            dist = None if a[4] is None or b[4] is None else a[4] + (b[4] - a[4]) * k
+            return (t, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k, a[3] + dh * k, dist)
+    return hist[-1]
+
+
+def shift_history(dx, dy, dh=0.0):
+    """2026-11-10: 走行中の補正を入れたとき、残っている過去の位置も同じだけずらす(補正の前に撮った画像が補正のあとに
+    届いても、同じずれをもう一度直さないように)。"""
+    global _last
+    for i, e in enumerate(_history):
+        _history[i] = (e[0], e[1] + dx, e[2] + dy, e[3] + dh, e[4])
+    if _last is not None:
+        _last = (_last[0], _last[1] + dx, _last[2] + dy, _last[3] + dh, _last[4])
+
+
+def add_correction(dx, dy, dh=0.0):
+    """カメラで分かったずれを足す(今は入れ物だけ。使い方は実機のデータで決める)。"""
+    _correction[0] += dx
+    _correction[1] += dy
+    _correction[2] += dh
+
+
+def text():
+    if _last is None:
+        return ""
+    return " course=(%.1f,%.1f,%+.1f)" % (_last[1], _last[2], _last[3])
+
+
+class EtRallyAnchorCoursePose(Behaviour):
+    """走り出しの直前に置く。スタートで測った位置を取り込んでいればその位置、なければ計画のスタートに合わせる。"""
+
+    def update(self):
+        from . import et_rally_start_pose as sp
+        pose = sp.applied_start_pose() or (sp.START_MM[0], sp.START_MM[1], sp.START_HEADING_DEG)
+        anchor(pose, self.logger)
+        return Status.SUCCESS
+
+
+class EtRallyReleaseCoursePose(Behaviour):
+    def update(self):
+        last = current()
+        if last is not None:
+            self.logger.info("course pose: last (%.1f, %.1f, %+.2f deg)" % (last[1], last[2], last[3]))
+        release()
+        return Status.SUCCESS
+
+
+# ---------------- 走行中のカメラの画像を、撮った時刻とコース上の位置つきで残す ----------------
+class EtRallyCameraLogStart(Behaviour):
+    """走行中、every_n 枚に1枚、画像(JPEG)と、その時刻・コース上の位置・走った距離を保存する(実機の確認用)。
+    保存先: 2026-Alpha/run_logs/et_camera_<日時>/(frame_<番号>.jpg と meta.jsonl)。
+    画像は video.py の ET_RALLY_MARKER の裏のスレッドで受け取る(et_rally_marker_detector.set_detector で差し替え)。
+    時刻は裏のスレッドが画像を受け取った時刻(撮った瞬間より少し遅い。どれだけ遅いかは画像の中のマーカーの動きから調べる)。"""
+
+    state = None
+
+    def __init__(self, name, every_n=5, quality=90, exposure=None):
+        super().__init__(name)
+        self.every_n = max(1, int(every_n))
+        self.quality = int(quality)
+        # 2026-11-09: 露出を手動で固定する値(V4L2の単位、1=100マイクロ秒。50なら5ms)。None なら自動のまま。
+        # カメラの設定は画像を受け取るスレッドからしか触れないので、最初の画像が来たときに設定する。
+        self.exposure = exposure
+
+    def update(self):
+        # 2026-11-10: 画像は子プロセス(et_rally_camera_proc.py)が撮って保存する(meta.jsonl に撮った時刻)。
+        # 親はコース上の位置を時刻つきで poses.txt に残す(「時刻 x y 向き 走った距離」、あとで時刻で突き合わせる)。
+        global _recorder
+        from . import et_rally_camera_proc
+        proc = et_rally_camera_proc.current()
+        if proc is None or proc.folder is None:
+            self.logger.warning("camera log: camera process not running, skipped")
+            return Status.SUCCESS
+        try:
+            proc.folder.mkdir(parents=True, exist_ok=True)
+            _recorder = dict(file=open(proc.folder / "poses.txt", "w", encoding="utf-8"), last_t=0.0)
+        except OSError as error:   # 位置の記録が書けなくても、走りは止めない
+            self.logger.warning("camera log: cannot write poses.txt (%r)" % (error,))
+        proc.send("save 1")
+        EtRallyCameraLogStart.state = dict(folder=proc.folder)
+        self.logger.info("camera log: saving every %d frames to %s (camera %s)" % (self.every_n, proc.folder, proc.ready))
+        return Status.SUCCESS
+
+
+class EtRallyCameraLogStop(Behaviour):
+    def update(self):
+        global _recorder
+        st = EtRallyCameraLogStart.state
+        EtRallyCameraLogStart.state = None
+        from . import et_rally_camera_proc
+        if st is None:   # 画像は残さず、走行中の補正だけで子プロセスを使ったとき
+            stopped = et_rally_camera_proc.close_shared()
+            if stopped is not None:
+                self.logger.info("camera process: stopped %s" % (stopped,))
+            return Status.SUCCESS
+        rec, _recorder = _recorder, None
+        stopped = et_rally_camera_proc.close_shared()
+        if rec is not None:
+            rec["file"].close()
+        self.logger.info("camera log: stopped %s, saved in %s" % (stopped, st["folder"]))
+        return Status.SUCCESS
+
+
+class EtRallyCameraProcessStart(Behaviour):
+    """2026-11-10: ETラリーの最初に、カメラの子プロセスを起動する(開くのに約1秒かかるので早めに)。
+    走行中の画像を残すときは、保存先のフォルダもここで決める(保存を始めるのは EtRallyCameraLogStart)。"""
+
+    def __init__(self, name, log_every=None, exposure=None, calib_path=None, quality=90, prestart=False, gates=None,
+                 defer_open=False, gates_provider=None):
+        super().__init__(name)
+        self.gates = gates
+        # 2026-11-15: ETラリーの始めにゲートの位置を出す関数(受信の計画のとき)。出せたら親と子の両方に入れ直す。
+        self.gates_provider = gates_provider
+        # 2026-11-15: 本体(alpha.py の VideoThread)がカメラを使っているとき(--mission full など)は、子プロセスを起動時に立ち上げて
+        # カメラは開かずに待たせ、ETラリーの始め(ここ)で本体のカメラを閉じてから子に開かせる。
+        self.defer_open = bool(defer_open)
+        self.handover = None
+        self.log_every = log_every
+        self.exposure = exposure
+        self.calib_path = calib_path
+        self.quality = quality
+        self.folder = None
+        self.prestart_error = None
+        if prestart:
+            # ETラリー単体の走行(rally-drive)では、プログラムの起動時(タッチの前)に子プロセスを起動しておく
+            # (カメラが使えるまで約3秒かかるため)。通しの走行では、ほかの工程がカメラを使うので、ETラリーの最初に起動する。
+            try:
+                self._start()
+            except Exception as error:
+                self.prestart_error = error
+
+    def _start(self):
+        from pathlib import Path
+        from . import et_rally_camera_proc
+        if self.folder is None and self.log_every:
+            self.folder = Path(__file__).resolve().parents[1] / "run_logs" / ("et_camera_" + time.strftime("%Y%m%dT%H%M%S"))
+        proc = et_rally_camera_proc.shared(folder=self.folder, every_n=self.log_every or 5, quality=self.quality,
+                                           exposure=self.exposure, calib_path=self.calib_path, gates=self.gates,
+                                           defer_open=self.defer_open)
+        return proc
+
+    def _hand_over(self, proc):
+        """本体のカメラを閉じてから、子に開かせる(裏のスレッドで。閉じるのに最大2秒待つことがあるため)。"""
+        import threading
+        t0 = time.monotonic()
+
+        def work():
+            release = getattr(runtime, "release_camera", None)
+            if release is None:
+                ok, what = True, "no release hook"
+            else:
+                try:
+                    ok, what = release()
+                except Exception as error:
+                    ok, what = False, "release failed: %r" % (error,)
+            # 閉じられなくても開かせる(子は開けるまで video0〜3 を探し続ける)
+            proc.open_camera()
+            self.handover = dict(ok=ok, what=what, sec=round(time.monotonic() - t0, 2))
+            self.logger.info("camera handover: main camera %s (%s), child told to open after %.2fs" % (
+                "closed" if ok else "NOT closed", what, time.monotonic() - t0))
+
+        threading.Thread(target=work, name="et-rally-camera-handover", daemon=True).start()
+
+    def update(self):
+        try:
+            proc = self._start()
+        except Exception as error:
+            self.logger.warning("camera process: start failed (%r)" % (error,))
+            return Status.SUCCESS
+        if self.gates_provider is not None:
+            try:
+                g = self.gates_provider()
+            except Exception as error:
+                g = None
+                self.logger.warning("camera process: gates not available (%r)" % (error,))
+            if g:
+                import json
+                from . import et_rally_start_pose as _sp
+                _sp.set_gate_legs(g)
+                proc.send("gates " + json.dumps(g, separators=(",", ":")))
+                self.logger.info("camera process: gates set from the received plan/hints")
+        if getattr(proc, "defer_open", False) and not proc.opened:
+            self._hand_over(proc)
+        self.logger.info("camera process: running (log=%s, exposure=%s, ready=%s, prestart error=%r, deferred open=%s)" % (
+            self.folder, self.exposure, proc.ready, self.prestart_error, getattr(proc, "defer_open", False)))
+        return Status.SUCCESS
+
+
+class EtRallyCameraProcessStop(Behaviour):
+    """走行中の画像を残さないとき(スタートの取り込みだけ)に、走り出す前に子プロセスを止める。"""
+
+    def update(self):
+        from . import et_rally_camera_proc
+        stopped = et_rally_camera_proc.close_shared()
+        if stopped is not None:
+            self.logger.info("camera process: stopped %s" % (stopped,))
+        return Status.SUCCESS
+
+
+def restore_video_mode(prev):
+    """カメラの使い方を元に戻す(ET_RALLY_MARKER のままだと、裏のスレッドが毎フレーム検出を回して重いため)。"""
+    video = getattr(runtime, "video", None)
+    if video is None or prev is None:
+        return
+    try:
+        video.set_target_interested(prev)
+    except Exception:
+        pass

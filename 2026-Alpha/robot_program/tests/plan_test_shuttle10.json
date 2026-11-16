@@ -1,0 +1,170 @@
+{
+  "note_1102": "後退のテスト(A4): 前進300mm→止まる→後退300mm→止まる を10回(前後の切り替え20回)。理想ではスタートに戻る。戻った位置のずれで、前後の切り替え1回あたりのずれ(歯車のガタなど)を見る。",
+  "expected_end": {
+    "front_mm": 0.0,
+    "right_mm": 0.0,
+    "heading_deg": 0.0
+  },
+  "steps": [
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 300.0,
+      "reverse": true,
+      "stop": true,
+      "label": null
+    }
+  ]
+}

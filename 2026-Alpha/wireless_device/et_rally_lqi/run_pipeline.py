@@ -1,6 +1,6 @@
 """実測ログ1つから、モデル(b, c)・不感帯・LQIのゲインKまでを、一気に計算して報告する。
 
-`et_rally_lqi_calibration.py`(--mission et-rally-lqi-calibration)で走らせたログを、
+`et_rally_turn_calibration.py`(--mission et-rally-turn-calibration)で走らせたログを、
 run_logsからそのままこのスクリプトへ渡せば、`robot_program/behaviours/et_rally_turn_lqi.py`の
 PLACEHOLDER_K_*・stiction_floorを差し替えるための値を、そのまま出力する。
 
@@ -24,7 +24,7 @@ def run(log_path, q_theta=1.0, q_omega=0.05, q_integral=0.02, r=0.02):
     if not runs:
         raise SystemExit(
             "応答特性(HoldSymmetricPower)のデータが見つからない。"
-            "--mission et-rally-lqi-calibration のログのパスを確認すること。"
+            "--mission et-rally-turn-calibration のログのパスを確認すること。"
         )
     b, c, r_squared, n = fit_b_c(runs)
     by_direction = fit_b_c_by_direction(runs)

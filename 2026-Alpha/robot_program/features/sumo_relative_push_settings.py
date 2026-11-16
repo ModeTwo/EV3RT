@@ -20,6 +20,12 @@ class RelativePushSettings:
     phase_timeout_sec: float = 15.0
     overall_timeout_sec: float = 90.0
 
+    capture_camera_max_correction_deg: float = 4.0
+    capture_camera_smoothing_alpha: float = 0.35
+    capture_camera_update_interval_sec: float = 0.05
+    capture_camera_max_age_sec: float = 0.4
+    capture_camera_loss_timeout_sec: float = 0.6
+
     def __post_init__(self):
         for f in fields(self):
             v = getattr(self, f.name)
@@ -37,5 +43,15 @@ class RelativePushSettings:
             raise ValueError("push PWM must be 1..100")
         if not isinstance(self.turn_power, int) or not 1 <= self.turn_power <= 80:
             raise ValueError("turn PWM must be 1..80")
+        if not 0 < self.capture_camera_smoothing_alpha <= 1:
+            raise ValueError("invalid capture camera smoothing")
+        if self.capture_camera_max_correction_deg > 20:
+            raise ValueError("capture camera correction must be <= 20 degrees")
+        if not (
+            self.capture_camera_update_interval_sec
+            <= self.capture_camera_max_age_sec
+            <= self.capture_camera_loss_timeout_sec
+        ):
+            raise ValueError("invalid capture camera time limits")
         if self.green_turn_deadband_deg >= 45:
             raise ValueError("invalid angle deadband")

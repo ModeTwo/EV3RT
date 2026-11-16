@@ -17,6 +17,8 @@ class RobotRuntime:
         self.plotter: Any = None
         self.video: Any = None
         self.course: int = 0
+        # 2026-11-15: 本体のカメラを閉じる関数(alpha.py の release_main_camera)。ETラリーの始めにカメラを子プロセスへ渡すときに使う。
+        self.release_camera: Any = None
 
     def configure(
         self,
