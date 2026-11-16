@@ -81,6 +81,15 @@ def main():
         if os.path.exists(os.path.join(out, key + '.pick.json')):
             continue
         jobs.append((gp, out, key))
+    # 2026-11-17: 重い配置から先に回す(最後に重い配置だけが残って CPU が遊ぶのを減らす)。100配置で、ゲートどうしが1マス以内に
+    # 近い組が多いほど計算が重かった(近い組なし: 中央値26秒、2組以上: 208秒)。ゲートの位置だけで分かる。
+    def _near_pairs(gp):
+        G = json.load(open(gp, encoding='utf-8'))['gates']
+        pts = {c: [tuple(G[c]['a']), tuple(G[c]['b'])] for c in ('red', 'blue', 'yellow')}
+        d = lambda p, q: ((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2) ** 0.5
+        return sum(1 for x, y in (('red', 'blue'), ('blue', 'yellow'), ('yellow', 'red'))
+                   if min(d(p, q) for p in pts[x] for q in pts[y]) <= 1.0)
+    jobs.sort(key=lambda j: -_near_pairs(j[0]))
     if a.limit:
         jobs = jobs[:a.limit]
     print('%d layouts to compute, %d workers' % (len(jobs), a.workers), flush=True)
