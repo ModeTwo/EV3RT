@@ -92,6 +92,7 @@ PARAMS = dict(
     per_gate_margin=False, per_gate_conn_cm=None,
     # 'all' = つなぎは全部 per_gate_conn_cm、'adjacent' = 狭いゲートにつながる区間だけ狭いゲートのすき間、ほかは per_gate_conn_cm
     per_gate_conn_mode='all',
+    out_arc_angles=[],
     arc_first=False, arc_first_tries=200, arc_first_lines=[0.0, 8.0, 16.0, 20.0, 24.0, 28.0, 32.0, 40.0],
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
     keepout_body=True, start_exempt_cm=20.0,
@@ -915,6 +916,10 @@ def _visit_candidates(g, pairs_override=None, only=None):
             pairs += [(a, 0.0), (0.0, a)]
         if OBLIQUE_MODE in ('straight', 'both'):
             pairs.append((a, a))
+    if pairs_override is None and OUT_ARC_ANGLES:
+        # 2026-11-16 ユーザー: ゲートの真ん中を過ぎたらすぐ大きく曲がって抜ける(抜けの角度を angles より大きく。円弧は split_radii)
+        for a in OUT_ARC_ANGLES:
+            pairs += [(0.0, float(a)), (0.0, -float(a))]
     for sg in (1, -1):
         base_u = g.n * sg
         for a_in, a_out, *rr in (pairs_override if pairs_override is not None else pairs):
