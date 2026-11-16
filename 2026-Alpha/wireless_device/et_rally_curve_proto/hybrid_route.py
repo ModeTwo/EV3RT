@@ -3011,7 +3011,9 @@ def main():
         print(f'  lap1 {v["color"]:6s} {v["mode"]:2s} sign={v["sign"]:+d} off={v["off"]:+.1f} angle={v["angle"]:+.0f}/{v["angle_out"]:+.0f} ea={v["ea"]} ee={v["ee"]}')
     for key, e, s in used:
         _USED_PRIMS[(key, e, s)] = T[key].prims[(e, s)]
-    if FAST_MARGINS:
+    # 2026-11-17: fast_keep_min_sec で例外なしと解き比べると FAST_MARGINS を空にするので、元の設定(PARAMS)で判断する
+    # (空で判断していて、例外を残した経路でも「fast margins used」が出ず、run_layout.py が例外なしと誤っていた)
+    if FAST_MARGINS or PARAMS.get('fast_margins'):
         fu = sorted({('%s->%s' % key, T[key].fast_used[(e, s)]) for key, e, s in used if (e, s) in T[key].fast_used})
         print('fast margins used: %s' % (fu or 'none'), flush=True)
     audit = route_audit([p for key, e, s in used for p in T[key].prims[(e, s)]], visits, used)

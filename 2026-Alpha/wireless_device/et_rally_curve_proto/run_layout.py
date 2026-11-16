@@ -32,6 +32,9 @@ COMMON = dict(
     PYTHONUTF8='1', OMP_NUM_THREADS='1', NUMBA_NUM_THREADS='1',
 )
 FAST = '2.5,2.0'
+# 2026-11-17(計算時間の試し): RUN_LAYOUT_NOFAST=1 で、つなぎの例外のすき間を試さない(例外なしの1回だけ)
+if os.environ.get('RUN_LAYOUT_NOFAST', '0') == '1':
+    FAST = None
 TIMEOUT = int(os.environ.get('RUN_LAYOUT_TIMEOUT', '4000'))
 # 2026-11-16(計算時間): 新しいやり方。道具の中で、numba で候補を先に飛ばし(run_kernel=1、結果は同じ)、例外のすき間の経路は
 # 例外なしでも解き直して1秒以上速いときだけ残す(fast_keep_min_sec=1.0)。例外が残ったときだけ、5秒未満なら70秒の周回数で比べる
