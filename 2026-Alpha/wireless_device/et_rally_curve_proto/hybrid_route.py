@@ -89,6 +89,9 @@ PARAMS = dict(
     visit_filter_laps_only=False, arc_first_run_top=60,
     exit_early=[],
     defer_via=False,
+    per_gate_margin=False, per_gate_conn_cm=None,
+    # 'all' = つなぎは全部 per_gate_conn_cm、'adjacent' = 狭いゲートにつながる区間だけ狭いゲートのすき間、ほかは per_gate_conn_cm
+    per_gate_conn_mode='all',
     arc_first=False, arc_first_tries=200, arc_first_lines=[0.0, 8.0, 16.0, 20.0, 24.0, 28.0, 32.0, 40.0],
     # 進入禁止: True = 車体の箱のどこも入らない(スタートで置いた時点でかかっている長方形は、スタートの車軸から start_exempt_cm 以内だけ外す)
     keepout_body=True, start_exempt_cm=20.0,
@@ -547,7 +550,7 @@ _line_memo = {}   # (始点, 終点, 前後, allow, スタートの除外中か)
 
 
 def line_ok(a, b, m, allow=None):
-    key = (float(a[0]), float(a[1]), float(b[0]), float(b[1]), m, allow, _EXEMPT_ON, _ALLOW_TAB)
+    key = (float(a[0]), float(a[1]), float(b[0]), float(b[1]), m, allow, _EXEMPT_ON, _ALLOW_TAB, MARGIN_FRONT, MARGIN_REAR)
     ok = _line_memo.get(key)
     if ok is None:
         ok = _line_memo[key] = _line_check(a, b, m, allow)
@@ -617,7 +620,7 @@ def arc_ok(pr, allow=None):
     if pr[5] < 1e-6:
         return True
     _, c, r, theta, sgn, sweep, m, p0 = pr
-    key = (round(float(p0[0]), 3), round(float(p0[1]), 3), round(float(theta), 6), r, sgn, m, allow, _EXEMPT_ON, _ALLOW_TAB)
+    key = (round(float(p0[0]), 3), round(float(p0[1]), 3), round(float(theta), 6), r, sgn, m, allow, _EXEMPT_ON, _ALLOW_TAB, MARGIN_FRONT, MARGIN_REAR)
     memo = _arc_memo.get(key)
     if memo is not None:
         if memo[1] is not None and sweep >= memo[1] - 1e-9:
@@ -670,7 +673,7 @@ def pivot_ok(p, h_from, h_to):
     dd = nd(h_to - h_from)
     if abs(dd) < 0.3:
         return True
-    key = (round(float(p[0]), 2), round(float(p[1]), 2), round(h_from, 2), round(h_to, 2), _EXEMPT_ON)
+    key = (round(float(p[0]), 2), round(float(p[1]), 2), round(h_from, 2), round(h_to, 2), _EXEMPT_ON, MARGIN_FRONT, MARGIN_REAR)
     if key not in _pivot_cache:
         hs = h_from + dd * np.linspace(0, 1, int(abs(dd)) + 2)
         ax, ay = _pivot_axle(p, h_from, hs)
@@ -795,7 +798,7 @@ def _arc_limit(p, th, s, r, m):
     """点 p から動く向き th で円弧を描いたとき、確実に当たる最初の角度(rad)。当たらなければ INF。
     2026-11-09: 同じ始点・半径・回る向きの円弧は何度も出てくるので1周分を1回だけ調べ、当たる候補は形を作らずに捨てる。
     1°おきの点が2つ続けて当たる所だけを見るので、通れる円弧を捨てることはない(判定は1°以下の間隔のため)。"""
-    key = (round(float(p[0]), 3), round(float(p[1]), 3), round(float(th), 6), r, s, m, _EXEMPT_ON)
+    key = (round(float(p[0]), 3), round(float(p[1]), 3), round(float(th), 6), r, s, m, _EXEMPT_ON, MARGIN_FRONT, MARGIN_REAR)
     v = _arc_limit_memo.get(key)
     if v is None:
         n = 360
@@ -1319,7 +1322,7 @@ _arcfirst_memo = {}   # 2026-11-16: 抜けの姿勢 -> 曲がってからつな�
 
 def _best_run(A, hA, B, hB, m, tail, top=12):
     key = (round(float(A[0]), 3), round(float(A[1]), 3), round(hA, 3), round(float(B[0]), 3), round(float(B[1]), 3),
-           round(hB, 3), m, tail, _EXEMPT_ON, _ALLOW_TAB, top)
+           round(hB, 3), m, tail, _EXEMPT_ON, _ALLOW_TAB, top, MARGIN_FRONT, MARGIN_REAR)
     if key not in _run_cache:
         _run_cache[key] = _best_run0(A, hA, B, hB, m, tail, top)
     return _run_cache[key]
@@ -1387,6 +1390,7 @@ class Table:
         self.ends, self.starts = ends, starts
         self.is_start = is_start
         self.allow_gate = allow_gate   # この区間で横切ってよいゲートの色(None なし)
+        self.margin = None   # 2026-11-16: この区間だけのすき間(per_gate_margin で狭いゲートにつながる区間)。None なら全体の値
         self.via_first = via_first   # スタート・ゴールの区間: 組み合わせが少ないので、最初から遠回りも比べる
         nE, nS = len(ends), len(starts)
         Ea = [np.repeat(np.array(v, float), nS) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in ends])]
@@ -1437,7 +1441,7 @@ class Table:
         global _EXEMPT_ON, _ALLOW_TAB
         self.allow_via = True
         for (pe, ps) in self.pending:
-            _EXEMPT_ON = self.is_start; _ALLOW_TAB = self.allow_gate
+            _EXEMPT_ON = self.is_start; _ALLOW_TAB = self.allow_gate   # via_options は当たりを見ないので、すき間は関係しない
             try:
                 if (pe, ps) not in self.via:
                     self.via[(pe, ps)] = via_options(self.ends[pe], self.starts[ps])
@@ -1450,14 +1454,18 @@ class Table:
 
     def resolve(self, e, s):
         """(e,s) の今の候補を厳密に判定し、当たらない最初の候補に確定する。"""
-        global _EXEMPT_ON, _ALLOW_TAB
+        global _EXEMPT_ON, _ALLOW_TAB, MARGIN_FRONT, MARGIN_REAR
         if self.done[e, s]:
             return False
         _EXEMPT_ON = self.is_start; _ALLOW_TAB = self.allow_gate
+        mf0, mr0 = MARGIN_FRONT, MARGIN_REAR
+        if self.margin is not None:
+            MARGIN_FRONT = MARGIN_REAR = self.margin
         try:
             return self._resolve(e, s)
         finally:
             _EXEMPT_ON = False; _ALLOW_TAB = None
+            MARGIN_FRONT, MARGIN_REAR = mf0, mr0
 
     def _resolve(self, e, s):
         ep, sp = self.ends[e], self.starts[s]
@@ -1918,10 +1926,35 @@ def main():
             OBLIQUE_CHOICE.clear()
     if used_margin is not None:
         print('margin selected: %.1f' % used_margin, flush=True)
+    conn_margin = CONN_MARGIN_CM
+    gm = {}
+    # 2026-11-16 ユーザー: ゲートごとのすき間(per_gate_margin)。狭い配置(最初のすき間で通れないゲートがある)でも、通れるゲートは
+    # 最初のすき間(3cm)から順に、通れる一番大きいすき間で通り方の候補を作り直す。つなぎは per_gate_conn_cm(なければ最初のすき間)。
+    # 今までは1つでも狭いゲートがあると、全部のゲートとつなぎが狭いすき間になっていた。
+    if PER_GATE_MARGIN and MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0] - 1e-9:
+        gm = {}
+        for c, g in GATES.items():
+            gm[c] = used_margin
+            for mg in MARGIN_LIST:
+                if mg <= used_margin + 1e-9:
+                    break
+                MARGIN_FRONT = MARGIN_REAR = float(mg)
+                for memo in (_line_memo, _arc_memo, _pivot_cache, _piv_int, _run_cache, _arc_limit_memo):
+                    memo.clear()
+                v = visit_candidates(g)
+                if v:
+                    cands[c] = v; gm[c] = float(mg)
+                    break
+        MARGIN_FRONT = MARGIN_REAR = used_margin
+        for memo in (_line_memo, _arc_memo, _pivot_cache, _piv_int, _run_cache, _arc_limit_memo):
+            memo.clear()
+        if conn_margin is None:
+            conn_margin = PER_GATE_CONN_CM if PER_GATE_CONN_CM is not None else MARGIN_LIST[0]
+        print('per-gate margin: %s (connections %.1f)' % ({c: m for c, m in gm.items()}, float(conn_margin)), flush=True)
     # 2026-11-14: つなぎの区間(スタートからを含む)だけ、すき間の基準を別にする(ゲートの通り方の候補は上で決めた基準のまま)。
     # ゲートの通過では2.5cm が要る配置でも、つなぎは脚から離して通れることが多い。その時間の差を見るため。
-    if CONN_MARGIN_CM is not None and used_margin is not None and float(CONN_MARGIN_CM) > used_margin:
-        MARGIN_FRONT = MARGIN_REAR = float(CONN_MARGIN_CM)
+    if conn_margin is not None and used_margin is not None and float(conn_margin) > used_margin:
+        MARGIN_FRONT = MARGIN_REAR = float(conn_margin)
         for memo in (_line_memo, _arc_memo, _pivot_cache, _piv_int, _run_cache, _arc_limit_memo):
             memo.clear()
         print('connection margin: %.1f (gate passes %.1f)' % (MARGIN_FRONT, used_margin), flush=True)
@@ -1975,6 +2008,12 @@ def main():
          ('yellow', 'GOAL'): Table(ends['yellow'], goal_pose, via_first=True, allow_gate='red' if FINAL_VIA_RED else None)}
     if START_PRELUDE:
         T[('START', 'yellow')] = Table(start_pose, starts['yellow'], is_start=True, via_first=True)
+    if PER_GATE_MARGIN and PER_GATE_CONN_MODE == 'adjacent' and gm and used_margin is not None:
+        for (ka, kb), tab in T.items():
+            lo = min([gm.get(ka, INF), gm.get(kb, INF)])
+            if lo < INF / 2 and lo < MARGIN_FRONT - 1e-9:
+                tab.margin = float(lo)
+        print('table margins:', {'%s->%s' % k: (t.margin if t.margin is not None else MARGIN_FRONT) for k, t in T.items()}, flush=True)
     print('tables', {k: v.C.shape for k, v in T.items()}, f'{time.time() - t0:.1f}s', flush=True)
     seq = ['red', 'blue', 'yellow'] * LAPS
     vs = {c: (np.array([v['s'] for v in cands[c]]), np.array([v['e'] for v in cands[c]]),
