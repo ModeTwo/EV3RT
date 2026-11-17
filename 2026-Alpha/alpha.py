@@ -1989,8 +1989,11 @@ def _run_main(argv, startup_cleanup):
         mission_config = dataclasses.replace(mission_config,
                                              et_rally_camera_handover_test=(args.rally_camera_handover_test == 'on'))
     if args.rally_camera_log is not None:
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-            parser.error('--rally-camera-log requires --mission rally-drive, bottle-rally or rally-sumo')
+        # 2026-11-18: bottle-sumo + --rally-stop-before-drive でも使える(スタートの画像が数枚残る。測れなかった回の原因を見るため)
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS and not (
+                mission_config.mission_mode == 'bottle-sumo' and mission_config.et_rally_stop_before_drive):
+            parser.error('--rally-camera-log requires --mission rally-drive, bottle-rally or rally-sumo '
+                         '(or bottle-sumo with --rally-stop-before-drive)')
         if not 1 <= args.rally_camera_log <= 30:
             parser.error('--rally-camera-log must be between 1 and 30')
         mission_config = dataclasses.replace(mission_config, et_rally_camera_log_every=args.rally_camera_log)
