@@ -346,15 +346,40 @@ class Video(object):
         results = zxingcpp.read_barcodes(
             _CL_DETECT.apply(crop), formats=_QR_ONLY, return_errors=True
         )
+        located = None
         if results:
             r = results[0]
             corners = [(x + CROP_X1, y) for x, y in self._result_pos_to_corners(r)]
             if r.valid:
                 return r.text, corners
             text = self._wechat_decode_roi(self._extract_roi(r, crop))
-            return text, corners
+            if text:
+                return text, corners
+            located = corners
 
-        return "", None
+        # Stage 4 (2026-11-17, devSS): 半分に縮めた画像でもう一度(ピントが少し外れたぼけに強い)。
+        # ヒント2が止まったまま23秒読めなかった回の対策。上の段で読めたときは通らない。
+        small = cv2.resize(crop, (crop.shape[1] // 2, crop.shape[0] // 2), interpolation=cv2.INTER_AREA)
+        results = zxingcpp.read_barcodes(small, formats=_QR_ONLY, return_errors=True)
+        if results:
+            r = results[0]
+            corners = [(2 * x + CROP_X1, 2 * y) for x, y in self._result_pos_to_corners(r)]
+            if r.valid:
+                return r.text, corners
+            located = located or corners
+        # WeChat は重いので、QRの位置が見えているときか、3回に1回だけ(走っていてQRが見えていない間に読み取りを遅らせない)
+        self._qr_small_tries = getattr(self, '_qr_small_tries', 0) + 1
+        if located is None and self._qr_small_tries % 3:
+            return "", None
+        try:
+            texts, _ = _WECHAT.detectAndDecode(small)
+            t = next((x for x in texts if x), None)
+            if t:
+                return t, located
+        except Exception:
+            pass
+
+        return "", located
 
     def _detection_worker(self) -> None:
         while not self._worker_stop.is_set():
@@ -463,6 +488,20 @@ class Video(object):
             finally:
                 with self._pending_lock:
                     self._opening_cap_cfg = None
+        # 2026-11-17(devSS): ピントの指示(request_focus)をこのスレッドで入れる
+        with self._pending_lock:
+            focus = getattr(self, '_pending_focus', False)
+            self._pending_focus = False
+        if focus is not False and self.cap is not None:
+            try:
+                if focus is None:
+                    self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+                else:
+                    self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+                    self.cap.set(cv2.CAP_PROP_FOCUS, int(focus))
+                print("QR_FOCUS %s" % ("auto" if focus is None else "manual %d" % int(focus)))
+            except Exception as error:
+                print("QR_FOCUS failed: %r" % (error,))
 
         capture_session, capture_mode = self._vision_sessions.capture_token()
         ret, frame = self.cap.read()
@@ -1347,6 +1386,12 @@ class Video(object):
     def require_qr_decoder(self):
         if zxingcpp is None:
             raise RuntimeError('zxingcpp is required for the Hint1/Hint2 mission')
+
+    def request_focus(self, value):
+        """2026-11-17(devSS): カメラのピント。None で自動(連続オートフォーカス)、数値(0〜255)で手動のその値。
+        カメラを読むスレッドで入れる(QR が読めないときにピントを振って探す、to_hint_route.WaitForQRDecode)。"""
+        with self._pending_lock:
+            self._pending_focus = value
 
     def prepare_qr_camera(self):
         """Prepare capture without accepting or decoding any QR observation."""
