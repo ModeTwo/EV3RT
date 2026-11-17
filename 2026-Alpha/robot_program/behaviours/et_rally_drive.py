@@ -415,6 +415,11 @@ class EtRallySpinAroundByEncoder(Behaviour):
         self.pid.setpoint = current_heading + error
         clamper = self.escalated_clamper if self.escalated else self.fine_clamper
         power = int(clamper.clamp(self.pid(current_heading)))
+        if self.settle_after_reversal_deg is not None and power != 0:
+            # 2026-11-17(devSS): ETラリー以外の旋回では、回す向きは誤差の符号で決める。出力の下限(50)で丸めるため、
+            # 速く回っている間に微分の項でPIDの符号だけが反転すると±50で行き来し(誤差+6°のまま9往復・約0.8秒)、
+            # 行き過ぎていないのに「反転」と数えていた。
+            power = int(math.copysign(abs(power), error))
         right_power = runtime.course * power
         left_power = (-1) * runtime.course * power
         runtime.right_motor.set_power(right_power)
