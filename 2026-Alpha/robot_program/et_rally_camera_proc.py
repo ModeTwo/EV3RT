@@ -144,13 +144,26 @@ def child_python():
 
 
 def child_env(python):
-    """子に渡す環境変数。親(PyPy)と別のPythonで子を動かすときは PYTHONPATH・PYTHONHOME を外す。
-    2026-11-18: 別のラズパイの full で、親の PYTHONPATH(PyPy向けの cv2)を /usr/bin/python3 が読んで
-    「recursion is detected during loading of cv2」で子が落ち、ETラリーのカメラ補正が止まっていた。"""
+    """子に渡す環境変数。親(PyPy)と別のPythonで子を動かすときは PYTHONPATH・PYTHONHOME を外し、
+    LD_LIBRARY_PATH から親の環境(PyPy の venv・site-packages)の場所を外す。
+    2026-11-18: 別のラズパイの full でだけ、子の /usr/bin/python3 が「recursion is detected during loading of cv2」
+    で落ち、ETラリーのカメラ補正が止まっていた(端末から同じ子を起動すると動く)。親が cv2 を読むと、pip の
+    OpenCV は LD_LIBRARY_PATH に自分のライブラリの場所を足す(子プロセスに効く)ので、それを疑っている。"""
     env = dict(os.environ)
     if os.path.realpath(python) != os.path.realpath(sys.executable):
         for name in ('PYTHONPATH', 'PYTHONHOME'):
             env.pop(name, None)
+        prefixes = {os.path.realpath(p) for p in (sys.prefix, getattr(sys, 'base_prefix', sys.prefix))}
+        keep = []
+        for part in env.get('LD_LIBRARY_PATH', '').split(os.pathsep):
+            real = os.path.realpath(part) if part else ''
+            if not part or 'site-packages' in part or any(real.startswith(p + os.sep) or real == p for p in prefixes):
+                continue
+            keep.append(part)
+        if keep:
+            env['LD_LIBRARY_PATH'] = os.pathsep.join(keep)
+        else:
+            env.pop('LD_LIBRARY_PATH', None)
     return env
 
 
@@ -196,8 +209,8 @@ def _child(cfg):
     try:
         import cv2
     except ImportError as error:
-        say(ev='error', what='cannot import cv2 in %s (%r) PYTHONPATH=%r sys.path=%r' % (
-            sys.executable, error, os.environ.get('PYTHONPATH'), sys.path[:6]))
+        say(ev='error', what='cannot import cv2 in %s (%r) PYTHONPATH=%r LD_LIBRARY_PATH=%r sys.path=%r' % (
+            sys.executable, error, os.environ.get('PYTHONPATH'), os.environ.get('LD_LIBRARY_PATH'), sys.path[:6]))
         return
     state = dict(save=False, detect=False, track=False, quit=False, mirror=bool(cfg.get('mirror')))
 
