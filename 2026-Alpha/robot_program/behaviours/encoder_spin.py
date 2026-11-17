@@ -33,7 +33,10 @@ class EncoderSpin(EtRallySpinAroundByEncoder):
     max_powerがフェーズ1の出力、toleranceが仕上げの許容(fine_trim=Falseのときは使われない)。"""
 
     def __init__(self, name, target, max_power, min_power, pid_p, pid_i, pid_d, target_type,
-                 tolerance=0.5, fine_trim=True):
+                 tolerance=0.5, fine_trim=True, stall_power_cap=None):
+        # stall_power_cap: 仕上げで止まって動かないときに上げる出力の上限(None なら 90)。ボトルを運ぶ旋回で低くする
+        if stall_power_cap is not None:
+            self.stall_power_cap = stall_power_cap
         fine_max = min(FINE_MAX_POWER, max_power)
         fine_min = min(FINE_MIN_POWER, fine_max)
         super().__init__(
@@ -80,13 +83,21 @@ class DeliveryEncoderTurn(EncoderSpin):
         return super().update()
 
 
-def delivery_encoder_turn(name, context, settings, target, fine_trim=True):
-    """delivery_turn.delivery_turnのエンコーダ版。"""
+def delivery_encoder_turn(name, context, settings, target, fine_trim=True, carrying_bottle=False):
+    """delivery_turn.delivery_turnのエンコーダ版。
+    carrying_bottle=True: ボトルを押して運びながらの旋回。出力を settings.delivery_carry_turn_power に下げ、
+    止まったときに上げる出力も settings.delivery_carry_turn_stall_cap までにする(2026-11-17、ボトルが外へ出そうだった)。"""
     root = Sequence(name=name, memory=True)
+    if carrying_bottle:
+        power = settings.delivery_carry_turn_power
+        turn = DeliveryEncoderTurn(name + ' spin', context, target, power, power, fine_trim=fine_trim)
+        turn.stall_power_cap = settings.delivery_carry_turn_stall_cap
+    else:
+        turn = DeliveryEncoderTurn(name + ' spin', context, target,
+                                   settings.to_spin_min_power, settings.to_spin_max_power,
+                                   fine_trim=fine_trim)
     root.add_children([
-        DeliveryEncoderTurn(name + ' spin', context, target,
-                            settings.to_spin_min_power, settings.to_spin_max_power,
-                            fine_trim=fine_trim),
+        turn,
         StopNow(name=name + ' brake'),
     ])
     return root

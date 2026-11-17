@@ -85,6 +85,10 @@ class IntegrationSettings:
     to_exit_turn_black_detect_max_error_deg: float = 60.0
     to_spin_min_power: int = 65
     to_spin_max_power: int = 65
+    # 2026-11-17(devSS、ユーザー): ボトルをアームに挟んで押しながら運ぶ旋回(ヒント2のあと、ボトル置き場へ向く旋回)の出力。
+    # 65 では勢いでボトルがアームの間から出ていきそうだった。止まって動かないときに上げる出力の上限も同じ値にする。
+    delivery_carry_turn_power: int = 50
+    delivery_carry_turn_stall_cap: int = 60
     # Hint2後の移動完了位置から、黄→青→赤のドロップゾーン前を進む。
     delivery_trace_target_v: int = 75
     delivery_trace_power: int = 50

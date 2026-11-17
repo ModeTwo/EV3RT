@@ -415,7 +415,7 @@ class EtRallySpinAroundByEncoder(Behaviour):
                     # 2026-11-17(devSS、ユーザー): ETラリー以外の旋回では、上げても動かなければさらに段階的に上げる
                     # (ヒント1のあとの旋回が、出力40のまま約6秒固まった)。約0.2秒ごとに +15、最大90。
                     if self.stall_ticks % (_STALL_TICK_LIMIT + 1) == 0:
-                        lo = min(90, int(self.escalated_clamper.min_val) + 15)
+                        lo = min(getattr(self, "stall_power_cap", 90), int(self.escalated_clamper.min_val) + 15)
                         self.escalated_clamper = SymmetricClamper(lo, max(lo, int(self.escalated_clamper.max_val)))
                         self.logger.info("%+06d %s.still stalled, power up to %d" % (
                             runtime.plotter.get_distance(), self.__class__.__name__, lo))
