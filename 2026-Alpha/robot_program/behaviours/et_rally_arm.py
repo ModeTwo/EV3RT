@@ -75,7 +75,12 @@ class EtRallyArmUpDown(Behaviour):
         if self.ticks > self.GRACE_TICKS:
             # 2026-11-17(devSS): 出力を落としたあと(上がりきる手前の SLOW_ZONE)は、遅い動きが当たり前なので下限だけで判定する
             # (一番速い動き×0.3 と比べると、落とした直後に止まり、260°に届かず245〜257°で止まっていた)。
-            limit = self.min_slow_deg if self.slowed else max(self.min_slow_deg, self.SLOW_RATIO * self.peak)
+            # 2026-11-17(devSS): 下げ(direction=+1)は重さで速さが変わる(途中で1tick 10〜18度落ちてから0〜4度に戻る)ので、
+            # 一番速い動きとの比は使わず、下限だけで判定する(比を使うと、落ちた直後の0・3・4度で -147 で止まった)。
+            if self.slowed or int(self.direction) > 0:
+                limit = self.min_slow_deg
+            else:
+                limit = max(self.min_slow_deg, self.SLOW_RATIO * self.peak)
             if delta < limit:
                 self.slow += 1
             else:

@@ -22,6 +22,11 @@ from .sumo_visual_turn import VisualBottleTurn
 from .sumo_visual_policy import VisualTurnMemory
 
 
+# 2026-11-17(devSS): 相撲への接近の直進の向きの戻し(上の _start_drive)。
+APPROACH_PID_P = 2.5
+APPROACH_PID_I = 0.3
+
+
 class AlignSumoBottle(Behaviour):
     """規定距離接近と画像正対の共通動作。
 
@@ -143,8 +148,10 @@ class AlignSumoBottle(Behaviour):
             target=lambda distance_mm: target,
             target_type=HeadingType.ABSOLUTE,
             power=approach_power,
-            pid_p=self.motion_settings.drive_pid_p,
-            pid_i=self.motion_settings.drive_pid_i,
+            # 2026-11-17(devSS、ユーザー): 相撲へ向かう1100mmの直進だけ強めに向きを戻す。共通の P1.1/I0.1 では、
+            # 曲がり終わりの向きのずれ(2〜5°)が直進の最後まで残り(12回のログで-2〜-6°のまま)、横へ数cmずれていた。
+            pid_p=max(self.motion_settings.drive_pid_p, APPROACH_PID_P),
+            pid_i=max(self.motion_settings.drive_pid_i, APPROACH_PID_I),
             pid_d=self.motion_settings.drive_pid_d,
             distance_limit_mm=self.settings.distance_mm,
         )
