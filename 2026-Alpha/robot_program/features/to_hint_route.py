@@ -929,11 +929,7 @@ def build_tantou_tree(context, config, include_exit=True):
     
     IsDistanceEarned(
         name="run_to_black_limit",
-        # 2026-11-17(devSS、実機): 400→200。黒線を見るのはこの距離のあとからなので、ロボットの位置が回によって
-        # ずれて黒線が400mmより手前に来ると、見ずに通り過ぎた(ユーザー: 黒線に対して行き過ぎ)。
-        # 黒線までは走れた回で約515mm、遠かった回で746mm(位置の振れ ±200mm くらい)。始めの200mmは見ない
-        # (旋回した場所の近くの線を拾わないため)
-        delta_dist=200  # tantou4: 550
+        delta_dist=400  # tantou4: 550
     ),
     ])
 
@@ -961,32 +957,20 @@ def build_tantou_tree(context, config, include_exit=True):
         qr_reader=read_qr2,
         target=105,
         slow_power=50,
-        # 2026-11-17(devSS): 黒線を見ながら走る区間を 200→400mm に延ばした(上の run_to_black_limit を 400→200 にした分)。
-        # 出力 80→65: 黒線の上を通る間にセンサーを読む回数を増やす(2回続けて黒で判定)
-        fast_power=65,
+        fast_power=80,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
         target_type=HeadingType.ABSOLUTE,
-        distance_mm=400,
+        distance_mm=200,
         decel_mm=50,
-        # 2026-11-17(devSS、実機): 20 だと200mmを過ぎたあと車輪が回らず(出力20で止まる)、黒線に届かないまま
-        # 動かなくなった(ヒント2のQRは読めたあと、黒線が想定より約230mm先だった回)。200mmを過ぎても黒線まで
-        # ゆっくり進み続けられる出力にする(出力30でも車輪が回らなかったことがある)
-        decel_min_power=40
+        decel_min_power=20
     ),
     
     IsBlackDetected(
         name="detect_black_2",
         black_threshold=settings.to_exit_black_v,
         required_frames=2
-    ),
-
-    # 2026-11-17(devSS): それでも黒線が見つからないときに止まったままにならないよう、上限を置いて先へ進む
-    # (ふだんはこの区間の約110mmで黒線。11/17 の外れた回は約340mm)
-    IsDistanceEarned(
-        name="black_2_give_up",
-        delta_dist=600
     ),
     ])
     
@@ -1030,20 +1014,13 @@ def build_tantou_tree(context, config, include_exit=True):
             target_type=HeadingType.ABSOLUTE,
             distance_mm=200,
             decel_mm=50,
-            # 2026-11-17(devSS): 20 だと200mmを過ぎて黒線がないとき車輪が回らず止まったままになる(run_to_black_2 と同じ)
-            decel_min_power=40
+            decel_min_power=20
         ),
     
         IsBlackDetected(
             name="detect_black_3",
             black_threshold=settings.to_exit_black_v,
             required_frames=2
-        ),
-
-        # 2026-11-17(devSS): 黒線が見つからなくても止まったままにしない上限
-        IsDistanceEarned(
-            name="black_3_give_up",
-            delta_dist=600
         ),
 
         #IsDistanceEarned(
@@ -1117,26 +1094,11 @@ def build_tantou_tree(context, config, include_exit=True):
         policy=ParallelPolicy.SuccessOnAll()
     )
 
-    # 2026-11-17(devSS): 黒線を早めに(200mmから)見るようにしたので、QRがまだ読めないうちに黒線で止まることがある。
-    # そのときは止まったまま待つだけにせず、WaitForQRDecode(少しずつ前後に動いて読み直し、読めたら止まった位置へ戻る)に入る。
-    # すでに読めていれば WaitForQRDecode はすぐ SUCCESS を返す。
-    drive_then_wait_qr_2 = Sequence(
-        name="drive_then_wait_qr_2",
-        memory=True
-    )
-    drive_then_wait_qr_2.add_children([
-        drive_selector_2,
-        WaitForQRDecode(
-            name="wait_qr_after_black_2",
-            qr_reader=read_qr2
-        ),
-    ])
-
     go_to_black_a_with_qr_2.add_children([
 
         qr2_read,
         #black_or_50,
-        drive_then_wait_qr_2,
+        drive_selector_2,
 
     ])
 
