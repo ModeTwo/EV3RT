@@ -18,6 +18,13 @@ class SumoBlueDetector:
     # S が下限45ぎりぎり(46〜54)で、青い丸と誤って確定することがあった(面積 最大561)。本物の青い丸は 226〜230
     # (11/17 の A・C の129枚、本物54個・灰色の点33個で重なりなし)。マスク自体は変えず、候補ごとに中央値で見る。
     MIN_MEDIAN_SATURATION = 120
+    # 2026-11-17(devSS): 青い丸が写っていないときの手がかり。黒線の上で青い丸の隣にある赤い丸(床の横長の楕円)を探し、
+    # 青い丸の横の位置を推定する。11/17 の画像で両方写っていたとき、青の cx − 赤の cx は
+    # 右コース(course=-1)で +60〜+107px、左コース(+1)で −66〜−165px → 青 ≈ 赤 − course × 90px(±50px くらい)。
+    RED_HSV_RANGES = (((0, 120, 60), (10, 255, 255)), ((165, 120, 60), (180, 255, 255)))
+    RED_MIN_AREA = 150
+    RED_TO_BLUE_PX = 90.0
+    SIDE_DEADBAND_PX = 40.0
 
     def __init__(self):
         self.stable_frames = 0
@@ -152,6 +159,43 @@ class SumoBlueDetector:
         self.bottom_previous = hint
         return hint if self.bottom_frames >= 3 else None
 
+    def _red_hint(self, hsv):
+        """床の赤い丸(横長の楕円、画面の上30%は除く。ゲートの赤い脚は縦長なので除く)。一番大きいもの。"""
+        height = hsv.shape[0]
+        red = None
+        for lower, upper in self.RED_HSV_RANGES:
+            part = cv2.inRange(hsv, np.array(lower, np.uint8), np.array(upper, np.uint8))
+            red = part if red is None else (red | part)
+        red = cv2.morphologyEx(red, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        contours, _ = cv2.findContours(red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best = None
+        for contour in contours:
+            area = float(cv2.contourArea(contour))
+            x, y, w, h = cv2.boundingRect(contour)
+            if area < self.RED_MIN_AREA or y < height * 0.3 or w < 1.3 * h:
+                continue
+            moments = cv2.moments(contour)
+            if moments["m00"] <= 0:
+                continue
+            if best is None or area > best["area"]:
+                best = dict(cx=moments["m10"] / moments["m00"], cy=moments["m01"] / moments["m00"],
+                            area=area, x=x, y=y, w=w, h=h)
+        return best
+
+    def blue_side_from_red(self, red_hint, course, image_width=320):
+        """赤い丸の位置から、青い丸の推定 cx と向き('left'/'right'/'center')。分からなければ None。"""
+        if red_hint is None or course not in (-1, 1):
+            return None
+        est = float(red_hint["cx"]) - course * self.RED_TO_BLUE_PX
+        center = image_width / 2.0
+        if est < center - self.SIDE_DEADBAND_PX:
+            side = "left"
+        elif est > center + self.SIDE_DEADBAND_PX:
+            side = "right"
+        else:
+            side = "center"
+        return dict(blue_cx_estimate=est, side=side)
+
     def step(self, image):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(
@@ -177,11 +221,22 @@ class SumoBlueDetector:
             self.stable_frames = 0
             self.previous_center = None
             self.previous_area = None
+            red_hint = self._red_hint(hsv)
+            course = None
+            try:
+                from robot_program.runtime import runtime as _runtime
+                course = _runtime.course
+            except Exception:
+                pass
             return {
                 "confirmed": False,
                 "candidate": None,
                 "candidate_count": 0,
                 "bottom_hint": bottom_hint,
+                # 2026-11-17(devSS): 青い丸が見えないときの手がかり(探す向きを決めるのに使える)。
+                # red_hint: 床の赤い丸、blue_from_red: {"blue_cx_estimate": 推定の青の cx, "side": left/right/center}
+                "red_hint": red_hint,
+                "blue_from_red": self.blue_side_from_red(red_hint, course, mask.shape[1]),
             }
 
         nearby = []
