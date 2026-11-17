@@ -169,12 +169,14 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     LAP_LINE_NEAR_X_MM = 1726.0
     # ボトルの手前側の縁を、土俵の奥の縁からこの距離まで押す(--sumo-push-clearance-mm)。従来 300 = 緑の帯の縁(304)。
     PUSH_CLEARANCE_MM = 300.0
-    LINE_WAIT_MM = 60.0
+    # 黒線を見るまで推定より先へ押してよい距離。11/18: 押す間の滑りで推定は実際より 27〜約140mm 先に出ていて(いつも同じ向き)、
+    # 60 では黒線に届かなかった(押し終わり 190 で2回とも not_seen、ボトルは黒線にかかる〜3cm 先)。
+    LINE_WAIT_MM = 150.0
     LINE_SENSOR_FORWARD_MM = 38.0   # 色センサーは車軸の 38mm 前(sumo_rally_transition と同じ)
     LINE_BLACK_MAX_V = 40           # 黒線は V≈13、白は約99。土俵の灰色の線を黒と取らないよう低めにする
     LINE_CONFIRM = 2                # 続けて黒を見た回数
-    LINE_WINDOW_MM = 120.0          # 推定でこの範囲にセンサーがある間だけ探す
-    LINE_MAX_SHIFT_MM = 80.0        # これより大きく直す必要が出たら見間違いとして使わない
+    LINE_WINDOW_MM = 200.0          # 推定でこの範囲にセンサーがある間だけ探す(11/18: 押す間の滑りで推定が最大約14cm 先に出た)
+    LINE_MAX_SHIFT_MM = 170.0       # これより大きく直す必要が出たら見間違いとして使わない
 
     def __init__(
         self,
