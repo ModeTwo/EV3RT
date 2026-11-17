@@ -286,7 +286,10 @@ class TurnAfterBlue(Behaviour):
     # 止まりきるまで待ってから、ずれが TRIM_MIN_DEG を超えていれば小さく直す(最大 MAX_TRIMS 回)。
     EXIT_SETTLE = False
     SETTLE_SEC = 0.25
-    TRIM_MIN_DEG = 0.5
+    # 2026-11-18 3回目: 最初の旋回は止まりきって -0.51° だったが、0.5° を越えたので出力50で直し、2° 行き過ぎて戻る往復で
+    # +2.5° で終わった。直すのは 1.0° を越えたときだけ、出力も下げる。
+    TRIM_MIN_DEG = 1.0
+    TRIM_POWER = 35
     MAX_TRIMS = 2
 
     def initialise(self):
@@ -338,7 +341,7 @@ class TurnAfterBlue(Behaviour):
             return Status.SUCCESS
         self.trims += 1
         self.settle_since = None
-        self.turn = self._new_turn(target, 50, 0.3, "face rally direction trim")
+        self.turn = self._new_turn(target, self.TRIM_POWER, 0.5, "face rally direction trim")
         self.logger.info("BLUE_EXIT_TRIM %d error=%+.2f" % (self.trims, error))
         return Status.RUNNING
 

@@ -873,6 +873,10 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             self._fixed_sample()
         except (ValueError, TypeError, OverflowError) as error:
             return self._nc_fail("fixed-endpoint odometry: " + str(error))
+        # 2026-11-18 2回目: 黒線は押す前(捕まえに行く間・緑を避ける戻りの円弧)に越えることもある(bottle-sumo で
+        # 戻りの円弧のあと押す残りが 14mm、黒線は見ないまま押し終わった)。前へ進む段階ではずっと探す。
+        if self._fixed_enabled() and self.phase in ("NC_CAPTURE", "NC_TURN", "NC_PUSH"):
+            self._line_anchor_tick()
         if not self.phase.startswith("NC_"):
             return super().update()
         push_settings = self.push_settings
@@ -1096,7 +1100,6 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         """方位はジャイロで補正し、走行中の角度ずれでは失敗しない。"""
         if self.phase == "NC_PUSH" and self._fixed_enabled():
             self._fixed_sample()
-            self._line_anchor_tick()
             remaining = self._fixed_remaining()
             if remaining <= 0.0:
                 return self._start_backoff(now)
