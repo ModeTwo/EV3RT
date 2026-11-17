@@ -23,6 +23,8 @@ class RaceConfig:
     # profile: PDF距離-方位表。legacy: 従来の固定方位+ライントレース。
     # profile: 谷口さんベースコードでSTART-LAPまで全部ライントレース
     start_lap_mode: str = 'profile'
+    # 選択したコースの方位表。alpha.pyでCLIから設定する。
+    start_lap_course: str = 'left'
     #start_lap_mode: str = 'legacy'
     #start_lap_mode: str = 'alltrace'
     start_lap_power: int = 100
@@ -135,7 +137,7 @@ class RaceConfig:
     et_rally_turn_wheel_sync_gain: Optional[float] = 2.0
     # 2026-10-31: wheel_sync有効時だけ、phase1の最後の(エンコーダ度, 出力)で左右そろって減速する。
     # 既定None=通常の(15度, 50)。同期ありでは止めた後の流れが約12度に増えて行き過ぎていたため。
-    et_rally_turn_sync_decel: Optional[tuple] = (40.0, 40)
+    et_rally_turn_sync_decel: Optional[tuple] = (40.0, 45)
     # 2026-10-28: one_shotで、旋回の前に車体が止まるまで待つ。既定None=False(待たない)。
     et_rally_turn_pre_stop: Optional[bool] = True
     # 2026-10-29: 経路の前に、スタートの向きへこの距離(mm)だけ前進→後退して、置いた向きを確かめる。既定None=しない。

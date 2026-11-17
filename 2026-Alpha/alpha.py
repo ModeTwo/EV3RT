@@ -1193,6 +1193,21 @@ def read_rally_drive_hints(mission, hint1, hint2_gate_info, check_tree, plan_giv
     return hint1, hint2_gate_info
 
 
+def _configure_full_lap_defaults(mission):
+    """Use the latest tested LAP settings in full; explicit overrides win."""
+    if mission != 'full':
+        return
+    defaults = {
+        'LAP_WHITE_SIDED_REJOIN': 'on',
+        'LAP_DARK_HEADING': 'on',
+        'LAP_GATE_TARGET': 'gray_center',
+        'LAP_WEAK_BLUE_MODE': 'baseline',
+    }
+    for name, value in defaults.items():
+        os.environ.setdefault(name, value)
+    print(' -- full LAP settings: ' + ' '.join(name + '=' + os.environ[name] for name in defaults), flush=True)
+
+
 def _run_main(argv, startup_cleanup):
     global g_course, g_key, g_shutdown
     g_shutdown = Shutdown(lambda: stop_motors(robot_runtime))
@@ -1672,6 +1687,7 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument("--sumo-push-power", type=int, default=80)
     parser.add_argument("--sumo-push-turn-power", type=int, default=50)
     args = parser.parse_args(argv)
+    _configure_full_lap_defaults(args.mission)
     if args.mission == "sumo-push-route-test" and not args.sumo_push_calibration:
         from robot_program.features.sumo_relative_push_settings import (
             RelativePushSettings,
@@ -1785,6 +1801,7 @@ def _run_main(argv, startup_cleanup):
     mission_config = config_for_mission(args.mission)
     mission_config = dataclasses.replace(
         mission_config,
+        start_lap_course=args.course,
         sumo_push_calibration=args.sumo_push_calibration,
         sumo_push_execute=args.sumo_push_execute,
     )

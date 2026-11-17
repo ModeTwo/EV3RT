@@ -97,8 +97,8 @@ LARGE_ERROR_DEG = 2.0
 EXTRA_PULSE_ATTEMPTS = 3
 # 2026-10-31: phase1_model使用時、一定の流れを満額見込む旋回の大きさ(度)。これ未満は角度に比例して小さくする。
 PHASE1_FLOW_FULL_DEG = 40.0
-# 2026-10-31: wheel_sync使用時の、片輪の出力の下限(不感帯CW35/CCW40前後で止まりきらないよう少し下)。
-WHEEL_SYNC_MIN_POWER = 30
+# 2026-10-31: wheel_sync使用時の片輪出力の下限。不感帯の実測目安はCW35/CCW40前後。
+WHEEL_SYNC_MIN_POWER = 35
 # 2026-10-31: wheel_sync中に両輪の回転量がこのtick数より長く増えなければ、1tickごとに基準の出力をSTEPずつ上げる。
 WHEEL_SYNC_STALL_TICKS = 3
 WHEEL_SYNC_STALL_STEP = 2
