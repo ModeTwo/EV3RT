@@ -67,6 +67,7 @@ class TurnTowardRallyStart(Behaviour):
                 tolerance=1.0,
                 normalize_error=False,
             )
+            self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
 
         self.turn.tick_once()
 
@@ -247,6 +248,7 @@ class TurnAfterBlue(Behaviour):
                 pid_d=motion.turn_pid_d,
                 tolerance=1.0,
             )
+            self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
             self.logger.info(
                 "BLUE_EXIT_TURN START course=%s bearing=%.2f "
                 "target=%.2f power=50"
@@ -445,6 +447,7 @@ class MoveToRallyBlue(Behaviour):
             pid_p=motion.turn_pid_p, pid_i=motion.turn_pid_i,
             pid_d=motion.turn_pid_d, tolerance=1.0,
         )
+        self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
         self.logger.info("RALLY_BLUE SEARCH count=%d offset=%.1f target=%.2f"
                          % (self.search_count, offset, target))
         self._set_phase("TURN")
@@ -590,6 +593,7 @@ class MoveToRallyBlue(Behaviour):
                 pid_d=motion.turn_pid_d,
                 tolerance=1.0,
             )
+            self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
             self.turn.predictive_brake_horizon_sec = 0.04
 
             self.logger.info(

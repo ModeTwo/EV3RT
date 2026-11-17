@@ -108,6 +108,8 @@ class SpinAround(Behaviour):
             else:
                 self.target_heading = self.target
             self._predictive_previous = None
+            self._boost_prev = None
+            self._boost = 0
             self.pid = PID(
                 self.pid_p,
                 self.pid_i,
@@ -155,8 +157,25 @@ class SpinAround(Behaviour):
         elif raw_power * error < 0.0:
             raw_power = -raw_power
         power = int(self.clamper.clamp(raw_power))
+        if getattr(self, "stall_boost", False):
+            # 2026-11-17(devSS): 回ろうとして向きが変わらないまま約0.3秒たつごとに、出力を +15(最大90)。
+            # 青い丸への小さな向き直し(残り2°)が出力50で動かず、6秒の時間切れで失敗した(ロボットA)。
+            import time as _t
+            now = _t.monotonic()
+            prev = getattr(self, "_boost_prev", None)
+            if prev is None or abs(_normalize_heading_error(current_heading - prev[1])) >= 0.5:
+                self._boost_prev = (now, current_heading)
+            elif now - prev[0] >= 0.3:
+                self._boost = min(90, getattr(self, "_boost", 0) + 15)
+                self._boost_prev = (now, current_heading)
+                self.logger.info("spin stalled, power boost +%d" % self._boost)
+            boost = getattr(self, "_boost", 0)
+            if boost and power:
+                power = int(math.copysign(min(100, abs(power) + boost), power))
         right_power = runtime.course * power
         left_power = -runtime.course * power
+        runtime.right_motor.set_brake(False)
+        runtime.left_motor.set_brake(False)
         runtime.right_motor.set_power(right_power)
         runtime.left_motor.set_power(left_power)
         log_power_state(self.__class__.__name__, right_power, left_power)

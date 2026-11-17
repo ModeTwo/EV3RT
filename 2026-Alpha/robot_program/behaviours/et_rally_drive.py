@@ -351,6 +351,8 @@ class EtRallySpinAroundByEncoder(Behaviour):
                 self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL)
                 self.stall_ticks = 0
                 self.escalated = False
+                self.escalated_clamper = SymmetricClamper(max(int(self.main_power * 0.8), int(self.fine_clamper.min_val)), self.main_power)
+                self.phase2_started_at = time.monotonic()
                 self.prev_heading_for_stall = current_heading
                 # 2026-10-25較正用: フェーズ2が最初に行き過ぎて向きを反転させる直前の
                 # 誤差を、「フェーズ2の1回目の精度」(一発パルス仕上げとの公平な比較用)
@@ -405,12 +407,32 @@ class EtRallySpinAroundByEncoder(Behaviour):
         if heading_progress < _STALL_PROGRESS_DEG:
             self.stall_ticks += 1
             if self.stall_ticks > _STALL_TICK_LIMIT:  # 約0.2秒進捗なし(2026-09-12: 元は15tick=0.45秒、体感の停止時間を減らすため短縮)
+                if not self.escalated:
+                    self.logger.info("%+06d %s.stalled in fine-trim, escalating power" % (
+                        runtime.plotter.get_distance(), self.__class__.__name__))
                 self.escalated = True
-                self.logger.info("%+06d %s.stalled in fine-trim, escalating power" % (
-                    runtime.plotter.get_distance(), self.__class__.__name__))
+                if self.settle_after_reversal_deg is not None:
+                    # 2026-11-17(devSS、ユーザー): ETラリー以外の旋回では、上げても動かなければさらに段階的に上げる
+                    # (ヒント1のあとの旋回が、出力40のまま約6秒固まった)。約0.2秒ごとに +15、最大90。
+                    if self.stall_ticks % (_STALL_TICK_LIMIT + 1) == 0:
+                        lo = min(90, int(self.escalated_clamper.min_val) + 15)
+                        self.escalated_clamper = SymmetricClamper(lo, max(lo, int(self.escalated_clamper.max_val)))
+                        self.logger.info("%+06d %s.still stalled, power up to %d" % (
+                            runtime.plotter.get_distance(), self.__class__.__name__, lo))
         else:
             self.stall_ticks = 0
         self.prev_heading_for_stall = current_heading
+        if self.settle_after_reversal_deg is not None:
+            # 2026-11-17(devSS): 仕上げが FINE_TIMEOUT_SEC を超えたら打ち切る(このあとの直進・ライントレースが向きを寄せる)
+            if not hasattr(self, "phase2_started_at"):
+                self.phase2_started_at = time.monotonic()
+            if time.monotonic() - self.phase2_started_at > 2.5:
+                runtime.right_motor.set_power(0); runtime.right_motor.set_brake(True)
+                runtime.left_motor.set_power(0); runtime.left_motor.set_brake(True)
+                self.logger.warning("%+06d %s.fine-trim timeout at heading=%d residual=%+.1f, giving up" % (
+                    runtime.plotter.get_distance(), self.__class__.__name__, current_heading, error))
+                del self.phase2_started_at
+                return Status.SUCCESS
 
         self.pid.setpoint = current_heading + error
         clamper = self.escalated_clamper if self.escalated else self.fine_clamper
