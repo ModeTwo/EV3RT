@@ -291,7 +291,7 @@ class MoveToRallyBlue(Behaviour):
     VIEW_BACK_MAX_STEPS = 3
     VIEW_BACK_POWER = 35
     VIEW_BACK_TIMEOUT_SEC = 2.0
-    SEARCH_WAIT_SEC = 0.6
+    SEARCH_WAIT_SEC = 2.0
     SEARCH_LIMIT_DEG = 20.0
     ACQUIRE_TIMEOUT_SEC = 45.0
 
@@ -354,6 +354,10 @@ class MoveToRallyBlue(Behaviour):
         self.phase_started_at = time.monotonic()
         if phase == "ALIGN_SETTLE":
             self.blue_settle_samples = []
+        if phase == "DETECT":
+            self.blue_search_frame = -1
+            self.blue_empty_frames = 0
+            self.blue_candidate_at = None
 
     def _start_view_back(self):
         import math
@@ -425,6 +429,48 @@ class MoveToRallyBlue(Behaviour):
             int(round(-self.VIEW_BACK_POWER - correction))
         )
         return Status.RUNNING
+
+    def _blue_search_ready(self, observation, now):
+        # カメラ未更新と、青候補が見えない状態を区別する。
+        if not observation:
+            return False
+
+        import math
+        try:
+            t = float(observation["t"])
+            frame = int(observation["frame_id"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+
+        if (
+            not math.isfinite(t)
+            or not 0 <= now - t <= self.MAX_OBSERVATION_AGE_SEC
+        ):
+            return False
+
+        visible = (
+            observation.get("candidate") is not None
+            or observation.get("candidate_count", 0) > 0
+        )
+        if frame > getattr(self, "blue_search_frame", -1):
+            self.blue_search_frame = frame
+            if visible:
+                self.blue_empty_frames = 0
+                self.blue_candidate_at = t
+            else:
+                self.blue_empty_frames = (
+                    getattr(self, "blue_empty_frames", 0) + 1
+                )
+
+        if visible:
+            return False
+
+        recent = getattr(self, "blue_candidate_at", None)
+        return (
+            now - self.phase_started_at >= self.SEARCH_WAIT_SEC
+            and getattr(self, "blue_empty_frames", 0) >= 3
+            and (recent is None or now - recent >= 1.0)
+        )
 
     def _start_search(self):
         if self.search_count >= len(self.search_offsets):
@@ -500,7 +546,7 @@ class MoveToRallyBlue(Behaviour):
                     return self._start_view_back()
 
             if not observation or not observation.get("confirmed"):
-                if now - self.phase_started_at >= self.SEARCH_WAIT_SEC:
+                if self._blue_search_ready(observation, now):
                     return self._start_search()
                 return Status.RUNNING
 
@@ -542,7 +588,7 @@ class MoveToRallyBlue(Behaviour):
             motion = self.config.sumo
             power = 50  # 青い丸への補正旋回専用
 
-            if self.blue_alignment_turns >= 6:
+            if self.blue_alignment_turns >= 3:
                 return self._fail("blue alignment correction limit")
             self.blue_alignment_turns += 1
             if (self.blue_previous_error is not None

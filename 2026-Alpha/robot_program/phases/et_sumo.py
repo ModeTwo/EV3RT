@@ -23,6 +23,7 @@ def build_sumo_after_delivery(context, config):
     ))
     tree = build_sumo_push_tree(context, config)
     tree.engine.continuous_entry = True
+    tree.engine.push_endpoint_enabled = True
     tree.engine.delivery_green_on_right = (
         config.mission_mode == "bottle-sumo"
     )

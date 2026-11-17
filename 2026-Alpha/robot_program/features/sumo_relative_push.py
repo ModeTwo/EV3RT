@@ -5,6 +5,7 @@
 import math
 import time
 from py_trees.common import Status
+from py_trees.behaviour import Behaviour
 from simple_pid import PID
 from ..runtime import runtime
 from ..behaviours.gyro_drive import RunByGyro
@@ -45,6 +46,102 @@ class ContinuousReturnTurn(SpinToBearing):
             super().terminate(new_status)
 
 
+class ForwardReturnArc(Behaviour):
+    """両輪50以上の前進で方位を戻し、同じ周期に押しへ渡す。"""
+
+    MIN_POWER = 50
+    MAX_POWER = 75
+    TOLERANCE_DEG = 2.0
+    MAX_DISTANCE_MM = 250.0
+    TIMEOUT_SEC = 3.0
+
+    def __init__(self, name, owner, bearing):
+        super().__init__(name)
+        self.owner = owner
+        self.target_bearing = float(bearing) % 360.0
+
+    def initialise(self):
+        self.started_at = time.monotonic()
+        self.origin = self.owner._encoder_pair()
+        self.initial_error = delta(
+            self.target_bearing, current_bearing(self.owner.context)
+        )
+        self.last_log_at = None
+        self.logger.info(
+            "SUMO_RETURN_ARC START target=%.2f error=%.2f "
+            "power=50..75 max_distance=250.0"
+            % (self.target_bearing, self.initial_error)
+        )
+
+    def _fail(self, reason):
+        self.logger.error("SUMO_RETURN_ARC FAILURE: " + reason)
+        return Status.FAILURE
+
+    def update(self):
+        now = time.monotonic()
+        bearing = current_bearing(self.owner.context)
+        distance = self.owner._forward_mm_from(self.origin)
+        error = delta(self.target_bearing, bearing)
+        if not all(math.isfinite(v) for v in (
+            now, bearing, distance, error, self.initial_error
+        )):
+            return self._fail("invalid gyro/encoder")
+
+        # カーブ中も押し出し終了位置を越えて走り続けない。
+        if self.owner._fixed_enabled():
+            self.owner._fixed_sample()
+            if self.owner._fixed_remaining() <= 0.0:
+                self.logger.info(
+                    "SUMO_RETURN_ARC ENDPOINT_REACHED distance=%.1f error=%.2f"
+                    % (distance, error)
+                )
+                return Status.SUCCESS
+
+        crossed = self.initial_error * error < 0.0
+        if abs(error) <= self.TOLERANCE_DEG or crossed:
+            self.logger.info(
+                "SUMO_RETURN_ARC COMPLETE bearing=%.2f error=%.2f distance=%.1f"
+                % (bearing, error, distance)
+            )
+            return Status.SUCCESS
+
+        if now - self.started_at > self.TIMEOUT_SEC:
+            return self._fail("timeout")
+        if distance >= self.MAX_DISTANCE_MM or distance < -2.0:
+            return self._fail("distance bound")
+        if now - self.started_at > 0.6 and distance < 2.0:
+            return self._fail("no forward progress")
+
+        extra = int(round(
+            min(25.0, max(12.0, 1.5 * abs(error)))
+        ))
+        outer = min(self.MAX_POWER, self.MIN_POWER + extra)
+
+        # 床面方位の正方向は時計回り。コースでは反転しない。
+        left, right = (
+            (outer, self.MIN_POWER) if error > 0.0
+            else (self.MIN_POWER, outer)
+        )
+        runtime.left_motor.set_power(left)
+        runtime.right_motor.set_power(right)
+
+        if self.last_log_at is None or now - self.last_log_at >= 0.2:
+            self.logger.info(
+                "SUMO_RETURN_ARC DRIVE error=%.2f distance=%.1f left=%d right=%d"
+                % (error, distance, left, right)
+            )
+            self.last_log_at = now
+        return Status.RUNNING
+
+    def terminate(self, new_status):
+        if new_status == Status.SUCCESS:
+            return  # 同一周期で押し出し、または後退開始へ渡す。
+        for motor in (runtime.left_motor, runtime.right_motor):
+            if motor is not None:
+                motor.set_power(0)
+                motor.set_brake(True)
+
+
 class RelativeAlignAndPush(AlignAndCatchTest):
     """較正なし相対方式。正対までは親、正対後はこのクラスが担当する。
 
@@ -74,6 +171,8 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     def initialise(self):
         """実行ごとの状態を初期化する。機器登録・タッチ開始はalphaが担当する。"""
         self.nc_samples = []
+        self.fixed_pose = None
+        self.fixed_push_end = None
         self.angle_policy = None
         self.context.sumo.rally_turn_reference = None
         self.approach_bearing = None
@@ -94,6 +193,68 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         runtime.require("sonar_sensor")
         super().initialise()
 
+    def _fixed_enabled(self):
+        return bool(getattr(self, "push_endpoint_enabled", False))
+
+    def _fixed_begin(self):
+        if not self._fixed_enabled():
+            return
+        bearing = current_bearing(self.context)
+        self.fixed_pose = (0.0, 0.0, self._encoder_pair(), bearing)
+        self.fixed_push_end = None
+        self.logger.info(
+            "SUMO_FIXED ORIGIN approach=%.2f circle_far=1590.0 "
+            "green=1895.0 bottle_offset=115.0 "
+            "bottle_radius=32.5 clearance=200.0"
+            % self.approach_bearing
+        )
+
+    def _fixed_sample(self):
+        pose = getattr(self, "fixed_pose", None)
+        if not self._fixed_enabled() or pose is None:
+            return
+        x, y, previous, old_bearing = pose
+        counts = self._encoder_pair()
+        bearing = current_bearing(self.context)
+        diameter = float(runtime.plotter.tire_diameter)
+        if (
+            not math.isfinite(diameter) or diameter <= 0
+            or not math.isfinite(bearing)
+        ):
+            raise ValueError("invalid fixed-endpoint sensors")
+
+        distance = (
+            math.pi * diameter
+            * sum(c - p for c, p in zip(counts, previous)) / 720.0
+        )
+        if not math.isfinite(distance) or abs(distance) > 100.0:
+            raise ValueError("fixed-endpoint encoder discontinuity")
+
+        mid = old_bearing + delta(bearing, old_bearing) / 2.0
+        angle = math.radians(delta(mid, self.approach_bearing))
+        self.fixed_pose = (
+            x + distance * math.cos(angle),
+            y + distance * math.sin(angle),
+            counts, bearing,
+        )
+
+    def _fixed_remaining(self):
+        pose = getattr(self, "fixed_pose", None)
+        if pose is None:
+            raise ValueError("fixed-endpoint origin missing")
+        cosine = math.cos(math.radians(
+            delta(pose[3], self.approach_bearing)
+        ))
+        if cosine < 0.5:
+            raise ValueError("push heading outside endpoint direction bound")
+
+        # ボトル後端を円の奥縁から200mm外へ出す。
+        rear = pose[0] + 115.0 * cosine - 32.5
+        remaining = (1590.0 + 200.0 - rear) / cosine
+        if remaining > 1500.0:
+            raise ValueError("fixed-endpoint remaining distance too large")
+        return remaining
+
     def _start_drive(self, now):
         # 最初の直進で指示する絶対目標を床面方位に変換して保持する。
         # 開始時の実姿勢ではなく、直進に使用する目標そのものを基準にする。
@@ -113,6 +274,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.approach_bearing = ref.bearing(
             ref.reset_gyro_deg + self.approach_offset_from_reset_deg
         )
+        self._fixed_begin()
         super()._start_drive(now)
 
     def _start_catch_drive(self):
@@ -293,6 +455,9 @@ class RelativeAlignAndPush(AlignAndCatchTest):
                 self.angle_policy["push_bearing_deg"] if self.angle_policy else None
             ),
         )
+        pose = getattr(self, "fixed_pose", None)
+        if self._fixed_enabled() and pose is not None:
+            row.update(fixed_x_mm=pose[0], fixed_y_mm=pose[1])
         return row
 
     def _recording_details(self):
@@ -333,6 +498,18 @@ class RelativeAlignAndPush(AlignAndCatchTest):
                 samples=list(self.nc_samples),
             ),
         )
+        if self._fixed_enabled():
+            result["route"].update(
+                geometry_stop_enabled=True,
+                pose_method="signed encoders and midpoint gyro from approach start",
+                total_forward_target_mm=None,
+                fixed_circle_far_mm=1590.0,
+                fixed_green_boundary_mm=1895.0,
+                fixed_bottle_offset_mm=115.0,
+                fixed_bottle_radius_mm=32.5,
+                fixed_clearance_mm=200.0,
+                fixed_push_end_xy_mm=self.fixed_push_end,
+            )
         return result
 
     def _nc_fail(self, reason):
@@ -352,11 +529,23 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     def _push(self, now):
         """押し直進を開始する。目標は引継ぎ時の実際の方位。"""
         self.phase = "NC_PUSH"
-                # 接近開始から押し出し完了までの合計前進距離を800mmにする
-        self.actual_push_distance_mm = max(
-            0.0,
-            800.0 - self.capture_leg_mm,
-        )
+        # 有効時は開始位置基準。他の実行方法は従来の距離方式。
+        if self._fixed_enabled():
+            self._fixed_sample()
+            self.actual_push_distance_mm = max(
+                0.0, self._fixed_remaining()
+            )
+            self.logger.info(
+                "SUMO_FIXED PLAN x=%.1f y=%.1f remaining=%.1f bearing=%.2f"
+                % (
+                    self.fixed_pose[0], self.fixed_pose[1],
+                    self.actual_push_distance_mm, self.fixed_pose[3],
+                )
+            )
+        else:
+            self.actual_push_distance_mm = max(
+                0.0, 800.0 - self.capture_leg_mm
+            )
 
         self.logger.info(
             "SUMO_RELATIVE PUSH_DISTANCE "
@@ -396,11 +585,23 @@ class RelativeAlignAndPush(AlignAndCatchTest):
 
     def _start_backoff(self, now):
         """押し出し完了後、同じ方位で150mm後退する。"""
+        if self._fixed_enabled():
+            self._fixed_sample()
+            self.fixed_push_end = self.fixed_pose[:2]
+            cosine = math.cos(math.radians(
+                delta(self.fixed_pose[3], self.approach_bearing)
+            ))
+            rear = self.fixed_pose[0] + 115.0 * cosine - 32.5
+            self.logger.info(
+                "SUMO_FIXED END x=%.1f y=%.1f estimated_bottle_rear=%.1f "
+                "circle_far=1590.0 green=1895.0 physical_success=unverified"
+                % (self.fixed_pose[0], self.fixed_pose[1], rear)
+            )
         self._hold("NC_BACK", now)
         self.push_leg_mm = max(0.0, self._forward_mm_from(self.push_encoder_origin))
 
         # 押し出し距離に関係なく150mm後退する
-        self.back_target_mm = 150.0
+        self.back_target_mm = 100.0
         self.back_left_origin = float(runtime.left_motor.get_count())
         self.back_right_origin = float(runtime.right_motor.get_count())
         self.back_heading = current_bearing(self.context)
@@ -501,6 +702,10 @@ class RelativeAlignAndPush(AlignAndCatchTest):
 
     def update(self):
         """制御周期1回分。計測・終了優先判定・状態別処理・前進の順に進める。"""
+        try:
+            self._fixed_sample()
+        except (ValueError, TypeError, OverflowError) as error:
+            return self._nc_fail("fixed-endpoint odometry: " + str(error))
         if not self.phase.startswith("NC_"):
             return super().update()
         push_settings = self.push_settings
@@ -522,7 +727,14 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             # Distance first: do not read/command another forward tick at the endpoint.
             if self.phase == "NC_CAPTURE" and progress >= push_settings.capture_max_mm:
                 return self._push_without_capture(now, progress)
-            if self.phase == "NC_PUSH" and progress >= self.actual_push_distance_mm:
+            push_done = False
+            if self.phase == "NC_PUSH":
+                push_done = (
+                    self._fixed_remaining() <= 0.0
+                    if self._fixed_enabled()
+                    else progress >= self.actual_push_distance_mm
+                )
+            if push_done:
                 return self._start_backoff(now)
             # None: この周期は未読取 / False: 範囲外 / True: 一回で成立。
             evidence = None
@@ -612,15 +824,11 @@ class RelativeAlignAndPush(AlignAndCatchTest):
                 abs(delta(self.angle_policy["push_bearing_deg"], bearing)) <= 1.0):
             self._push(now)
             return self._drive_forward(now, 0.0, bearing)
-        self.turn = ContinuousReturnTurn(
-            ("relative return after capture" if self.capture_assumed
-             else "relative return without capture confirmation"), self.context,
+        self.turn = ForwardReturnArc(
+            ("forward return after capture" if self.capture_assumed
+             else "forward return without capture confirmation"),
+            self,
             self.angle_policy["push_bearing_deg"],
-            max_power=self.push_settings.turn_power,
-            min_power=self.push_settings.turn_power,
-            pid_p=self.motion_settings.turn_pid_p,
-            pid_i=self.motion_settings.turn_pid_i,
-            pid_d=self.motion_settings.turn_pid_d, tolerance=1.0,
         )
         self.phase = "NC_TURN"
         self.capture_turn_performed = True
@@ -673,16 +881,11 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             return self._push(now)
         if gap <= 1.0:
             return self._push(now)
-        self.turn = SpinToBearing(
-            "relative return after capture",
-            self.context,
-            target,
-            max_power=push_settings.turn_power,
-            min_power=push_settings.turn_power,
-            pid_p=self.motion_settings.turn_pid_p,
-            pid_i=self.motion_settings.turn_pid_i,
-            pid_d=self.motion_settings.turn_pid_d,
-            tolerance=1.0,
+        self.turn = ForwardReturnArc(
+            ("forward return after capture" if self.capture_assumed
+             else "forward return without capture confirmation"),
+            self,
+            self.angle_policy["push_bearing_deg"],
         )
         self.phase = "NC_TURN"
         self.capture_turn_performed = True
@@ -724,6 +927,21 @@ class RelativeAlignAndPush(AlignAndCatchTest):
 
     def _drive_forward(self, now, progress, bearing):
         """方位はジャイロで補正し、走行中の角度ずれでは失敗しない。"""
+        if self.phase == "NC_PUSH" and self._fixed_enabled():
+            self._fixed_sample()
+            remaining = self._fixed_remaining()
+            if remaining <= 0.0:
+                return self._start_backoff(now)
+
+            # 残り200mmで基本出力から50へ徐々に下げる。
+            base = self.push_settings.power
+            floor = min(50, base)
+            self.drive.power = int(round(
+                floor + (base - floor) * min(1.0, remaining / 200.0)
+            ))
+            if self.drive.running:
+                limit = min(self.drive.power, 100 - self.drive.power)
+                self.drive.pid.output_limits = (-limit, limit)
         if progress < 0:
             return self._nc_fail("negative forward progress")
         if progress - self.progress_anchor >= self.catch_settings.stall_progress_mm:
