@@ -1420,7 +1420,7 @@ def _run_main(argv, startup_cleanup):
     )
     parser.add_argument('--pre-touch-gyro-drift', choices=['on', 'off'], default=None,
                         help=('2026-11-17: measure the gyro drift for the 3 s before the touch start and subtract it '
-                              'from the touch (LAP included since 2026-11-17 night). off = measure and log only. Default (unset) = on.'))
+                              'after the lap gate (not in LAP, 2026-11-18). off = measure and log only. Default (unset) = on.'))
     parser.add_argument('--rally-strategy', choices=['file', 'received', 'local'], default=None,
                         help=('ET rally plan source. file = the default plan file (robot_program/et_rally_default_plan.json), '
                               'received = from the PC, local = pick a precomputed plan on the robot from the hints it read '
