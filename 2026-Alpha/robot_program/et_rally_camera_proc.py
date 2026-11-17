@@ -147,6 +147,15 @@ _shared = None
 def shared(**kwargs):
     """ETラリーの間に使う1つの子プロセス。なければ kwargs で起動する。"""
     global _shared
+    if _shared is not None and not _shared.alive():
+        # 2026-11-18: 先に起動しておいた子(full では起動時)が、ETラリーの前に終わっていたら理由をログに出す
+        # (別のラズパイの full で子が終わりのコード0で落ちていて、理由が分からなかった)
+        try:
+            evs = [json.dumps(e)[:200] for e in _shared.poll()]
+            print(" -- ET rally camera process: the earlier one had exited (code %s) events: %s stderr: %s" % (
+                _shared.proc.poll(), " | ".join(evs) or "-", _shared.stderr_tail() or "-"), flush=True)
+        except Exception:
+            pass
     if _shared is None or not _shared.alive():
         _shared = CameraProcess(**kwargs)
     return _shared
