@@ -1405,7 +1405,7 @@ def _run_main(argv, startup_cleanup):
     )
     parser.add_argument('--pre-touch-gyro-drift', choices=['on', 'off'], default=None,
                         help=('2026-11-17: measure the gyro drift for the 3 s before the touch start and subtract it '
-                              'from the touch onward (all phases). off = measure and log only. Default (unset) = on.'))
+                              'after the lap gate (not during the LAP line trace). off = measure and log only. Default (unset) = on.'))
     parser.add_argument('--rally-gyro-drift-extra-sec', type=float, default=None,
                         help=('With --rally-gyro-drift-comp on: seconds to stay still and measure the drift '
                               'rate after the arm is up and has settled. Default (unset) = 2.'))

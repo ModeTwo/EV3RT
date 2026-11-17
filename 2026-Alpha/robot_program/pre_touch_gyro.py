@@ -4,7 +4,9 @@
 z軸の回転の速さの平均と、ハブの向き(小数)の変化の速さの2通りでずれを出してログに書く。待ち時間は増えない。
 結果は RESULT に残す。
 
-2026-11-17(ユーザー): 測ったずれをタッチの時点から差し引く(ENABLED、--pre-touch-gyro-drift off で切る)。
+2026-11-17(ユーザー): 測ったずれを差し引く(ENABLED、--pre-touch-gyro-drift off で切る)。LAP(ラップゲートまでの
+ライントレース)には入れず、ラップゲートのあとジャイロの倍率補正を有効にした時点(gyro_scale.ensure_scaled_gyro)から
+差し引き始める(その時点の向きは変えないので、つなぎ目で向きは跳ばない)。
 ジャイロの実物(GyroSensor)の get_angle を差し替えるので、alpha.py の g_gyro_sensor・plotter・runtime.gyro_sensor
 (ScaledGyro の中身)が同じ値を読む。reset() で差し引きの起点も今に戻す。ETラリーの四捨五入前の向き
 (EtRallyHeading がハブから直接読む)は drift_total() を引く。ETラリーの始めのずれの差し引き
@@ -36,7 +38,7 @@ _STOP = None
 
 
 def drift_total(now=None):
-    """タッチ(または最後の reset)から今までに差し引く量(度)。"""
+    """差し引き始め(ラップゲートのあと、または最後の reset)から今までに差し引く量(度)。"""
     if _T0 is None or RATE == 0.0:
         return 0.0
     now = time.monotonic() if now is None else now
@@ -52,10 +54,19 @@ def stop_at(t):
         _STOP = t
 
 
+def start_now():
+    """差し引きを今から始める(ラップゲートのあと、倍率補正を有効にしたときに gyro_scale から呼ぶ)。測っていなければ何もしない。"""
+    global _T0, _STOP
+    if RATE != 0.0 and _T0 is None:
+        _T0, _STOP = time.monotonic(), None
+        return True
+    return False
+
+
 def _install(sensor, rate, logger):
     global RATE, _T0, _STOP
     if getattr(sensor, "_pre_touch_patched", False):
-        RATE, _T0, _STOP = rate, time.monotonic(), None
+        RATE, _T0, _STOP = rate, None, None
         return
     orig_get = sensor.get_angle
     orig_reset = sensor.reset
@@ -72,7 +83,7 @@ def _install(sensor, rate, logger):
     sensor.get_angle = get_angle
     sensor.reset = reset
     sensor._pre_touch_patched = True
-    RATE, _T0, _STOP = rate, time.monotonic(), None
+    RATE, _T0, _STOP = rate, None, None   # 差し引き始めは start_now()(ラップゲートのあと)
 
 
 class PreTouchGyroDrift(Behaviour):
@@ -141,7 +152,7 @@ class PreTouchGyroDrift(Behaviour):
                 sensor = sensor._sensor
             try:
                 _install(sensor, -mean, self.logger)
-                how = "subtracted from now on"
+                how = "subtracted after the lap gate"
             except Exception as error:
                 how = "could not install (%s), not subtracted" % error
         # 符号: ずれの速さ = -(z軸の速さの平均)(et_rally_heading と同じ)。向きの変化の速さも同じ向きのはず
