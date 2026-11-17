@@ -1686,6 +1686,18 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument("--sumo-push-capture-max-mm", type=float, default=500.0)
     parser.add_argument("--sumo-push-power", type=int, default=80)
     parser.add_argument("--sumo-push-turn-power", type=int, default=50)
+    parser.add_argument(
+        "--sumo-line-anchor",
+        action="store_true",
+        help="2026-11-18: while pushing, re-anchor the push endpoint (and the axle pose handed to the rally turn) "
+             "on the LAP black line seen by the colour sensor. Without it the line is only logged (SUMO_LINE).",
+    )
+    parser.add_argument(
+        "--sumo-line-x-mm",
+        type=float,
+        default=None,
+        help="near edge of the LAP black line in the sumo frame (mm from the approach start). Default 1731 (read from the rule figure).",
+    )
     args = parser.parse_args(argv)
     _configure_full_lap_defaults(args.mission)
     if args.mission == "sumo-push-route-test" and not args.sumo_push_calibration:
@@ -1981,6 +1993,16 @@ def _run_main(argv, startup_cleanup):
         if not 1 <= args.rally_camera_exposure <= 5000:
             parser.error('--rally-camera-exposure must be between 1 and 5000')
         mission_config = dataclasses.replace(mission_config, et_rally_camera_exposure=args.rally_camera_exposure)
+    if args.sumo_line_anchor or args.sumo_line_x_mm is not None:
+        # 2026-11-18: 相撲の押し出しで LAP の黒線を使って押し終わりの位置を決め直す。
+        from robot_program.features.sumo_relative_push import RelativeAlignAndPush as _rp
+        if args.sumo_line_x_mm is not None:
+            if not 1600.0 <= args.sumo_line_x_mm <= 1900.0:
+                parser.error('--sumo-line-x-mm must be between 1600 and 1900')
+            _rp.LAP_LINE_NEAR_X_MM = float(args.sumo_line_x_mm)
+        _rp.LINE_ANCHOR = bool(args.sumo_line_anchor)
+        print(' -- sumo line anchor: %s line_x=%.1f' % (
+            'on' if _rp.LINE_ANCHOR else 'observe-only', _rp.LAP_LINE_NEAR_X_MM), flush=True)
     if args.rally_camera_calib is not None:
         # 2026-11-17: ロボットごとの較正。親(この工程)と、あとで起動するカメラの子プロセスの両方に効かせる。
         from robot_program import et_rally_start_pose as _sp

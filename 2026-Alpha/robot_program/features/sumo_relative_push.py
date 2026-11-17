@@ -158,6 +158,19 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     NC_PUSH: 押し出し / NC_BACK*: 押し・接近区間を逆順に戻る。
     FINALIZING: 親の録画終了処理。状態名・ログ形式は従来互換。"""
 
+    # 2026-11-18: 押している間に色センサーで LAP の黒線を見て、押し終わりの位置を決め直す。
+    # 相撲へ向かい始めた位置(SUMO_FIXED の原点)は前の工程でずれることがあるため。
+    # 黒線の見え方は常にログに出し(SUMO_LINE)、位置を直すのは LINE_ANCHOR(--sumo-line-anchor)のときだけ。
+    # LAP_LINE_NEAR_X_MM は規約の図(図 5-21、灰色の点の間隔 246mm で縮尺)から読んだ「土俵の奥の縁 1590 + 約141mm」
+    # = 黒線の手前の縁。±2〜3cm の誤差があるので、実測またはログの SUMO_LINE で詰める。
+    LINE_ANCHOR = False
+    LAP_LINE_NEAR_X_MM = 1731.0
+    LINE_SENSOR_FORWARD_MM = 38.0   # 色センサーは車軸の 38mm 前(sumo_rally_transition と同じ)
+    LINE_BLACK_MAX_V = 40           # 黒線は V≈13、白は約99。土俵の灰色の線を黒と取らないよう低めにする
+    LINE_CONFIRM = 2                # 続けて黒を見た回数
+    LINE_WINDOW_MM = 120.0          # 推定でこの範囲にセンサーがある間だけ探す
+    LINE_MAX_SHIFT_MM = 80.0        # これより大きく直す必要が出たら見間違いとして使わない
+
     def __init__(
         self,
         name,
@@ -248,6 +261,9 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.capture_candidate_progress = None
         self.nc_evidence = CaptureEvidence(self.push_settings)
         self.nc_outcome = None
+        self._line_count = 0
+        self._line_first = None
+        self._line_done = False
         runtime.require("sonar_sensor")
         super().initialise()
 
@@ -682,8 +698,56 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         )
         return Status.RUNNING
 
+    def _line_anchor_tick(self):
+        """押している間、色センサーで LAP の黒線の手前の縁を探し、見つけたら原点からの推定とのずれを出す。"""
+        if self._line_done or self.fixed_pose is None or self.approach_bearing is None:
+            return
+        x, y, counts, bearing = self.fixed_pose
+        angle = math.radians(delta(bearing, self.approach_bearing))
+        sensor_x = x + self.LINE_SENSOR_FORWARD_MM * math.cos(angle)
+        if abs(sensor_x - self.LAP_LINE_NEAR_X_MM) > self.LINE_WINDOW_MM:
+            self._line_count = 0
+            self._line_first = None
+            return
+        try:
+            h, s, v = runtime.color_sensor.get_raw_color_hsv()
+        except Exception as error:
+            self._line_done = True
+            self.logger.info("SUMO_LINE unavailable reason=%s" % error)
+            return
+        if v > self.LINE_BLACK_MAX_V:
+            self._line_count = 0
+            self._line_first = None
+            return
+        if self._line_count == 0:
+            self._line_first = (sensor_x, (h, s, v))
+        self._line_count += 1
+        if self._line_count < self.LINE_CONFIRM:
+            return
+        self._line_done = True
+        first_x, first_hsv = self._line_first
+        shift = self.LAP_LINE_NEAR_X_MM - first_x
+        applied = self.LINE_ANCHOR and abs(shift) <= self.LINE_MAX_SHIFT_MM
+        if applied:
+            # 見つけたあと進んだ分はそのまま残し、x だけを直す(y と向きはそのまま)。
+            self.fixed_pose = (x + shift, y, counts, bearing)
+        self.logger.info(
+            "SUMO_LINE seen sensor_x=%.1f expected=%.1f shift=%+.1f hsv=%s axle_x=%.1f->%.1f "
+            "bearing_off=%+.2f %s"
+            % (first_x, self.LAP_LINE_NEAR_X_MM, shift, first_hsv, x,
+               self.fixed_pose[0], math.degrees(angle),
+               "applied" if applied else (
+                   "rejected (shift too large)" if self.LINE_ANCHOR else "observe-only"))
+        )
+
     def _start_backoff(self, now):
         """押し出し完了後、同じ方位で150mm後退する。"""
+        if self._fixed_enabled() and not self._line_done:
+            self.logger.info(
+                "SUMO_LINE not_seen expected=%.1f axle_x=%.1f"
+                % (self.LAP_LINE_NEAR_X_MM,
+                   self.fixed_pose[0] if self.fixed_pose else float("nan"))
+            )
         if self._fixed_enabled():
             self._fixed_sample()
             self.fixed_push_end = self.fixed_pose[:2]
@@ -1032,6 +1096,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         """方位はジャイロで補正し、走行中の角度ずれでは失敗しない。"""
         if self.phase == "NC_PUSH" and self._fixed_enabled():
             self._fixed_sample()
+            self._line_anchor_tick()
             remaining = self._fixed_remaining()
             if remaining <= 0.0:
                 return self._start_backoff(now)
