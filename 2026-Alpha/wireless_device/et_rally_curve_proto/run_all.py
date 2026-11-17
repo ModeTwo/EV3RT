@@ -8,6 +8,7 @@
 - 作業者は常駐し、計画への変換と当たり判定はその中で行う(起動のたびの読み込みを省く)。道具の計算は別プロセス(時間切れあり)。
 - <鍵>.pick.json がある配置は飛ばす(止まっても続きから再開できる)。
 - 12本同時がこの PC(i5-1235U)で一番速かった(同じ12配置で 12本 158秒・6本 178秒・4本 205秒、11/16)。
+- 2026-11-17: ただしメモリ 8GB で、ほかのアプリが約6GB 使うと、道具1本 約0.6GB で 12本は入らない(スワップで止まった)。--workers で調整する。
 """
 import argparse
 import json
@@ -25,7 +26,9 @@ def _init():
     os.environ['PYTHONUTF8'] = '1'
     sys.path.insert(0, HERE)
     import run_layout
-    run_layout.INPROC = True
+    # 2026-11-17: 既定は作業者の中で計画・当たり判定をしない(作業者が道具を読み込んで約430MB 常駐し、12本でメモリ 8GB を
+    # 使い切ってスワップで計算がほぼ止まった)。RUN_ALL_INPROC=1 で前のやり方。
+    run_layout.INPROC = os.environ.get('RUN_ALL_INPROC', '0') == '1'
 
 
 def _job(args):
