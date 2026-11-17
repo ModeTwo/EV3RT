@@ -3,5 +3,6 @@
 (robot_program/et_rally_plan_select.py。探す順: ET_RALLY_PLANS_DIR → ここ → ~/et_rally_plans)。
 
 2026-11-17 版: ガレージの条件 横10cm・縦12cm(g1012)、往復をまとめる手直し(plan_tidy)入り。
-抜けて戻る通過の 7.2cm(pb72、235配置の作り直し)はまだ入っていない。
+同日夜: 抜けて逆向きに戻る通過は車体の端がゲートの線を 7.2cm 越える(pass_back_cm、それまで4.2cm)。
+その通り方をしていた235配置だけ作り直した(pb72)。
 作り方: wireless_device/et_rally_curve_proto/export_plans.py <計算結果のフォルダ> --out <出力フォルダ>
