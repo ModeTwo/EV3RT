@@ -1562,6 +1562,27 @@ def _run_main(argv, startup_cleanup):
                         help=('While standing still at the ET rally start, measure the position and heading with the camera '
                               '(markers and gray dots) and use them for the first segment: the heading offset goes into the gyro, '
                               'a position offset re-plans the first connection (default off).'))
+    parser.add_argument('--rally-blue-stop-extra-mm', type=float, default=None,
+                        help='2026-11-18: stop this much further at the blue circle (colour-sensor stop). Default 0.')
+    parser.add_argument('--rally-blue-aim-left-mm', type=float, default=None,
+                        help='2026-11-18: aim this many mm to the left of the blue circle centre seen by the camera. Default 0.')
+    parser.add_argument('--rally-blue-drive-pid', type=str, default=None,
+                        help='2026-11-18: heading PID "P,I,D" for the drive to the blue circle (default: the sumo drive 1.1,0.1,0.03).')
+    parser.add_argument('--rally-blue-align-encoder', action='store_true',
+                        help='2026-11-18: turn toward the blue circle seen by the camera with the encoder spin (as in the bottle delivery).')
+    parser.add_argument('--rally-blue-exit-settle', action='store_true',
+                        help=('2026-11-18: after the blue circle, turn to the rally direction with the predictive brake, wait '
+                              'until stopped and trim if the heading is off by more than 0.5 deg (log BLUE_EXIT_SETTLE).'))
+    parser.add_argument('--sumo-green-avoid', action='store_true',
+                        help=('2026-11-18: after the push, if the turn toward the blue circle is predicted to put a body corner '
+                              'over the green beside the ring (log SUMO_SWEEP), first back away on an arc turning the same way.'))
+    parser.add_argument('--sumo-green-ring-offset-mm', type=float, default=None,
+                        help='2026-11-18: ring center offset toward the green from the push line y=0 (default 36).')
+    parser.add_argument('--sumo-green-arc-radius-mm', type=float, default=None,
+                        help='2026-11-18: radius of the reverse arc of --sumo-green-avoid (default 300).')
+    parser.add_argument('--rally-stop-before-drive', action='store_true',
+                        help=('2026-11-18 test: with --mission bottle-sumo, continue into the ET rally start (arm, gyro '
+                              're-measure, start pose by camera, plan) and stop just before driving.'))
     parser.add_argument('--rally-arm-while-driving', choices=['on', 'off'], default=None,
                         help=('Raise the arm while driving when the plan file says the arm can be up before the legs are '
                               'reached (et_rally_arm.must_be_up_sec >= --rally-arm-up-sec + 0.5); otherwise raise it at the '
@@ -1691,6 +1712,24 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument("--sumo-push-capture-max-mm", type=float, default=500.0)
     parser.add_argument("--sumo-push-power", type=int, default=80)
     parser.add_argument("--sumo-push-turn-power", type=int, default=50)
+    parser.add_argument(
+        "--sumo-line-anchor",
+        action="store_true",
+        help="2026-11-18: while pushing, re-anchor the push endpoint (and the axle pose handed to the rally turn) "
+             "on the LAP black line seen by the colour sensor. Without it the line is only logged (SUMO_LINE).",
+    )
+    parser.add_argument(
+        "--sumo-line-x-mm",
+        type=float,
+        default=None,
+        help="near edge of the LAP black line in the sumo frame (mm from the approach start). Default 1726 (measured 136mm beyond the ring).",
+    )
+    parser.add_argument(
+        "--sumo-push-clearance-mm",
+        type=float,
+        default=None,
+        help="push until the bottle's near edge is this far beyond the ring's far edge (default 300 = green strip edge at 304).",
+    )
     args = parser.parse_args(argv)
     _configure_full_lap_defaults(args.mission)
     if args.mission == "sumo-push-route-test" and not args.sumo_push_calibration:
@@ -1953,6 +1992,54 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-arm-up-before-touch requires --mission rally-drive')
         mission_config = dataclasses.replace(
             mission_config, et_rally_arm_up_before_touch=(args.rally_arm_up_before_touch == 'on'))
+    if args.rally_blue_stop_extra_mm is not None:
+        if not -50.0 <= args.rally_blue_stop_extra_mm <= 60.0:
+            parser.error('--rally-blue-stop-extra-mm must be between -50 and 60')
+        from robot_program.features.sumo_rally_transition import StableBlueArrival as _sba
+        _sba.EXTRA_MM = float(args.rally_blue_stop_extra_mm)
+        print(' -- blue circle stop extra: %+.1f mm' % _sba.EXTRA_MM, flush=True)
+    if args.rally_blue_aim_left_mm is not None:
+        if not -60.0 <= args.rally_blue_aim_left_mm <= 60.0:
+            parser.error('--rally-blue-aim-left-mm must be between -60 and 60')
+        from robot_program.features.sumo_rally_transition import MoveToRallyBlue as _mtb
+        _mtb.AIM_LEFT_MM = float(args.rally_blue_aim_left_mm)
+        print(' -- blue circle aim: %+.1f mm to the left' % _mtb.AIM_LEFT_MM, flush=True)
+    if args.rally_blue_drive_pid is not None:
+        try:
+            _pid = tuple(float(v) for v in args.rally_blue_drive_pid.split(','))
+            if len(_pid) != 3 or not all(0.0 <= v <= 20.0 for v in _pid):
+                raise ValueError
+        except ValueError:
+            parser.error('--rally-blue-drive-pid must be "P,I,D" with values 0..20')
+        from robot_program.features.sumo_rally_transition import MoveToRallyBlue as _mtb2
+        _mtb2.DRIVE_PID = _pid
+        print(' -- blue circle drive PID: P=%.2f I=%.2f D=%.3f' % _pid, flush=True)
+    if args.rally_blue_align_encoder:
+        from robot_program.features.sumo_rally_transition import MoveToRallyBlue as _mtb3
+        _mtb3.ALIGN_ENCODER = True
+        print(' -- blue circle alignment turn: encoder spin', flush=True)
+    if args.rally_blue_exit_settle:
+        from robot_program.features.sumo_rally_transition import TurnAfterBlue as _tab
+        _tab.EXIT_SETTLE = True
+        print(' -- blue exit turn: settle and trim on', flush=True)
+    if args.sumo_green_avoid or args.sumo_green_ring_offset_mm is not None or args.sumo_green_arc_radius_mm is not None:
+        from robot_program.features.sumo_rally_transition import TurnTowardRallyStart as _ttr
+        if args.sumo_green_avoid:
+            _ttr.GREEN_AVOID = True
+        if args.sumo_green_ring_offset_mm is not None:
+            if not -200.0 <= args.sumo_green_ring_offset_mm <= 200.0:
+                parser.error('--sumo-green-ring-offset-mm must be -200..200')
+            _ttr.GREEN_RING_OFFSET_MM = args.sumo_green_ring_offset_mm
+        if args.sumo_green_arc_radius_mm is not None:
+            if not 150.0 <= args.sumo_green_arc_radius_mm <= 800.0:
+                parser.error('--sumo-green-arc-radius-mm must be 150..800')
+            _ttr.GREEN_ARC_RADIUS_MM = args.sumo_green_arc_radius_mm
+        print(' -- sumo green: avoid=%s ring_offset=%.0f arc_radius=%.0f'
+              % (_ttr.GREEN_AVOID, _ttr.GREEN_RING_OFFSET_MM, _ttr.GREEN_ARC_RADIUS_MM), flush=True)
+    if args.rally_stop_before_drive:
+        if mission_config.mission_mode != 'bottle-sumo':
+            parser.error('--rally-stop-before-drive requires --mission bottle-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_stop_before_drive=True)
     if args.rally_start_pose is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS + ('full',):
             parser.error('--rally-start-pose requires --mission rally-drive, bottle-rally, rally-sumo or full')
@@ -1975,8 +2062,11 @@ def _run_main(argv, startup_cleanup):
         mission_config = dataclasses.replace(mission_config,
                                              et_rally_camera_handover_test=(args.rally_camera_handover_test == 'on'))
     if args.rally_camera_log is not None:
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-            parser.error('--rally-camera-log requires --mission rally-drive, bottle-rally or rally-sumo')
+        # 2026-11-18: bottle-sumo + --rally-stop-before-drive でも使える(スタートの画像が数枚残る。測れなかった回の原因を見るため)
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS and not (
+                mission_config.mission_mode == 'bottle-sumo' and mission_config.et_rally_stop_before_drive):
+            parser.error('--rally-camera-log requires --mission rally-drive, bottle-rally or rally-sumo '
+                         '(or bottle-sumo with --rally-stop-before-drive)')
         if not 1 <= args.rally_camera_log <= 30:
             parser.error('--rally-camera-log must be between 1 and 30')
         mission_config = dataclasses.replace(mission_config, et_rally_camera_log_every=args.rally_camera_log)
@@ -1986,6 +2076,23 @@ def _run_main(argv, startup_cleanup):
         if not 1 <= args.rally_camera_exposure <= 5000:
             parser.error('--rally-camera-exposure must be between 1 and 5000')
         mission_config = dataclasses.replace(mission_config, et_rally_camera_exposure=args.rally_camera_exposure)
+    if args.sumo_push_clearance_mm is not None:
+        # 2026-11-18: ボトルの手前側の縁を土俵の奥の縁からこの距離まで押す(従来 300 = 緑の帯の縁 304mm)
+        if not 80.0 <= args.sumo_push_clearance_mm <= 300.0:
+            parser.error('--sumo-push-clearance-mm must be between 80 and 300')
+        from robot_program.features.sumo_relative_push import RelativeAlignAndPush as _rpc
+        _rpc.PUSH_CLEARANCE_MM = float(args.sumo_push_clearance_mm)
+        print(' -- sumo push clearance: %.1f mm beyond the ring' % _rpc.PUSH_CLEARANCE_MM, flush=True)
+    if args.sumo_line_anchor or args.sumo_line_x_mm is not None:
+        # 2026-11-18: 相撲の押し出しで LAP の黒線を使って押し終わりの位置を決め直す。
+        from robot_program.features.sumo_relative_push import RelativeAlignAndPush as _rp
+        if args.sumo_line_x_mm is not None:
+            if not 1600.0 <= args.sumo_line_x_mm <= 1900.0:
+                parser.error('--sumo-line-x-mm must be between 1600 and 1900')
+            _rp.LAP_LINE_NEAR_X_MM = float(args.sumo_line_x_mm)
+        _rp.LINE_ANCHOR = bool(args.sumo_line_anchor)
+        print(' -- sumo line anchor: %s line_x=%.1f' % (
+            'on' if _rp.LINE_ANCHOR else 'observe-only', _rp.LAP_LINE_NEAR_X_MM), flush=True)
     if args.rally_camera_calib is not None:
         # 2026-11-17: ロボットごとの較正。親(この工程)と、あとで起動するカメラの子プロセスの両方に効かせる。
         from robot_program import et_rally_start_pose as _sp

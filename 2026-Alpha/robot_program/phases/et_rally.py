@@ -152,9 +152,17 @@ def build_et_rally_phase(context, config):
     # (PC から丸ごと届く・ロボットが選ぶ・ガレージだけ)はファイルの計画と同じくラリー開始の向きが0°。旧い形の受信SEQ
     # (競技スタート基準)は、読み込むときに同じだけずらす(execute_strategy.build_execute_strategy)。
     full_file = config.mission_mode == "full" and config.et_rally_strategy_source in ("file", "received", "local")
-    install_heading = full_file or float_heading or drift_compensation or scale_neg is not None or scale_pos is not None
+    # 2026-11-18: bottle-sumo のあとに付けた試験(--rally-stop-before-drive)。ジャイロのリセットは配置ラインなので
+    # full の式は使えない。青い丸のあとラリーの向きへ向き直った今の向きを計画の0°とみなす(向きのずれはスタートの
+    # 取り込みのカメラが測る。走り出さないので走りには効かない)。
+    after_sumo_test = (config.mission_mode == "bottle-sumo"
+                       and bool(getattr(config, "et_rally_stop_before_drive", None)))
+    install_heading = (full_file or after_sumo_test or float_heading or drift_compensation
+                       or scale_neg is not None or scale_pos is not None)
 
     def full_file_plan_origin():
+        if after_sumo_test:
+            return runtime.gyro_sensor.get_angle()
         # 青丸での正対目標は、競技スタートから右コースが+90°、左が-90°。
         # ツリー構築後に記録されるリセット値を、ラリー開始時に参照する。
         return context.sumo.bearing_reference.reset_gyro_deg - runtime.course * 90.0
@@ -173,7 +181,8 @@ def build_et_rally_phase(context, config):
         children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
     if install_heading:
         children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation, scale_neg,
-                                              scale_pos, plan_origin=full_file_plan_origin if full_file else None))
+                                              scale_pos, plan_origin=(full_file_plan_origin if (full_file or after_sumo_test)
+                                                                      else None)))
     # 2026-11-10: カメラ(スタートの取り込み・走行中の画像)は子プロセスで動かす。開くのに時間がかかるので最初に起動する。
     camera_log_every = getattr(config, "et_rally_camera_log_every", None)
     use_start_pose = bool(getattr(config, "et_rally_start_pose", None))
@@ -290,6 +299,22 @@ def build_et_rally_phase(context, config):
     if camera_log_every:
         children.append(EtRallyCameraLogStart("et_rally camera log", every_n=camera_log_every,
                                               exposure=getattr(config, "et_rally_camera_exposure", None)))
+    if getattr(config, "et_rally_stop_before_drive", None):
+        # 2026-11-18: 試験用。ここ(スタートの取り込み・計画の読み込みのあと、走り出す直前)で止まる。
+        children.append(StopNow(name="et_rally stop before drive (test)"))
+        if camera_log_every or camera_correct:
+            children.append(EtRallyCameraLogStop("et_rally camera log stop"))
+        if track_course:
+            children.append(EtRallyReleaseCoursePose("et_rally course pose release"))
+        children.append(SetTireDiameter("et_rally tire diameter restore", TIRE_DIAMETER))
+        if carry_integral:
+            children.append(SetMoveCarryIntegral("et_rally move carry integral off", False))
+        if move_tuning:
+            children.append(SetMoveTuning("et_rally move tuning off", False, None))
+        if install_heading:
+            children.append(RestoreEtRallyHeading("et_rally heading restore"))
+        root.add_children(children)
+        return root
     children.append(EtRallyBatteryLog("et_rally battery drive start", "start"))
     execute = build_execute_strategy(context, config)
     if camera_correct and track_course:

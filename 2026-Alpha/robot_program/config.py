@@ -297,6 +297,9 @@ class RaceConfig:
     # 既定None=しない。測る秒数(Noneなら2秒)、位置のずれがこのmm以上なら最初のつなぎを引き直す(Noneなら5mm、
     # それより小さければ最初の区間の自分の位置に入れる)、カメラの較正ファイル(Noneなら calib_1111.json)。
     et_rally_start_pose: Optional[bool] = None
+    # 2026-11-18: 試験用。ETラリーの頭(アーム・ジャイロの測り直し・スタートの取り込み・計画の読み込み)まで進めて、
+    # 走り出す直前で止まる(--rally-stop-before-drive。bottle-sumo のあとに付けて、相撲→青い丸→ラリーの受け渡しを見る)。
+    et_rally_stop_before_drive: Optional[bool] = None
     et_rally_start_pose_sec: Optional[float] = None
     et_rally_start_pose_rejoin_min_mm: Optional[float] = None
     et_rally_camera_calib_path: Optional[str] = None
