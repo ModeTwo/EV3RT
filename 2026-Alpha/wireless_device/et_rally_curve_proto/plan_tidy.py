@@ -98,7 +98,9 @@ def merge_back_and_forth(steps, max_back_mm=200.0, max_dh=3.0):
                 # 真ん中の区間で動いた分(横の小さな寄せも含む)を足した終わりの位置へ、まっすぐ1本で行く
                 # (向きを少しだけ変える)。終わりの位置は元と同じになる(横の寄せを捨てると周ごとにたまる)。
                 nxt = _straight_to_same_end(steps[i + 1:j], steps[j])
-                out.append(s)
+                # もとの計画では、この直進のあと向きを切り替えるので「止まる」(stop)が付いている。続けて走るので外す
+                # (11/17 実機: 付いたままで、黄と赤の間で減速して止まっていた)。
+                out.append(dict(s, stop=False))
                 out.extend(nxt)
                 merged += 1
                 i = j + 1
