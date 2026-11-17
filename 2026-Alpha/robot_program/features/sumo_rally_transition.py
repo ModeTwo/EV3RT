@@ -395,8 +395,22 @@ class MoveToRallyBlue(Behaviour):
             motion = self.config.sumo
             power = 50  # 青い丸への補正旋回専用
 
+            # 2026-11-17(devSS の応急処置、相撲の改良版が来るまで): 残りの修正が補正旋回の許容幅(2°)以下なら、
+            # 旋回しても動かない(spin ... samples=0)ので、合っているとみなして前進する。ロボットA・Cとも、カメラの左右の
+            # 向きの個体差で青い丸が真ん中から15画素前後ずれて見え、約2°の修正を3回繰り返して失敗し、ETラリーへ
+            # つながらなかった。また回数の上限に達したときも、失敗にせず今の向きで前進する(ETラリーへつなぐ)。
+            if abs(correction) <= 2.0:
+                self.logger.info(
+                    "RALLY_BLUE SMALL correction=%.2f <= spin tolerance 2.0, driving as aligned" % correction
+                )
+                self._start_drive()
+                return Status.RUNNING
             if self.blue_alignment_turns >= 3:
-                return self._fail("blue alignment correction limit")
+                self.logger.warning(
+                    "RALLY_BLUE correction limit reached (correction=%.2f), driving with the current heading" % correction
+                )
+                self._start_drive()
+                return Status.RUNNING
             self.blue_alignment_turns += 1
             self.turn = SpinToBearing(
                 "rally blue alignment",
