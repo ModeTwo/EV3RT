@@ -295,6 +295,13 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             y + distance * math.sin(angle),
             counts, bearing,
         )
+        # RALLY_AXLE_POSE_EXPORT
+        reference = getattr(self.context.sumo, "rally_turn_reference", None)
+        if isinstance(reference, dict) and reference.get("course") == runtime.course:
+            reference["axle_pose"] = dict(
+                x=self.fixed_pose[0], y=self.fixed_pose[1],
+                left=counts[0], right=counts[1], bearing=bearing,
+            )
 
     def _fixed_remaining(self):
         pose = getattr(self, "fixed_pose", None)
@@ -316,8 +323,17 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     def _start_drive(self, now):
         # 最初の直進で指示する絶対目標を床面方位に変換して保持する。
         # 開始時の実姿勢ではなく、直進に使用する目標そのものを基準にする。
-        # 方位はSumoPushSequence開始時に確定する。ここで再設定しない。
+        # 配送後の接近方位は開始時にコースの符号をそろえる。
         # bottle-sumo: LEFTの右側、RIGHTの左側は共に床面方位180度。
+        # BOTTLE_APPROACH_OFFSET_FIXED
+        if self.continuous_entry and getattr(self, "delivery_green_on_right", False):
+            if runtime.course not in (-1, 1):
+                raise ValueError("unsupported course for bottle approach")
+            self.approach_offset_from_reset_deg = -90.0 * runtime.course
+            self.logger.info(
+                "SUMO_ALIGN APPROACH_REFERENCE course=%s raw_offset=%.1f"
+                % (runtime.course, self.approach_offset_from_reset_deg)
+            )
         if getattr(self, "delivery_green_on_right", False):
             from dataclasses import replace
             self.push_settings = replace(
@@ -684,7 +700,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.push_leg_mm = max(0.0, self._forward_mm_from(self.push_encoder_origin))
 
         # 押し出し距離に関係なく150mm後退する
-        self.back_target_mm = 100.0
+        self.back_target_mm = 120.0
         self.back_left_origin = float(runtime.left_motor.get_count())
         self.back_right_origin = float(runtime.right_motor.get_count())
         self.back_heading = current_bearing(self.context)

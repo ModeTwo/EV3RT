@@ -23,6 +23,63 @@ class TurnTowardRallyStart(Behaviour):
     def initialise(self):
         self.turn = None
 
+    def _target_from_axle_pose(self, reference, start_bearing):
+        import math
+        pose = reference.get("axle_pose")
+        if pose is None:
+            self.logger.info(
+                "RALLY_TURN GEOMETRY_FALLBACK reason=no-axle-pose"
+            )
+            return None
+        try:
+            x, y = float(pose["x"]), float(pose["y"])
+            approach = float(reference["approach_bearing"])
+            old_bearing = float(pose["bearing"])
+            old_left = float(pose["left"])
+            old_right = float(pose["right"])
+            left = float(runtime.left_motor.get_count())
+            right = float(runtime.right_motor.get_count())
+            diameter = float(runtime.plotter.tire_diameter)
+            values = (
+                x, y, approach, old_bearing, old_left, old_right,
+                left, right, diameter, start_bearing,
+            )
+            if not all(math.isfinite(v) for v in values) or diameter <= 0:
+                raise ValueError("invalid pose/encoder")
+
+            # 最終計測後の制動中の移動も反映する。
+            distance = (
+                math.pi * diameter
+                * ((left-old_left)+(right-old_right)) / 720.0
+            )
+            if abs(distance) > 100.0:
+                raise ValueError("encoder discontinuity")
+            change = (start_bearing-old_bearing+180.0) % 360.0 - 180.0
+            angle = math.radians(old_bearing + change/2.0 - approach)
+            x += distance * math.cos(angle)
+            y += distance * math.sin(angle)
+
+            # 横方向は進行方向の右が正。LEFTは左、RIGHTは右。
+            blue_x = 1170.0
+            blue_y = -runtime.course * blue_x * math.tan(math.radians(14.0))
+            dx, dy = blue_x-x, blue_y-y
+            if math.hypot(dx, dy) < 1.0:
+                raise ValueError("axle already at blue center")
+            target = (
+                approach + math.degrees(math.atan2(dy, dx))
+            ) % 360.0
+            self.logger.info(
+                "RALLY_TURN GEOMETRY axle=(%.1f,%.1f) "
+                "blue=(%.1f,%.1f) target=%.2f"
+                % (x, y, blue_x, blue_y, target)
+            )
+            return target
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            self.logger.info(
+                "RALLY_TURN GEOMETRY_FALLBACK reason=%s" % exc
+            )
+            return None
+
     def update(self):
         if self.turn is None:
             import math
@@ -37,6 +94,9 @@ class TurnTowardRallyStart(Behaviour):
                 if not math.isfinite(approach):
                     return Status.FAILURE
                 target = (approach + runtime.course * 215.0) % 360.0
+                computed = self._target_from_axle_pose(reference, start_bearing)
+                if computed is not None:
+                    target = computed
                 # 従来と同じ旋回方向を保つ。最短方向には切り替えない。
                 signed_angle = (target - start_bearing) % 360.0
                 if runtime.course == -1:
@@ -635,7 +695,13 @@ class MoveToRallyBlue(Behaviour):
             power = 50  # 青い丸への補正旋回専用
 
             if self.blue_alignment_turns >= 3:
-                return self._fail("blue alignment correction limit")
+                self.logger.info(
+                    "RALLY_BLUE CORRECTION_LIMIT_CONTINUE corrections=%d "
+                    "error_px=%.2f aligned=False"
+                    % (self.blue_alignment_turns, error_px)
+                )
+                self._start_drive()
+                return Status.RUNNING
             self.blue_alignment_turns += 1
             if (self.blue_previous_error is not None
                     and self.blue_previous_error * error_px < 0.0):

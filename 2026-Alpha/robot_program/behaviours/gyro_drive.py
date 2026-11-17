@@ -221,6 +221,9 @@ class RunByGyro(Behaviour):
         super().__init__(name)
         self.target = target
         self.target_type = target_type
+        # MOTOR_POWER_BOUNDS_100
+        if not math.isfinite(power) or not -100 <= power <= 100:
+            raise ValueError("power must be finite and within -100..100")
         self.power = power
         self.pid_p = pid_p
         self.pid_i = pid_i
@@ -256,7 +259,7 @@ class RunByGyro(Behaviour):
                 raise ValueError('distance_limit_mm must be positive and finite')
             if not math.isfinite(completion_min_mm) or not 0 <= completion_min_mm < distance_limit_mm:
                 raise ValueError('completion window must be within distance_limit_mm')
-            if not isinstance(power, int) or not 1 <= power <= 400:
+            if not isinstance(power, int) or not 1 <= power <= 100:
                 raise ValueError('power must be an integer from 1 to 100')
             if any(not math.isfinite(gain) for gain in (pid_p, pid_i, pid_d)):
                 raise ValueError('PID gains must be finite')
@@ -292,7 +295,10 @@ class RunByGyro(Behaviour):
                 setpoint=self.target_heading,
                 sample_time=EXEC_INTERVAL,
                 # abs()により、power<0(後退)でもmin<=maxを保った有効な範囲になる。
-                output_limits=(-abs(self.power), abs(self.power)),
+                output_limits=(
+                    -min(abs(self.power), 100 - abs(self.power)),
+                    min(abs(self.power), 100 - abs(self.power)),
+                ),
             )
             self.logger.info(
                 "%+06d %s.gyro run started at heading=%.1f requested=%.1f resolved=%.1f delta=%.1f"
@@ -307,9 +313,11 @@ class RunByGyro(Behaviour):
             )
             self.running = True
 
-        turn = int(self.pid(current_heading))
-        right_power = self.power + runtime.course * turn
-        left_power = self.power - runtime.course * turn
+        turn_limit = min(abs(self.power), 100 - abs(self.power))
+        self.pid.output_limits = (-turn_limit, turn_limit)
+        turn = int(max(-turn_limit, min(turn_limit, self.pid(current_heading))))
+        right_power = max(-100, min(100, self.power + runtime.course * turn))
+        left_power = max(-100, min(100, self.power - runtime.course * turn))
         runtime.right_motor.set_power(right_power)
         runtime.left_motor.set_power(left_power)
         log_power_state(self.__class__.__name__, right_power, left_power)
@@ -368,7 +376,7 @@ class RunByGyro(Behaviour):
         correction = (self.path_tracker.correction(progress, actual_heading, self.target)
                       if self.path_tracker is not None else 0.0)
         self.target_heading = nominal_heading + correction
-        turn_limit = min(self.power, 400-self.power)
+        turn_limit = min(self.power, 400 - self.power)
         feedforward = curvature_turn(self.target, progress, self.power,
                                      self.wheel_tread_mm, self.feedforward_gain)
         feedforward = max(-turn_limit, min(turn_limit, feedforward))
