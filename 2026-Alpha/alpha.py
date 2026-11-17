@@ -1568,6 +1568,13 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument('--rally-blue-exit-settle', action='store_true',
                         help=('2026-11-18: after the blue circle, turn to the rally direction with the predictive brake, wait '
                               'until stopped and trim if the heading is off by more than 0.5 deg (log BLUE_EXIT_SETTLE).'))
+    parser.add_argument('--sumo-green-avoid', action='store_true',
+                        help=('2026-11-18: after the push, if the turn toward the blue circle is predicted to put a body corner '
+                              'over the green beside the ring (log SUMO_SWEEP), first back away on an arc turning the same way.'))
+    parser.add_argument('--sumo-green-ring-offset-mm', type=float, default=None,
+                        help='2026-11-18: ring center offset toward the green from the push line y=0 (default 36).')
+    parser.add_argument('--sumo-green-arc-radius-mm', type=float, default=None,
+                        help='2026-11-18: radius of the reverse arc of --sumo-green-avoid (default 300).')
     parser.add_argument('--rally-stop-before-drive', action='store_true',
                         help=('2026-11-18 test: with --mission bottle-sumo, continue into the ET rally start (arm, gyro '
                               're-measure, start pose by camera, plan) and stop just before driving.'))
@@ -2010,6 +2017,20 @@ def _run_main(argv, startup_cleanup):
         from robot_program.features.sumo_rally_transition import TurnAfterBlue as _tab
         _tab.EXIT_SETTLE = True
         print(' -- blue exit turn: settle and trim on', flush=True)
+    if args.sumo_green_avoid or args.sumo_green_ring_offset_mm is not None or args.sumo_green_arc_radius_mm is not None:
+        from robot_program.features.sumo_rally_transition import TurnTowardRallyStart as _ttr
+        if args.sumo_green_avoid:
+            _ttr.GREEN_AVOID = True
+        if args.sumo_green_ring_offset_mm is not None:
+            if not -200.0 <= args.sumo_green_ring_offset_mm <= 200.0:
+                parser.error('--sumo-green-ring-offset-mm must be -200..200')
+            _ttr.GREEN_RING_OFFSET_MM = args.sumo_green_ring_offset_mm
+        if args.sumo_green_arc_radius_mm is not None:
+            if not 150.0 <= args.sumo_green_arc_radius_mm <= 800.0:
+                parser.error('--sumo-green-arc-radius-mm must be 150..800')
+            _ttr.GREEN_ARC_RADIUS_MM = args.sumo_green_arc_radius_mm
+        print(' -- sumo green: avoid=%s ring_offset=%.0f arc_radius=%.0f'
+              % (_ttr.GREEN_AVOID, _ttr.GREEN_RING_OFFSET_MM, _ttr.GREEN_ARC_RADIUS_MM), flush=True)
     if args.rally_stop_before_drive:
         if mission_config.mission_mode != 'bottle-sumo':
             parser.error('--rally-stop-before-drive requires --mission bottle-sumo')
