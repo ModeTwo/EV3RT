@@ -406,6 +406,8 @@ class Video(object):
             if self._vision_sessions.publish_qr(session, frame_id, text):
                 with self._result_lock:
                     self._detected_corners = corners
+                    # 2026-11-17(devSS): QRの位置が見つかった時刻(読めなくても)。to_hint_route がQRの写りの大きさで止まるのに使う
+                    self._detected_corners_at = time.monotonic() if corners is not None else None
                     if text:
                         self._detected_text = text
                         self._last_decode_time = time.time()
@@ -421,14 +423,23 @@ class Video(object):
         if corners is not None:
             st['located'] += 1
         if text:
-            print("QR_STATS session=%s decoded after %.1fs attempts=%d located=%d" % (
-                session, now - st['t0'], st['n'], st['located']))
+            width = ""
+            if corners is not None:
+                (x0, y0), (x1, y1) = corners[0], corners[1]
+                width = " width=%.0fpx" % math.hypot(x1 - x0, y1 - y0)
+            print("QR_STATS session=%s decoded after %.1fs attempts=%d located=%d%s" % (
+                session, now - st['t0'], st['n'], st['located'], width))
             st['t0'] = float('inf')
             return
         if now - st['last_log'] >= 2.0:
             st['last_log'] = now
-            print("QR_STATS session=%s waiting %.1fs attempts=%d located=%d frame=%s" % (
-                session, now - st['t0'], st['n'], st['located'], frame_id))
+            # 2026-11-17: 位置が見つかったときは、QRの写りの幅(1920幅の画素)も出す(読める距離を調べるため)
+            width = ""
+            if corners is not None:
+                (x0, y0), (x1, y1) = corners[0], corners[1]
+                width = " width=%.0fpx" % math.hypot(x1 - x0, y1 - y0)
+            print("QR_STATS session=%s waiting %.1fs attempts=%d located=%d frame=%s%s" % (
+                session, now - st['t0'], st['n'], st['located'], frame_id, width))
         marks = (3.0, 8.0, 15.0)
         if st['saved'] < len(marks) and now - st['t0'] >= marks[st['saved']]:
             st['saved'] += 1
@@ -1386,6 +1397,16 @@ class Video(object):
     def require_qr_decoder(self):
         if zxingcpp is None:
             raise RuntimeError('zxingcpp is required for the Hint1/Hint2 mission')
+
+    def get_qr_located(self):
+        """2026-11-17(devSS): 最後にQRの位置が見つかった画像での (左上→右上の幅 画素(1920幅), 何秒前)。なければ None。"""
+        with self._result_lock:
+            corners = self._detected_corners
+            at = getattr(self, '_detected_corners_at', None)
+        if corners is None or at is None:
+            return None
+        (x0, y0), (x1, y1) = corners[0], corners[1]
+        return math.hypot(x1 - x0, y1 - y0), time.monotonic() - at
 
     def request_focus(self, value):
         """2026-11-17(devSS): カメラのピント。None で自動(連続オートフォーカス)、数値(0〜255)で手動のその値。
