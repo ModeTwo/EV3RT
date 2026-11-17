@@ -105,12 +105,20 @@ class ForwardReturnArc(Behaviour):
             )
             return Status.SUCCESS
 
-        if now - self.started_at > self.TIMEOUT_SEC:
-            return self._fail("timeout")
-        if distance >= self.MAX_DISTANCE_MM or distance < -2.0:
-            return self._fail("distance bound")
-        if now - self.started_at > 0.6 and distance < 2.0:
+        elapsed = now - self.started_at
+        if distance < -2.0:
+            return self._fail("reverse distance bound")
+        if elapsed > 0.6 and distance < 2.0:
             return self._fail("no forward progress")
+        if distance >= self.MAX_DISTANCE_MM or elapsed > self.TIMEOUT_SEC:
+            reason = "distance" if distance >= self.MAX_DISTANCE_MM else "time"
+            self.logger.info(
+                "SUMO_RETURN_ARC LIMIT_HANDOFF reason=%s distance=%.1f "
+                "bearing=%.2f remaining_error=%.2f aligned=False"
+                % (reason, distance, bearing, error)
+            )
+            # 補正を終了し、現在の方位で押し出しへ渡す。
+            return Status.SUCCESS
 
         extra = int(round(
             min(25.0, max(12.0, 1.5 * abs(error)))
@@ -167,6 +175,54 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         super().__init__(name, context, settings, motion_settings, catch_settings)
         self.push_settings = push_settings
         self.execute = execute
+
+    def _fail(self, reason):
+        recoverable = (
+            "alignment turn failed",
+            "alignment turn timeout",
+            "alignment turn limit reached without alignment",
+            "fine alignment timeout; approach inhibited",
+        )
+        if (
+            reason in recoverable
+            and not self.catch_started
+            and self.phase != "FINALIZING"
+        ):
+            return self._continue_after_alignment_failure(reason)
+        self._black_fine_started = None
+        return super()._fail(reason)
+
+    def _continue_after_alignment_failure(self, reason):
+        self._stop_child("turn")
+        self._stop_child("drive")
+        self._brake()
+        self._black_fine_started = None
+
+        if (
+            self.selected_track_id is None
+            or self.selected_capture_at is None
+            or self.selected_frame_id is None
+        ):
+            return super()._fail(
+                "missing bottle evidence for alignment continuation"
+            )
+
+        bearing = current_bearing(self.context)
+        gyro = float(runtime.gyro_sensor.get_angle())
+        if not all(math.isfinite(v) for v in (bearing, gyro)):
+            return super()._fail(
+                "invalid alignment continuation pose"
+            )
+
+        self.context.sumo.bottle_aligned = False
+        self.observation_decision = "alignment-incomplete-continue"
+        self.catch_started = True
+        self.catch_track = self.selected_track_id
+        self.logger.info(
+            "SUMO_ALIGN CONTINUE_UNALIGNED reason=%s bearing=%.2f track=%s"
+            % (reason, bearing, self.catch_track)
+        )
+        return self._start_catch_drive()
 
     def initialise(self):
         """実行ごとの状態を初期化する。機器登録・タッチ開始はalphaが担当する。"""
@@ -312,31 +368,10 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         return Status.RUNNING
 
     def _on_alignment_turn_limit(self, now, observation, target):
-        if self._black_fine_started is None:
-            self._black_fine_started = now
-            self._black_fine_track = observation.get("track_id")
-        bearing = current_bearing(self.context)
-        error = delta(float(target), bearing)
-        if not all(math.isfinite(v) for v in (bearing, error)):
-            return self._fail("invalid fine alignment angle")
-        if abs(error) < 0.5:
-            return Status.RUNNING
-
-        self._brake()
-        step = max(-8.0, min(8.0, error))
-        self._black_fine_target = (bearing + step) % 360.0
-        self._black_fine_sign = 1 if step > 0 else -1
-        self._black_fine_previous = (now, bearing)
-        self._black_fine_pulse_at = now
-        self.phase = "BLACK_FINE_PULSE"
-        power = 55 * self._black_fine_sign
-        self.logger.info(
-            "SUMO_ALIGN FINE_GYRO_START error=%.2f step=%.2f power=%d"
-            % (error, step, power)
+        return self._continue_after_alignment_failure(
+            "alignment coarse-turn limit"
         )
-        runtime.left_motor.set_power(power)
-        runtime.right_motor.set_power(-power)
-        return Status.RUNNING
+
 
     def _black_fine_tick(self, now):
         # 失敗後は既存の録画終了処理へ進める。
