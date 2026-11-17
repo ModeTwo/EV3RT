@@ -717,6 +717,43 @@ class MoveToRallyBlue(Behaviour):
             )
         )
         self._set_phase("DRIVE")
+        # 2026-11-17(devSS、ユーザー): 位置合わせが終わって丸へ走り出したら、もう本体のカメラは使わない(止まるのは色センサー)。
+        self._early_camera_handover()
+
+    def _early_camera_handover(self):
+        """2026-11-17(devSS、ユーザー): 本体のカメラを閉じて、ETラリーのカメラ(子プロセス)を開かせる。ETラリーの始めに開くと
+        使えるまで約1.9秒かかり、スタートで止まっている時間が延びていた。ETラリーの始め
+        (et_rally_course_pose.EtRallyCameraProcessStart)は、開いていればもう渡さない。"""
+        try:
+            from .. import et_rally_camera_proc
+            proc = et_rally_camera_proc.current()
+        except Exception:
+            proc = None
+        if proc is None or not getattr(proc, "defer_open", False) or getattr(proc, "opened", True):
+            return
+        release = getattr(runtime, "release_camera", None)
+        if release is None:
+            return
+        if self.session is not None and runtime.video is not None:
+            try:
+                runtime.video.end_rally_blue_read(self.session)
+            except Exception:
+                pass
+        self.session = None
+        import threading
+        t0 = time.monotonic()
+        logger = self.logger
+
+        def work():
+            try:
+                ok, what = release()
+            except Exception as error:
+                ok, what = False, "release failed: %r" % (error,)
+            proc.open_camera()
+            logger.info("RALLY_BLUE camera handover (early): main camera %s (%s), child told to open after %.2fs"
+                        % ("closed" if ok else "NOT closed", what, time.monotonic() - t0))
+
+        threading.Thread(target=work, name="rally-blue-camera-handover", daemon=True).start()
 
     def terminate(self, new_status):
         if self.turn is not None and self.turn.status == Status.RUNNING:
@@ -727,9 +764,9 @@ class MoveToRallyBlue(Behaviour):
 
         self._stop_motors()
 
-        if self.session is not None:
+        if self.session is not None and runtime.video is not None:
             runtime.video.end_rally_blue_read(self.session)
-            self.session = None
+        self.session = None
 
 
 # 既存のbuild_move_sumo_to_rally_startを拡張する。
