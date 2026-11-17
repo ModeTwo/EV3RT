@@ -318,6 +318,8 @@ class MoveToRallyBlue(Behaviour):
         self.phase = "DETECT"
         self.view_back_steps = 0
         self.blue_alignment_turns = 0
+        self.blue_area_reference = None
+        self.blue_area_reject_log_at = None
         self.blue_previous_error = None
         self.blue_pulse_only = False
         self.search_origin = current_bearing(self.context)
@@ -429,6 +431,30 @@ class MoveToRallyBlue(Behaviour):
             int(round(-self.VIEW_BACK_POWER - correction))
         )
         return Status.RUNNING
+
+    def _blue_candidate_matches(self, candidate, now):
+        import math
+        try:
+            area = float(candidate["area"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+        if not math.isfinite(area) or area <= 0.0:
+            return False
+
+        previous = self.blue_area_reference
+        if previous is not None and area < previous * 0.45:
+            logged = self.blue_area_reject_log_at
+            if logged is None or now - logged >= 1.0:
+                self.logger.info(
+                    "RALLY_BLUE REJECT_AREA area=%.1f previous=%.1f ratio=%.3f"
+                    % (area, previous, area / previous)
+                )
+                self.blue_area_reject_log_at = now
+            # 小さな別候補で旋回せず、再検出を待つ。
+            return False
+
+        self.blue_area_reference = area
+        return True
 
     def _blue_search_ready(self, observation, now):
         # カメラ未更新と、青候補が見えない状態を区別する。
@@ -557,6 +583,8 @@ class MoveToRallyBlue(Behaviour):
             if not candidate:
                 return Status.RUNNING
 
+            if not self._blue_candidate_matches(candidate, now):
+                return Status.RUNNING
             cx = float(candidate["cx"])
             try:
                 aim_cx = self._blue_aim_cx(candidate)
@@ -619,9 +647,9 @@ class MoveToRallyBlue(Behaviour):
                 pid_p=motion.turn_pid_p,
                 pid_i=motion.turn_pid_i,
                 pid_d=motion.turn_pid_d,
-                tolerance=1.0,
+                tolerance=0.5,
             )
-            self.turn.predictive_brake_horizon_sec = 0.04
+            self.turn.predictive_brake_horizon_sec = 0.01
 
             self.logger.info(
                 "RALLY_BLUE TURN correction=%.2f target=%.2f"

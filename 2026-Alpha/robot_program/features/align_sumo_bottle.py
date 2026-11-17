@@ -351,7 +351,9 @@ class AlignSumoBottle(Behaviour):
             ):
                 samples = []
             self.approach_near_samples = (samples + [(track, t)])[-3:]
-            return len(self.approach_near_samples) >= 3
+            # 画面端は2フレーム、通常の近接判定は3フレーム。
+            required_frames = 2 if side_edge else 3
+            return len(self.approach_near_samples) >= required_frames
 
         except (KeyError, TypeError, ValueError, OverflowError):
             self.approach_near_samples = []

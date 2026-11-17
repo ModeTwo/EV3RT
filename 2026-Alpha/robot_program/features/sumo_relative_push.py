@@ -170,6 +170,8 @@ class RelativeAlignAndPush(AlignAndCatchTest):
 
     def initialise(self):
         """実行ごとの状態を初期化する。機器登録・タッチ開始はalphaが担当する。"""
+        self._black_fine_started = None
+        self._black_fine_track = None
         self.nc_samples = []
         self.fixed_pose = None
         self.fixed_push_end = None
@@ -205,7 +207,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.logger.info(
             "SUMO_FIXED ORIGIN approach=%.2f circle_far=1590.0 "
             "green=1895.0 bottle_offset=115.0 "
-            "bottle_radius=32.5 clearance=200.0"
+            "bottle_radius=32.5 clearance=300.0"
             % self.approach_bearing
         )
 
@@ -250,7 +252,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
 
         # ボトル後端を円の奥縁から200mm外へ出す。
         rear = pose[0] + 115.0 * cosine - 32.5
-        remaining = (1590.0 + 200.0 - rear) / cosine
+        remaining = (1590.0 + 300.0 - rear) / cosine
         if remaining > 1500.0:
             raise ValueError("fixed-endpoint remaining distance too large")
         return remaining
@@ -279,6 +281,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
 
     def _start_catch_drive(self):
         """親の正対完了フック。押す向きを決め、捕捉接近を開始する。"""
+        self._black_fine_started = None
         self.angle_policy = alignment_push_policy(
             self.push_settings, self.approach_bearing, current_bearing(self.context)
         )
@@ -309,42 +312,90 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         return Status.RUNNING
 
     def _on_alignment_turn_limit(self, now, observation, target):
-        # Only this camera-guided capture route accepts incomplete alignment.
-        try:
-            values = (
-                float(observation["t"]),
-                float(observation["gyro_deg"]),
-                float(observation["candidate"]["cx"]),
-                float(target),
-            )
-            valid = (
-                all(math.isfinite(v) for v in values)
-                and observation.get("session") == self.session
-                and observation.get("confirmed")
-                and observation.get("track_id") is not None
-                and 0 <= values[2] < 320
-                and 0 <= now - values[0]
-                <= self.push_settings.capture_camera_max_age_sec
-            )
-        except (KeyError, TypeError, ValueError):
-            valid = False
-        if not valid:
-            return self._fail("invalid camera handoff at alignment turn limit")
-        self.context.sumo.bottle_aligned = False
-        self.context.sumo.camera_capture_bearing_deg = target
-        self.context.sumo.camera_capture_heading_deg = (
-            runtime.gyro_sensor.get_angle()
-        )
-        self.context.sumo.bottle_bearing_deg = target
-        self.observation_decision = "turn-limit-camera-handoff"
+        if self._black_fine_started is None:
+            self._black_fine_started = now
+            self._black_fine_track = observation.get("track_id")
+        bearing = current_bearing(self.context)
+        error = delta(float(target), bearing)
+        if not all(math.isfinite(v) for v in (bearing, error)):
+            return self._fail("invalid fine alignment angle")
+        if abs(error) < 0.5:
+            return Status.RUNNING
+
+        self._brake()
+        step = max(-8.0, min(8.0, error))
+        self._black_fine_target = (bearing + step) % 360.0
+        self._black_fine_sign = 1 if step > 0 else -1
+        self._black_fine_previous = (now, bearing)
+        self._black_fine_pulse_at = now
+        self.phase = "BLACK_FINE_PULSE"
+        power = 55 * self._black_fine_sign
         self.logger.info(
-            "SUMO_ALIGN TURN_LIMIT_CAMERA_HANDOFF turns=%d track=%s"
-            % (self.turns, self.selected_track_id)
+            "SUMO_ALIGN FINE_GYRO_START error=%.2f step=%.2f power=%d"
+            % (error, step, power)
         )
-        self.catch_started = True
-        # Keep aligned_at unset: this route did not complete alignment.
-        self.catch_track = self.selected_track_id
-        return self._start_catch_drive()
+        runtime.left_motor.set_power(power)
+        runtime.right_motor.set_power(-power)
+        return Status.RUNNING
+
+    def _black_fine_tick(self, now):
+        # 失敗後は既存の録画終了処理へ進める。
+        if self.phase not in ("OBSERVE", "SETTLE", "BLACK_FINE_PULSE"):
+            self._black_fine_started = None
+            return None
+        try:
+            if now - self._black_fine_started >= 3.0:
+                return self._fail(
+                    "fine alignment timeout; approach inhibited"
+                )
+            if self.phase != "BLACK_FINE_PULSE":
+                return None
+
+            bearing = current_bearing(self.context)
+            if not math.isfinite(bearing):
+                return self._fail("invalid fine alignment gyro")
+            old_t, old_b = self._black_fine_previous
+            dt = now - old_t
+            velocity = (
+                delta(bearing, old_b) / dt if dt > 0.0001 else 0.0
+            )
+            self._black_fine_previous = (now, bearing)
+            remaining = delta(self._black_fine_target, bearing)
+            toward = max(0.0, velocity * self._black_fine_sign)
+            allowance = min(2.0, max(0.5, toward * 0.025))
+            if (
+                remaining * self._black_fine_sign <= allowance
+                or now - self._black_fine_pulse_at >= 0.150
+            ):
+                self.logger.info(
+                    "SUMO_ALIGN FINE_GYRO_BRAKE remaining=%.2f velocity=%.1f"
+                    % (remaining, velocity)
+                )
+                self._settle(now, after_turn=True)
+            return Status.RUNNING
+        except Exception as exc:
+            return self._fail("fine alignment error: %s" % exc)
+
+    def _update_bottle_observation(self, now):
+        if self._black_fine_started is not None:
+            obs = runtime.video.get_sumo_alignment_observation(
+                self.session
+            )
+            if (
+                obs
+                and obs.get("confirmed")
+                and obs.get("candidate")
+                and obs.get("session") == self.session
+                and obs.get("t", -1) >= self.observations_after
+                and 0 <= now - obs["t"]
+                <= self.settings.max_observation_age_sec
+                and obs.get("track_id") != self._black_fine_track
+            ):
+                return self._fail(
+                    "bottle identity changed during fine alignment"
+                )
+        return super()._update_bottle_observation(now)
+
 
     def _capture_camera_target(self, distance_mm):
         # Return an equivalent angle near the drive's unwrapped heading.
@@ -507,7 +558,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
                 fixed_green_boundary_mm=1895.0,
                 fixed_bottle_offset_mm=115.0,
                 fixed_bottle_radius_mm=32.5,
-                fixed_clearance_mm=200.0,
+                fixed_clearance_mm=300.0,
                 fixed_push_end_xy_mm=self.fixed_push_end,
             )
         return result
@@ -702,6 +753,10 @@ class RelativeAlignAndPush(AlignAndCatchTest):
 
     def update(self):
         """制御周期1回分。計測・終了優先判定・状態別処理・前進の順に進める。"""
+        if self._black_fine_started is not None:
+            result = self._black_fine_tick(time.monotonic())
+            if result is not None:
+                return result
         try:
             self._fixed_sample()
         except (ValueError, TypeError, OverflowError) as error:
