@@ -42,9 +42,21 @@ class CameraProcess:
         self.defer_open = bool(defer_open)
         self.opened = not self.defer_open
         root = Path(__file__).resolve().parents[1]
+        # 2026-11-18: 子のエラー出力をファイルに残す(それまでは捨てていて、別のラズパイで full のときだけ子が落ちても
+        # 理由が分からなかった)。run_logs/et_camera_child_<時刻>.log。書けなければ今までどおり捨てる。
+        self.stderr_path = None
+        err = subprocess.DEVNULL
+        try:
+            logs = root / 'run_logs'
+            logs.mkdir(parents=True, exist_ok=True)
+            self.stderr_path = logs / ('et_camera_child_%s.log' % time.strftime('%Y%m%dT%H%M%S'))
+            err = open(str(self.stderr_path), 'a')
+        except Exception:
+            self.stderr_path = None
+            err = subprocess.DEVNULL
         self.proc = subprocess.Popen([child_python(), '-m', 'robot_program.et_rally_camera_proc', json.dumps(cfg)],
                                      cwd=str(root), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, bufsize=1, universal_newlines=True)
+                                     stderr=err, bufsize=1, universal_newlines=True)
         self.folder = None if folder is None else Path(folder)
         if self.folder is not None:
             self.folder.mkdir(parents=True, exist_ok=True)   # 子がカメラを開く前に、親が位置の記録を書き始めることがある
@@ -91,6 +103,17 @@ class CameraProcess:
 
     def alive(self):
         return self.proc.poll() is None
+
+    def stderr_tail(self, lines=6):
+        """2026-11-18: 子のエラー出力の最後の数行(落ちた理由をログに出す用)。"""
+        if not self.stderr_path:
+            return ''
+        try:
+            with open(str(self.stderr_path), errors='replace') as f:
+                tail = [l.rstrip() for l in f.readlines()[-lines:]]
+            return ' | '.join(l for l in tail if l)
+        except Exception:
+            return ''
 
     def close(self, timeout=2.0):
         self.send('quit')
