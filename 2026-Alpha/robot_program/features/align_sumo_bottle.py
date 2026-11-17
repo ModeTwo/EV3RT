@@ -358,8 +358,8 @@ class AlignSumoBottle(Behaviour):
             ):
                 samples = []
             self.approach_near_samples = (samples + [(track, t)])[-3:]
-            # 画面端は2フレーム、通常の近接判定は3フレーム。
-            required_frames = 2 if side_edge else 3
+            # 確定済みの画面端は追加待ちなし。通常は3フレーム。
+            required_frames = 1 if side_edge else 3
             return len(self.approach_near_samples) >= required_frames
 
         except (KeyError, TypeError, ValueError, OverflowError):
@@ -437,18 +437,23 @@ class AlignSumoBottle(Behaviour):
         """直進中の履歴から限定的に推定旋回し、画像の再取得を試す。"""
         if self.turns >= self.settings.max_turns:
             return False
+        # LAST_SEEN_RECOVERY_ONE_CONFIRMED
         rows = self.approach_observations
-        if self.approach_recovery_attempted or len(rows) < 3:
+        if self.approach_recovery_attempted or not rows:
             return False
         a, b = rows[0], rows[-1]
-        if not (0 <= now - b["t"] <= 2.0 and 0 < b["d"] - a["d"] <= 250):
+        if not 0 <= now - b["t"] <= 2.0:
             return False
         distance = float(runtime.plotter.get_distance())
         bearing = current_bearing(self.context)
-        if not math.isfinite(distance):
+        if not math.isfinite(distance) or not 0 <= distance - b["d"] <= 120.0:
             return False
         remaining = max(0.0, min(60.0, distance - b["d"]))
-        slope = max(-1.0, min(1.0, (b["cx"] - a["cx"]) / (b["d"] - a["d"])))
+        # 1件だけなら、移動傾向を推定せず最後の方向を使う。
+        span = b["d"] - a["d"]
+        slope = 0.0
+        if len(rows) >= 2 and 0 < span <= 250.0:
+            slope = max(-1.0, min(1.0, (b["cx"]-a["cx"]) / span))
         predicted_cx = b["cx"] + max(-30.0, min(30.0, slope * remaining))
         captured_bearing = self.context.sumo.bearing_reference.bearing(b["gyro"])
         target = (captured_bearing + (predicted_cx - self.settings.target_cx) / self.settings.visual_px_per_degree) % 360.0
