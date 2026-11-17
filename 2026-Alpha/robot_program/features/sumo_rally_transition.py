@@ -7,7 +7,12 @@ from py_trees.common import Status
 from py_trees.composites import Sequence
 
 from ..runtime import runtime
-from ..features.sumo_bearing_motion import SpinToBearing, current_bearing
+from ..features.sumo_bearing_motion import SpinToBearing, EncoderSpinToBearing, current_bearing
+
+# 2026-11-17(devSS、ユーザー): 相撲→ETラリーの旋回(青い丸へ向く・丸での向き直し・丸に着いてラリーの向きへ)を、
+# 相撲の中と同じエンコーダ主導の旋回(encoder_spin.EncoderSpin)にして出力を上げる。PIDの SpinAround(出力50〜60)は
+# 145°に1.8秒・62°に1.2秒かかり、最後に行き過ぎて戻ることがあった。
+RALLY_TRANSITION_TURN_POWER = 70
 from ..behaviours.motor_control import StopNow
 
 
@@ -56,20 +61,18 @@ class TurnTowardRallyStart(Behaviour):
                 % (runtime.course, signed_angle, start_bearing, target_bearing)
             )
 
-            power = 60  # 215°旋回専用
+            power = RALLY_TRANSITION_TURN_POWER
             motion = self.config.sumo
-
-            self.turn = SpinAround(
+            self.turn = EncoderSpinToBearing(
                 "rally start camera direction",
-                target=-runtime.course * signed_angle,
+                self.context,
+                target_bearing,
                 max_power=power,
                 min_power=power,
                 pid_p=motion.turn_pid_p,
                 pid_i=motion.turn_pid_i,
                 pid_d=motion.turn_pid_d,
-                target_type=HeadingType.RELATIVE,
                 tolerance=1.0,
-                normalize_error=False,
             )
 
         self.turn.tick_once()
@@ -237,12 +240,12 @@ class TurnAfterBlue(Behaviour):
 
             target = 90.0 if runtime.course == -1 else 270.0
             motion = self.config.sumo
-            self.turn = SpinToBearing(
+            self.turn = EncoderSpinToBearing(
                 name="face rally direction after blue arrival",
                 context=self.context,
                 bearing=target,
-                max_power=50,
-                min_power=50,
+                max_power=RALLY_TRANSITION_TURN_POWER,
+                min_power=RALLY_TRANSITION_TURN_POWER,
                 pid_p=motion.turn_pid_p,
                 pid_i=motion.turn_pid_i,
                 pid_d=motion.turn_pid_d,
@@ -250,8 +253,8 @@ class TurnAfterBlue(Behaviour):
             )
             self.logger.info(
                 "BLUE_EXIT_TURN START course=%s bearing=%.2f "
-                "target=%.2f power=50"
-                % (runtime.course, current_bearing(self.context), target)
+                "target=%.2f power=%d"
+                % (runtime.course, current_bearing(self.context), target, RALLY_TRANSITION_TURN_POWER)
             )
 
         self.turn.tick_once()
@@ -416,9 +419,9 @@ class MoveToRallyBlue(Behaviour):
             self.blue_alignment_turns += 1
             motion = self.config.sumo
             target_bearing = (current_bearing(self.context) + correction) % 360.0
-            self.turn = SpinToBearing(
+            self.turn = EncoderSpinToBearing(
                 "rally blue alignment", self.context, target_bearing,
-                max_power=50, min_power=50,
+                max_power=RALLY_TRANSITION_TURN_POWER, min_power=RALLY_TRANSITION_TURN_POWER,
                 pid_p=motion.turn_pid_p, pid_i=motion.turn_pid_i, pid_d=motion.turn_pid_d,
                 tolerance=2.0,
             )
@@ -640,6 +643,8 @@ class MoveToRallyBlue(Behaviour):
             completion_min_mm=0.0,
         )
         self.drive_by_ground = by_ground
+        if by_ground:
+            self._early_camera_handover()
         self.drive_start_mm = float(runtime.plotter.get_distance())
         self.drive_blue_first = None
         self.drive_classifier = ColorClassifier() if by_ground else None
@@ -655,6 +660,42 @@ class MoveToRallyBlue(Behaviour):
         )
         self._set_phase("DRIVE")
 
+    def _early_camera_handover(self):
+        """2026-11-17(devSS、ユーザー): 丸の中心の位置が出て距離で走り出したら、もう本体のカメラは使わないので、
+        ここで本体のカメラを閉じてETラリーのカメラ(子プロセス)を開かせる。ETラリーの始めに開くと使えるまで約1.9秒かかり、
+        スタートで止まっている時間が延びていた。ETラリーの始め(et_rally_course_pose.EtRallyCameraProcessStart)は、
+        開いていればもう渡さない。"""
+        try:
+            from .. import et_rally_camera_proc
+            proc = et_rally_camera_proc.current()
+        except Exception:
+            proc = None
+        if proc is None or not getattr(proc, "defer_open", False) or getattr(proc, "opened", True):
+            return
+        release = getattr(runtime, "release_camera", None)
+        if release is None:
+            return
+        if self.session is not None and runtime.video is not None:
+            try:
+                runtime.video.end_rally_blue_read(self.session)
+            except Exception:
+                pass
+        self.session = None
+        import threading
+        t0 = time.monotonic()
+        logger = self.logger
+
+        def work():
+            try:
+                ok, what = release()
+            except Exception as error:
+                ok, what = False, "release failed: %r" % (error,)
+            proc.open_camera()
+            logger.info("RALLY_BLUE camera handover (early): main camera %s (%s), child told to open after %.2fs"
+                        % ("closed" if ok else "NOT closed", what, time.monotonic() - t0))
+
+        threading.Thread(target=work, name="rally-blue-camera-handover", daemon=True).start()
+
     def terminate(self, new_status):
         if self.turn is not None and self.turn.status == Status.RUNNING:
             self.turn.stop(Status.INVALID)
@@ -664,9 +705,9 @@ class MoveToRallyBlue(Behaviour):
 
         self._stop_motors()
 
-        if self.session is not None:
+        if self.session is not None and runtime.video is not None:
             runtime.video.end_rally_blue_read(self.session)
-            self.session = None
+        self.session = None
 
 
 # 既存のbuild_move_sumo_to_rally_startを拡張する。
