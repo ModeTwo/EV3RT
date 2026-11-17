@@ -2057,7 +2057,9 @@ def _run_main(argv, startup_cleanup):
             ('--rally-move-fine-power', args.rally_move_fine_power, 'et_rally_move_fine_power')):
         if value is None:
             continue
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+        # 2026-11-17(ユーザー): スタートで測ったジャイロのずれの差し引きは full でも試せるようにする
+        allowed = MANUAL_RALLY_MISSIONS + (('full',) if option == '--rally-gyro-drift-comp' else ())
+        if mission_config.mission_mode not in allowed:
             parser.error(option + ' requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(mission_config, **{field: value == 'on'})
     if args.rally_straight_pause_labels is not None:
