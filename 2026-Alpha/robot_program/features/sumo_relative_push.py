@@ -271,6 +271,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self._line_count = 0
         self._line_first = None
         self._line_done = False
+        self._line_trace = []
         runtime.require("sonar_sensor")
         super().initialise()
 
@@ -727,6 +728,9 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             self._line_done = True
             self.logger.info("SUMO_LINE unavailable reason=%s" % error)
             return
+        # 2026-11-18: 見逃しの調べ。探す範囲で読んだ値をすべて覚え、見つからなかったときにまとめて出す。
+        if len(self._line_trace) < 400:
+            self._line_trace.append((round(time.monotonic(), 3), round(sensor_x, 1), int(h), int(s), int(v), self.phase))
         if v > self.LINE_BLACK_MAX_V:
             self._line_count = 0
             self._line_first = None
@@ -752,6 +756,26 @@ class RelativeAlignAndPush(AlignAndCatchTest):
                    "rejected (shift too large)" if self.LINE_ANCHOR else "observe-only"))
         )
 
+    def _log_line_trace(self):
+        """探す範囲で読んだ色センサーの値(時刻・推定のセンサー位置・H,S,V・段階)をまとめて出す(見逃しの調べ)。"""
+        tr = getattr(self, "_line_trace", None)
+        if not tr:
+            self.logger.info("SUMO_LINE_TRACE reads=0 (the sensor never entered the search range)")
+            return
+        darkest = min(tr, key=lambda r: r[4])
+        same = sum(1 for a, b in zip(tr, tr[1:]) if a[2:5] == b[2:5])
+        dt = [b[0] - a[0] for a, b in zip(tr, tr[1:])]
+        dx = [b[1] - a[1] for a, b in zip(tr, tr[1:])]
+        self.logger.info(
+            "SUMO_LINE_TRACE reads=%d x=%.0f..%.0f darkest v=%d at x=%.0f hsv=(%d,%d,%d) repeated=%d dt_max=%.3f dx_max=%.1f"
+            % (len(tr), tr[0][1], tr[-1][1], darkest[4], darkest[1], darkest[2], darkest[3], darkest[4], same,
+               max(dt) if dt else 0.0, max(dx) if dx else 0.0))
+        # 1行に 20 個ずつ: 推定のセンサー位置:V(H,S)
+        for i in range(0, len(tr), 20):
+            self.logger.info("SUMO_LINE_TRACE " + " ".join(
+                "%.0f:%d(%d,%d)%s" % (r[1], r[4], r[2], r[3], "" if r[5] == "NC_PUSH" else r[5][3])
+                for r in tr[i:i + 20]))
+
     def _start_backoff(self, now):
         """押し出し完了後、同じ方位で150mm後退する。"""
         if self._fixed_enabled() and not self._line_done:
@@ -760,6 +784,8 @@ class RelativeAlignAndPush(AlignAndCatchTest):
                 % (self.LAP_LINE_NEAR_X_MM,
                    self.fixed_pose[0] if self.fixed_pose else float("nan"))
             )
+        if self._fixed_enabled():
+            self._log_line_trace()
         if self._fixed_enabled():
             self._fixed_sample()
             self.fixed_push_end = self.fixed_pose[:2]
