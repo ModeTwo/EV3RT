@@ -54,9 +54,11 @@ class CameraProcess:
         except Exception:
             self.stderr_path = None
             err = subprocess.DEVNULL
-        self.proc = subprocess.Popen([child_python(), '-m', 'robot_program.et_rally_camera_proc', json.dumps(cfg)],
+        python = child_python()
+        env = child_env(python)
+        self.proc = subprocess.Popen([python, '-m', 'robot_program.et_rally_camera_proc', json.dumps(cfg)],
                                      cwd=str(root), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=err, bufsize=1, universal_newlines=True)
+                                     stderr=err, bufsize=1, universal_newlines=True, env=env)
         self.folder = None if folder is None else Path(folder)
         if self.folder is not None:
             self.folder.mkdir(parents=True, exist_ok=True)   # 子がカメラを開く前に、親が位置の記録を書き始めることがある
@@ -141,6 +143,17 @@ def child_python():
     return sys.executable
 
 
+def child_env(python):
+    """子に渡す環境変数。親(PyPy)と別のPythonで子を動かすときは PYTHONPATH・PYTHONHOME を外す。
+    2026-11-18: 別のラズパイの full で、親の PYTHONPATH(PyPy向けの cv2)を /usr/bin/python3 が読んで
+    「recursion is detected during loading of cv2」で子が落ち、ETラリーのカメラ補正が止まっていた。"""
+    env = dict(os.environ)
+    if os.path.realpath(python) != os.path.realpath(sys.executable):
+        for name in ('PYTHONPATH', 'PYTHONHOME'):
+            env.pop(name, None)
+    return env
+
+
 _shared = None
 
 
@@ -183,7 +196,8 @@ def _child(cfg):
     try:
         import cv2
     except ImportError as error:
-        say(ev='error', what='cannot import cv2 in %s (%r)' % (sys.executable, error))
+        say(ev='error', what='cannot import cv2 in %s (%r) PYTHONPATH=%r sys.path=%r' % (
+            sys.executable, error, os.environ.get('PYTHONPATH'), sys.path[:6]))
         return
     state = dict(save=False, detect=False, track=False, quit=False, mirror=bool(cfg.get('mirror')))
 
