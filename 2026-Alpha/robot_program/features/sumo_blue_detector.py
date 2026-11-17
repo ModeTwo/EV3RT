@@ -199,6 +199,30 @@ class SumoBlueDetector:
             side = "center"
         return dict(blue_cx_estimate=est, side=side)
 
+    def _split_noisy_contour(self, contour, shape, saturation=None):
+        # 通常の楕円判定に失敗した大きな輪郭だけ再分離する。
+        area = float(cv2.contourArea(contour))
+        if area < 600.0:
+            return []
+        isolated = np.zeros(shape, np.uint8)
+        cv2.drawContours(isolated, [contour], -1, 255, -1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        isolated = cv2.morphologyEx(
+            isolated, cv2.MORPH_OPEN, kernel
+        )
+        pieces, _ = cv2.findContours(
+            isolated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        result = []
+        for piece in pieces:
+            candidate = self._candidate(piece, shape, saturation)
+            if (
+                candidate is not None
+                and candidate["area"] >= area * 0.25
+            ):
+                result.append(candidate)
+        return result
+
     def step(self, image):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(
@@ -219,6 +243,10 @@ class SumoBlueDetector:
             candidate = self._candidate(contour, mask.shape, saturation)
             if candidate is not None:
                 candidates.append(candidate)
+            else:
+                candidates.extend(
+                    self._split_noisy_contour(contour, mask.shape, saturation)
+                )
 
         if not candidates:
             self.stable_frames = 0

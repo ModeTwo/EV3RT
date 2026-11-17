@@ -319,17 +319,19 @@ class AlignSumoBottle(Behaviour):
                 return False
 
             t = float(observation["t"])
+            x = float(point["x"])
             w = float(point["w"])
             h = float(point["h"])
             y = float(point["y"])
             area = float(point["area"])
             if (
-                not all(math.isfinite(v) for v in (now, t, w, h, y, area))
+                not all(math.isfinite(v) for v in (now, t, x, w, h, y, area))
                 or not 0 <= now - t <= min(
                     0.15, self.settings.max_observation_age_sec
                 )
                 or not (
                     0 < w <= 320 and 0 < h <= 180 and 0 <= y < 180
+                    and 0 <= x < 320 and x + w <= 320
                 )
             ):
                 self.approach_near_samples = []
@@ -340,7 +342,12 @@ class AlignSumoBottle(Behaviour):
                 y + h >= 160 and w >= 30
                 and h >= 40 and area >= 900
             )
-            if not (large or low):
+            # 左右端から50px以内へ近づいた追跡対象も停止条件にする。
+            side_edge = (
+                (x <= 50 or x + w >= 270)
+                and w >= 25 and h >= 35 and area >= 900
+            )
+            if not (large or low or side_edge):
                 self.approach_near_samples = []
                 return False
 
@@ -351,7 +358,9 @@ class AlignSumoBottle(Behaviour):
             ):
                 samples = []
             self.approach_near_samples = (samples + [(track, t)])[-3:]
-            return len(self.approach_near_samples) >= 3
+            # 画面端は2フレーム、通常の近接判定は3フレーム。
+            required_frames = 2 if side_edge else 3
+            return len(self.approach_near_samples) >= required_frames
 
         except (KeyError, TypeError, ValueError, OverflowError):
             self.approach_near_samples = []
