@@ -240,8 +240,8 @@ class TurnAfterBlue(Behaviour):
                 name="face rally direction after blue arrival",
                 context=self.context,
                 bearing=target,
-                max_power=50,
-                min_power=50,
+                max_power=55,
+                min_power=55,
                 pid_p=motion.turn_pid_p,
                 pid_i=motion.turn_pid_i,
                 pid_d=motion.turn_pid_d,
@@ -249,7 +249,7 @@ class TurnAfterBlue(Behaviour):
             )
             self.logger.info(
                 "BLUE_EXIT_TURN START course=%s bearing=%.2f "
-                "target=%.2f power=50"
+                "target=%.2f power=55"
                 % (runtime.course, current_bearing(self.context), target)
             )
 
