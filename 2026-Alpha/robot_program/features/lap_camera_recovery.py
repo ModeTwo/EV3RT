@@ -105,9 +105,9 @@ RECOVERY_MAX_ATTEMPTS=2
 
 RECOVERY_PEAK_DEG=8.0
 
-FALLBACK_AFTER_GATE_MM=150.0
-UNSEEN_GATE_FALLBACK_AFTER_MM=50.0  # 青未検知時のみ、従来100 mmから50 mm短縮
-UNSEEN_DISTANCE_REDUCTION_MM=50.0
+FALLBACK_AFTER_GATE_MM=120.0
+UNSEEN_GATE_FALLBACK_AFTER_MM=0.0  # 青未検知時は推定ゲート位置まで
+UNSEEN_DISTANCE_REDUCTION_MM=100.0
 UNSEEN_ESTIMATE_SLOW_BEFORE_GATE_MM=190.0
 UNSEEN_ESTIMATE_MIN_SLOW_MM=50.0
 
@@ -132,7 +132,9 @@ if WEAK_BLUE_MODE not in ('baseline','early'):
     raise ValueError('LAP_WEAK_BLUE_MODE must be baseline or early')
 if GATE_TARGET_MODE not in ('baseline','gray_center'):
     raise ValueError('LAP_GATE_TARGET must be baseline or gray_center')
-GRAY_CENTER_FROM_BLUE_MM=270.0  # provisional distance from blue leading edge
+GRAY_CENTER_FROM_BLUE_MM=270.0  # measured distance from blue leading edge
+BLUE_APPROACH_TARGET_MM=GRAY_CENTER_FROM_BLUE_MM-30.0
+SHORT_BLUE_MAX_MM=60.0  # provisional: observed 33 mm failure vs 75-99 mm passes
 
 
 
@@ -146,8 +148,10 @@ def confirmed_black_approach_mm(gate, normal_mm):
     if not math.isfinite(blue) or not math.isfinite(black) or black < blue:
         return float(normal_mm), 'invalid_blue_black_progress'
     gap = black - blue
+    if gap < SHORT_BLUE_MAX_MM:
+        return float(normal_mm), 'short_blue_fixed_after_black'
     if GATE_TARGET_MODE == 'gray_center':
-        return max(0.0, GRAY_CENTER_FROM_BLUE_MM - gap), 'gray_center_estimate'
+        return max(0.0, BLUE_APPROACH_TARGET_MM - gap), 'gray_center_estimate'
     if gap <= LATE_BLUE_BLACK_GAP_MM:
         return float(normal_mm), 'normal_black'
     return min(float(normal_mm), max(0.0, blue_unconfirmed_limit_mm() - gap)), 'late_black'
@@ -310,9 +314,10 @@ class TrialLoggedTrace(ForwardOnlyTrace):
             line_input = white_side_turn(h, s, v, runtime.course, self.trace_side == TraceSide.NORMAL)
             floor_note = '_DARK_HEADING_V%d_S%d' % (v, s)
         gain=4.0 if strong else variant['heading_gain'];heading_limit=20.0 if strong else 16.0
-        left,right,error,line,correction,mode=mix_heading_trace(100+line_input,100-line_input,heading,self.owner.heading_origin,runtime.course,gain=gain,heading_limit=heading_limit)
+        speed=self.owner.straight_power
+        left,right,error,line,correction,mode=mix_heading_trace(speed+line_input,speed-line_input,heading,self.owner.heading_origin,runtime.course,gain=gain,heading_limit=heading_limit)
         turn=(left-right)/2.0;limit=variant.get('turn_limit',50.0)
-        turn=max(-limit,min(limit,turn));base=100.0-abs(turn)
+        turn=max(-limit,min(limit,turn));base=speed-abs(turn)
         left,right=round(base+turn),round(base-turn)
         mode=mode+'_'+name+('_NEAR_'+approach if near else '')+floor_note
         super().set_motor_power(left,right)
@@ -360,6 +365,8 @@ class Peak100ContinuousLap(RunByGyro):
         self.live_camera_recovery = False
         self.profile_white_rejoin = False
         self.profile_rejoin_source = None
+        self.straight_start_mm = None
+        self.straight_power = 100
         self.observation_start_mm = FINAL_OBSERVATION_START_MM
         self.camera_start_mm = CAMERA_CORRECTION_START_MM
         self.camera_deadline_mm = CAMERA_CORRECTION_DEADLINE_MM
@@ -443,6 +450,8 @@ class Peak100ContinuousLap(RunByGyro):
                 if self.devtk_speed_config is not None:
                     progress = float(runtime.plotter.get_distance()) - self.origin_distance
                     self.power = speed_profile(progress, self.devtk_speed_config)
+                    if self.straight_start_mm is not None and progress >= self.straight_start_mm:
+                        self.power = min(self.power, self.straight_power)
                 return result
             finally:
                 self.completion_condition = gate
@@ -462,7 +471,7 @@ class Peak100ContinuousLap(RunByGyro):
         strong=(not slow and self.transition_phase=='FALLBACK' and self.approach_near and approach_mode() in ('heading_strong','line_half'))
         gain,limit=(4.0,20.0) if strong else (2.0,16.0)
         turn=max(-limit,min(limit,gain*error))
-        base=TRACE_POWER if slow else 100.0-abs(turn)
+        base=TRACE_POWER if slow else self.straight_power-abs(turn)
         runtime.left_motor.set_brake(False);runtime.right_motor.set_brake(False)
         left=round(base-runtime.course*turn);right=round(base+runtime.course*turn)
         runtime.left_motor.set_power(left);runtime.right_motor.set_power(right)
@@ -524,7 +533,7 @@ class Peak100ContinuousLap(RunByGyro):
     def _start_pre_gate_trace(self, hsv, direction):
         self.pre_gate_side = lap_trace_side(direction, runtime.course)
         self.pre_gate_trace = TrialLoggedTrace(owner=self, name='pre-gate line trace', target=trace_target_v(),
-            power=100, power_min=100, pid_p=.50, pid_i=.000001, pid_d=.045, trace_side=self.pre_gate_side)
+            power=self.straight_power, power_min=self.straight_power, pid_p=.50, pid_i=.000001, pid_d=.045, trace_side=self.pre_gate_side)
         self.transition_phase = 'TRACE'
         self.pre_gate_white_count = 0
         self.logger.info('LAP_TRANSITION phase=TRACE hsv=%s direction=%d side=%s gate_latched=%s'
@@ -937,13 +946,9 @@ class Peak100ContinuousLap(RunByGyro):
             elif gate is not None and getattr(gate,'saw_blue',False) and getattr(gate,'blue_progress',None) is not None:
                 blue=float(gate.blue_progress)
                 if not math.isfinite(blue):return self._finish_distance_run(Status.FAILURE)
-                limit_mm = blue_unconfirmed_limit_mm()
-                if progress - blue >= limit_mm:
-                    self.fallback_done = True
-                    self.logger.warning('LAP_FALLBACK_BLUE_UNCONFIRMED_LIMIT blue_mm=%.1f progress_mm=%.1f after_blue_mm=%.1f limit_mm=%.1f black_confirmed=False'
-                                        % (blue, progress, progress - blue, limit_mm))
-                    return self._finish_distance_run(Status.SUCCESS)
-                base=blue+BLUE_TO_BLACK_LIMIT_MM;source='blue_plus_search_limit'
+                # Blue without a confirmed black uses the same estimated gate
+                # boundary as lost-line fallback; blue still requests slow drive.
+                base=self.fallback_estimated_gate_mm;source='estimated_blue_unconfirmed'
             else:
                 base=self.fallback_estimated_gate_mm;source='estimated'
             slow_confirmed = self.confirmed_fallback_slow and self.fallback_gate_base is not None
@@ -962,7 +967,7 @@ class Peak100ContinuousLap(RunByGyro):
                     self.logger.warning('LAP_UNSEEN_ESTIMATE_DONE progress_mm=%.1f target_mm=%.1f blue_confirmed=False' % (progress,plan[1]))
                     return self._finish_distance_run(Status.SUCCESS)
             after_mm = (self.confirmed_fallback_after_mm if slow_confirmed else
-                        UNSEEN_GATE_FALLBACK_AFTER_MM if source == 'estimated' else FALLBACK_AFTER_GATE_MM)
+                        UNSEEN_GATE_FALLBACK_AFTER_MM if source in ('estimated', 'estimated_blue_unconfirmed') else FALLBACK_AFTER_GATE_MM)
             if slow_confirmed:
                 after_mm, approach_reason = confirmed_black_approach_mm(gate, self.confirmed_fallback_after_mm)
                 if not self.fallback_gate_slow:
@@ -1267,6 +1272,10 @@ class Peak100ContinuousLap(RunByGyro):
         self.logger.info('LAP_CAMERA_SESSION_SYNC old=%s new=%s frame=%d' % (frozen, current, frame))
 
     def update(self):
+        if self.running and self.straight_start_mm is not None:
+            progress = float(runtime.plotter.get_distance()) - self.origin_distance
+            if progress >= self.straight_start_mm:
+                self.power = min(self.power, self.straight_power)
         if self.running:
             self._sync_lap_bottle_session(time.monotonic())
         if self.running and self.transition_phase is not None:return self._transition_update()
@@ -1834,18 +1843,25 @@ def build_lap_camera_recovery(context, config, original):
         max_heading_correction_deg=original.max_heading_correction_deg,
         profile_log_interval_sec=original.profile_log_interval_sec)
     lap.devtk_speed_config = original.config if isinstance(original, RunByGyroSpeedDownatCurve) else None
+    default_straight_power = config.start_lap_final_straight_power if config.mission_mode == "full" else 100
+    straight_power = os.environ.get("LAP_STRAIGHT_POWER", str(default_straight_power))
+    if straight_power not in ("100", "90", "85", "80", "75"):
+        raise ValueError("LAP_STRAIGHT_POWER must be 100, 90, 85, 80 or 75")
+    lap.straight_power = int(straight_power)
     window = final_zero_window(original.target, original.distance_limit_mm, decision_offset_mm=decision_offset_mm())
     if window is None:
         lap.observation_start_mm = lap.camera_start_mm = lap.camera_deadline_mm = None
         print('LAP_FINAL_STRAIGHT unavailable; continue profile and use gate-distance fallback', flush=True)
     else:
         straight_start, lap.observation_start_mm, lap.camera_start_mm, lap.camera_deadline_mm = window
+        lap.straight_start_mm = straight_start
+        print("LAP_STRAIGHT_POWER start_mm=%.1f power=%d" % (straight_start, lap.straight_power), flush=True)
         print('LAP_FINAL_STRAIGHT start_mm=%.1f observation_mm=%.1f decision_mm=%.1f deadline_mm=%.1f' % window, flush=True)
     lap.profile_white_rejoin = True
     lap.line_entry = 'cross_rejoin'
     lap.gate_recovery = 'baseline'
     lap.confirmed_fallback_slow = True
-    lap.confirmed_fallback_after_mm = 150.0
+    lap.confirmed_fallback_after_mm = 120.0
     gate = BlueThenBlackGate(lap, allow_weak_blue=True)
     lap.completion_condition, lap.completion_min_mm = gate, lap.observation_start_mm if lap.observation_start_mm is not None else math.inf
     continuous_to = config.mission_mode in ('lap-to', 'lap-to-sumo', 'full')
@@ -1871,12 +1887,12 @@ def build_lap_camera_recovery(context, config, original):
         root_children.append(DumpTransitionDiagnostics(lap))
     root.add_children(root_children)
     print('LAP_REACQUIRE_POLICY mode=%s limit_mm=%.1f limit_sec=%.2f' % (REACQUIRE_MODE, REACQUIRE_LIMIT_MM, REACQUIRE_LIMIT_SEC), flush=True)
-    print('LAP_GRAY_BLUE_POLICY target=%s weak=%s gray_from_blue_mm=%.1f' % (GATE_TARGET_MODE, WEAK_BLUE_MODE, GRAY_CENTER_FROM_BLUE_MM), flush=True)
+    print('LAP_GRAY_BLUE_POLICY target=%s weak=%s gray_from_blue_mm=%.1f approach_target_mm=%.1f' % (GATE_TARGET_MODE, WEAK_BLUE_MODE, GRAY_CENTER_FROM_BLUE_MM, BLUE_APPROACH_TARGET_MM), flush=True)
     print('LAP_CAMERA_REFERENCE_X value=%.1f' % lap_camera_reference_x(), flush=True)
     print('LAP_DEVTK_PROFILE source=%s correction_start_mm=%s' % (type(original).__name__, lap.camera_start_mm), flush=True)
-    print('LAP_RECOVERY enabled=True trace_target_v=%d gate=combined post_gate=gyro confirmed_mm=150 fallback_unseen_mm=50 fallback_blue_mm=150' % trace_target_v(), flush=True)
+    print('LAP_RECOVERY enabled=True trace_target_v=%d gate=combined post_gate=gyro confirmed_mm=120 fallback_unseen_mm=0 fallback_blue_mm=120' % trace_target_v(), flush=True)
     print('LAP_ADAPTIVE_PEAK_POLICY far_peak_deg=%.1f initial_offset_px=%.1f ramp_mm=%.1f' % (far_peak_deg(), ADAPTIVE_INITIAL_OFFSET_PX, ADAPTIVE_RAMP_MM), flush=True)
     print('LAP_DARK_ENTRY_EDGE_POLICY mode=%s' % dark_entry_edge_mode(), flush=True)
-    print('LAP_GATE_DISTANCE_POLICY total_limit_mm=%.1f late_gap_mm=%.1f normal_after_black_mm=150' % (blue_unconfirmed_limit_mm(), LATE_BLUE_BLACK_GAP_MM), flush=True)
+    print('LAP_GATE_DISTANCE_POLICY short_blue_lt_mm=%.1f short_after_black_mm=120 blue_unconfirmed=estimated_gate' % SHORT_BLUE_MAX_MM, flush=True)
     print('LAP_UNSEEN_ESTIMATE after_slow_mm=%s slow_before_estimated_gate_mm=%.1f' % (unseen_estimate_distance(), UNSEEN_ESTIMATE_SLOW_BEFORE_GATE_MM), flush=True)
     return root
