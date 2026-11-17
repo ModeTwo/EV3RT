@@ -175,6 +175,9 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     LINE_SENSOR_FORWARD_MM = 38.0   # 色センサーは車軸の 38mm 前(sumo_rally_transition と同じ)
     LINE_BLACK_MAX_V = 40           # 黒線は V≈13、白は約99。土俵の灰色の線を黒と取らないよう低めにする
     LINE_CONFIRM = 2                # 続けて黒を見た回数
+    # 2026-11-18: 1回だけでも十分に暗ければ黒線とする。押す速さでは読む間隔が最大23mm(同じ値の読み直しも混じる)で、
+    # 幅約20mmの黒線を1回しか読めず見逃した(07:40、V=19 の1回だけ)。範囲の中に暗いものは黒線しか無い(土俵の灰色は V≈80)。
+    LINE_SINGLE_MAX_V = 25
     LINE_WINDOW_MM = 200.0          # 推定でこの範囲にセンサーがある間だけ探す(11/18: 押す間の滑りで推定が最大約14cm 先に出た)
     LINE_MAX_SHIFT_MM = 170.0       # これより大きく直す必要が出たら見間違いとして使わない
 
@@ -738,7 +741,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         if self._line_count == 0:
             self._line_first = (sensor_x, (h, s, v))
         self._line_count += 1
-        if self._line_count < self.LINE_CONFIRM:
+        if self._line_count < self.LINE_CONFIRM and v > self.LINE_SINGLE_MAX_V:
             return
         self._line_done = True
         first_x, first_hsv = self._line_first
