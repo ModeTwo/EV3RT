@@ -1210,6 +1210,11 @@ class EtRallyStartPoseCapture(Behaviour):
                 self.logger.warning("start pose: camera process not running, skipped")
                 return Status.SUCCESS
             return Status.RUNNING
+        if self.proc.ready is None and not self.proc.alive():
+            # 2026-11-18: 子が落ちていたら待たない(別のラズパイの full で、落ちた子を15秒+α 待って約22秒止まっていた)
+            self.logger.warning("start pose: camera process exited (code %s) before it was ready, skipped. stderr: %s (%s)" % (
+                self.proc.proc.poll(), self.proc.stderr_tail() or "-", getattr(self.proc, "stderr_path", None)))
+            return Status.SUCCESS
         if self.proc.ready is None and now - self.start_time < self.MAX_WAIT_SEC:
             return Status.RUNNING   # カメラが開くのを待つ
         if self.counting_since is None:

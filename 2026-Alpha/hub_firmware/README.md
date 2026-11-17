@@ -1,5 +1,15 @@
 # ハブのプログラム(asp.bin)の書き換え記録
 
+## 書き込み方(2026-11-17、どのラズパイでも)
+ETラリーは brakecal 版(このフォルダの asp_brakecal_904096d_v011.bin、md5 b7370340f8d21a40a0986a96f073e614)が前提。
+1. ラズパイで `cd ~/EV3RT && git pull origin devSS`(このファイルが来る)。
+2. ハブのUSBを抜いて電源を切り、Bluetoothボタンを押しながらUSBを挿し、LEDが点滅するまで押す(書き込みモード)。
+3. ラズパイで次を実行する(~/libraspike-art が必要)。
+   ```
+   cd ~/libraspike-art/spike && sudo ../scripts/deploy-dfu.sh ~/EV3RT/2026-Alpha/hub_firmware/asp_brakecal_904096d_v011.bin
+   ```
+4. ハブの電源を入れ直す。起動時に `SPIKE asp.bin version=0.1.0 expected=0.1.1` が出なければ書き込めている。
+
 2026-10-29。ジャイロのくせ(bias)を、ブレーキで止まっている間もハブ自身が測り直すようにした版を試すための記録。
 
 ## 元に戻す方法
