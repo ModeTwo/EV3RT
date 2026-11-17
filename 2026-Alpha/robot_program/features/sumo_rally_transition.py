@@ -374,7 +374,7 @@ class MoveToRallyBlue(Behaviour):
     GROUND_SPIN_MIN_DEG = 6.0     # これより大きくずれていれば、まずその場で向き直る(小さければ走りながら向ける)
     GROUND_MAX_DIST_MM = 1000.0
     GROUND_MIN_DIST_MM = 150.0
-    GROUND_DRIVE_POWER = 60
+    GROUND_DRIVE_POWER = 70   # 11/17: 60 で 547mm に2.5秒。止まりの行き過ぎは4mm だったので前と同じ70に
     _ground_camera = None
 
     def _ground(self, candidate):
@@ -385,7 +385,7 @@ class MoveToRallyBlue(Behaviour):
             from .. import et_rally_start_pose as sp
             cam = MoveToRallyBlue._ground_camera
             if cam is None or cam.calib_path != sp.DEFAULT_CALIB:
-                cam = MoveToRallyBlue._ground_camera = sp.GroundCamera(sp.DEFAULT_CALIB)
+                cam = MoveToRallyBlue._ground_camera = sp.GroundCamera(sp.DEFAULT_CALIB, build_map=False)
             # 画像は 640x480 の真ん中の16:9(640x360)を 320x180 に縮めたもの(py_etrobo_util/video.py の BOTTLE と同じ)
             u, v = 2.0 * float(candidate["cx"]), 2.0 * float(candidate["cy"]) + 60.0
             n = cv2.undistortPoints(np.array([[[u, v]]], np.float64), cam.K, cam.dist).reshape(2)

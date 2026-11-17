@@ -23,6 +23,9 @@ FINE_MIN_POWER = 50
 # 2026-11-16(devSSとのマージ): 回す量に使うタイヤ径。マージ前の EtRallySpinAroundByEncoder が使っていた
 # ET_RALLY_TIRE_DIAMETER(56.87)のまま固定する(devSS で ETラリーの値は 55.56 に変わり、旋回は直進と同じ径を使う形になったため)。
 LEGACY_TIRE_DIAMETER = 56.87
+# 2026-11-17(devSS、ユーザー): 仕上げで一度行き過ぎて戻ったあとは、この度数以内なら止める(細かい往復で遅くなっていた)。
+# 旋回のあとの直進・ライントレースは目標の向きへ寄せるので、この程度の残りは吸収される。
+SETTLE_AFTER_REVERSAL_DEG = 1.5
 
 
 class EncoderSpin(EtRallySpinAroundByEncoder):
@@ -38,7 +41,8 @@ class EncoderSpin(EtRallySpinAroundByEncoder):
             fine_max_power=fine_max, fine_min_power=fine_min,
             pid_p=pid_p, pid_i=pid_i, pid_d=pid_d, target_type=target_type,
             fine_tolerance_deg=tolerance, fine_trim=fine_trim,
-            tire_diameter_mm=LEGACY_TIRE_DIAMETER)
+            tire_diameter_mm=LEGACY_TIRE_DIAMETER,
+            settle_after_reversal_deg=max(SETTLE_AFTER_REVERSAL_DEG, tolerance))
 
 
 class LocalEncoderSpin(EncoderSpin):

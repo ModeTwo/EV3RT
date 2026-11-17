@@ -162,8 +162,13 @@ class EtRallySpinAroundByEncoder(Behaviour):
                  fine_trim: bool = True, backlash_preload_deg: float = 0.0,
                  lag_compensation_deg: float = 0.0,
                  adaptive_lag_compensation: bool = False,
-                 left_target_scale: float = 1.0, tire_diameter_mm: float = None) -> None:
+                 left_target_scale: float = 1.0, tire_diameter_mm: float = None,
+                 settle_after_reversal_deg: float = None) -> None:
         super(EtRallySpinAroundByEncoder, self).__init__(name)
+        # 2026-11-17(devSS、ユーザー): 仕上げで一度行き過ぎて向きを反転したあとは、誤差がこの度数以内なら止める
+        # (None なら従来どおり fine_tolerance_deg まで続ける)。ETラリー以外の旋回(encoder_spin.EncoderSpin)が
+        # 出力50〜60のまま0.5°以内を狙って行き来し、13往復・約1.1秒かかっていた。
+        self.settle_after_reversal_deg = settle_after_reversal_deg
         # DD-22較正用: 片輪エンコーダテストで実測した、右輪の方が同じエンコーダ回転量に
         # 対して約0.9%多く実際の方位を変える(実効径・グリップの定常的な左右差)分を
         # 補正する。旋回のたびの「引き込まれ」(lag_compensation_deg)とは別の、
@@ -370,7 +375,9 @@ class EtRallySpinAroundByEncoder(Behaviour):
 
         # --- フェーズ2: ジャイロによる低パワーの仕上げ補正 ---
         error = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
-        if abs(error) < self.fine_tolerance_deg:
+        settle = self.settle_after_reversal_deg
+        settled = (settle is not None and self.oscillation.reversal_count >= 1 and abs(error) < settle)
+        if abs(error) < self.fine_tolerance_deg or settled:
             # 2026-09-14: 判定が通った瞬間、モーターを明示的に止めずにSUCCESSを
             # 返していたため、fine_min_power(50前後)で回っていた勢いのまま
             # 判定後も惰性で回り続け、毎回ほぼ一定量(28x90度/14x180度テストで
