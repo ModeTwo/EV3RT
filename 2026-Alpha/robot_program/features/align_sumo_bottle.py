@@ -115,6 +115,10 @@ class AlignSumoBottle(Behaviour):
         return row
 
     def _start_drive(self, now):
+        approach_power = (
+            90 if abs(self.settings.distance_mm - 1100.0) < 0.001
+            else self.settings.power
+        )
         if self.continuous_entry:
             if runtime.course not in (-1, 1):
                 raise ValueError("unsupported course for delivery-to-sumo")
@@ -138,7 +142,7 @@ class AlignSumoBottle(Behaviour):
             name="sumo prescribed straight approach",
             target=lambda distance_mm: target,
             target_type=HeadingType.ABSOLUTE,
-            power=self.settings.power,
+            power=approach_power,
             pid_p=self.motion_settings.drive_pid_p,
             pid_i=self.motion_settings.drive_pid_i,
             pid_d=self.motion_settings.drive_pid_d,
@@ -146,7 +150,7 @@ class AlignSumoBottle(Behaviour):
         )
         self.logger.info(
             "SUMO_ALIGN DRIVE distance=%.1f power=%d"
-            % (self.settings.distance_mm, self.settings.power)
+            % (self.settings.distance_mm, approach_power)
         )
 
     def initialise(self):

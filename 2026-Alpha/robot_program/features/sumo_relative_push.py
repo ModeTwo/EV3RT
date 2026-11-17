@@ -75,6 +75,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         """実行ごとの状態を初期化する。機器登録・タッチ開始はalphaが担当する。"""
         self.nc_samples = []
         self.angle_policy = None
+        self.context.sumo.rally_turn_reference = None
         self.approach_bearing = None
         self.capture_assumed = False
         self.latest_raw = None
@@ -119,6 +120,11 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.angle_policy = alignment_push_policy(
             self.push_settings, self.approach_bearing, current_bearing(self.context)
         )
+        self.context.sumo.rally_turn_reference = {
+            "course": runtime.course,
+            "approach_bearing": self.approach_bearing,
+            "bottle_delta": self.angle_policy["actual_alignment_delta_deg"],
+        }
         self.logger.info("SUMO_RELATIVE ANGLE " + str(self.angle_policy))
         if not self.execute:
             return AlignSumoBottle._finish_recording(
@@ -227,6 +233,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
                     * delta(desired, self.capture_camera_heading)
                 )
                 self.capture_camera_last_at = t
+                self.capture_camera_hold_logged = False
                 self.capture_camera_next_at = (
                     now + settings.capture_camera_update_interval_sec
                 )
@@ -238,9 +245,19 @@ class RelativeAlignAndPush(AlignAndCatchTest):
                     "correction=%.2f target=%.2f"
                     % (frame, error, correction, self.capture_camera_heading)
                 )
-        # Repeated frames never extend this capture-time based timeout.
-        if now - self.capture_camera_last_at > settings.capture_camera_loss_timeout_sec:
-            return self._nc_fail("capture camera target lost")
+        # 画像を失っても最後の目標方位で接近を継続する。
+        # 接近距離上限と超音波判定は既存処理で維持する。
+        age = now - self.capture_camera_last_at
+        if not math.isfinite(age) or age < 0:
+            return self._nc_fail("invalid capture camera timestamp")
+        if age > settings.capture_camera_loss_timeout_sec:
+            if not getattr(self, "capture_camera_hold_logged", False):
+                self.logger.info(
+                    "SUMO_RELATIVE CAPTURE_CAMERA_LOST_HOLD_HEADING "
+                    "age=%.3f target=%.2f"
+                    % (age, self.capture_camera_heading)
+                )
+                self.capture_camera_hold_logged = True
         return None
 
     def _encoder_pair(self):
@@ -585,6 +602,10 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             "SUMO_RELATIVE CAPTURE_CONFIRMED_MOVING raw=%s progress=%.1f"
             % (self.latest_raw, progress)
         )
+        return self._start_capture_push_transition(now)
+
+    def _start_capture_push_transition(self, now):
+        """捕獲確認の有無によらず、既存の回避判定に従う。"""
         self._release_capture_drive()
         bearing = current_bearing(self.context)
         if (not self.angle_policy["toward_green"] or
@@ -592,7 +613,8 @@ class RelativeAlignAndPush(AlignAndCatchTest):
             self._push(now)
             return self._drive_forward(now, 0.0, bearing)
         self.turn = ContinuousReturnTurn(
-            "relative return after capture", self.context,
+            ("relative return after capture" if self.capture_assumed
+             else "relative return without capture confirmation"), self.context,
             self.angle_policy["push_bearing_deg"],
             max_power=self.push_settings.turn_power,
             min_power=self.push_settings.turn_power,
@@ -617,14 +639,16 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.drive = None
 
     def _push_without_capture(self, now, progress):
-        """未捕捉の上限到達は旋回せず、指定距離の押しと後退へ進む。"""
+        """捕獲未確認でも緑床回避を経由して押し出しへ続行する。"""
         self.capture_assumed = False
-        self.capture_leg_mm = max(0.0, self._forward_mm_from(self.capture_encoder_origin))
-        self.logger.info("SUMO_RELATIVE CAPTURE_NOT_CONFIRMED_CONTINUE progress=%.1f" % progress)
-        self._release_capture_drive()
-        bearing = current_bearing(self.context)
-        self._push(now)
-        return self._drive_forward(now, 0.0, bearing)
+        self.capture_leg_mm = max(
+            0.0, self._forward_mm_from(self.capture_encoder_origin)
+        )
+        self.logger.info(
+            "SUMO_RELATIVE CAPTURE_NOT_CONFIRMED_CONTINUE progress=%.1f"
+            % progress
+        )
+        return self._start_capture_push_transition(now)
 
     def _update_stationary_confirmation(self, now, bearing, progress, evidence):
         """捕捉成立までは測距を確認し、旋回後は停止待ちのみ行う。"""
@@ -729,7 +753,8 @@ class RelativeAlignAndPush(AlignAndCatchTest):
 def build_relative_push(context, config):
     from dataclasses import replace
 
-    push_settings = config.sumo_relative_push
+    # 捕獲確認は 0 < raw <= 90。無効値の除外条件は維持。
+    push_settings = replace(config.sumo_relative_push, capture_raw_max=90)
     catch = replace(
         config.sumo_catch,
         distance_mm=push_settings.capture_max_mm,

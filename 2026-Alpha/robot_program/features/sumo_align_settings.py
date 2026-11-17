@@ -19,7 +19,7 @@ class SumoAlignSettings:
     center_tolerance_px: float = 8.0
     max_stationary_heading_error_deg: float = 2.0
     max_turn_step_deg: float = 20.0
-    max_turns: int = 3
+    max_turns: int = 2
     turn_timeout_sec: float = 4.0
     overall_timeout_sec: float = 40.0
 

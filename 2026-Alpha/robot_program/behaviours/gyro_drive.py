@@ -57,6 +57,46 @@ class SpinAround(Behaviour):
         self.target_heading = 0.0
         self.pid = None
 
+    def _predictive_brake_reached(self, heading, error):
+        # 有効化した青い丸の補正旋回だけで使用する。
+        horizon = getattr(self, "predictive_brake_horizon_sec", 0.0)
+        if horizon <= 0.0:
+            return False
+
+        import math
+        import time
+        now = time.monotonic()
+        previous = getattr(self, "_predictive_previous", None)
+        self._predictive_previous = (now, heading)
+        if previous is None:
+            return False
+
+        dt = now - previous[0]
+        if not 0.0001 <= dt <= 0.2:
+            return False
+
+        velocity = (
+            heading - previous[1] + 180.0
+        ) % 360.0 - 180.0
+        velocity /= dt
+        if not math.isfinite(velocity) or abs(velocity) > 720.0:
+            return False
+        if error * velocity <= 0.0:
+            return False
+
+        allowance = min(
+            3.0,
+            max(self.tolerance, abs(velocity) * horizon + 0.25),
+        )
+        if abs(error) > allowance:
+            return False
+
+        self.logger.info(
+            "BLUE_PREDICTIVE_BRAKE error=%.2f velocity=%.1f allowance=%.2f"
+            % (error, velocity, allowance)
+        )
+        return True
+
     def update(self) -> Status:
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
         current_heading = -runtime.course * runtime.gyro_sensor.get_angle()
@@ -65,6 +105,7 @@ class SpinAround(Behaviour):
                 self.target_heading = current_heading + self.target
             else:
                 self.target_heading = self.target
+            self._predictive_previous = None
             self.pid = PID(
                 self.pid_p,
                 self.pid_i,
@@ -89,6 +130,8 @@ class SpinAround(Behaviour):
             if self.normalize_error
             else raw_error
         )
+        if self._predictive_brake_reached(current_heading, error):
+            return Status.SUCCESS
         if abs(error) < self.tolerance:
             self.logger.info(
                 "%+06d %s.spin ended at heading=%d"
