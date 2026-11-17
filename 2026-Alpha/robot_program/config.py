@@ -28,6 +28,8 @@ class RaceConfig:
     #start_lap_mode: str = 'legacy'
     #start_lap_mode: str = 'alltrace'
     start_lap_power: int = 100
+    # fullのLAP最終直線上限。100に変更すれば従来速度に戻る。
+    start_lap_final_straight_power: int = 75
     # 車軸中心から最初のカーブまで。アーム先端から500mm＋前方100mm。
     start_lap_first_straight_mm: float = 600.0
     # 最初のカーブ以降の距離倍率。別途実測するまでは旧表の長さを維持。

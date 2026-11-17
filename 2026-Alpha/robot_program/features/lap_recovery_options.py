@@ -30,9 +30,9 @@ def dark_entry_edge_mode():
 
 def blue_unconfirmed_limit_mm():
     """Maximum projected distance after a blue candidate without confirmed black."""
-    value = os.environ.get('LAP_BLUE_UNCONFIRMED_LIMIT_MM', '350')
-    if value not in ('300', '350', '450'):
-        raise ValueError('LAP_BLUE_UNCONFIRMED_LIMIT_MM must be 300, 350 or 450')
+    value = os.environ.get('LAP_BLUE_UNCONFIRMED_LIMIT_MM', '320')
+    if value not in ('300', '320', '350', '450'):
+        raise ValueError('LAP_BLUE_UNCONFIRMED_LIMIT_MM must be 300, 320, 350 or 450')
     return float(value)
 
 
