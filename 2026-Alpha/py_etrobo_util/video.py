@@ -40,6 +40,8 @@ def round_up_to_odd(f) -> int:
 # frame size for Raspberry Pi USB camera capture
 # 2026-11-17(devSS): ボトルの候補で、幅が高さのこの倍を超える横長の塊(床の線など)は、ほかに候補があれば選ばない
 BOTTLE_PICK_MAX_ASPECT = 2.5
+# 2026-11-17(devSS): ボトルの候補で、いちばん大きい塊のこの割合より小さい塊は選ばない
+BOTTLE_PICK_MIN_AREA_RATIO = 0.4
 IN_FRAME_WIDTH_QR  = 1920
 IN_FRAME_HEIGHT_QR = 1080
 IN_FRAME_WIDTH     = 640
@@ -662,6 +664,10 @@ class Video(object):
                         best = max(blobs, key=lambda b: b[0])
                     else:
                         upright = [b for b in blobs if b[4][2] <= BOTTLE_PICK_MAX_ASPECT * max(b[4][3], 1)] or blobs
+                        # 2026-11-17(devSS、ユーザー): いちばん大きい塊の BOTTLE_PICK_MIN_AREA_RATIO 未満の小さい塊は選ばない
+                        # (真ん中に近い面積157の青を、面積635の黄より先に選んだ場面があった)
+                        biggest = max(b[0] for b in upright)
+                        upright = [b for b in upright if b[0] >= BOTTLE_PICK_MIN_AREA_RATIO * biggest] or upright
                         best = min(upright, key=lambda b: (abs(b[2] - FRAME_WIDTH / 2), -b[0]))
                         colors = set(b[1] for b in upright)
                         now_pick = time.monotonic()
