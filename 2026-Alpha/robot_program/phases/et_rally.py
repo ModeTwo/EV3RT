@@ -143,13 +143,18 @@ def build_et_rally_phase(context, config):
     children = [EtRallyTimeBudgetStart("et_rally time budget start", getattr(config, "et_rally_time_total", None)),
                 EtRallyBatteryLog("et_rally battery begin", "begin")]
     # 2026-10-29: 四捨五入前の向き・止まっている間のずれの差し引き(robot_program/et_rally_heading.py)。
-    float_heading = bool(getattr(config, "et_rally_gyro_float_heading", None))
-    drift_compensation = bool(getattr(config, "et_rally_gyro_drift_compensation", None))
+    float_heading = gyro_tire_calibration and bool(getattr(config, "et_rally_gyro_float_heading", None))
+    drift_compensation = gyro_tire_calibration and bool(getattr(config, "et_rally_gyro_drift_compensation", None))
     # 2026-10-30: 左回り(headingが減る向き)だけの倍率。
-    scale_neg = getattr(config, "et_rally_gyro_scale_neg", None)
-    scale_pos = getattr(config, "et_rally_gyro_scale_pos", None)
-    install_heading = gyro_tire_calibration and (float_heading or drift_compensation or scale_neg is not None
-                                                 or scale_pos is not None)
+    scale_neg = getattr(config, "et_rally_gyro_scale_neg", None) if gyro_tire_calibration else None
+    scale_pos = getattr(config, "et_rally_gyro_scale_pos", None) if gyro_tire_calibration else None
+    full_file = config.mission_mode == "full" and config.et_rally_strategy_source == "file"
+    install_heading = full_file or float_heading or drift_compensation or scale_neg is not None or scale_pos is not None
+
+    def full_file_plan_origin():
+        # 青丸での正対目標は、競技スタートから右コースが+90°、左が-90°。
+        # ツリー構築後に記録されるリセット値を、ラリー開始時に参照する。
+        return context.sumo.bearing_reference.reset_gyro_deg - runtime.course * 90.0
     if gyro_tire_calibration:
         children.extend([
             # 通しの実行ではラップゲート後に有効済み(何もしない)。ETラリーだけ単独で走らせる場合の保険。
@@ -165,7 +170,7 @@ def build_et_rally_phase(context, config):
         children.append(SetGyroScaleDisabled("et_rally gyro scale disabled", True))
     if install_heading:
         children.append(InstallEtRallyHeading("et_rally heading", float_heading, drift_compensation, scale_neg,
-                                              scale_pos))
+                                              scale_pos, plan_origin=full_file_plan_origin if full_file else None))
     # 2026-11-10: カメラ(スタートの取り込み・走行中の画像)は子プロセスで動かす。開くのに時間がかかるので最初に起動する。
     camera_log_every = getattr(config, "et_rally_camera_log_every", None)
     use_start_pose = bool(getattr(config, "et_rally_start_pose", None))

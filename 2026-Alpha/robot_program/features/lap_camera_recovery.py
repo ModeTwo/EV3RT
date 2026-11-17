@@ -1,5 +1,5 @@
 """LAP camera merge and gate control using the standard VideoThread."""
-import json, math, time
+import json, math, time, os
 from collections import deque, Counter
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status, ParallelPolicy
@@ -14,6 +14,7 @@ from .start_to_lap_gate import RunByGyroSpeedDownatCurve, speed_profile
 from .lap_straight_window import final_zero_window
 from .lap_recovery_options import (
     decision_offset_mm,
+    unseen_estimate_distance,
     dark_heading_mode,
     approach_mode,
     blue_unconfirmed_limit_mm,
@@ -98,18 +99,23 @@ RECOVERY_PEAK_DEG=8.0
 
 FALLBACK_AFTER_GATE_MM=150.0
 UNSEEN_GATE_FALLBACK_AFTER_MM=100.0  # 青未検知時のみ推定ゲートから50 mm短縮
+UNSEEN_ESTIMATE_SLOW_BEFORE_GATE_MM=190.0
+UNSEEN_ESTIMATE_MIN_SLOW_MM=50.0
 
 GATE_STOP_RECORD_SEC=0.5
 
-REACQUIRE_LIMIT_MM=60.0
-
-REACQUIRE_LIMIT_SEC=0.15
+# Explicit comparison mode; normal full-mission behavior remains unchanged.
+REACQUIRE_MODE=os.environ.get('LAP_REACQUIRE_MODE', 'baseline').lower()
+if REACQUIRE_MODE not in ('baseline', 'extended'):
+    raise ValueError('LAP_REACQUIRE_MODE must be baseline or extended')
+REACQUIRE_LIMIT_MM=100.0 if REACQUIRE_MODE == 'extended' else 60.0
+REACQUIRE_LIMIT_SEC=0.25 if REACQUIRE_MODE == 'extended' else 0.15
 
 ENTRY_SIDE_LIMIT_MM=90.0
 
 ENTRY_SIDE_LIMIT_SEC=0.22
 
-BLUE_TO_BLACK_LIMIT_MM=300.0
+BLUE_TO_BLACK_LIMIT_MM=120.0
 LATE_BLUE_BLACK_GAP_MM=150.0
 
 
@@ -215,9 +221,13 @@ class BlueThenBlackGate(Behaviour):
                 return self._confirm(progress, raw_progress, hsv, 'weak')
             if delta <= BLUE_TO_BLACK_LIMIT_MM:
                 return Status.RUNNING
-            self.weak_blue_progress = None
-            self.weak_blue_samples = 0
-            self.weak_blue_last_progress = None
+            # A confirmed weak-blue candidate remains the fallback anchor even
+            # if black is not seen within the bounded search window.
+            self.saw_blue = True
+            self.blue_progress = self.weak_blue_progress
+            self.black_window_expired = True
+            self.logger.warning('LAP_GATE_WEAK_BLUE_EXPIRED blue_mm=%.1f progress_mm=%.1f' % (self.blue_progress, progress))
+            return Status.RUNNING
 
         h, s, v = hsv
         if 205 <= h <= 215 and s >= LAP_WEAK_BLUE_MIN_S and LAP_WEAK_BLUE_MIN_V <= v < LAP_BLUE_MIN_V:
@@ -334,10 +344,13 @@ class Peak100ContinuousLap(RunByGyro):
     def initialise(self):
         self.native_capture_enabled = False
         self.handoff_complete=False;self.camera_direction=None;self.camera_search_logged=False;self.target=self.profile_target;self.pre_gate_trace=None;self.pre_gate_side=None;self.pre_gate_white_count=0;self.floor_classifier=ColorClassifier();self.trace_motor_samples=deque(maxlen=500);self.trace_motor_total=0;self.trace_projection=None;self.trace_projection_base=None
-        self.transition_phase=None;self.transition_start=None;self.transition_time=None;self.gate_latched=False;self.recovery_attempts=0;self.edge_count=0;self.recovery_direction=None;self.frozen_camera_frame=None;self.frozen_camera_stream=None;self.fallback_done=False;self.fallback_reason=None;self.fallback_gate_base=None;self.transition_samples=deque(maxlen=500);self.transition_total=0;self._diag_context=None;self.entry_seek_parent=None;self.approach_near=False
+        self.transition_phase=None;self.transition_start=None;self.transition_time=None;self.gate_latched=False;self.recovery_attempts=0;self.edge_count=0;self.recovery_direction=None;self.frozen_camera_frame=None;self.frozen_camera_stream=None;self.fallback_done=False;self.fallback_reason=None;self.fallback_gate_base=None;self.transition_samples=deque(maxlen=500);self.transition_total=0;self._diag_context=None;self.entry_seek_parent=None;self.approach_near=False;self.entry_dark_hold=None;self.entry_dark_hold_used=False
         self.cross_direction = None
         self.cross_saw_dark = False
         self.cross_pending_entry_dark = False
+        self.unseen_estimate_started = False
+        self.unseen_estimate_cancelled = False
+        self.cross_initial_mid_tone = False
         self.cross_min_v = None
         self.cross_last_v = None
         self.cross_rise_count = 0
@@ -595,19 +608,28 @@ class Peak100ContinuousLap(RunByGyro):
         if self.far_entry_hold:
             return None
         if (self.profile_white_samples < PROFILE_REJOIN_WHITE_SAMPLES
-                or self.camera_direction not in (-1, 1) or self._profile_rejoin_pending_gate()
+                or self.camera_direction not in (-1, 0, 1) or self._profile_rejoin_pending_gate()
                 or progress >= self.distance_limit_mm - RECOVERY_LIMIT_MM):
             return None
 
         now = time.monotonic()
         snapshot = self.profile_rejoin_source.snapshot
-        opposite = 'RIGHT' if self.camera_direction < 0 else 'LEFT'
+        center_origin = self.camera_direction == 0
+        if center_origin:
+            if (not snapshot or snapshot.get('side') not in ('LEFT', 'RIGHT')
+                    or not isinstance(snapshot.get('x'), (int, float))
+                    or not math.isfinite(snapshot['x'])
+                    or abs(snapshot['x'] - lap_camera_reference_x()) < 20.0):
+                return None
+            opposite = snapshot['side']
+        else:
+            opposite = 'RIGHT' if self.camera_direction < 0 else 'LEFT'
         if (snapshot is None or snapshot['side'] != opposite
                 or snapshot['stream'] != self.frozen_camera_stream
                 or snapshot['frame'] <= self.frozen_camera_frame
                 or not 0 <= now - snapshot['capture_time'] <= CAMERA_MAX_AGE_SEC):
             return None
-        if far_entry_policy() == 'evidence' and self.far_entry_disabled_reason is None:
+        if not center_origin and far_entry_policy() == 'evidence' and self.far_entry_disabled_reason is None:
             gyro = float(runtime.gyro_sensor.get_angle())
             heading = -runtime.course * gyro
             toward = self.camera_direction * (-runtime.course) * ((heading - self.heading_origin + 180.0) % 360.0 - 180.0)
@@ -712,11 +734,17 @@ class Peak100ContinuousLap(RunByGyro):
         self.cross_entry_frame = frame if source == 'camera' else None
         self.cross_dark_observed = hsv[1] <= 45 and hsv[2] <= LINE_CROSS_DARK_V
         self.cross_pending_entry_dark = bool(source == 'dark_entry' and self.cross_dark_observed)
+        # V40..60 alone is not proof of black: require a later white run and a
+        # fresh camera vote on the other side before initiating recovery.
+        self.cross_initial_mid_tone = bool(source == 'camera' and isinstance(frame, int)
+                                          and hsv[1] <= 45 and 40 <= hsv[2] <= 60)
         self.cross_white_samples = 0
         self.cross_last_white_distance = None
         self._transition_start('CROSS', distance, now)
         self.logger.info('LAP_LINE_CROSS_START progress_mm=%.1f hsv=%s direction=%d frame=%s source=%s'
                          % (distance - self.origin_distance, hsv, direction, frame, source))
+        if self.cross_initial_mid_tone:
+            self.logger.info('LAP_MID_ENTRY_CANDIDATE v=%d frame=%d; await white and opposite camera vote' % (hsv[2], frame))
 
     def _update_early_return(self, distance, now, hsv, heading, error):
         if self.gate_latched:
@@ -750,7 +778,7 @@ class Peak100ContinuousLap(RunByGyro):
             self._transition_drive(self.heading_origin, heading)
             return Status.RUNNING
 
-        if ((self.cross_white_recovery or self.live_camera_recovery) and self.cross_entry_frame is not None
+        if ((self.cross_white_recovery or self.live_camera_recovery or self.cross_initial_mid_tone) and self.cross_entry_frame is not None
                 and self._cross_needs_recovery(distance, now, hsv)):
             snapshot = self.side_source.snapshot
             self.logger.info('LAP_CROSS_WHITE_RECOVERY raw_mm=%.1f cross_mm=%.1f white_samples=%d '
@@ -864,6 +892,15 @@ class Peak100ContinuousLap(RunByGyro):
             gate_read=True
             if self.completion_condition.status==Status.SUCCESS:
                 self.gate_latched=True;self.logger.info('LAP_TRANSITION gate_latched=True progress_mm=%.1f' % progress)
+        plan = self._unseen_estimate_plan()
+        gate = self.completion_condition
+        blue_evidence = self._unseen_blue_evidence(gate)
+        if self.unseen_estimate_started and blue_evidence and not self.unseen_estimate_cancelled:
+            self.unseen_estimate_cancelled = True
+            self.logger.info('LAP_UNSEEN_ESTIMATE_CANCEL reason=blue_evidence progress_mm=%.1f' % progress)
+        if (self.transition_phase != 'FALLBACK' and plan and not self.gate_latched
+                and not blue_evidence and progress >= plan[0]):
+            return self._start_fallback('unseen_estimate')
         if self.transition_phase=='FALLBACK':
             if self.gate_latched and self.fallback_gate_base is None:
                 self.fallback_gate_base=float(self.completion_condition.black_progress)
@@ -885,6 +922,19 @@ class Peak100ContinuousLap(RunByGyro):
                 base=self.fallback_estimated_gate_mm;source='estimated'
             slow_confirmed = self.confirmed_fallback_slow and self.fallback_gate_base is not None
             slow_blue = self.confirmed_fallback_slow and gate is not None and getattr(gate, 'saw_blue', False)
+            if (source == 'estimated' and plan and not self.unseen_estimate_cancelled
+                    and not blue_evidence and progress >= plan[0]):
+                if not self.unseen_estimate_started:
+                    if progress > plan[1] - UNSEEN_ESTIMATE_MIN_SLOW_MM:
+                        self.unseen_estimate_cancelled = True
+                        self.logger.warning('LAP_UNSEEN_ESTIMATE_SKIPPED reason=late progress_mm=%.1f target_mm=%.1f' % (progress,plan[1]))
+                    else:
+                        self.unseen_estimate_started = True
+                        self.logger.info('LAP_UNSEEN_ESTIMATE_SLOW progress_mm=%.1f target_mm=%.1f power=%d' % (progress,plan[1],TRACE_POWER))
+                if self.unseen_estimate_started and progress >= plan[1]:
+                    self.fallback_done = True
+                    self.logger.warning('LAP_UNSEEN_ESTIMATE_DONE progress_mm=%.1f target_mm=%.1f blue_confirmed=False' % (progress,plan[1]))
+                    return self._finish_distance_run(Status.SUCCESS)
             after_mm = (self.confirmed_fallback_after_mm if slow_confirmed else
                         UNSEEN_GATE_FALLBACK_AFTER_MM if source == 'estimated' else FALLBACK_AFTER_GATE_MM)
             if slow_confirmed:
@@ -916,7 +966,7 @@ class Peak100ContinuousLap(RunByGyro):
                 self.fallback_blue_slow_logged = True
                 self.logger.info('LAP_FALLBACK_BLUE_SLOW power=%d blue_mm=%.1f gate_confirmed=False'
                                  % (TRACE_POWER, gate.blue_progress))
-            self._transition_drive(self.heading_origin,-runtime.course*gyro, slow=slow_confirmed or slow_blue)
+            self._transition_drive(self.heading_origin,-runtime.course*gyro, slow=slow_confirmed or slow_blue or self.unseen_estimate_started)
             return Status.RUNNING
         if self.transition_phase == 'GATE_REJOIN' and self.gate_latched:
             return self._finish_distance_run(Status.SUCCESS)
@@ -950,6 +1000,22 @@ class Peak100ContinuousLap(RunByGyro):
             self._start_line_cross(distance, now, hsv, direction, 'dark_entry', snapshot['frame'])
             return self._update_line_cross(distance, now, hsv, heading, error)
         if self.transition_phase=='ENTRY_SEEK':
+            # Left course: preserve the observed approach heading briefly when
+            # the floor has become deeply dark, instead of straightening on it.
+            if (not self.entry_dark_hold_used and runtime.course == 1 and s <= 45
+                    and v <= LINE_CROSS_DARK_V and not self._profile_rejoin_pending_gate()
+                    and 2.0 <= (heading-self.heading_origin)*self.camera_direction*(-runtime.course) <= 14.0):
+                self.entry_dark_hold=(distance,now,heading)
+                self.entry_dark_hold_used=True
+                self.logger.info('LAP_ENTRY_DARK_HOLD_START raw_mm=%.1f heading=%.1f hsv=%s limit_mm=30.0' % (raw,heading,hsv))
+            if self.entry_dark_hold is not None:
+                start,started,target=self.entry_dark_hold
+                traveled=distance-start;held=now-started
+                if 0 <= traveled < 30.0 and 0 <= held < 0.15 and s <= 45 and v <= 45 and not self._profile_rejoin_pending_gate():
+                    self._transition_drive(target,heading)
+                    return Status.RUNNING
+                self.logger.info('LAP_ENTRY_DARK_HOLD_END raw_mm=%.1f traveled_mm=%.1f elapsed=%.3f hsv=%s' % (raw,traveled,held,hsv))
+                self.entry_dark_hold=None
             delta=distance-self.transition_start;elapsed=now-self.transition_time
             parent=self.entry_seek_parent
             parent_expired=parent is not None and (distance-parent[0]>=RECOVERY_LIMIT_MM or now-parent[1]>=RECOVERY_LIMIT_SEC or distance<parent[0] or now<parent[1])
@@ -1067,6 +1133,17 @@ class Peak100ContinuousLap(RunByGyro):
         self._transition_start('FALLBACK',distance,now)
         self.logger.warning('LAP_FALLBACK_START reason=%s estimated_gate_mm=%.1f gate_latched=%s unseen_gate_after_mm=%.1f' % (reason,self.fallback_estimated_gate_mm,self.gate_latched,UNSEEN_GATE_FALLBACK_AFTER_MM))
         return self._transition_update()
+    @staticmethod
+    def _unseen_blue_evidence(gate):
+        return bool(gate is None or getattr(gate, 'saw_blue', False)
+                    or getattr(gate, 'weak_blue_progress', None) is not None
+                    or getattr(gate, 'weak_blue_samples', 0))
+    def _unseen_estimate_plan(self):
+        distance = unseen_estimate_distance()
+        if distance is None or self.camera_start_mm is None:
+            return None
+        slow_at = self.fallback_estimated_gate_mm - UNSEEN_ESTIMATE_SLOW_BEFORE_GATE_MM
+        return slow_at, slow_at + distance
     def update(self):
         if self.running and self.transition_phase is not None:return self._transition_update()
         if self.running and self.camera_start_mm is None:
@@ -1074,6 +1151,22 @@ class Peak100ContinuousLap(RunByGyro):
             if progress >= self.distance_limit_mm:
                 return self._start_fallback('no_final_zero_window')
             return self._profile_update()
+        if self.running:
+            plan = self._unseen_estimate_plan()
+            gate = self.completion_condition
+            if plan and not self._unseen_blue_evidence(gate):
+                progress = float(runtime.plotter.get_distance()) - self.origin_distance
+                if self.trace_projection is not None:
+                    try:self.trace_projection.update(runtime.plotter)
+                    except ValueError:return self._finish_distance_run(Status.FAILURE)
+                    progress = self.projected_progress()
+                if progress >= plan[0]:
+                    gate.tick_once()
+                    if gate.status == Status.SUCCESS:
+                        self.gate_latched = True
+                        return self._finish_distance_run(Status.SUCCESS)
+                    if not self._unseen_blue_evidence(gate):
+                        return self._start_fallback('unseen_estimate')
         if self.running and self.live_camera_recovery:
             distance = float(runtime.plotter.get_distance())
             progress = distance - self.origin_distance
@@ -1097,7 +1190,7 @@ class Peak100ContinuousLap(RunByGyro):
                         self.logger.info('LAP_CAMERA_SEARCH start_mm=%.1f deadline_mm=%.1f; continue profile' % (progress,self.camera_deadline_mm));self.camera_search_logged=True
                     return self._profile_update()
                 self.camera_direction={'LEFT':-1,'RIGHT':1,'CENTER':0}[snapshot['side']]
-                deadband=merge_deadband()
+                deadband=max(12.0, merge_deadband())
                 if abs(snapshot['x']-lap_camera_reference_x())<=deadband:self.camera_direction=0
                 self.logger.info('LAP_CAMERA_DEADBAND x=%.1f reference=%.1f deadband_px=%.1f voted_side=%s direction=%d' % (snapshot['x'],lap_camera_reference_x(),deadband,snapshot['side'],self.camera_direction))
                 self.frozen_camera_frame=snapshot.get('frame')
@@ -1427,6 +1520,8 @@ class RollingCameraMerge(CameraMergeDemo):
             # The preceding gate condition is BLUE followed by classified BLACK.
             gate=getattr(boundary_lap,'completion_condition',None)
             gate_confirmed=bool(getattr(gate,'confirmed',False))
+            if gate_confirmed:
+                self.post_trace_target_mm, _ = confirmed_black_approach_mm(gate, boundary_lap.confirmed_fallback_after_mm)
             if gate_confirmed and self.post_gate_steer == 'gyro':
                 self.post_gate_gyro_active = True
                 self.phase = 'TRACE'
@@ -1458,7 +1553,9 @@ class RollingCameraMerge(CameraMergeDemo):
                 self.trace_origin=distance;self.phase='TRACE';self.last_trace_log=0.0
                 self.logger.info('LAP_FLOOR_HANDOFF floor_hsv=%s frozen_direction=%d trace_side=%s camera_majority=%s' %
                                  ((h,s,v),frozen_direction,side.name,snapshot['side'] if snapshot else None))
-                self._start_trace_projection()
+                self.post_trace_projection = getattr(gate, 'measure_projection', None)
+                if self.post_trace_projection is None:
+                    self._start_trace_projection()
                 return self._update_projected_trace()
             self.logger.info('LAP_FLOOR_CHECK floor_hsv=%s frozen_direction=%s camera_majority=%s' %
                              ((h,s,v),frozen_direction,snapshot['side'] if snapshot else None))
@@ -1623,7 +1720,7 @@ def build_lap_camera_recovery(context, config, original):
     lap.line_entry = 'cross_rejoin'
     lap.gate_recovery = 'baseline'
     lap.confirmed_fallback_slow = True
-    lap.confirmed_fallback_after_mm = 200.0
+    lap.confirmed_fallback_after_mm = 150.0
     gate = BlueThenBlackGate(lap, allow_weak_blue=True)
     lap.completion_condition, lap.completion_min_mm = gate, lap.observation_start_mm if lap.observation_start_mm is not None else math.inf
     continuous_to = config.mission_mode in ('lap-to', 'lap-to-sumo', 'full')
@@ -1648,10 +1745,12 @@ def build_lap_camera_recovery(context, config, original):
     if not continuous_to:
         root_children.append(DumpTransitionDiagnostics(lap))
     root.add_children(root_children)
+    print('LAP_REACQUIRE_POLICY mode=%s limit_mm=%.1f limit_sec=%.2f' % (REACQUIRE_MODE, REACQUIRE_LIMIT_MM, REACQUIRE_LIMIT_SEC), flush=True)
     print('LAP_CAMERA_REFERENCE_X value=%.1f' % lap_camera_reference_x(), flush=True)
     print('LAP_DEVTK_PROFILE source=%s correction_start_mm=%s' % (type(original).__name__, lap.camera_start_mm), flush=True)
-    print('LAP_RECOVERY enabled=True trace_target_v=%d gate=combined post_gate=gyro confirmed_mm=200 fallback_unseen_mm=100 fallback_blue_mm=150' % trace_target_v(), flush=True)
+    print('LAP_RECOVERY enabled=True trace_target_v=%d gate=combined post_gate=gyro confirmed_mm=150 fallback_unseen_mm=100 fallback_blue_mm=150' % trace_target_v(), flush=True)
     print('LAP_ADAPTIVE_PEAK_POLICY far_peak_deg=%.1f initial_offset_px=%.1f ramp_mm=%.1f' % (far_peak_deg(), ADAPTIVE_INITIAL_OFFSET_PX, ADAPTIVE_RAMP_MM), flush=True)
     print('LAP_DARK_ENTRY_EDGE_POLICY mode=%s' % dark_entry_edge_mode(), flush=True)
-    print('LAP_GATE_DISTANCE_POLICY total_limit_mm=%.1f late_gap_mm=%.1f normal_after_black_mm=200' % (blue_unconfirmed_limit_mm(), LATE_BLUE_BLACK_GAP_MM), flush=True)
+    print('LAP_GATE_DISTANCE_POLICY total_limit_mm=%.1f late_gap_mm=%.1f normal_after_black_mm=150' % (blue_unconfirmed_limit_mm(), LATE_BLUE_BLACK_GAP_MM), flush=True)
+    print('LAP_UNSEEN_ESTIMATE after_slow_mm=%s slow_before_estimated_gate_mm=%.1f' % (unseen_estimate_distance(), UNSEEN_ESTIMATE_SLOW_BEFORE_GATE_MM), flush=True)
     return root

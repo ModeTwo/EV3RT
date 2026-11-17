@@ -319,11 +319,14 @@ def build_tantou_tree(context, config, include_exit=True):
             qr_reader=read_qr1,
             target=40,
             slow_power=50,
-            fast_power=65,
+            fast_power=70,
             pid_p=1.1,
             pid_i=0.00075,
             pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
+            target_type=HeadingType.ABSOLUTE,
+            distance_mm=760,
+            decel_mm=50,
+            decel_min_power=20
         ),
     
         IsDistanceEarned(
@@ -363,11 +366,14 @@ def build_tantou_tree(context, config, include_exit=True):
             context=context,
             name="run_after_qr_200mm",
             target=40,
-            power=60,
+            power=70,
             pid_p=1.1,
             pid_i=0.00075,
             pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
+            target_type=HeadingType.ABSOLUTE,
+            distance_mm=250,
+            decel_mm=50,
+            decel_min_power=20
         ),
     
         IsDistanceEarned(
@@ -593,7 +599,10 @@ def build_tantou_tree(context, config, include_exit=True):
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
-        target_type=HeadingType.ABSOLUTE
+        target_type=HeadingType.ABSOLUTE,
+        distance_mm=950,
+        decel_mm=100,
+        decel_min_power=40
     )
 
 
@@ -779,8 +788,8 @@ def build_tantou_tree(context, config, include_exit=True):
         name="run_to_black_2_01",
         qr_reader=read_qr2,
         target=105,
-        slow_power=80,
-        fast_power=80,
+        slow_power=50,
+        fast_power=75,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
@@ -816,12 +825,15 @@ def build_tantou_tree(context, config, include_exit=True):
         name="run_to_black_2",
         qr_reader=read_qr2,
         target=105,
-        slow_power=80,
+        slow_power=50,
         fast_power=80,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
-        target_type=HeadingType.ABSOLUTE
+        target_type=HeadingType.ABSOLUTE,
+        distance_mm=200,
+        decel_mm=50,
+        decel_min_power=20
     ),
     
     IsBlackDetected(
@@ -868,7 +880,10 @@ def build_tantou_tree(context, config, include_exit=True):
             pid_p=1.1,
             pid_i=0.00075,
             pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
+            target_type=HeadingType.ABSOLUTE,
+            distance_mm=200,
+            decel_mm=50,
+            decel_min_power=20
         ),
     
         IsBlackDetected(

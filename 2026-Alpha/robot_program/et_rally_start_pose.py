@@ -1316,8 +1316,12 @@ class EtRallyApplyStartPose(Behaviour):
             return Status.SUCCESS
         gyro = runtime.gyro_sensor
         if hasattr(gyro, "set_heading_offset"):
-            # 計画の向き(heading = -course × ジャイロ)で -dth になるように、ジャイロの向きに course × dth を足す。
-            gyro.set_heading_offset(getattr(runtime, "course", -1) * dth)
+            # 計画座標での向きが -dth になるようにジャイロを補正する。
+            offset = getattr(runtime, "course", -1) * dth
+            if getattr(gyro, "plan_origin_deg", None) is not None:
+                # fullでは正対の残差をジャイロが既に持つため、カメラの測定との差だけ足す。
+                offset = _nd(offset - (gyro.get_angle() - gyro.heading_offset))
+            gyro.set_heading_offset(offset)
         else:
             self.logger.warning("start pose: gyro has no heading offset (EtRallyHeading not installed), heading not applied")
         _applied = (x, y, h)
