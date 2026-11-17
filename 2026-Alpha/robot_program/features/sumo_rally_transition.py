@@ -296,6 +296,17 @@ class TurnAfterBlue(Behaviour):
         self.trims = 0
 
     def _new_turn(self, target, power, tolerance, name):
+        self.exit_target_bearing = target
+        if self.EXIT_SETTLE:
+            # 2026-11-18 2回目: SpinToBearing は先読みブレーキでも出力55で約6°、仕上げの出力50でも約4°行き過ぎた(ロボットA)。
+            # ボトル配置の旋回で残りが 0.0〜0.1° だったエンコーダ旋回(フェーズ1+ジャイロの仕上げ)に替える。
+            from ..behaviours.encoder_spin import EncoderSpin
+            from ..types import HeadingType
+            raw = float(runtime.gyro_sensor.get_angle())
+            heading = self.context.sumo.bearing_reference.legacy_target(target, raw, runtime.course)
+            return EncoderSpin(name=name, target=heading, max_power=power, min_power=power,
+                               pid_p=0.2, pid_i=0.00075, pid_d=0.03,
+                               target_type=HeadingType.ABSOLUTE, tolerance=tolerance)
         motion = self.config.sumo
         turn = SpinToBearing(
             name=name, context=self.context, bearing=target,
@@ -304,8 +315,6 @@ class TurnAfterBlue(Behaviour):
             tolerance=tolerance,
         )
         turn.stall_boost = True
-        if self.EXIT_SETTLE:
-            turn.predictive_brake_horizon_sec = 0.01
         return turn
 
     def _settle(self):
@@ -320,7 +329,7 @@ class TurnAfterBlue(Behaviour):
             return Status.RUNNING
         if now - self.settle_since < self.SETTLE_SEC:
             return Status.RUNNING
-        target = self.turn.target_bearing
+        target = self.exit_target_bearing
         error = (target - current_bearing(self.context) + 180.0) % 360.0 - 180.0
         self.logger.info(
             "BLUE_EXIT_SETTLE bearing=%.2f target=%.2f error=%+.2f trims=%d"
@@ -329,7 +338,7 @@ class TurnAfterBlue(Behaviour):
             return Status.SUCCESS
         self.trims += 1
         self.settle_since = None
-        self.turn = self._new_turn(target, 50, 0.5, "face rally direction trim")
+        self.turn = self._new_turn(target, 50, 0.3, "face rally direction trim")
         self.logger.info("BLUE_EXIT_TRIM %d error=%+.2f" % (self.trims, error))
         return Status.RUNNING
 
@@ -347,7 +356,8 @@ class TurnAfterBlue(Behaviour):
 
             target = 90.0 if runtime.course == -1 else 270.0
             # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(stall_boost、gyro_drive.SpinAround)
-            self.turn = self._new_turn(target, 55, 1.0, "face rally direction after blue arrival")
+            self.turn = self._new_turn(target, 55, 0.5 if self.EXIT_SETTLE else 1.0,
+                                       "face rally direction after blue arrival")
             self.logger.info(
                 "BLUE_EXIT_TURN START course=%s bearing=%.2f "
                 "target=%.2f power=55"
@@ -358,7 +368,7 @@ class TurnAfterBlue(Behaviour):
         if self.turn.status == Status.SUCCESS:
             self.logger.info(
                 "BLUE_EXIT_TURN COMPLETE bearing=%.2f target=%.2f"
-                % (current_bearing(self.context), self.turn.target_bearing)
+                % (current_bearing(self.context), self.exit_target_bearing)
             )
             if self.EXIT_SETTLE:
                 return self._settle()
