@@ -1871,9 +1871,10 @@ def _run_main(argv, startup_cleanup):
     if args.rally_plan_path is not None:
         # PC接続・Hint計算を一切使わず、指定したplan.json(steps形式)をそのまま実行する
         # (直進距離やキャスター引きずりの実機較正など、固定動作だけを試したいときに使う)。
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+        # 2026-11-17(ユーザー): full でも、計画ファイルを指定して走れる(配置を決めて試すとき。ヒントは読むが計画はこのファイル)
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS + ('full',):
             parser.error(
-                "--rally-plan-path requires --mission rally-drive, bottle-rally or rally-sumo"
+                "--rally-plan-path requires --mission full, rally-drive, bottle-rally or rally-sumo"
             )
         mission_config = dataclasses.replace(
             mission_config, et_rally_strategy_source='file', et_rally_plan_path=args.rally_plan_path)
