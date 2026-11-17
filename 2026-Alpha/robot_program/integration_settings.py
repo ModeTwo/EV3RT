@@ -87,8 +87,9 @@ class IntegrationSettings:
     to_spin_max_power: int = 65
     # 2026-11-17(devSS、ユーザー): ボトルをアームに挟んで押しながら運ぶ旋回(ヒント2のあと、ボトル置き場へ向く旋回)の出力。
     # 65 では勢いでボトルがアームの間から出ていきそうだった。止まって動かないときに上げる出力の上限も同じ値にする。
-    delivery_carry_turn_power: int = 50
-    delivery_carry_turn_stall_cap: int = 60
+    # 11/17夜: 50 ではボトル置き場へ向く旋回が動かずに約14秒止まった → 60(ユーザー)。上げる上限は70
+    delivery_carry_turn_power: int = 60
+    delivery_carry_turn_stall_cap: int = 70
     # Hint2後の移動完了位置から、黄→青→赤のドロップゾーン前を進む。
     delivery_trace_target_v: int = 75
     delivery_trace_power: int = 50
