@@ -919,6 +919,7 @@ class MoveToRallyBlue(Behaviour):
     # 止める命令から止まるまでに進む分(出力70)。devAT が色センサーの止め方で実測した手前補正(StableBlueArrival.STOP_ADVANCE_MM)
     # と同じ値。11/17 の4回でも、止めたあと約25〜40mm 進んでいた。
     GROUND_STOP_ADVANCE_MM = 39.0
+    AIM_LEFT_MM = 0.0
     _ground_camera = None
 
     def _ground(self, candidate):
@@ -950,6 +951,9 @@ class MoveToRallyBlue(Behaviour):
     def _decide_from_ground(self, ground):
         import math
         fwd, left = ground
+        # 2026-11-18(devSS): 狙いを丸の中心から左へ AIM_LEFT_MM ずらす(--rally-blue-aim-left-mm、既定0)。
+        # ロボットA・右コースで、ラリーのスタートの取り込みが毎回横に約25mm ずれていた(ばらつき約5mm)。
+        left = left + self.AIM_LEFT_MM
         dist = math.hypot(fwd, left)
         angle = math.degrees(math.atan2(left, fwd))      # 車軸から見た丸の中心の向き、左が+
         correction = -angle                               # 方位(bearing)は時計回りが+

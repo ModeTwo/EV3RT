@@ -1559,6 +1559,8 @@ def _run_main(argv, startup_cleanup):
                               'a position offset re-plans the first connection (default off).'))
     parser.add_argument('--rally-blue-stop-extra-mm', type=float, default=None,
                         help='2026-11-18: stop this much further at the blue circle (colour-sensor stop). Default 0.')
+    parser.add_argument('--rally-blue-aim-left-mm', type=float, default=None,
+                        help='2026-11-18: aim this many mm to the left of the blue circle centre seen by the camera. Default 0.')
     parser.add_argument('--rally-blue-exit-settle', action='store_true',
                         help=('2026-11-18: after the blue circle, turn to the rally direction with the predictive brake, wait '
                               'until stopped and trim if the heading is off by more than 0.5 deg (log BLUE_EXIT_SETTLE).'))
@@ -1980,6 +1982,12 @@ def _run_main(argv, startup_cleanup):
         from robot_program.features.sumo_rally_transition import StableBlueArrival as _sba
         _sba.EXTRA_MM = float(args.rally_blue_stop_extra_mm)
         print(' -- blue circle stop extra: %+.1f mm' % _sba.EXTRA_MM, flush=True)
+    if args.rally_blue_aim_left_mm is not None:
+        if not -60.0 <= args.rally_blue_aim_left_mm <= 60.0:
+            parser.error('--rally-blue-aim-left-mm must be between -60 and 60')
+        from robot_program.features.sumo_rally_transition import MoveToRallyBlue as _mtb
+        _mtb.AIM_LEFT_MM = float(args.rally_blue_aim_left_mm)
+        print(' -- blue circle aim: %+.1f mm to the left' % _mtb.AIM_LEFT_MM, flush=True)
     if args.rally_blue_exit_settle:
         from robot_program.features.sumo_rally_transition import TurnAfterBlue as _tab
         _tab.EXIT_SETTLE = True
