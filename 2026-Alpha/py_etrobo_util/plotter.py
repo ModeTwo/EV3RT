@@ -89,8 +89,12 @@ class Plotter(object):
         left_delta = left_count - previous['emit_left']
         # 2026-11-18(ユーザー): 止まっている間(両輪とも2秒以上変わらない)は10秒に1行だけにする。
         # 走り終わったあとも0.2秒ごとに出続けてログが流れ続けていた。動き出せばすぐ元の間隔に戻る。
-        idle = (right_delta == 0 and left_delta == 0
-                and now - previous['right_changed'] >= 2.0 and now - previous['left_changed'] >= 2.0)
+        # 2026-11-18 2回目: ブレーキで止まっていても片輪が ±1° 行き来し続ける(ロボットA)ので、±1° 以内は止まっているとみなす。
+        if abs(right_delta) <= 1 and abs(left_delta) <= 1:
+            previous.setdefault('still_since', now)
+        else:
+            previous.pop('still_since', None)
+        idle = now - previous.get('still_since', now) >= 2.0
         if idle and now - previous.get('printed', 0.0) < 10.0:
             previous.update(emit_time=now, emit_right=right_count, emit_left=left_count)
             return
