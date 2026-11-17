@@ -51,6 +51,47 @@ PARAMS = dict(
     # (平行で隣の列のゲートは間隔24.64cmが車体より短く、抜けきる・手前から入るの条件で数cm戻っていた)。0で無効。
     # start_any_gate: 赤をくぐり始めるまでは、赤以外のゲートをくぐってよい(色の順番は赤から数える)。
     same_laps=True, join_max_cm=8.0, start_any_gate=True,
+    # 2026-11-16(ユーザー: つなぎ目を道具の側で直す): そのまま続けてよい横のずれ(cm)。以前は 0.3 で、黄を斜めに抜けた円弧の
+    # 1.5mm の横のずれでも次の赤の入りへそのまま続け、短い直進で斜めに取り戻していた(計画ではゲートの中の円弧なしの折れ、
+    # その直進は当たり判定もしていなかった)。0.02 にすると、ずれのある組は普通のつなぎ方を探す。
+    join_lat_cm=0.3,
+    # 2026-11-16(ユーザー): つなぎの区間ごとの例外のすき間。広いすき間で作ったつなぎより、fast_margins の順(広い方から)のすき間で
+    # fast_gain_sec 以上速くなる区間だけ、その区間だけ狭くする(配置全体は狭くしない。つなぎは1周に1回なので、1周0.5秒以上速いとき)。
+    # 狭い配置でなければ下限は2cm(ユーザー)。空なら使わない。
+    fast_margins=[], fast_gain_sec=0.5,
+    time_pairs=False,
+    # 2026-11-17(全配置の計算の順番・ユーザー): True なら、狭い配置(最初のすき間で通れないゲートがある)は候補を作った段階で
+    # 'DEFERRED narrow' と出して終わる(run_all.py の1回目で後回しにする)。
+    defer_narrow=False,
+    # 2026-11-17 計測用: 3つ目のゲートが、つなぎの探索に関わったか(調べた形の範囲に入ったか)を数える(time_pairs と一緒に)
+    measure_third=False,
+    # 2026-11-16(計算時間): 行き止まりの判定。車体には車軸を中心とした半径 min(前, 後ろ, 横幅の半分) の円が入るので、脚から
+    # (その半径 + すき間の下限)、進入禁止から(その半径)より近くには車軸が来られない。そう太らせた障害物とゲートの線(壁)で格子を
+    # 領域に分け、抜けと入りの姿勢が別の領域のつなぎは試さずに「つながらない」にする(どんな走り方でもつながらないので結果は同じ)。
+    # 道具は円弧を点で調べるので、太らせる量を conn_prune_slack だけ小さくする。ゲートの間のつなぎ(赤→青・青→黄・黄→赤)だけ。
+    conn_prune=False, conn_prune_slack=1.5,
+    # 2026-11-16(計算時間): 例外のすき間(fast_margins)を、確定したつなぎ全部ではなく、決まった経路で使っているつなぎだけで試す
+    # (経路が決まるたびに試し、速くなれば解き直す)。
+    fast_lazy=False,   # 2026-11-16 計測用: つなぎごとの計算時間と決まり方をログに出す
+    # 2026-11-16(計算時間): 例外のすき間で選ばれた経路が、例外なしより何秒速いかの見込み(使ったつなぎの差 × 使った回数)が
+    # これ未満なら、例外を元に戻して解き直し、例外なしの経路を出す(run_layout.py が例外なしでもう1回計算しなくて済む)。
+    fast_keep_min_sec=0.0,   # run_layout.py は 1.0 にする(既定の 0 は使わない)
+    # 2026-11-16(計算時間): 遠回り・曲がってからつなぐの1本の走り(_best_run)でも、確実に当たる候補を numba で先に飛ばす。
+    # 結果は変わらない見込み(確かめてから既定にする)。
+    # 2026-11-16(計算時間・ユーザー): 平行に動かすと同じ形になる配置どうしで、ゲートの間のつなぎ(赤→青・青→黄・黄→赤)を使い回す。
+    # 使い回すのは、直接つなぐ候補で決まり、決めるまでに調べたどの形も進入禁止の長方形に届かなかったつなぎだけ(そうでないつなぎは
+    # 毎回計算する)。その条件なら、平行に動かした配置でも同じ候補が同じ理由で捨てられるので、最初から計算したのと同じつなぎになる。
+    # 空なら使わない。ファイルは形ごと(run_all.py が同じ形の配置を同じ作業者で続けて計算する)。
+    reuse_file='',
+    # 2026-11-16(計算時間・案B): 遠回りの中継の点を、ゲートの格子の点から P/3(8.21cm)おきに置く(平行に動かしても中継の点が
+    # ずれないので、つなぎを配置をまたいで共有できる)。False なら今まで(BOUNDS の角から wp_step おき)。
+    wp_grid=False,
+    # 2026-11-16(計算時間・案B): ゲートの間のつなぎを、配置をまたいで共有する SQLite のファイル。つなぎを確定するときに調べた範囲を
+    # 記録し、その範囲の中の障害物(脚・ゲートの線・進入禁止・中継の点を置く範囲)が同じ配置でだけ結果を使う(最初から計算したのと
+    # 同じつなぎになる)。wp_grid=True と一緒に使う。空なら使わない。
+    share_db='',
+    line_kernel=0,   # 2026-11-16(計算時間): 1 なら直線の当たり判定(_line_check)の前半を numba の1回の呼び出しで(同じ結果)
+    run_kernel=0,   # 1: 候補ごとに numba を呼ぶ版、2: 1回の呼び出しにまとめた版(同じ結果)
     # final_min_clear_cm: 最後の周の黄(そのあとガレージへ向かう)の通り方は、脚とのすき間がこれ以上のものだけにする(0で無効)。
     # 2026-11-12 実機: 配置36で最後の黄だけ反対向きから25°斜めに通り抜ける計画(すき間1.70cm)になり、その手前で大きく
     # 回り込む円弧(カメラがほとんど床の点を見ない)の間に約2cm 右にずれて、右側が脚に当たった。ユーザー決定で2cmにする。
@@ -59,6 +100,12 @@ PARAMS = dict(
     final_yellow_visits=[],
     # 2段階探索の2段目: 色ごとに使う通り方 [sign, mode, angle, angle_out] だけに絞る(空なら絞らない)
     visit_filter={},
+    # 2026-11-17(ユーザーの経路案の確かめ用): {色: [通る向き sign, ...]} の向きで、前進(F)で通る候補だけにする。空なら使わない。
+    visit_signs={},
+    # 2026-11-17 ユーザー: 狭い配置で、すき間を下げたとき(margin_list[0] より小さいすき間で候補を作るとき)だけ、ゲートを真ん中から
+    # 横にずらして通る候補も作る(cm、ゲートの線の向き。斜めの通過も含む)。#244 で黄を 0.5〜0.75cm 赤の側へずらすと、
+    # 青の脚とのすき間が 1.6 → 2.1cm になる(真ん中を通る候補しかなく、2cm で通れなかった)。空なら使わない。
+    narrow_offsets=[],
     # 狭い配置の判定(2026-11-09): この順にすき間を試し、3色ともゲートを通る候補がある最初のすき間で探索する。
     # 候補を作るだけなので約1秒で分かる。空なら margin_front/margin_rear のまま。
     margin_list=[],
@@ -167,6 +214,7 @@ for k in list(PARAMS):
     if v is not None:
         d = PARAMS[k]
         PARAMS[k] = ([float(x) for x in v.split(',')] if isinstance(d, list) else
+                     json.loads(v) if isinstance(d, dict) else   # 2026-11-17: 辞書は JSON で渡す(visit_signs など)
                      (v == '1' if isinstance(d, bool) else type(d)(v)))
 globals().update({k.upper(): v for k, v in PARAMS.items()})
 
@@ -483,6 +531,13 @@ def body_keepout_mask(px, py, hdeg):
         return np.zeros(len(px), bool)
     if not KEEPOUT_BODY:
         return in_keepout(px, py)
+    # 2026-11-16(計算時間): どの進入禁止の長方形にも車体が届かないなら、向きの計算などをせずに返す(下のループと同じ判定を先に)
+    reach0 = math.hypot(max(FRONT, REAR), HALF_WIDTH) + 1.0
+    if len(px):
+        xmn, xmx, ymn, ymx = float(px.min()), float(px.max()), float(py.min()), float(py.max())
+        if not any(not (xmx + reach0 < x0 or xmn - reach0 > x1 or ymx + reach0 < y0 or ymn - reach0 > y1)
+                   for x0, x1, y0, y1 in KEEPOUT):
+            return np.zeros(len(px), bool)
     h = np.radians(np.asarray(hdeg, float))
     if _KO_CORNERS is None:
         _KO_CORNERS = [[(x, y) for x in (x0, x1) for y in (y0, y1) if abs(x) < INF / 2 and abs(y) < INF / 2]
@@ -560,7 +615,44 @@ def line_ok(a, b, m, allow=None):
     return ok
 
 
+_KO_ARR = None
+
+
 def _line_check(a, b, m, allow=None):
+    if LINE_KERNEL and hr_kernels.AVAILABLE and GATE_MODEL == 'rect':
+        return _line_check_k(a, b, m, allow)
+    return _line_check0(a, b, m, allow)
+
+
+def _line_check_k(a, b, m, allow=None):
+    """_line_check0 と同じ判定。点の並び・向きの三角関数は同じ numpy の式で作り、判定の順番どおりに numba で調べる。"""
+    global _KO_ARR
+    v = b - a; L = float(np.hypot(*v))
+    if L < 1e-6:
+        return True
+    h = math.atan2(v[1], v[0]) + (0 if m > 0 else math.pi)
+    if m > 0:
+        f0, f1, r0, r1 = 0.0, L + FRONT, -REAR, L
+    else:
+        f0, f1, r0, r1 = -L, FRONT, -L - REAR, 0.0
+    n = max(2, int(L / 2) + 1)
+    xs = np.linspace(a[0], b[0], n); ys = np.linspace(a[1], b[1], n)
+    if _KO_ARR is None:
+        _KO_ARR = np.array([[float(v_) for v_ in r_] for r_ in KEEPOUT], float).reshape(-1, 4)
+    gs = [(pa[0], pa[1], pb[0], pb[1]) for pa, pb, col in GSEG
+          if not (col == allow or col == _ALLOW_TAB or (_EXEMPT_ON and START_ANY_GATE and col != 'red'))]
+    gsegs = np.array(gs, float).reshape(-1, 4)
+    hh = np.array([h])
+    if not hr_kernels.line_core(xs, ys, gsegs, _KO_ARR, float(np.cos(hh)[0]), float(np.sin(hh)[0]), float(a[0]), float(a[1]),
+                                float(f0), float(f1), float(r0), float(r1), float(HALF_WIDTH), float(MARGIN_FRONT), float(MARGIN_REAR),
+                                float(_RO) if GATE_MODEL == 'rect' else 0.0,
+                                LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, POST_HV, _POST_CORNERS4):
+        return False
+    nb = max(2, int(L) + 1)
+    return not body_keepout(np.linspace(a[0], b[0], nb), np.linspace(a[1], b[1], nb), np.full(nb, math.degrees(h)))
+
+
+def _line_check0(a, b, m, allow=None):
     v = b - a; L = float(np.hypot(*v))
     if L < 1e-6:
         return True
@@ -640,7 +732,71 @@ def arc_ok(pr, allow=None):
     return ok
 
 
+_ARC_K_STATIC = None
+
+
+def _arc_k_static():
+    """arc_core に渡す、配置ごとに変わらない配列(進入禁止の長方形と角、車体の輪郭、スタートの除外)。body_keepout_mask と同じ作り方。"""
+    global _ARC_K_STATIC, _KO_CORNERS, _START_EXEMPT, _BODY_OUTLINE
+    if _ARC_K_STATIC is None:
+        if _KO_CORNERS is None:
+            _KO_CORNERS = [[(x, y) for x in (x0, x1) for y in (y0, y1) if abs(x) < INF / 2 and abs(y) < INF / 2]
+                           for x0, x1, y0, y1 in KEEPOUT]
+        if _BODY_OUTLINE is None:
+            _BODY_OUTLINE = (np.concatenate([np.linspace(-REAR, FRONT, 14), np.full(8, FRONT), np.linspace(FRONT, -REAR, 14), np.full(8, -REAR)]),
+                             np.concatenate([np.full(14, HALF_WIDTH), np.linspace(HALF_WIDTH, -HALF_WIDTH, 8), np.full(14, -HALF_WIDTH),
+                                             np.linspace(-HALF_WIDTH, HALF_WIDTH, 8)]))
+        xs_, ys_ = _BODY_OUTLINE
+        if _START_EXEMPT is None:
+            sb = [(START[0] + a * math.cos(math.radians(START_H)) - b * math.sin(math.radians(START_H)),
+                   START[1] + a * math.sin(math.radians(START_H)) + b * math.cos(math.radians(START_H)))
+                  for a, b in zip(xs_, ys_)]
+            _START_EXEMPT = {k for k, (x0, x1, y0, y1) in enumerate(KEEPOUT) if any(x0 < x < x1 and y0 < y < y1 for x, y in sb)}
+        K = len(KEEPOUT)
+        ko = np.array([[float(v_) for v_ in r_] for r_ in KEEPOUT], float).reshape(-1, 4)
+        kc = np.zeros((K, 4, 2)); nc = np.zeros(K, np.int64)
+        for k in range(K):
+            nc[k] = len(_KO_CORNERS[k])
+            for j, (x, y) in enumerate(_KO_CORNERS[k]):
+                kc[k, j, 0] = x; kc[k, j, 1] = y
+        ex = np.array([k in _START_EXEMPT for k in range(K)], np.bool_)
+        _ARC_K_STATIC = (ko, kc, nc, ex, np.asarray(xs_, float), np.asarray(ys_, float))
+    return _ARC_K_STATIC
+
+
 def _arc_check(pr, allow=None):
+    if LINE_KERNEL and hr_kernels.AVAILABLE and GATE_MODEL == 'rect' and _RO <= 0:
+        return _arc_check_k(pr, allow)
+    return _arc_check0(pr, allow)
+
+
+def _arc_check_k(pr, allow=None):
+    """_arc_check0 と同じ判定(_RO = 0 のとき)。点の並び・向き・三角関数は同じ numpy の式で作り、判定を numba で。"""
+    _, c, r, theta, sgn, sweep, m, p0 = pr
+    xs, ys, hb = arc_samples(pr)
+    n = len(xs) - 1
+    h = np.radians(np.asarray(hb, float))
+    cs = np.cos(h); sn = np.sin(h)
+    ko, kc, nc, ex, ox, oy = _arc_k_static()
+    if not KEEPOUT:
+        ko = np.zeros((0, 4))
+    near_start = np.hypot(xs - START[0], ys - START[1]) <= START_EXEMPT_CM
+    ex_now = ex & bool(_EXEMPT_ON)
+    gs = [(pa[0], pa[1], pb[0], pb[1]) for pa, pb, col in GSEG
+          if not (col == allow or col == _ALLOW_TAB or (_EXEMPT_ON and START_ANY_GATE and col != 'red'))]
+    gsegs = np.array(gs, float).reshape(-1, 4)
+    code, i = hr_kernels.arc_core(np.asarray(xs, float), np.asarray(ys, float), cs, sn, LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV,
+                                  _LEG_CORNERS4, float(_RECT_REACH), float(FRONT), float(REAR), float(HALF_WIDTH),
+                                  float(MARGIN_FRONT), float(MARGIN_REAR), ko, kc, nc, ex_now, near_start, bool(KEEPOUT_BODY),
+                                  ox, oy, float(math.hypot(max(FRONT, REAR), HALF_WIDTH) + 1.0), gsegs)
+    if code == 1:
+        return False, sweep * max(i - 1, 0) / n
+    if code in (2, 3):
+        return False, 0.0
+    return True, None
+
+
+def _arc_check0(pr, allow=None):
     """(当たらないか, 当たる最初の角度rad)"""
     _, c, r, theta, sgn, sweep, m, p0 = pr
     xs, ys, hb = arc_samples(pr)
@@ -684,7 +840,74 @@ def pivot_ok(p, h_from, h_to):
     return _pivot_cache[key]
 
 
+_KO_TRACK = False   # 2026-11-16: True の間、調べた形が進入禁止の長方形に届いたら _KO_NEAR を True にする(reuse_file)
+_KO_NEAR = False
+_KO_EXP = None
+
+
+def _ko_touch(pr):
+    """形 pr の車体が通る範囲(外接の長方形 + 車体の一番遠い点 + 1cm)が、どれかの進入禁止の長方形に届くか(大きめに見る)。"""
+    global _KO_EXP
+    if not KEEPOUT:
+        return False
+    if _KO_EXP is None:
+        rr = math.hypot(max(FRONT, REAR), HALF_WIDTH) + 1.0 + max(PIVOT_BACK_CM, 0.0) + 1.0
+        _KO_EXP = [(x0 - rr, x1 + rr, y0 - rr, y1 + rr) for x0, x1, y0, y1 in KEEPOUT]
+    if pr[0] == 'line':
+        xs = (float(pr[1][0]), float(pr[2][0])); ys = (float(pr[1][1]), float(pr[2][1]))
+        xmn, xmx, ymn, ymx = min(xs), max(xs), min(ys), max(ys)
+    elif pr[0] == 'arc':
+        c, r = pr[1], float(pr[2])
+        xmn, xmx, ymn, ymx = float(c[0]) - r, float(c[0]) + r, float(c[1]) - r, float(c[1]) + r
+    else:
+        xmn = xmx = float(pr[1][0]); ymn = ymx = float(pr[1][1])
+    return any(not (xmx < x0 or xmn > x1 or ymx < y0 or ymn > y1) for x0, x1, y0, y1 in _KO_EXP)
+
+
+_REG = None   # 2026-11-16(share_db): 今確定しているつなぎで調べた範囲 [xmin, xmax, ymin, ymax](車軸の位置、広げる前)
+
+
+_THIRD = None      # 計測用: 3つ目のゲートの障害物の範囲のリスト [x0, x1, y0, y1](広げたもの)
+_TOUCH3 = False
+
+
+def _reg_add(xmn, xmx, ymn, ymx):
+    global _TOUCH3
+    if _THIRD is not None and not _TOUCH3:
+        for x0, x1, y0, y1 in _THIRD:
+            if not (xmx < x0 or xmn > x1 or ymx < y0 or ymn > y1):
+                _TOUCH3 = True
+                break
+    r = _REG
+    if xmn < r[0]: r[0] = xmn
+    if xmx > r[1]: r[1] = xmx
+    if ymn < r[2]: r[2] = ymn
+    if ymx > r[3]: r[3] = ymx
+
+
+def _reg_prim(pr):
+    if pr[0] == 'line':
+        _reg_add(min(float(pr[1][0]), float(pr[2][0])), max(float(pr[1][0]), float(pr[2][0])),
+                 min(float(pr[1][1]), float(pr[2][1])), max(float(pr[1][1]), float(pr[2][1])))
+    elif pr[0] == 'arc':
+        c, r = pr[1], float(pr[2])
+        _reg_add(float(c[0]) - r, float(c[0]) + r, float(c[1]) - r, float(c[1]) + r)
+    else:
+        pb = max(PIVOT_BACK_CM, 0.0)
+        _reg_add(float(pr[1][0]) - pb, float(pr[1][0]) + pb, float(pr[1][1]) - pb, float(pr[1][1]) + pb)
+
+
+def _reg_pair(A, B, pad):
+    _reg_add(min(float(A[0]), float(B[0])) - pad, max(float(A[0]), float(B[0])) + pad,
+             min(float(A[1]), float(B[1])) - pad, max(float(A[1]), float(B[1])) + pad)
+
+
 def prim_ok(pr):
+    global _KO_NEAR
+    if _REG is not None:
+        _reg_prim(pr)
+    if _KO_TRACK and not _KO_NEAR and _ko_touch(pr):
+        _KO_NEAR = True
     if pr[0] == 'line':
         return line_ok(pr[1], pr[2], pr[3])
     if pr[0] == 'arc':
@@ -946,7 +1169,10 @@ def _visit_candidates(g, pairs_override=None, only=None):
         for a_in, a_out, *rr in (pairs_override if pairs_override is not None else pairs):
             oblique = abs(a_in) > 1e-9 or abs(a_out) > 1e-9
             radii = (rr if rr else SPLIT_RADII) if abs(a_in - a_out) > 1e-9 else [0.0]
-            for off in (OFFSETS if not oblique else [0.0]):
+            offs = OFFSETS if not oblique else [0.0]
+            if NARROW_OFFSETS and MARGIN_LIST and MARGIN_FRONT < MARGIN_LIST[0] - 1e-9:
+                offs = sorted(set(list(offs) + [float(o) for o in NARROW_OFFSETS]), key=abs)
+            for off in offs:
                 C = g.c + g.t * off
                 for mode in modes:
                     if only is not None and (sg, mode) not in only:
@@ -1289,8 +1515,14 @@ def _wp():
     global _WPT, _WPP
     if _WPT is None:
         pts, poses = [], []
-        for x in np.arange(BOUNDS[0], BOUNDS[1] + 0.1, WP_STEP):
-            for y in np.arange(BOUNDS[2], BOUNDS[3] + 0.1, WP_STEP):
+        if WP_GRID:
+            st = P / 3.0
+            xr = [k * st for k in range(int(math.ceil(BOUNDS[0] / st - 1e-9)), int(math.floor((BOUNDS[1] + 0.1) / st)) + 1)]
+            yr = [k * st for k in range(int(math.ceil(BOUNDS[2] / st - 1e-9)), int(math.floor((BOUNDS[3] + 0.1) / st)) + 1)]
+        else:
+            xr = np.arange(BOUNDS[0], BOUNDS[1] + 0.1, WP_STEP); yr = np.arange(BOUNDS[2], BOUNDS[3] + 0.1, WP_STEP)
+        for x in xr:
+            for y in yr:
                 if in_keepout(np.array([x]), np.array([y]))[0]:
                     continue
                 hs = np.arange(WP_HEADINGS) * 360.0 / WP_HEADINGS
@@ -1375,6 +1607,8 @@ _arcfirst_memo = {}   # 2026-11-16: 抜けの姿勢 -> 曲がってからつな�
 
 
 def _best_run(A, hA, B, hB, m, tail, top=12):
+    if _REG is not None:
+        _reg_pair(A, B, 2.0 * max(RADII) + float(tail) + 1.0)
     key = (round(float(A[0]), 3), round(float(A[1]), 3), round(hA, 3), round(float(B[0]), 3), round(float(B[1]), 3),
            round(hB, 3), m, tail, _EXEMPT_ON, _ALLOW_TAB, top, MARGIN_FRONT, MARGIN_REAR)
     if key not in _run_cache:
@@ -1387,6 +1621,10 @@ def _best_run0(A, hA, B, hB, m, tail, top=12):
     add = 0.0 if m > 0 else 180.0
     thA, thB = math.radians(hA + add), math.radians(hB + add)
     Bm = B - tail * tdir(thB) if tail > 0 else B
+    if RUN_KERNEL and hr_kernels.AVAILABLE and GATE_MODEL == 'rect':
+        if RUN_KERNEL >= 2:
+            return _best_run_k2(A, hA, B, hB, m, tail, top, thA, thB, Bm)
+        return _best_run_k(A, hA, B, hB, m, tail, top, thA, thB, Bm)
     cands = []
     for r in RADII:
         for w in range(8):
@@ -1397,7 +1635,68 @@ def _best_run0(A, hA, B, hB, m, tail, top=12):
                 pr = pr + [('line', Bm, B, m)]
             cands.append((sum((prim_len(q) / (V_LINE if q[0] == 'line' else v_arc(q[2]))) for q in pr), pr))
     cands.sort(key=lambda c: c[0])
-    for _, pr in cands[:top]:
+    sel = cands[:top]
+    for c in sel:
+        if all(prim_ok(q) for q in c[1]):
+            return c[1]
+    return None
+
+
+_RADII_ARR = None
+
+
+def _best_run_k(A, hA, B, hB, m, tail, top, thA, thB, Bm):
+    """2026-11-16(計算時間): _best_run0 と同じ候補・同じ順番を、numba で選ぶ。候補の時間は形を作らずに出し(run_costs)、
+    確実に脚に当たる候補は形を作らずに飛ばし(next_option)、形を作って prim_ok で調べるのは残った候補だけ。"""
+    global _RADII_ARR
+    if _RADII_ARR is None:
+        _RADII_ARR = np.array([float(r) for r in RADII], float)
+    costs = hr_kernels.run_costs(float(A[0]), float(A[1]), float(thA), float(Bm[0]), float(Bm[1]), float(thB), _RADII_ARR,
+                                 float(ARC_K), float(V_LINE), float(HALF_TREAD), float(tail))
+    idx = np.argsort(costs, kind='stable')
+    idx = idx[np.isfinite(costs[idx])][:top]
+    n = len(idx)
+    if n == 0:
+        return None
+    order = np.arange(n, dtype=np.int64)
+    approx = costs[idx]
+    fam = np.zeros(n, np.int64); ms = np.full(n, int(m), np.int64)
+    rs = _RADII_ARR[idx // 8]; ws = (idx % 8).astype(np.int64)
+    ds = 0 if tail > 0 else int(m)
+    ptr = 0
+    while True:
+        ptr = hr_kernels.next_option(
+            float(A[0]), float(A[1]), float(hA), float(B[0]), float(B[1]), float(hB), ds, order, ptr, approx, INF / 2,
+            fam, ms, rs, ws, float(tail), float(PIVOT_BACK_CM), float(FRONT), float(REAR - _RO), float(HALF_WIDTH),
+            float(MARGIN_FRONT), float(MARGIN_REAR), LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, float(_RECT_REACH),
+            int(m), 0.0)
+        if ptr >= n:
+            return None
+        pr = dubins_one(A, thA, Bm, thB, float(rs[ptr]), int(ws[ptr]), m)
+        if pr is not None:
+            if tail > 0:
+                pr = pr + [('line', Bm, B, m)]
+            if all(prim_ok(q) for q in pr):
+                return pr
+        ptr += 1
+
+
+def _best_run_k2(A, hA, B, hB, m, tail, top, thA, thB, Bm):
+    """_best_run_k と同じ候補・同じ順番。numba の部分(時間・並べ替え・確実に当たる候補の飛ばし)を1回の呼び出しにまとめた版。"""
+    global _RADII_ARR
+    if _RADII_ARR is None:
+        _RADII_ARR = np.array([float(r) for r in RADII], float)
+    surv = hr_kernels.run_survivors(
+        float(A[0]), float(A[1]), float(hA), float(B[0]), float(B[1]), float(hB), float(thA), float(thB), float(Bm[0]), float(Bm[1]),
+        _RADII_ARR, float(ARC_K), float(V_LINE), float(HALF_TREAD), float(tail), int(top), int(m),
+        float(PIVOT_BACK_CM), float(FRONT), float(REAR - _RO), float(HALF_WIDTH), float(MARGIN_FRONT), float(MARGIN_REAR),
+        LEG_C, LEG_U, LEG_V, LEG_HU, LEG_HV, _LEG_CORNERS4, float(_RECT_REACH))
+    for i in surv:
+        pr = dubins_one(A, thA, Bm, thB, float(_RADII_ARR[i // 8]), int(i % 8), m)
+        if pr is None:
+            continue
+        if tail > 0:
+            pr = pr + [('line', Bm, B, m)]
         if all(prim_ok(q) for q in pr):
             return pr
     return None
@@ -1439,6 +1738,159 @@ def _pick_vias(lst):
     return out
 
 
+REUSE = None        # 2026-11-16: reuse_file から読んだ、ほかの配置で決まったつなぎ(形の原点からの座標)
+REUSE_NEW = {}      # この配置で新しく決まった、使い回せるつなぎ
+REUSE_STAT = {'hit': 0, 'bad': 0, 'miss': 0}
+ORIGIN = None       # この配置の形の原点(ゲートの点の x・y の最小、cm)
+
+
+def _canon_pose(p):
+    return (round(float(p[0][0]) - float(ORIGIN[0]), 3), round(float(p[0][1]) - float(ORIGIN[1]), 3), round(float(p[1]), 3), p[2])
+
+
+def _shift_prim(q, d):
+    """形 q を d だけ平行に動かす(d は np.array([dx, dy]))。"""
+    if q[0] == 'line':
+        return ('line', q[1] + d, q[2] + d, q[3])
+    if q[0] == 'arc':
+        return (q[0], q[1] + d, q[2], q[3], q[4], q[5], q[6], q[7] + d) + tuple(q[8:])
+    return ('pivot', q[1] + d) + tuple(q[2:])
+
+
+PAIR_T = {}; PAIR_K = {}; PAIR_3 = {}   # 計測用(time_pairs・measure_third)
+_CONN = {}          # すき間の下限 -> (格子の番号, x0, y0, 刻み)(conn_prune)
+CONN_STAT = {'pruned': 0, 'checked': 0}
+
+
+def _conn_grid(m):
+    """すき間の下限 m での行き止まりの判定用の、領域の番号の格子。"""
+    g = _CONN.get(m)
+    if g is not None:
+        return g
+    h = 1.0
+    x0, x1, y0, y1 = -60.0, 210.0, -70.0, 165.0
+    nx = int((x1 - x0) / h) + 1; ny = int((y1 - y0) / h) + 1
+    xs = x0 + h * np.arange(nx); ys = y0 + h * np.arange(ny)
+    X, Y = np.meshgrid(xs, ys)
+    rad = min(FRONT, REAR, HALF_WIDTH)
+    free = np.ones((ny, nx), bool)
+    infl = rad + m - CONN_PRUNE_SLACK
+    for (c, u, v, hu, hv) in LEGS:
+        dx = X - c[0]; dy = Y - c[1]
+        du = np.maximum(np.abs(dx * u[0] + dy * u[1]) - hu, 0.0); dv = np.maximum(np.abs(dx * v[0] + dy * v[1]) - hv, 0.0)
+        free &= np.hypot(du, dv) >= infl
+    ki = rad - CONN_PRUNE_SLACK
+    for kx0, kx1, ky0, ky1 in (KEEPOUT or []):
+        dx = np.maximum(np.maximum(kx0 - X, X - kx1), 0.0); dy = np.maximum(np.maximum(ky0 - Y, Y - ky1), 0.0)
+        inside = (X > kx0) & (X < kx1) & (Y > ky0) & (Y < ky1)
+        free &= ~inside & (np.hypot(dx, dy) >= ki)
+    # ゲートの線(越えられない壁): 線に触れるマスを全部ふさぐ(細かく刻んで、線が通るマスとその4近傍の境をふさぐ)
+    for pa, pb, col in GSEG:
+        L = float(np.hypot(*(pb - pa)))
+        n = int(L / (h * 0.25)) + 2
+        for t in np.linspace(0.0, 1.0, n):
+            px, py = pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t
+            ix = int(math.floor((px - x0) / h + 0.5)); iy = int(math.floor((py - y0) / h + 0.5))
+            for jy in (iy - 1, iy, iy + 1):
+                for jx in (ix - 1, ix, ix + 1):
+                    if 0 <= jy < ny and 0 <= jx < nx:
+                        free[jy, jx] = False
+    lab = hr_kernels.label4(free.astype(np.uint8))
+    g = (lab, x0, y0, h)
+    _CONN[m] = g
+    return g
+
+
+def _conn_label(p, m):
+    lab, x0, y0, h = _conn_grid(m)
+    ix = int(math.floor((float(p[0]) - x0) / h + 0.5)); iy = int(math.floor((float(p[1]) - y0) / h + 0.5))
+    if not (0 <= iy < lab.shape[0] and 0 <= ix < lab.shape[1]):
+        return 0
+    return int(lab[iy, ix])
+SHARE = None        # 2026-11-16(share_db): SQLite の接続
+SHARE_PREFIX = ''   # 設定のハッシュ(設定が違う計算の結果を混ぜない)
+SHARE_CACHE = {}    # この配置で読んだ鍵 -> 変種のリスト
+SHARE_NEW = {}      # この配置で新しく決まった鍵 -> 変種のリスト
+SHARE_STAT = {'hit': 0, 'sigdiff': 0, 'bad': 0, 'computed': 0, 'stored': 0}
+
+
+def _share_key(ep, sp, o, allow_via, allow_gate):
+    f = lambda p: '%.3f,%.3f,%.3f,%d' % (float(p[0][0]) - o[0], float(p[0][1]) - o[1], float(p[1]), int(p[2]))
+    return '%s|%s|%s|%.3f,%.3f,%.3f,%s,%s,%d,%d' % (SHARE_PREFIX, f(ep), f(sp), MARGIN_FRONT, MARGIN_REAR, _RO, allow_gate,
+                                                    _ALLOW_TAB, int(bool(_EXEMPT_ON)), int(bool(allow_via)))
+
+
+def _signature(R, o, with_bounds):
+    """範囲 R(絶対座標 [x0, x1, y0, y1])の中にある障害物の一覧(原点 o からの座標、丸めたもの)。"""
+    x0, x1, y0, y1 = R
+    items = []
+    for k, (c, u, v, hu, hv) in enumerate(LEGS):
+        cs = _LEG_CORNERS4[k]
+        if cs[:, 0].max() < x0 or cs[:, 0].min() > x1 or cs[:, 1].max() < y0 or cs[:, 1].min() > y1:
+            continue
+        items.append(('L', round(float(c[0]) - o[0], 3), round(float(c[1]) - o[1], 3), round(float(u[0]), 4), round(float(u[1]), 4),
+                      round(float(hu), 3), round(float(hv), 3)))
+    for pa, pb, col in GSEG:
+        if max(pa[0], pb[0]) < x0 or min(pa[0], pb[0]) > x1 or max(pa[1], pb[1]) < y0 or min(pa[1], pb[1]) > y1:
+            continue
+        q = sorted([(round(float(pa[0]) - o[0], 3), round(float(pa[1]) - o[1], 3)), (round(float(pb[0]) - o[0], 3), round(float(pb[1]) - o[1], 3))])
+        items.append(('G',) + tuple(q[0]) + tuple(q[1]))
+
+    def clip(tag, kx0, kx1, ky0, ky1):
+        a0, a1, b0, b1 = max(kx0, x0), min(kx1, x1), max(ky0, y0), min(ky1, y1)
+        if a0 < a1 and b0 < b1:
+            items.append((tag, round(a0 - o[0], 3), round(a1 - o[0], 3), round(b0 - o[1], 3), round(b1 - o[1], 3)))
+    for kx0, kx1, ky0, ky1 in (KEEPOUT or []):
+        clip('K', kx0, kx1, ky0, ky1)
+    if with_bounds:
+        clip('B', BOUNDS[0], BOUNDS[1], BOUNDS[2], BOUNDS[3])
+        items.append(('W', 1, 0, 0, 0))
+    return tuple(sorted(items))
+
+
+def _share_get(key):
+    if key in SHARE_CACHE:
+        return SHARE_CACHE[key]
+    v = []
+    try:
+        row = SHARE.execute('SELECT v FROM conn WHERE k = ?', (key,)).fetchone()
+        if row is not None:
+            import pickle
+            v = pickle.loads(row[0])
+    except Exception as error:
+        print('share_db read failed (%r)' % (error,), flush=True)
+    SHARE_CACHE[key] = v
+    return v
+
+
+def _share_flush():
+    """この配置で新しく決まったつなぎを書き足す(同じ鍵に変種を足す。同じ障害物の一覧の変種がもうあれば足さない)。"""
+    if SHARE is None or not SHARE_NEW:
+        return
+    import pickle
+    try:
+        SHARE.execute('BEGIN IMMEDIATE')
+        for key, vs in SHARE_NEW.items():
+            row = SHARE.execute('SELECT v FROM conn WHERE k = ?', (key,)).fetchone()
+            cur = pickle.loads(row[0]) if row is not None else []
+            sigs = {v[1] for v in cur}
+            add = []
+            for v in vs:
+                if v[1] not in sigs:
+                    add.append(v); sigs.add(v[1])
+            if add:
+                SHARE.execute('INSERT OR REPLACE INTO conn (k, v) VALUES (?, ?)', (key, pickle.dumps(cur + add, protocol=4)))
+                SHARE_STAT['stored'] += len(add)
+        SHARE.execute('COMMIT')
+    except Exception as error:
+        print('share_db write failed (%r)' % (error,), flush=True)
+        try:
+            SHARE.execute('ROLLBACK')
+        except Exception:
+            pass
+    SHARE_NEW.clear()
+
+
 class Table:
     def __init__(self, ends, starts, is_start=False, via_first=False, allow_gate=None):
         self.ends, self.starts = ends, starts
@@ -1447,6 +1899,15 @@ class Table:
         self.margin = None   # 2026-11-16: この区間だけのすき間(per_gate_margin で狭いゲートにつながる区間)。None なら全体の値
         self.margin_fallback = None   # 広いすき間でつなげない組だけ使うすき間(per_gate_conn_mode=fallback)
         self.fb_used = set()
+        self.fast_used = {}   # (e, s) -> 例外で使ったすき間(fast_margins)
+        self.fast_base = {}   # (e, s) -> 例外にする前の (時間, つなぎ)。fast_keep_min_sec で元に戻すとき用
+        self.fast_tried = set()
+        self.reuse_key = None   # 2026-11-16: ゲートの間のつなぎの表なら ('red', 'blue') など(reuse_file・share_db)
+        self.lap = False        # 2026-11-16: ゲートの間のつなぎの表(conn_prune)
+        self._kind = ''         # 計測用(time_pairs): 最後に確定したときの決まり方
+        self._reg = {}          # (e, s) -> 確定までに調べた範囲(share_db)
+        self._cmax = {}         # (e, s) -> 試した遠回りの見込みの最大(share_db)
+        self._via_cmax = 0.0
         self.via_first = via_first   # スタート・ゴールの区間: 組み合わせが少ないので、最初から遠回りも比べる
         nE, nS = len(ends), len(starts)
         Ea = [np.repeat(np.array(v, float), nS) for v in zip(*[(p[0][0], p[0][1], p[1], p[2]) + pivot_interval(p[0], p[1]) for p in ends])]
@@ -1471,7 +1932,7 @@ class Table:
             ux, uy = np.cos(th), np.sin(th)
             along = (sx - ex) * ux + (sy - ey) * uy
             lat = -(sx - ex) * uy + (sy - ey) * ux
-            mask = (ed != 0) & (ed == sd) & (np.abs(nd(eh - sh)) < 0.01) & (np.abs(lat) < 0.3) & (along <= 1e-6) & (along >= -JOIN_MAX_CM)
+            mask = (ed != 0) & (ed == sd) & (np.abs(nd(eh - sh)) < 0.01) & (np.abs(lat) < JOIN_LAT_CM) & (along <= 1e-6) & (along >= -JOIN_MAX_CM)
             for e, s in zip(*np.nonzero(mask)):
                 e, s = int(e), int(s)
                 self.C[e, s] = float(along[e, s]) / V_LINE * spd(ends[e][2])
@@ -1509,6 +1970,33 @@ class Table:
         self.pending = set()
 
     def resolve(self, e, s):
+        if TIME_PAIRS:
+            t0_ = time.perf_counter(); self._kind = 'direct_try'
+            global _REG, _TOUCH3, _THIRD
+            m3 = MEASURE_THIRD and self.lap
+            if m3:
+                _THIRD = self._third; _TOUCH3 = False; _REG = [INF, -INF, INF, -INF]; self._via_cmax = self._cmax.get((e, s), 0.0)
+                ep_, sp_ = self.ends[e], self.starts[s]
+                _reg_pair(ep_[0], sp_[0], 2.0 * max(RADII) + max(float(TAIL_CM), float(LEAD_CM)) + max(PIVOT_BACK_CM, 0.0) + 1.0)
+            try:
+                r_ = self._resolve_t(e, s)
+            finally:
+                if m3:
+                    if self._via_cmax > 0.0:
+                        Lv = self._via_cmax * V_LINE * max(1.0, REV_SPEED_SCALE)
+                        _reg_pair(ep_[0], sp_[0], Lv / 2)
+                    self._cmax[(e, s)] = self._via_cmax
+                    k3 = (id(self), e, s)
+                    PAIR_3[k3] = PAIR_3.get(k3, False) or _TOUCH3
+                    _REG = None; _THIRD = None
+            k_ = (id(self), e, s)
+            PAIR_T[k_] = PAIR_T.get(k_, 0.0) + time.perf_counter() - t0_
+            if self.done[e, s]:
+                PAIR_K[k_] = self._kind if self._kind != 'direct_try' else 'direct'
+            return r_
+        return self._resolve_t(e, s)
+
+    def _resolve_t(self, e, s):
         """(e,s) の今の候補を厳密に判定し、当たらない最初の候補に確定する。"""
         global _EXEMPT_ON, _ALLOW_TAB, MARGIN_FRONT, MARGIN_REAR
         if self.done[e, s]:
@@ -1532,12 +2020,143 @@ class Table:
                 self.deferred.discard((e, s))
                 MARGIN_FRONT = MARGIN_REAR = self.margin_fallback
                 r = self._resolve(e, s) or True
+            if (FAST_MARGINS and not FAST_LAZY and self.done[e, s] and (e, s) not in self.fast_tried and (e, s) not in self.fb_used
+                    and self.C[e, s] < INF / 2 and (e, s) not in self.join):
+                r = self._try_fast(e, s, MARGIN_FRONT) or r
             return r
         finally:
             _EXEMPT_ON = False; _ALLOW_TAB = None
             MARGIN_FRONT, MARGIN_REAR = mf0, mr0
 
+    def _try_fast(self, e, s, m_now):
+        """2026-11-16: 広いすき間 m_now で確定したつなぎ (e,s) を、fast_margins の狭いすき間で作り直し、FAST_GAIN_SEC 以上速ければ
+        その区間だけ狭いすき間のつなぎにする(広い方から試し、条件を満たした最初のすき間)。当たりを無視した見込みの下限でも
+        FAST_GAIN_SEC 速くならない区間は試さない。戻り値: 変わったか。"""
+        global MARGIN_FRONT, MARGIN_REAR
+        self.fast_tried.add((e, s))
+        c0 = float(self.C[e, s])
+        if c0 - float(self.approx[e, s, 0]) < FAST_GAIN_SEC:
+            return False
+        saved = (c0, self.prims.get((e, s)), int(self.ptr[e, s]), (e, s) in self.deferred, (e, s) in self.pending)
+        for mg in FAST_MARGINS:
+            if mg >= m_now - 1e-9:
+                continue
+            MARGIN_FRONT = MARGIN_REAR = float(mg)
+            self.done[e, s] = False; self.ptr[e, s] = 0; self.C[e, s] = self.approx[e, s, 0]
+            self.deferred.discard((e, s)); self.pending.discard((e, s))
+            for _ in range(4):
+                self._resolve(e, s)
+                if self.done[e, s]:
+                    break
+            c1 = float(self.C[e, s]) if self.done[e, s] else INF
+            if c1 < INF / 2 and c0 - c1 >= FAST_GAIN_SEC:
+                self.fast_used[(e, s)] = float(mg)
+                self.fast_base[(e, s)] = (c0, saved[1])
+                MARGIN_FRONT = MARGIN_REAR = m_now
+                return True
+            # 戻す
+            self.C[e, s], pr, self.ptr[e, s], dfr, pnd = saved
+            if pr is not None:
+                self.prims[(e, s)] = pr
+            self.done[e, s] = True
+            if dfr:
+                self.deferred.add((e, s))
+            if pnd:
+                self.pending.add((e, s))
+        MARGIN_FRONT = MARGIN_REAR = m_now
+        return False
+
     def _resolve(self, e, s):
+        if (CONN_PRUNE and self.lap and _RO <= 0 and not _EXEMPT_ON and _ALLOW_TAB is None and self.allow_gate is None
+                and not self.done[e, s] and int(self.ptr[e, s]) == 0 and hr_kernels.AVAILABLE):
+            m_ = min(MARGIN_FRONT, MARGIN_REAR)
+            le = _conn_label(self.ends[e][0], m_); ls = _conn_label(self.starts[s][0], m_)
+            CONN_STAT['checked'] += 1
+            if le > 0 and ls > 0 and le != ls:
+                old = self.C[e, s]
+                self.C[e, s] = INF; self.done[e, s] = True
+                CONN_STAT['pruned'] += 1
+                return abs(INF - old) > 1e-9
+        if SHARE is not None and self.reuse_key is not None and not self.via_first and (e, s) not in self.join:
+            return self._resolve_share(e, s)
+        if REUSE is None or self.reuse_key is None or self.via_first or (e, s) in self.join:
+            return self._resolve0(e, s)
+        global _KO_TRACK, _KO_NEAR
+        key = (self.reuse_key, _canon_pose(self.ends[e]), _canon_pose(self.starts[s]), MARGIN_FRONT, MARGIN_REAR, _RO,
+               self.allow_gate, _ALLOW_TAB, _EXEMPT_ON)
+        fresh = int(self.ptr[e, s]) == 0 and not self.done[e, s]
+        hit = REUSE.get(key) if fresh else None
+        if hit is not None:
+            c0, pr_c, ptr0 = hit
+            pr = [_shift_prim(q, ORIGIN) for q in pr_c]
+            if all(prim_ok(q) for q in pr):
+                old = self.C[e, s]
+                self.C[e, s] = c0; self.done[e, s] = True; self.prims[(e, s)] = pr; self.ptr[e, s] = ptr0
+                REUSE_STAT['hit'] += 1
+                return abs(c0 - old) > 1e-9
+            REUSE_STAT['bad'] += 1
+        _KO_TRACK = True; _KO_NEAR = False; self._direct_ok = False
+        try:
+            r = self._resolve0(e, s)
+        finally:
+            _KO_TRACK = False
+        if fresh and self._direct_ok and not _KO_NEAR and self.done[e, s] and self.C[e, s] < INF / 2:
+            REUSE_NEW[key] = (float(self.C[e, s]), [_shift_prim(q, -ORIGIN) for q in self.prims[(e, s)]], int(self.ptr[e, s]))
+        REUSE_STAT['miss'] += 1
+        return r
+
+    def _resolve_share(self, e, s):
+        """2026-11-16(share_db): ほかの配置で、同じ障害物の範囲で確定したつなぎがあれば使う。なければ計算して、調べた範囲と一緒に残す。"""
+        global _REG
+        ep, sp = self.ends[e], self.starts[s]
+        o = (math.floor(float(ep[0][0]) / P + 1e-9) * P, math.floor(float(ep[0][1]) / P + 1e-9) * P)
+        key = _share_key(ep, sp, o, self.allow_via, self.allow_gate)
+        fresh = int(self.ptr[e, s]) == 0 and not self.done[e, s] and (e, s) not in self.deferred and (e, s) not in self._reg
+        if fresh:
+            for reg_c, sig, c0, pr_c, ptr0 in _share_get(key):
+                R = [reg_c[0] + o[0], reg_c[1] + o[0], reg_c[2] + o[1], reg_c[3] + o[1]]
+                if _signature(R, o, any(t[0] == 'W' for t in sig)) != sig:
+                    SHARE_STAT['sigdiff'] += 1
+                    continue
+                d = np.array([o[0], o[1]])
+                pr = [_shift_prim(q, d) for q in pr_c]
+                if all(prim_ok(q) for q in pr):
+                    old = self.C[e, s]
+                    self.C[e, s] = c0; self.done[e, s] = True; self.prims[(e, s)] = pr; self.ptr[e, s] = ptr0
+                    SHARE_STAT['hit'] += 1
+                    return abs(c0 - old) > 1e-9
+                SHARE_STAT['bad'] += 1
+        reg = self._reg.get((e, s))
+        if reg is None:
+            reg = [INF, -INF, INF, -INF]
+        _REG = reg
+        self._via_cmax = self._cmax.get((e, s), 0.0)
+        try:
+            # 直接つなぐ候補(numba で形を作らずに飛ばすものを含む)が通りうる範囲と、その場で回れる角度を調べる範囲
+            _reg_pair(ep[0], sp[0], 2.0 * max(RADII) + max(float(TAIL_CM), float(LEAD_CM)) + max(PIVOT_BACK_CM, 0.0) + 1.0)
+            r = self._resolve0(e, s)
+        finally:
+            _REG = None
+        self._reg[(e, s)] = reg
+        self._cmax[(e, s)] = self._via_cmax
+        SHARE_STAT['computed'] += 1
+        if self.done[e, s] and self.C[e, s] < INF / 2 and (e, s) in self.prims:
+            R = list(reg)
+            with_bounds = self._via_cmax > 0.0
+            if with_bounds:
+                L = self._via_cmax * V_LINE * max(1.0, REV_SPEED_SCALE)
+                R = [min(R[0], min(float(ep[0][0]), float(sp[0][0])) - L / 2), max(R[1], max(float(ep[0][0]), float(sp[0][0])) + L / 2),
+                     min(R[2], min(float(ep[0][1]), float(sp[0][1])) - L / 2), max(R[3], max(float(ep[0][1]), float(sp[0][1])) + L / 2)]
+            ex = float(_RECT_REACH) + 2.0
+            R = [R[0] - ex, R[1] + ex, R[2] - ex, R[3] + ex]
+            sig = _signature(R, o, with_bounds)
+            d = np.array([-o[0], -o[1]])
+            ent = ([R[0] - o[0], R[1] - o[0], R[2] - o[1], R[3] - o[1]], sig, float(self.C[e, s]),
+                   [_shift_prim(q, d) for q in self.prims[(e, s)]], int(self.ptr[e, s]))
+            SHARE_NEW.setdefault(key, []).append(ent)
+        return r
+
+    def _resolve0(self, e, s):
         ep, sp = self.ends[e], self.starts[s]
         old = self.C[e, s]
         fast = hr_kernels.AVAILABLE and GATE_MODEL == 'rect'
@@ -1563,6 +2182,8 @@ class Table:
                         if pv is not None:
                             c, pr = cv, pv
                     self.C[e, s] = c; self.done[e, s] = True; self.prims[(e, s)] = pr
+                    self._kind = 'via' if self.allow_via and self._kind != 'direct_try' else 'direct'
+                    self._direct_ok = not self.via_first   # 2026-11-16: 直接つなぐ候補で決まった(reuse_file で使い回せる)
                     return abs(c - old) > 1e-9
             self.ptr[e, s] += 1
         # 2026-11-16: defer_via: 直接つなげなかったら、まず遠回り・曲がってからつなぐの見込みの下限(当たりを無視)だけを入れて
@@ -1581,17 +2202,22 @@ class Table:
                 self.C[e, s] = lb
                 return abs(lb - old) > 1e-9
         # 2026-11-16: 曲がってからつなぐ(arc_first)。直接つなげないときに試す(中継の格子では入らない狭い所の折り返し)
+        self._kind = 'detour_phase'
         arc_best = self._arc_first(ep, sp) if ARC_FIRST else None
         # 中継(1段目は使わない。経路が見つからないときだけ2段目で使う)
         if not self.allow_via:
             if arc_best is not None:
                 self.C[e, s], self.prims[(e, s)] = arc_best; self.done[e, s] = True
+                self._kind = 'arc_first'
                 return True
             self.C[e, s] = INF; self.done[e, s] = True; self.pending.add((e, s))
+            self._kind = 'none'
             return True
         if (e, s) not in self.via:
             self.via[(e, s)] = via_options(ep, sp)
         for c0, opt in _pick_vias(self.via[(e, s)]):
+            if _REG is not None:
+                self._via_cmax = max(self._via_cmax, float(c0))
             if arc_best is not None and c0 >= arc_best[0]:
                 break
             pr = build_via(opt, ep, sp)
@@ -1602,14 +2228,24 @@ class Table:
                     if arc_best is not None and arc_best[0] <= c:
                         break
                     self.C[e, s] = c; self.done[e, s] = True; self.prims[(e, s)] = pr
+                    self._kind = 'via' if self.allow_via and self._kind != 'direct_try' else 'direct'
                     return True
         if arc_best is not None:
             self.C[e, s], self.prims[(e, s)] = arc_best; self.done[e, s] = True
+            self._kind = 'arc_first'
             return True
         self.C[e, s] = INF; self.done[e, s] = True
+        self._kind = 'none'
         return True
 
     def _arc_first(self, ep, sp):
+        if _REG is not None:
+            # 曲がってからつなぐの円弧(抜けの姿勢ごとに覚えて使い回すので、調べたかどうかによらず範囲に入れる)
+            pad = (float(max(ARC_FIRST_LINES)) if ARC_FIRST_LINES else 0.0) + 2.0 * max(RADII) + 1.0
+            _reg_pair(ep[0], ep[0], pad)
+        return self._arc_first0(ep, sp)
+
+    def _arc_first0(self, ep, sp):
         """2026-11-16: 抜けた姿勢から円弧で向きを変え(体の向きが45°の倍数になるまで)、そこから1本の走りでつなぐ。
         端の行のゲートを外へ前進で抜けて折り返す所(半径8cm で横を向き、すぐ大きい半径で戻る)は、中継の点の格子(8cm おき)では
         高さが合わず作れなかった。(cost, prims) か None。"""
@@ -1963,7 +2599,7 @@ def main():
     sel_i = None
     global MARGIN_FRONT, MARGIN_REAR, OBLIQUE_POLICY
     used_margin = None
-    global _GRID_ON, _RO
+    global _GRID_ON, _RO, FAST_MARGINS
     for i_mg, mg in enumerate(MARGIN_LIST or [None]):
         if i_mg == 1 and NARROW_SAFEST:
             # 狭い配置(最初のすき間で通れない): 垂直に通れないゲートだけ斜めを使う(計算量を約1/8にする。ユーザー決定 2026-11-09)
@@ -2031,10 +2667,22 @@ def main():
         for memo in (_line_memo, _arc_memo, _pivot_cache, _piv_int, _run_cache, _arc_limit_memo):
             memo.clear()
         print('connection margin: %.1f (gate passes %.1f)' % (MARGIN_FRONT, used_margin), flush=True)
+    if DEFER_NARROW and MARGIN_LIST and used_margin is not None and used_margin < MARGIN_LIST[0] - 1e-9:
+        print('DEFERRED narrow (margin %.1f)' % used_margin, flush=True)
+        return
     if CANDIDATES_ONLY:
         json.dump(dict(margin=used_margin, counts={c: len(v) for c, v in cands.items()}), open(sys.argv[2], 'w'))
         return
     LAP_MASK = {}
+    if VISIT_SIGNS:
+        for c in list(cands):
+            if c not in VISIT_SIGNS:
+                continue
+            if c == 'yellow':
+                # 周回の黄だけしぼる(最後の黄はガレージへ向かいやすい通り方を選べる。今の道具と同じ)
+                LAP_MASK[c] = np.array([v['sign'] in VISIT_SIGNS[c] and v['mode'] == 'F' for v in cands[c]])
+            else:
+                cands[c] = [v for v in cands[c] if v['sign'] in VISIT_SIGNS[c] and v['mode'] == 'F']
     if VISIT_FILTER:
         for c in cands:
             if c not in VISIT_FILTER:   # 2026-11-14: 書いていない色は絞らない
@@ -2081,6 +2729,45 @@ def main():
          ('yellow', 'GOAL'): Table(ends['yellow'], goal_pose, via_first=True, allow_gate='red' if FINAL_VIA_RED else None)}
     if START_PRELUDE:
         T[('START', 'yellow')] = Table(start_pose, starts['yellow'], is_start=True, via_first=True)
+    for k_ in (('red', 'blue'), ('blue', 'yellow'), ('yellow', 'red')):
+        T[k_].lap = True
+        if MEASURE_THIRD:
+            third = [c for c in ('red', 'blue', 'yellow') if c not in k_][0]
+            g3 = GATES[third]; ex3 = float(_RECT_REACH) + 1.0
+            bx = []
+            for k, (c, u, v, hu, hv) in enumerate(LEGS):
+                if min(np.hypot(*(c - g3.pa)), np.hypot(*(c - g3.pb))) < 20.0:
+                    cs = _LEG_CORNERS4[k]
+                    bx.append((cs[:, 0].min() - ex3, cs[:, 0].max() + ex3, cs[:, 1].min() - ex3, cs[:, 1].max() + ex3))
+            bx.append((min(g3.pa[0], g3.pb[0]) - 1.0, max(g3.pa[0], g3.pb[0]) + 1.0, min(g3.pa[1], g3.pb[1]) - 1.0, max(g3.pa[1], g3.pb[1]) + 1.0))
+            T[k_]._third = bx
+    # 2026-11-16(share_db): ゲートの間のつなぎを配置をまたいで共有する
+    global SHARE, SHARE_PREFIX
+    if SHARE_DB:
+        if not WP_GRID:
+            print('share_db needs wp_grid=True (the detour points must not move with the layout): not used', flush=True)
+        else:
+            import sqlite3, hashlib
+            SHARE = sqlite3.connect(SHARE_DB, timeout=300, isolation_level=None)
+            SHARE.execute('PRAGMA journal_mode=WAL')
+            SHARE.execute('CREATE TABLE IF NOT EXISTS conn (k TEXT PRIMARY KEY, v BLOB)')
+            pk = {k: v for k, v in PARAMS.items() if k not in ('share_db', 'reuse_file', 'fast_margins', 'fast_keep_min_sec')}
+            SHARE_PREFIX = hashlib.sha1(json.dumps(pk, sort_keys=True, default=str).encode()).hexdigest()[:12]
+            for k_ in (('red', 'blue'), ('blue', 'yellow'), ('yellow', 'red')):
+                T[k_].reuse_key = k_
+    # 2026-11-16: ゲートの間のつなぎの使い回し(reuse_file)
+    global REUSE, ORIGIN
+    if REUSE_FILE:
+        ORIGIN = np.array([min(min(g.pa[0], g.pb[0]) for g in GATES.values()), min(min(g.pa[1], g.pb[1]) for g in GATES.values())])
+        try:
+            import pickle
+            REUSE = pickle.load(open(REUSE_FILE, 'rb')) if os.path.exists(REUSE_FILE) else {}
+        except Exception as error:
+            print('reuse file not read (%r): starting empty' % (error,), flush=True)
+            REUSE = {}
+        for k_ in (('red', 'blue'), ('blue', 'yellow'), ('yellow', 'red')):
+            T[k_].reuse_key = k_
+        print('reuse: %d connections from other layouts of the same shape' % len(REUSE), flush=True)
     if PER_GATE_MARGIN and PER_GATE_CONN_MODE in ('adjacent', 'fallback') and gm and used_margin is not None:
         for (ka, kb), tab in T.items():
             lo = min([gm.get(ka, INF), gm.get(kb, INF)])
@@ -2127,6 +2814,7 @@ def main():
         for t in T.values():
             t.allow_via = True
     saved = None; t_phase2 = None
+    fast_sol = None   # 2026-11-16: 例外のすき間を使った経路(fast_keep_min_sec で例外なしと比べる)
     while True:
         it += 1
         if saved is not None and time.time() - t_phase2 > VIA_BUDGET_SEC:
@@ -2200,7 +2888,96 @@ def main():
                     t.open_via()
                 print(f'phase 1 {total:.1f}s -> phase 2 (detours)  {time.time() - t0:.1f}s', flush=True)
                 continue
+            if FAST_MARGINS and FAST_LAZY:
+                # 決まった経路で使っているつなぎだけ、例外のすき間を試す(速くなれば解き直す)
+                global _EXEMPT_ON, _ALLOW_TAB
+                lz = False
+                for key, e, s in used:
+                    tab = T[key]
+                    if ((e, s) in tab.fast_tried or (e, s) in tab.fb_used or (e, s) in tab.join or not tab.done[e, s]
+                            or not tab.C[e, s] < INF / 2):
+                        continue
+                    m_now = tab.margin if tab.margin is not None else MARGIN_FRONT
+                    mf0, mr0 = MARGIN_FRONT, MARGIN_REAR
+                    _EXEMPT_ON = tab.is_start; _ALLOW_TAB = tab.allow_gate
+                    try:
+                        MARGIN_FRONT = MARGIN_REAR = m_now
+                        lz = tab._try_fast(e, s, m_now) or lz
+                    finally:
+                        _EXEMPT_ON = False; _ALLOW_TAB = None
+                        MARGIN_FRONT, MARGIN_REAR = mf0, mr0
+                if lz:
+                    continue
+            if FAST_MARGINS and FAST_KEEP_MIN_SEC > 0 and fast_sol is None \
+                    and any((e, s) in T[key].fast_used for key, e, s in used):
+                # 例外のすき間を使った経路が見つかった。例外を全部元に戻して例外なしでも解き直し、合計で
+                # FAST_KEEP_MIN_SEC 以上速いときだけ例外の経路に戻す(つなぎの判定はほぼ済んでいるので、解き直しは速い)
+                fast_sol = (total, list(used), list(visits),
+                            {k: {es: (float(t.C[es]), t.prims.get(es), t.fast_used[es]) for es in t.fast_used} for k, t in T.items()})
+                for t in T.values():
+                    for es, (c0, pr0) in t.fast_base.items():
+                        if es in t.fast_used:
+                            t.C[es] = c0
+                            if pr0 is not None:
+                                t.prims[es] = pr0
+                    t.fast_used.clear()
+                FAST_MARGINS = []
+                print('fast margins: %.1fs with exceptions, solving again without them' % total, flush=True)
+                continue
+            if fast_sol is not None:
+                gain = total - fast_sol[0]
+                if gain >= FAST_KEEP_MIN_SEC:
+                    total, used, visits, fst = fast_sol
+                    for k, d in fst.items():
+                        for es, (c1, pr1, mg) in d.items():
+                            T[k].C[es] = c1; T[k].prims[es] = pr1; T[k].fast_used[es] = mg
+                    print('fast margins kept (%.2fs faster than %.1fs without them)' % (gain, total + gain), flush=True)
+                else:
+                    print('fast margins dropped (only %.2fs faster)' % gain, flush=True)
             break
+    if CONN_PRUNE:
+        print('conn prune: %d of %d connections found unreachable without trying' % (CONN_STAT['pruned'], CONN_STAT['checked']), flush=True)
+    if TIME_PAIRS:
+        agg = {}
+        for k_, t_ in PAIR_T.items():
+            kk = PAIR_K.get(k_, 'unfinished')
+            a = agg.setdefault(kk, [0, 0.0]); a[0] += 1; a[1] += t_
+        tot_ = sum(v[1] for v in agg.values())
+        if MEASURE_THIRD:
+            lapids = {id(t) for t in T.values() if t.lap}
+            t_lap = sum(t_ for k_, t_ in PAIR_T.items() if k_[0] in lapids)
+            t_free = sum(t_ for k_, t_ in PAIR_T.items() if k_[0] in lapids and not PAIR_3.get(k_, True))
+            n_lap = sum(1 for k_ in PAIR_T if k_[0] in lapids); n_free = sum(1 for k_ in PAIR_T if k_[0] in lapids and not PAIR_3.get(k_, True))
+            byk = {}
+            for k_, t_ in PAIR_T.items():
+                if k_[0] in lapids:
+                    kk = (PAIR_K.get(k_, 'unfinished'), PAIR_3.get(k_, True))
+                    a = byk.setdefault(kk, [0, 0.0]); a[0] += 1; a[1] += t_
+            print('third gate: lap pairs %d (%.1fs of %.1fs total), not touched by the third gate %d pairs %.1fs (%.0f%% of lap time)' % (
+                n_lap, t_lap, tot_, n_free, t_free, 100 * t_free / max(t_lap, 1e-9)), flush=True)
+            print('  by kind (kind, touched): ' + ', '.join('%s/%s %d %.1fs' % (k[0], 'T' if k[1] else 'F', v[0], v[1]) for k, v in sorted(byk.items(), key=lambda x: -x[1][1])), flush=True)
+        try:
+            nm_ = {id(t): '%s->%s' % k for k, t in T.items()}
+            json.dump([[nm_.get(k_[0], '?'), int(k_[1]), int(k_[2]), PAIR_K.get(k_, 'unfinished'), round(t_, 4)] for k_, t_ in PAIR_T.items()],
+                      open(sys.argv[2] + '.pairs.json', 'w'))
+        except Exception as error_:
+            print('pairs dump failed %r' % (error_,), flush=True)
+        print('pair time: total %.1fs ' % tot_ + ', '.join('%s %d pairs %.1fs (%.0f%%)' % (k, v[0], v[1], 100 * v[1] / max(tot_, 1e-9)) for k, v in sorted(agg.items(), key=lambda x: -x[1][1])), flush=True)
+    if SHARE is not None:
+        _share_flush()
+        print('share: used %d, obstacles differ %d, rejected %d, computed %d, stored %d' % (
+            SHARE_STAT['hit'], SHARE_STAT['sigdiff'], SHARE_STAT['bad'], SHARE_STAT['computed'], SHARE_STAT['stored']), flush=True)
+    if REUSE is not None:
+        print('reuse: used %d, rejected %d, computed %d, new %d' % (REUSE_STAT['hit'], REUSE_STAT['bad'], REUSE_STAT['miss'], len(REUSE_NEW)), flush=True)
+        if REUSE_NEW:
+            try:
+                import pickle
+                REUSE.update(REUSE_NEW)
+                tmpf = REUSE_FILE + '.tmp'
+                pickle.dump(REUSE, open(tmpf, 'wb'))
+                os.replace(tmpf, REUSE_FILE)
+            except Exception as error:
+                print('reuse file not written (%r)' % (error,), flush=True)
     print(f'TOTAL hybrid laps={LAPS}: {total:.1f}s (cost)  iterations={it} checks={sum(t.checks for t in T.values())} '
           f'compute {time.time() - t0:.1f}s', flush=True)
 
@@ -2221,7 +2998,11 @@ def main():
             visits[i] = dict(visits[i], prims=[('line', T[key].ends[e][0], q[2], q[3])] + list(visits[i]['prims'][1:]))
     blocks = []
     for i, (key, e, s) in enumerate(used):
-        blocks.append(dict(kind='conn', lap=None, color=None, prims=[ser(p) for p in T[key].prims[(e, s)]]))
+        # 2026-11-16: このつなぎで使ったすき間(例外 fast_margins・広いすき間でつなげなかった fallback のときだけ。なければ None)
+        cm_ = T[key].fast_used.get((e, s))
+        if cm_ is None and (e, s) in T[key].fb_used:
+            cm_ = T[key].margin_fallback
+        blocks.append(dict(kind='conn', lap=None, color=None, prims=[ser(p) for p in T[key].prims[(e, s)]], margin=cm_))
         if i < len(visits):
             v = visits[i]
             blocks.append(dict(kind='visit', lap=(i - len(visits) % 3) // 3 + 1, color=v['color'], mode=v['mode'], sign=v['sign'], off=v['off'], angle=v['angle'], angle_out=v['angle_out'],
@@ -2230,6 +3011,11 @@ def main():
         print(f'  lap1 {v["color"]:6s} {v["mode"]:2s} sign={v["sign"]:+d} off={v["off"]:+.1f} angle={v["angle"]:+.0f}/{v["angle_out"]:+.0f} ea={v["ea"]} ee={v["ee"]}')
     for key, e, s in used:
         _USED_PRIMS[(key, e, s)] = T[key].prims[(e, s)]
+    # 2026-11-17: fast_keep_min_sec で例外なしと解き比べると FAST_MARGINS を空にするので、元の設定(PARAMS)で判断する
+    # (空で判断していて、例外を残した経路でも「fast margins used」が出ず、run_layout.py が例外なしと誤っていた)
+    if FAST_MARGINS or PARAMS.get('fast_margins'):
+        fu = sorted({('%s->%s' % key, T[key].fast_used[(e, s)]) for key, e, s in used if (e, s) in T[key].fast_used})
+        print('fast margins used: %s' % (fu or 'none'), flush=True)
     audit = route_audit([p for key, e, s in used for p in T[key].prims[(e, s)]], visits, used)
     print('audit: min clearance front %.2fcm rear %.2fcm (needed %.1f / %.1f), keepout hits %d' % (
         audit['min_front'], audit['min_rear'], MARGIN_FRONT, MARGIN_REAR, audit['keepout_hits']), flush=True)

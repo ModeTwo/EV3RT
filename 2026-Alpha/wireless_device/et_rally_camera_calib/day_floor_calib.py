@@ -40,10 +40,10 @@ import floor_fit as ff  # noqa: E402
 START_POSE = os.path.join(ROOT, 'robot_program', 'et_rally_start_pose.py')
 
 
-def fit_mounting(dirs, calib):
+def fit_mounting(dirs, calib, still_mm=1.0):
     sp.set_gate_legs(None)
     cam = sp.GroundCamera(calib, top_s=0.5, top_x=sp.START_WIDE_X, top_y=sp.START_WIDE_Y)
-    runs = [ff.load_run(d, cam) for d in dirs]
+    runs = [ff.load_run(d, cam, still_mm=still_mm) for d in dirs]
     for d, run in zip(dirs, runs):
         print('%s: %s' % (os.path.basename(d.rstrip('/\\')), ', '.join('%s(%d点)' % (n, len(f)) for n, _, f in run)))
         if not run or run[0][0] != 'start' or len(run) < 4:
@@ -84,6 +84,7 @@ def main():
     ap.add_argument('--base', default=None, help='元にする較正ファイル(既定: 今の DEFAULT_CALIB)')
     ap.add_argument('--out', default=None)
     ap.add_argument('--set-default', action='store_true')
+    ap.add_argument('--still-mm', type=float, default=1.0, help='止まっているとみなす進んだ距離の幅(mm)。止まる間に少し進むロボットでは3')
     a = ap.parse_args()
     base_path = a.base or str(sp.DEFAULT_CALIB)
     base = json.load(open(base_path, encoding='utf-8'))
@@ -94,7 +95,7 @@ def main():
     tmp = os.path.join(HERE, '_day_floor_tmp.json')
     json.dump(clean, open(tmp, 'w', encoding='utf-8'), ensure_ascii=False)
     try:
-        p1, places = fit_mounting(a.dirs, tmp)
+        p1, places = fit_mounting(a.dirs, tmp, still_mm=a.still_mm)
         new = dict(clean, cam_yaw_fix_deg=float(p1[0]), roll_fix_deg=float(p1[1]), height_fix_mm=float(p1[2]))
         json.dump(new, open(tmp, 'w', encoding='utf-8'), ensure_ascii=False)
         diffs = []

@@ -491,20 +491,30 @@ def build_execute_strategy(context, config, lap_number=None):
             [{"type": "turn", "target_heading_deg": RALLY_START_HEADING}],
             config.mission_mode,
         )[0]["target_heading_deg"]
+        def _to_rally_origin(steps):
+            # 2026-11-17: full でラリー開始の向きを0°にするジャイロ(plan_origin、phases/et_rally.py)のときは、旧い形の受信SEQ
+            # (競技スタート基準・コースで正規化した向きで、ラリー開始の向きが start_heading = RALLY_START_HEADING)を、
+            # ラリー開始が0°になるようにずらす(経路の道具の計画と同じ座標)。plan_origin がなければそのまま。
+            if getattr(runtime.gyro_sensor, "plan_origin_deg", None) is None:
+                return steps, {}
+            shifted = [dict(st, target_heading_deg=((float(st["target_heading_deg"]) - start_heading + 180.0) % 360.0) - 180.0)
+                       if "target_heading_deg" in st else st for st in steps]
+            return shifted, {"initial_heading_deg": 0.0}
+
         def load_received():
             # 2026-11-15: 経路の道具の計画(PC から丸ごと届いた、またはロボットが選んだ)があれば、ファイルで走るときと同じに読む
             # (exit も読む)。最初の旋回の直前の向きもファイルのときと同じ 0。なければ従来の受信SEQ。
             path = getattr(context, "strategy_plan_path", None)
             if path:
                 return _load_plan_steps(path), {"initial_heading_deg": 0.0}
-            return full_start_to_gyro(context.strategy, config.mission_mode)
+            return _to_rally_origin(full_start_to_gyro(context.strategy, config.mission_mode))
 
         return DeferredStrategySequence(
             name="execute_received_strategy",
             loader=load_received,
             initial_heading_deg=start_heading,
             fallback_loader=(
-                (lambda: full_start_to_gyro(fallback_strategy(), config.mission_mode))
+                (lambda: _to_rally_origin(full_start_to_gyro(fallback_strategy(), config.mission_mode))[0])
                 if getattr(config, "et_rally_fallback_enabled", False) else None),
             turn_method=getattr(config, "et_rally_turn_method", "spin_encoder"),
             compensation_enabled=getattr(config, "et_rally_compensation_enabled", False),

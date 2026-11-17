@@ -436,3 +436,181 @@ def layer(prev, C, s_arr, e_arr, c_arr, n_e):
         if t < cur[e]:
             cur[e] = t; arg[e] = v
     return cur, be, arg
+
+
+@njit(cache=True)
+def run_costs(ax, ay, tha, bx, by, thb, rs, karc, vline, htread, tail):
+    """2026-11-16(計算時間): hybrid_route._best_run0 の候補(半径 rs × 形 0..7)の時間を、形を作らずに出す。
+    だめな候補は inf。足し方は _best_run0 と同じ順(円弧1、直進か真ん中の円弧、最後の円弧、最後の直進 tail)で、
+    長さ 1e-6 以下の部分は足さない(dubins_one が捨てるのと同じ)。"""
+    n = len(rs) * 8
+    out = np.full(n, np.inf)
+    k = 0
+    for i in range(len(rs)):
+        r = rs[i]
+        va = karc * vline / (1 + htread / r)
+        for w in range(8):
+            ok, a1, a2, a3, th1, th2, p1x, p1y, p2x, p2y, c1x, c1y, c2x, c2y, c3x, c3y = dubins_params(ax, ay, tha, bx, by, thb, r, w)
+            if ok:
+                c = 0.0
+                l1 = r * a1
+                if l1 > 1e-6:
+                    c += l1 / va
+                if w < 4:
+                    L = math.hypot(p2x - p1x, p2y - p1y)
+                    if L > 1e-6:
+                        c += L / vline
+                else:
+                    l2 = r * a2
+                    if l2 > 1e-6:
+                        c += l2 / va
+                l3 = r * a3
+                if l3 > 1e-6:
+                    c += l3 / va
+                if tail > 0:
+                    c += tail / vline
+                out[k] = c
+            k += 1
+    return out
+
+
+@njit(cache=True)
+def run_survivors(ax, ay, ha_deg, bx, by, hb_deg, tha, thb, bmx, bmy, rs, karc, vline, htread, tail, top, m,
+                  back, front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach):
+    """2026-11-16(計算時間): hybrid_route._best_run_k の numba の部分を1回の呼び出しにまとめたもの。候補(半径 rs × 形 0..7、
+    番号 = 半径の番号*8 + 形)を時間の順(同じ時間なら番号の順、kind='stable' と同じ)に並べ、時間が有限の先頭 top 個のうち、
+    脚に確実に当たらない候補の番号を、その順に返す(next_option で1つずつ飛ばしていたのと同じ並び)。"""
+    costs = run_costs(ax, ay, tha, bmx, bmy, thb, rs, karc, vline, htread, tail)
+    idx = np.argsort(costs, kind='mergesort')
+    sel = np.empty(top, np.int64)
+    n = 0
+    for i in idx:
+        if n >= top:
+            break
+        if np.isfinite(costs[i]):
+            sel[n] = i
+            n += 1
+    out = np.empty(n, np.int64)
+    if n == 0:
+        return out
+    sel = sel[:n]
+    order = np.arange(n)
+    approx = np.empty(n)
+    fam = np.zeros(n, np.int64)
+    ms = np.full(n, m, np.int64)
+    rs2 = np.empty(n)
+    ws = np.empty(n, np.int64)
+    for j in range(n):
+        approx[j] = costs[sel[j]]
+        rs2[j] = rs[sel[j] // 8]
+        ws[j] = sel[j] % 8
+    ds = 0 if tail > 0 else m
+    k = 0
+    ptr = 0
+    while True:
+        ptr = next_option(ax, ay, ha_deg, bx, by, hb_deg, ds, order, ptr, approx, 5e8, fam, ms, rs2, ws, tail, back,
+                          front, rear, hw, mf, mr, lc, lu, lv, lhu, lhv, corners, reach, m, 0.0)
+        if ptr >= n:
+            break
+        out[k] = sel[ptr]
+        k += 1
+        ptr += 1
+    return out[:k]
+
+
+@njit(cache=True)
+def line_core(xs, ys, gsegs, ko, c1, s1, ax, ay, f0, f1, r0, r1, hw, mf, mr, ro,
+              lc, lu, lv, lhu, lhv, corners, post_hv, post_corners):
+    """2026-11-16(計算時間): hybrid_route._line_check のうち、車体の進入禁止の判定(body_keepout)より前の部分を1回で。
+    gsegs: 横切ってはいけないゲートの線分 (G,4)、ko: 進入禁止の長方形 (K,4)。xs, ys, c1, s1 は呼ぶ側の numpy で作った値
+    (今までと同じ値で判定するため)。戻り値: 当たらないか(True)。"""
+    for g in range(len(gsegs)):
+        if seg_cross(xs, ys, gsegs[g, 0], gsegs[g, 1], gsegs[g, 2], gsegs[g, 3]):
+            return False
+    for i in range(len(xs)):
+        for k in range(len(ko)):
+            if xs[i] > ko[k, 0] and xs[i] < ko[k, 1] and ys[i] > ko[k, 2] and ys[i] < ko[k, 3]:
+                return False
+    px = np.empty(1); py = np.empty(1); cc = np.empty(1); ss = np.empty(1)
+    px[0] = ax; py[0] = ay; cc[0] = c1; ss[0] = s1
+    if rect_clear(px, py, cc, ss, f0, f1, hw, lc, lu, lv, lhu, lhv, corners)[0] < mf:
+        return False
+    if ro > 0:
+        d = min(rect_clear(px, py, cc, ss, r0 + ro, r1, hw, lc, lu, lv, lhu, lhv, corners)[0],
+                rect_clear(px, py, cc, ss, r0, r1, hw, lc, lu, lv, lhu, post_hv, post_corners)[0])
+    else:
+        d = rect_clear(px, py, cc, ss, r0, r1, hw, lc, lu, lv, lhu, lhv, corners)[0]
+    if d < mr:
+        return False
+    return True
+
+
+@njit(cache=True)
+def arc_core(xs, ys, c, s, lc, lu, lv, lhu, lhv, corners, reach, front, rear, hw, mf, mr,
+             ko, ko_corners, ko_nc, ko_exempt_now, near_start, keepout_body, outx, outy, body_reach, gsegs):
+    """2026-11-16(計算時間): hybrid_route._arc_check(_RO = 0 のとき)の判定を1回で。xs, ys, c, s は呼ぶ側の numpy で作った値。
+    戻り値 (code, i): 0 = 当たらない、1 = 姿勢 i で脚か進入禁止に当たる(最初の姿勢)、2 = 点が進入禁止、3 = ゲートを横切る。"""
+    n = len(xs)
+    okp = np.ones(n, np.bool_)
+    keep, near = poses_near(xs, ys, lc, reach)
+    if len(near):
+        cf, cr = rect_front_rear(xs[near], ys[near], c[near], s[near], lc, lu, lv, lhu, lhv, corners, keep, front, rear, hw)
+        for j in range(len(near)):
+            okp[near[j]] = (cf[j] >= mf) and (cr[j] >= mr)
+    if len(ko):
+        if not keepout_body:
+            for i in range(n):
+                for k in range(len(ko)):
+                    if xs[i] > ko[k, 0] and xs[i] < ko[k, 1] and ys[i] > ko[k, 2] and ys[i] < ko[k, 3]:
+                        okp[i] = False
+        else:
+            xmn = xs.min(); xmx = xs.max(); ymn = ys.min(); ymx = ys.max()
+            for k in range(len(ko)):
+                x0, x1, y0, y1 = ko[k, 0], ko[k, 1], ko[k, 2], ko[k, 3]
+                if xmx + body_reach < x0 or xmn - body_reach > x1 or ymx + body_reach < y0 or ymn - body_reach > y1:
+                    continue
+                hit = keepout_hit(xs, ys, c, s, outx, outy, x0, x1, y0, y1, ko_corners[k, :ko_nc[k]], front, rear, hw)
+                for i in range(n):
+                    if hit[i] and not (ko_exempt_now[k] and near_start[i]):
+                        okp[i] = False
+    for i in range(n):
+        if not okp[i]:
+            return 1, i
+    for i in range(n):
+        for k in range(len(ko)):
+            if xs[i] > ko[k, 0] and xs[i] < ko[k, 1] and ys[i] > ko[k, 2] and ys[i] < ko[k, 3]:
+                return 2, 0
+    for g in range(len(gsegs)):
+        if seg_cross(xs, ys, gsegs[g, 0], gsegs[g, 1], gsegs[g, 2], gsegs[g, 3]):
+            return 3, 0
+    return 0, 0
+
+
+@njit(cache=True)
+def label4(free):
+    """2026-11-16(行き止まりの判定): 0/1 の格子(1 = 通れる)の、4方向につながった領域に番号(1から)を振る。通れないマスは0。"""
+    ny, nx = free.shape
+    lab = np.zeros((ny, nx), np.int32)
+    stack = np.empty(ny * nx, np.int64)
+    cur = 0
+    for y0 in range(ny):
+        for x0 in range(nx):
+            if free[y0, x0] == 0 or lab[y0, x0] != 0:
+                continue
+            cur += 1
+            sp = 0
+            stack[sp] = y0 * nx + x0; sp += 1
+            lab[y0, x0] = cur
+            while sp > 0:
+                sp -= 1
+                v = stack[sp]
+                y = v // nx; x = v % nx
+                if x > 0 and free[y, x - 1] and lab[y, x - 1] == 0:
+                    lab[y, x - 1] = cur; stack[sp] = v - 1; sp += 1
+                if x < nx - 1 and free[y, x + 1] and lab[y, x + 1] == 0:
+                    lab[y, x + 1] = cur; stack[sp] = v + 1; sp += 1
+                if y > 0 and free[y - 1, x] and lab[y - 1, x] == 0:
+                    lab[y - 1, x] = cur; stack[sp] = v - nx; sp += 1
+                if y < ny - 1 and free[y + 1, x] and lab[y + 1, x] == 0:
+                    lab[y + 1, x] = cur; stack[sp] = v + nx; sp += 1
+    return lab

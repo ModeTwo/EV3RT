@@ -474,6 +474,12 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
             enable_finish=True,
             # 2026-11-14: 本番はタッチ1回で全工程を通す。ETラリーの持ち時間 = 120 − 競技の開始からの秒(et_rally_time_budget.py)
             et_rally_time_total=(config.et_rally_time_total if config.et_rally_time_total is not None else 120.0),
+            # 2026-11-17(ユーザー): full でも ETラリーのカメラの補正を使う(rally-drive で --rally-start-pose on・
+            # --rally-camera-correct on と同じ)。11/16 の full(ロボットC)はカメラの補正なしで走り、黄ゲートに当たった。
+            # コマンドの --rally-start-pose off / --rally-camera-correct で変えられる。
+            et_rally_start_pose=(config.et_rally_start_pose if config.et_rally_start_pose is not None else True),
+            et_rally_camera_correct=(config.et_rally_camera_correct if config.et_rally_camera_correct is not None
+                                     else (0.15, 0.1)),
         )
     return replace(config, mission_mode=('full' if mission == 'full' else 'configured'), **disabled)
 
