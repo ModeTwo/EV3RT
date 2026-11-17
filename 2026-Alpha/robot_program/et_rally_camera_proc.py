@@ -150,11 +150,20 @@ def child_env(python):
     OpenCV は LD_LIBRARY_PATH に自分のライブラリの場所を足す(子プロセスに効く)ので、それを疑っている。"""
     env = dict(os.environ)
     if os.path.realpath(python) != os.path.realpath(sys.executable):
+        removed = {}
         for name in ('PYTHONPATH', 'PYTHONHOME'):
-            env.pop(name, None)
+            value = env.pop(name, None)
+            if value:
+                removed[name] = value
         # PyPy の cv2(/usr/local/lib/pypy3/dist-packages/cv2、自前ビルド)は読み込み時に
         # LD_LIBRARY_PATH=/usr/local/lib: を足す(ロボットで確認)。/usr/bin/python3 の cv2(apt)には要らないので外す。
-        env.pop('LD_LIBRARY_PATH', None)
+        value = env.pop('LD_LIBRARY_PATH', None)
+        if value:
+            removed['LD_LIBRARY_PATH'] = value
+        # 2026-11-18: どれが子を壊していたかを突き止めるため、外した値と、残した PYTHON* をログに出す
+        kept = {k: v for k, v in env.items() if k.startswith('PYTHON')}
+        print(' -- ET rally camera process: child %s env removed %s kept %s' % (
+            python, removed or '-', kept or '-'), flush=True)
     return env
 
 
