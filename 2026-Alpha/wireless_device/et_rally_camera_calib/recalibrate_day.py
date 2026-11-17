@@ -82,6 +82,9 @@ def main():
     ap.add_argument('--base', default=None, help='レンズ・置き方・補正を引き継ぐ較正ファイル(既定: 今の DEFAULT_CALIB)')
     ap.add_argument('--out', default=None, help='保存するファイル名(既定: calib_<月日時分>.json)')
     ap.add_argument('--set-default', action='store_true', help='DEFAULT_CALIB を新しいファイルに書き換える')
+    ap.add_argument('--keep-floor', action='store_true',
+                    help=('2026-11-18: 床での較正の値(取り付けの補正 cam_yaw_fix_deg・roll_fix_deg・height_fix_mm と start_fix)も --base から'
+                          '仮に引き継ぐ。床で止まって撮る試験ができないとき用。start_fix はあとで lap_start_fix.py で周回のログから直す'))
     a = ap.parse_args()
 
     base_path = a.base or current_default()
@@ -126,6 +129,12 @@ def main():
          'note': '%s recalibrate_day.py: 較正台 %d 枚(下向きが真ん中の %s を先頭)、レンズ・置き方・補正は %s から引き継ぎ。%s' % (
              datetime.now().strftime('%Y-%m-%d %H:%M'), len(J), J[0]['file'], os.path.basename(base_path),
              ('警告: ' + '; '.join(warn)) if warn else '')}
+    if a.keep_floor:
+        kept = [k for k in ('cam_yaw_fix_deg', 'roll_fix_deg', 'height_fix_mm', 'start_fix') if k in base]
+        for k in kept:
+            d[k] = base[k]
+        d['note'] += ' 床での較正の値(%s)も仮に引き継いだ(--keep-floor)。' % ', '.join(kept)
+        print('床での較正の値も引き継いだ: %s' % ', '.join('%s=%s' % (k, base[k]) for k in kept))
     json.dump(d, open(path, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     print('保存: %s' % path)
     for w in warn:
