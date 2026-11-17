@@ -31,12 +31,14 @@ class TurnTowardRallyStart(Behaviour):
                 return Status.FAILURE
             start_bearing = current_bearing(self.context)
             reference = getattr(self.context.sumo, "rally_turn_reference", None)
-            signed_angle = runtime.course * 215.0
+            # 2026-11-17(devSS、実機C・右): 215°だと向いた先(235°)から青い丸が見つかった向きが 208〜228° と
+            # 毎回マイナス側へずれ、左右に探して最長約10秒かかった。見つかった向きの真ん中(約222°)に向くよう 228°にする。
+            signed_angle = runtime.course * RALLY_TURN_FROM_APPROACH_DEG
             if reference and reference.get("course") == runtime.course:
                 approach = float(reference["approach_bearing"])
                 if not math.isfinite(approach):
                     return Status.FAILURE
-                target = (approach + runtime.course * 215.0) % 360.0
+                target = (approach + runtime.course * RALLY_TURN_FROM_APPROACH_DEG) % 360.0
                 # 従来と同じ旋回方向を保つ。最短方向には切り替えない。
                 signed_angle = (target - start_bearing) % 360.0
                 if runtime.course == -1:
@@ -276,6 +278,8 @@ class TurnAfterBlue(Behaviour):
 
 # 2026-11-17(devSS): これより小さい青は青い丸として扱わない(上の MoveToRallyBlue の DETECT)
 RALLY_BLUE_MIN_AREA = 250.0
+# 相撲の向き(approach)から青い丸へ向く角度(元 215)。上の RALLY_TURN を参照
+RALLY_TURN_FROM_APPROACH_DEG = 228.0
 
 
 class MoveToRallyBlue(Behaviour):
@@ -294,11 +298,11 @@ class MoveToRallyBlue(Behaviour):
     FINE_PULSE_SEC = 0.02
     SETTLE_TIMEOUT_SEC = 1.5
     VIEW_BACK_STEP_MM = 30.0
-    VIEW_BACK_MAX_STEPS = 3
+    VIEW_BACK_MAX_STEPS = 4  # 2026-11-17: 最初に何も見えないときの1回を足した
     VIEW_BACK_POWER = 35
     VIEW_BACK_TIMEOUT_SEC = 2.0
     SEARCH_WAIT_SEC = 0.6
-    SEARCH_LIMIT_DEG = 20.0
+    SEARCH_LIMIT_DEG = 30.0
     ACQUIRE_TIMEOUT_SEC = 45.0
 
     def __init__(self, context, config):
@@ -333,9 +337,10 @@ class MoveToRallyBlue(Behaviour):
             bottle_delta = float(reference.get("bottle_delta", 0.0))
         # 左右情報は探索順序だけに使い、未実測の角度換算は行わない。
         direction = 1.0 if bottle_delta >= 0.0 else -1.0
-        self.search_offsets = [direction * sign * step
-                               for step in (5.0, 10.0, 15.0, 20.0)
-                               for sign in (1.0, -1.0)]
+        # 2026-11-17(devSS): 5°刻みの左右交互は遅かった(見つかるまで7回・約10秒)。丸はロボットに近く画面の下の端に
+        # 写るので、少し向きがずれると見えない。8°刻みで、bottle_delta の側を先に2段見てから反対側を見る。
+        self.search_offsets = [direction * s for s in (8.0, 16.0)] + [-direction * s for s in (8.0, 16.0)]             + [direction * 24.0, -direction * 24.0]
+        self.initial_back_done = False
         self.search_count = 0
         self._stop_motors()
         self._set_phase("ALIGN_SETTLE")
@@ -508,6 +513,11 @@ class MoveToRallyBlue(Behaviour):
 
             if not observation or not observation.get("confirmed"):
                 if now - self.phase_started_at >= self.SEARCH_WAIT_SEC:
+                    if not self.initial_back_done and self.search_count == 0:
+                        # 2026-11-17(devSS): 最初に何も見えないときは、向きを変える前に一度少し下がる
+                        # (丸が近くて画面の下に外れていることが多い。下がると下の端に写り始める)
+                        self.initial_back_done = True
+                        return self._start_view_back()
                     return self._start_search()
                 return Status.RUNNING
 
