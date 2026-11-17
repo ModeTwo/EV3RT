@@ -1,4 +1,5 @@
 import math
+import time
 from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSensor, GyroSensor
 
 # 2026-09-12: 直進100cm/102.9cmの実測テスト(計4回、指令距離に対する誤差は
@@ -12,12 +13,24 @@ from etrobo_python import ETRobo, Hub, Motor, TouchSensor, ColorSensor, SonarSen
 # したところ、まだ僅かに過走行が残っていたため、多数派だった+0.49%を採用して
 # 追加補正(2段階目、57.05 * 1.0049)。
 TIRE_DIAMETER: float = 57.33
+# DD-19較正用: 上記2段階の較正を一切行う前の、最初の想定タイヤ径(較正の起点)。
+# TIRE_DIAMETER(57.33)自体が既に較正済みの値のため、「補正なし」のベースライン
+# 計測では、ETラリー工程のタイヤ径をこちらに明示的に切り替える(phases/et_rally.py、
+# --rally-gyro-tire-calibration off指定時)。
+UNCALIBRATED_TIRE_DIAMETER: float = 55.0
 # ETラリー工程専用のタイヤ径。2026-09-19: RunByGyroにGYRO_SCALE_FACTORを適用した後の
 # 実機テストで、100cm指令に対し実測99.2cm(誤差-0.8%、過少走行)と判明したため
 # 57.33 * 0.992 に較正した。1回のみの試行なので暫定値。繰り返しテストの結果で再計算すること。
 # 他工程(ライントレース等)の距離には影響させないため、Plotter.tire_diameterを
 # ETラリー工程の開始時だけこの値へ切り替え、終了時に元へ戻す(phases/et_rally.py)。
-ET_RALLY_TIRE_DIAMETER: float = 56.87
+#
+# 2026-10-28: 56.87は直進後の惰性(止まるまでに約1〜2cm進む分)を含んだ実測で較正されて
+# いたため、1m直進でだけ誤差が打ち消し合っていた。床の実測(1000mm×3回・300mm×3回)で、
+# 実距離÷ログ上の距離(目標到達時+惰性)が長さによらず約0.977で一定だったため、
+# 56.87*0.977に修正した。惰性そのものは直進側(減速区間・手前で止める量)で扱う
+# (robot_program/features/execute_strategy.py)。
+# ET_RALLY_TIRE_DIAMETER: float = 56.87  # 2026-10-28以前(惰性込みの較正値)
+ET_RALLY_TIRE_DIAMETER: float = 55.56
 # WHEEL_TREAD: 2026-09-12に実測(左右タイヤの接地面中心間の距離、11.7cm)。
 # et_rally_planner側でのその場旋回の位置ズレ調査(SpinAroundByEncoder、
 # sample_comment.py参照)に使う。
@@ -34,7 +47,13 @@ IMU_HEADING_SIGN: float = 1.0
 # ので、GYRO_SCALE_FACTOR = 2536/2520 ≈ 1.00635。get_angle()の生値に
 # この係数を掛けたものを「真の回転角度の推定値」として使う。
 # タイヤ径較正と同じく、実測1回ぶんの暫定値なので、テストを重ねて精緻化すること。
-GYRO_SCALE_FACTOR: float = 1.00635
+# 2026-10-29: 1.00635で、headingが減る向き(左回り)に90度×30回(2700度)回すテスト
+# (robot_program/tests/plan_spin_samedirection30_neg.json、one_shot旋回)をしたところ、
+# ジャイロ上は最終誤差+0.04度で終わったが、実際はロボットから見て1.5度右を向いていた
+# (=実際の回転は2698.5度で、1.5度回り足りなかった)。生値は2700/1.00635=2682.96度なので、
+# 2698.5/2682.96 ≈ 1.00579に修正する。ジャイロ値は約1度刻みのため、±0.0002程度の誤差を含む。
+# 右回りでは未確認(元の1.00635の28回テストの向きは記録がない)。
+GYRO_SCALE_FACTOR: float = 1.00579
 
 class Plotter(object):
     def __init__(self) -> None:
@@ -45,6 +64,43 @@ class Plotter(object):
         self.loc_x = 0.0
         self.loc_y = 0.0
         self.prev_azimuth = 0.0
+        self._encoder_diag = None
+
+    def _log_encoder_snapshot(self, right_count, left_count, *, now=None):
+        """Log the same counts used for odometry; timestamps are local reads, not hub timestamps."""
+        now = time.monotonic() if now is None else now
+        previous = self._encoder_diag
+        if previous is None:
+            self._encoder_diag = {'right': right_count, 'left': left_count,
+                                  'right_changed': now, 'left_changed': now,
+                                  'emit_time': now, 'emit_right': right_count,
+                                  'emit_left': left_count}
+            print('ODOMETRY_SAMPLE read_mono_sec=%.6f right_deg=%s left_deg=%s distance_mm=%.3f init=True' %
+                  (now, right_count, left_count, self.distance), flush=True)
+            return
+        if right_count != previous['right']:
+            previous['right'], previous['right_changed'] = right_count, now
+        if left_count != previous['left']:
+            previous['left'], previous['left_changed'] = left_count, now
+        elapsed = now - previous['emit_time']
+        if elapsed < 0.2:
+            return
+        right_delta = right_count - previous['emit_right']
+        left_delta = left_count - previous['emit_left']
+        print('ODOMETRY_SAMPLE read_mono_sec=%.6f interval_sec=%.3f right_deg=%s left_deg=%s '
+              'right_delta_deg=%s left_delta_deg=%s right_rpm=%.2f left_rpm=%.2f '
+              'distance_mm=%.3f right_unchanged_sec=%.3f left_unchanged_sec=%.3f' %
+              (now, elapsed, right_count, left_count, right_delta, left_delta,
+               right_delta / (6.0 * elapsed), left_delta / (6.0 * elapsed), self.distance,
+               now - previous['right_changed'], now - previous['left_changed']), flush=True)
+        previous.update(emit_time=now, emit_right=right_count, emit_left=left_count)
+        # 2026-11-17(devSS): タッチ〜ラップゲートの間だけ、電池と出力も出す(robot_program/lap_diag.py)
+        try:
+            from robot_program import lap_diag
+            if lap_diag.ACTIVE:
+                lap_diag.sample(self.distance)
+        except Exception:
+            pass
 
     def plot(
         self,
@@ -57,6 +113,7 @@ class Plotter(object):
         sonar_sensor: SonarSensor,
         gyro_sensor: GyroSensor,
     ) -> None:
+        self.gyro_sensor = gyro_sensor
         if not self.running:
             self.running = True
             right_motor.reset_count()
@@ -64,6 +121,7 @@ class Plotter(object):
             self.prev_ang_r = right_motor.get_count()
             self.prev_ang_l = left_motor.get_count()
             gyro_sensor.reset()
+            self._log_encoder_snapshot(self.prev_ang_r, self.prev_ang_l)
             return
 
         # --- distance: taken from the wheel encoders ------------------
@@ -104,16 +162,17 @@ class Plotter(object):
         # --- location --------------------------------------------------------
         self.loc_x += delta_dist * math.sin(azi_mid)
         self.loc_y += delta_dist * math.cos(azi_mid)
+        self._log_encoder_snapshot(cur_ang_r, cur_ang_l)
         return
 
     def get_distance(self) -> int:
         return int(self.distance)
 
     def get_azimuth(self) -> int:
-        return int(IMU_HEADING_SIGN * math.radians(gyro_sensor.get_angle()) % (2.0 * math.pi))
+        return int(IMU_HEADING_SIGN * math.radians(self.gyro_sensor.get_angle()) % (2.0 * math.pi))
 
     def get_degree(self) -> int:
-        degree = int(IMU_HEADING_SIGN * gyro_sensor.get_angle()) % 360
+        degree = int(IMU_HEADING_SIGN * self.gyro_sensor.get_angle()) % 360
         return degree
 
     def get_loc_x(self) -> int:

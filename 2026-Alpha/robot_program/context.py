@@ -13,6 +13,8 @@ from .delivery_heading import DeliveryHeadingReference
 class RaceContext:
     # 各担当機能は他担当のモジュールを直接参照せず、この共有状態を介して情報を渡す。
     bottle_color: Optional[str] = None
+    # None: 通常AT / confirmed: 青→黒後の接近完了 / fallback: 推定位置後の接近完了。
+    lap_bottle_approach_result: Optional[str] = None
     # 配置先は認識色から一度だけ決定し、配置後の開始位置復帰にも同じ値を使う。
     selected_drop_zone: Optional[str] = None
     bottle_delivered: bool = False
@@ -32,6 +34,10 @@ class RaceContext:
     strategy_error: Optional[str] = None
     # ETラリー開始時のエラーで、PCの経路ではなく固定ルートを使うことにしたか。
     strategy_fallback_used: bool = False
+    # 2026-11-15: 経路の道具の計画(ファイルで走るときと同じ形)のパス。PC から丸ごと届いたとき、または
+    # 届かずロボットが選んだとき(et_rally_plan_select.py)に入る。入っていれば strategy の代わりにこれで走る。
+    strategy_plan_path: Optional[str] = None
+    strategy_plan_source: Optional[str] = None
     rally_lap: int = 0
     timer: RaceTimer = field(default_factory=RaceTimer)
     sumo: SumoState = field(default_factory=SumoState)

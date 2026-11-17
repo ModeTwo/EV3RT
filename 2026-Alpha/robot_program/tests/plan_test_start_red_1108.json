@@ -1,0 +1,100 @@
+{
+  "gates": {
+    "mode": "random",
+    "seed": 9392783,
+    "course": "right",
+    "red": {
+      "a": [
+        2,
+        2
+      ],
+      "b": [
+        1,
+        2
+      ]
+    },
+    "blue": {
+      "a": [
+        3,
+        1
+      ],
+      "b": [
+        3,
+        2
+      ]
+    },
+    "yellow": {
+      "a": [
+        3,
+        4
+      ],
+      "b": [
+        2,
+        4
+      ]
+    }
+  },
+  "heading_convention": "target_heading_deg is the GYRO target for course=right file-mode execution (gyro = -planner angle), same as plan_seed9392783_right_1031b.json. arc: target_heading_deg is the end heading, sweep_deg the signed heading change in the same frame (start = end - sweep), radius_mm the radius of the robot-centre path.",
+  "note_1108": "2026-11-08 スタートの取り込み(--rally-start-pose)とつなぎの引き直しの確認用。plan_seed9392783_right_oblique_m30_1105.json の最初の6歩(赤ゲートを抜けて234mm直進)で止まる。わざと前後・左右・向きをずらして置き、取り込みあり・なしで止まった位置を比べる。",
+  "laps": 0,
+  "steps": [
+    {
+      "type": "arc",
+      "target_heading_deg": 22.96,
+      "sweep_deg": 22.96,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 22.96,
+      "distance_mm": 486.1,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 90.0,
+      "sweep_deg": 67.04,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 90.0,
+      "distance_mm": 80.0,
+      "reverse": false,
+      "stop": false,
+      "label": "lap1-red"
+    },
+    {
+      "type": "arc",
+      "target_heading_deg": 100.0,
+      "sweep_deg": 10.0,
+      "radius_mm": 100.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 100.0,
+      "distance_mm": 234.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    }
+  ],
+  "et_rally_arm": {
+    "must_be_up_mm": 585.0,
+    "must_be_up_sec": 1.91,
+    "arm_front_cm": 5.0,
+    "arm_half_width_cm": 7.0,
+    "note": "must_be_up_* が null なら最後まで当たらない。時間は経路を作る道具の近似式(止まる時間を入れない短めの見込み)。"
+  }
+}

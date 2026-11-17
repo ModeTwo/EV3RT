@@ -1,5 +1,7 @@
 """Top-level robot mission composition."""
 
+from dataclasses import replace
+
 from .phases.bottle_and_rally_preparation import (
     build_bottle_and_rally_preparation_phase,
     build_bottle_delivery_final_phase,
@@ -14,9 +16,27 @@ from .behaviours.handoff import CaptureAtToHandoff
 from .gyro_scale import EnableGyroScale
 
 
+class _DeliveryLineBearingReference:
+    """Read the registered full-start heading in the delivery-line frame."""
+
+    def __init__(self, full_start_reference):
+        self.full_start_reference = full_start_reference
+
+    def bearing(self, gyro):
+        return (self.full_start_reference.bearing(gyro) + 180.0) % 360.0
+
+    def legacy_target(self, bearing, gyro, course):
+        full_start_bearing = (bearing + 180.0) % 360.0
+        return self.full_start_reference.legacy_target(full_start_bearing, gyro, course)
+
+
 def build_mission_children(context, config):
     # この関数は統合担当者だけが変更し、各機能担当者はfeatures配下だけを変更する。
     from .config import INTEGRATION_MISSIONS
+    if config.mission_mode.startswith('et-rally'):
+        # 2026-11-16: ETラリーの診断用ミッションでも RALLY_PWR を出す(それ以外のミッションではETラリーの工程に入るまで出さない)。
+        from . import power_log
+        power_log.set_enabled(True)
     if config.mission_mode in ("sumo-stage-all", "sumo-stage-entry", "sumo-stage-push", "sumo-stage-exit"):
         from .features.sumo_stage_test import build_sumo_stage_test
         return [EnableGyroScale(), build_sumo_stage_test(context, config)]
@@ -44,6 +64,51 @@ def build_mission_children(context, config):
         from .integration_runs import build_integration_children
         # ラップゲートを通らない試験ミッションは、先頭からジャイロの倍率補正を有効にする。
         return [EnableGyroScale()] + list(build_integration_children(context, config))
+    if config.mission_mode in ('lap-to', 'lap-to-sumo', 'full'):
+        # LAP already performed bottle approach; carry only AT's handoff state.
+        from .behaviours.motor_control import StopNow
+        from .features.catch_bottle import RequireBottleColor
+        from .diagnostics.lap_recovery_observation import FlushLapFloorDiagnostics, DumpTransitionDiagnostics
+        from .behaviours.continue_after_failure import ContinueAfterFailure
+        from py_trees.decorators import Timeout
+        lap = build_lap_gate_phase(context, config)
+        lap_phase = lap
+        to = build_tantou_tree(context, config, include_exit=True)
+        if config.mission_mode in ('lap-to-sumo', 'full'):
+            lap = ContinueAfterFailure(name='continue after LAP failure', child=lap)
+            to = ContinueAfterFailure(name='continue after TO failure',
+                    child=Timeout(name='TO 60s limit', child=to, duration=60))
+        children = [lap, EnableGyroScale(),
+                RequireBottleColor(context),
+                CaptureAtToHandoff('AT_TO capture boundary', context),
+                to]
+        if config.mission_mode in ('lap-to-sumo', 'full'):
+            from .phases.et_sumo import build_sumo_after_delivery
+
+            delivery = build_bottle_delivery_final_phase(context, config)
+            sumo = build_sumo_after_delivery(context, config)
+            children.extend([ContinueAfterFailure(name='continue after delivery failure',
+                                child=Timeout(name='delivery 60s limit', child=delivery, duration=60)),
+                             ContinueAfterFailure(name='finish after sumo failure', child=sumo)])
+        if config.mission_mode == 'full':
+            from .features.sumo_rally_transition import TurnAfterBlue, build_move_sumo_to_rally_start
+
+            transition = build_move_sumo_to_rally_start(context, config)
+            final_turn = next(child for child in transition.children if isinstance(child, TurnAfterBlue))
+            # 配置ラインは全体スタートと反対向き。正対ノードにだけ単体と同じ方位基準を渡す。
+            # 元の参照はResetDevice後に登録されるので、その値を実行時に使う。
+            reference = _DeliveryLineBearingReference(context.sumo.bearing_reference)
+            final_turn.context = replace(context, sumo=replace(context.sumo, bearing_reference=reference))
+            children.append(ContinueAfterFailure(name='continue after sumo-to-rally failure', child=transition))
+            if config.enable_et_rally and config.et_rally_laps > 0:
+                children.append(build_et_rally_phase(context, config))
+            if config.enable_finish:
+                children.append(build_finish_phase(context, config))
+        children.append(StopNow(name='LAP to route complete brake'))
+        if hasattr(lap_phase, 'floor_recorder'):
+            children.extend([FlushLapFloorDiagnostics(lap_phase.floor_recorder),
+                             DumpTransitionDiagnostics(lap_phase.lap_controller)])
+        return children
     if config.mission_mode not in (
         'at',
         'to',
@@ -53,7 +118,14 @@ def build_mission_children(context, config):
         'bottle-final',
         'rally-drive',
         'full',
-        'et-rally-lqi-calibration',
+        'et-rally-turn-calibration',
+        'et-rally-marker-observe',
+        'et-rally-turn-phase2-diagnostic',
+        'et-rally-single-wheel-diagnostic',
+        'et-rally-single-wheel-reversal-diagnostic',
+        'et-rally-single-wheel-alternating-diagnostic',
+        'et-rally-single-wheel-alternating-right-diagnostic',
+        'et-rally-single-wheel-alternating-left-diagnostic',
     ):
         raise ValueError('Unknown mission mode: ' + config.mission_mode)
     if config.mission_mode == 'at':
@@ -71,10 +143,44 @@ def build_mission_children(context, config):
     if config.mission_mode == 'rally-drive':
         # Hint取得・Bottle Deliveryを通らず、受信待ちとSEQ実行だけを構成する。
         return [EnableGyroScale(), build_et_rally_phase(context, config)]
-    if config.mission_mode == 'et-rally-lqi-calibration':
-        # ETラリー旋回のLQI設計用データ収集だけを実行する(PC通信・Hintは使わない)。
-        from .behaviours.et_rally_lqi_calibration import build_et_rally_lqi_calibration_sequence
-        return [EnableGyroScale(), build_et_rally_lqi_calibration_sequence()]
+    if config.mission_mode == 'et-rally-turn-calibration':
+        # ETラリー旋回の応答特性データ収集だけを実行する(PC通信・Hintは使わない)。
+        from .behaviours.et_rally_turn_calibration import build_et_rally_turn_calibration_sequence
+        return [EnableGyroScale(), build_et_rally_turn_calibration_sequence()]
+    if config.mission_mode == 'et-rally-marker-observe':
+        # マーカー検出の実機確認専用(走行体は動かさず、検出結果だけをログに出す)。
+        from .behaviours.et_rally_camera_correction import (
+            PrepareEtRallyMarkerCamera, EtRallyMarkerObserveLoop)
+        return [EnableGyroScale(), PrepareEtRallyMarkerCamera(name="prepare et_rally marker camera"),
+                EtRallyMarkerObserveLoop(name="et_rally marker observe")]
+    if config.mission_mode == 'et-rally-turn-phase2-diagnostic':
+        # フェーズ2が横ズレの原因かどうかの切り分け専用(plan_spin_alternating30.jsonと比較)。
+        from .behaviours.et_rally_turn_phase2_diagnostic import (
+            build_et_rally_turn_phase2_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_turn_phase2_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-diagnostic':
+        # 片輪だけのエンコーダ駆動で、左右の実効的な移動量の差を直接確認する専用。
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-reversal-diagnostic':
+        # 片輪だけの順方向→逆方向の反転コストを、左右で比較する専用。
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_reversal_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_reversal_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-alternating-diagnostic':
+        # 片輪だけを1周ごとに反転させ続け、反転コストのサンプル数を増やす専用。
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_alternating_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_alternating_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-alternating-right-diagnostic':
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_alternating_right_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_alternating_right_diagnostic_sequence()]
+    if config.mission_mode == 'et-rally-single-wheel-alternating-left-diagnostic':
+        from .behaviours.et_rally_single_wheel_test import (
+            build_et_rally_single_wheel_alternating_left_diagnostic_sequence)
+        return [EnableGyroScale(), build_et_rally_single_wheel_alternating_left_diagnostic_sequence()]
     children = []
     if config.lapgate:
         children.append(build_lap_gate_phase(context, config))

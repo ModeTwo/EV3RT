@@ -1,0 +1,521 @@
+"""ETラリー工程の間だけ使う、ジャイロの向きの読み取り窓口(2026-10-29)。
+
+ScaledGyro(gyro_scale.py)を差し替えずに継承し、ETラリー工程の開始時にruntime.gyro_sensorへ入れ、
+終了時に元のScaledGyroへ戻す(タイヤ径の切り替えと同じやり方)。ETラリーの各クラスは
+runtime.gyro_sensor.get_angle()を読むだけなので、クラス側は変えずに次の2つが効く。
+
+1. 四捨五入前の向きを使う(float_heading)
+   etrobo_pythonのGyroSensor.get_angle()は、ハブの向き(hub_imu_get_heading()、小数)を
+   round()で整数にして返す。ここではハブの値を直接読み、1度刻みにしない。
+
+2. 止まっている間のずれを差し引く(drift_compensation)
+   ハブ(Pybricks由来のpbio)は、全モーターが脱力しているときだけジャイロのくせを測り直す
+   (imu.cのpbio_imu_is_stationary)。走行中はモーターにブレーキや出力が入っているので測り直されず、
+   静止テストでは0.01〜0.05度/秒のずれが続いた。脱力をやめると、くせは10秒ほどで変わっていく
+   (2026-10-29の静止テスト、全モーター脱力→全モーターブレーキ)ので、脱力中に測った値は使えない。
+   そこで、ETラリー開始時にアームを上げ終えたあと、振動が収まるのを待ってから止まったまま
+   (車輪にはブレーキ)ハブの回転の速さ(z軸、くせを引いた後の値)を平均し、それをずれの速さとして
+   ETラリーの間ずっと差し引く(EtRallyArmUpWithDriftMeasure)。
+   2026-10-29: アームを上げている間に測ると、アームの動きと上の端に当たった衝撃でz軸が乱れ、
+   ずれの速さを逆の符号で読んだ(-0.079度/秒、実際は+0.019度/秒)。アームが動いている間と、
+   上げ切ったあとの振動の間(settle_sec)は測らない。ハブの向きは時計回りが正で、回転の速さのz軸とは符号が逆
+   (静止テストで確認)なので、ずれの速さ = -(z軸の平均)。
+   2026-10-29: 走行中の短い停止(旋回の前後)でも測っていたが、エンコーダが止まっていても歯車の
+   あそびで車体がまだ回っており、ずれの速さを逆の符号で読んでいた(1周目の開始時に-0.26度/秒、
+   静止テストでは毎回プラス)。走行中に測るのはやめ、開始時に測った値で固定する。
+
+3. 左回り(headingが減る向き)だけ別の倍率を使う(scale_neg、2026-10-30)
+   90度×30回の旋回テスト(10/30、ハブ書き換え後・四捨五入前の向き)で、右回りは2回とも共通の倍率
+   1.00579で合い、左回りは2回とも実際がジャイロより多く回った(1.8度・0.9度/2700度)。
+   時間とともにずれる成分なら右回りにも同じだけ出るので、回る向きで倍率が違うとみなす。
+   向きが減った量だけを数え(NEG_DEADBAND_DEGの遊びを持たせ、止まっている間や直進中の細かい
+   揺れは数えない)、その量に (scale_neg - 共通の倍率) を掛けて差し引く。
+
+4. 右回り(headingが増える向き)にも別の倍率を使えるようにする(scale_pos、2026-11-08)
+   11/08の90度×30回(右回り、旋回は同期・減速・出力50の今の設定)で、実機は3回とも1.00579で
+   ジャイロより約2.6〜6.6度多く回った(車輪の位置で測定)。10/30は目視で合っていたため、倍率を比べて決める。
+   増えた量だけを scale_neg と同じやり方で数え、(scale_pos - 共通の倍率) を掛けて足す。既定は使わない。
+"""
+
+import math
+import time
+
+from py_trees.behaviour import Behaviour
+from py_trees.common import Status
+from .features.sumo_bearing import bearing_delta
+
+from .gyro_scale import ScaledGyro, ensure_scaled_gyro
+from .runtime import runtime
+from . import pre_touch_gyro
+
+# 平均に入れるz軸の回転の速さの上限(度/秒)。アームの動きによる大きな揺れの読み取りを外す。
+# アームは上下に動くだけで、旋回の軸(z軸)への影響は平均すれば小さい想定(ログのstd・rejectedで確かめる)。
+MEASURE_MAX_ANGV_DEG_S = 1.0
+# この件数に満たなければ、ずれの速さは0のまま(差し引かない)にする。
+MEASURE_MIN_SAMPLES = 30
+# 左回りの量を数えるときの遊び(度、ハブの向きの単位)。この幅の中の揺れは数えない。
+# 向きが反転するたびに最大この分だけ数え漏らすが、倍率の差(約0.0005)を掛けると無視できる。
+NEG_DEADBAND_DEG = 0.2
+
+
+class EtRallyHeading(ScaledGyro):
+    """ScaledGyroと同じ倍率補正に、四捨五入前の向きと、ずれの差し引きを加える。"""
+
+    def __init__(self, base, float_heading, drift_compensation, scale_neg=None, scale_pos=None, *,
+                 plan_origin_deg=None):
+        scaled = base if isinstance(base, ScaledGyro) else ScaledGyro(base, 1.0, 0.0)
+        super().__init__(scaled._sensor, scaled._scale, scaled._origin)
+        self.base = base
+        # 経路の0°に対応する全体ジャイロ方位。カメラの補正値とは独立に持つ。
+        self.plan_origin_deg = plan_origin_deg
+        self.float_heading = float_heading
+        self.drift_compensation = drift_compensation
+        # 左回りだけの倍率。neg_trackは遊び付きでハブの向きを追いかける値、neg_totalはそれが減った量の合計。
+        self.scale_neg = scale_neg
+        self.neg_track = None
+        self.neg_total = 0.0
+        # 右回りだけの倍率(11/08)。pos_trackは遊び付きで追いかける値、pos_totalはそれが増えた量の合計。
+        self.scale_pos = scale_pos
+        self.pos_track = None
+        self.pos_total = 0.0
+        # ずれの速さ(ハブの向きの単位、度/秒)と、これまでに差し引いた量(度)。
+        # ずれの速さはset_drift_rate()で決まるまで0。決まったら、差し替えた時点から差し引く。
+        self.drift_rate = 0.0
+        self.drift_total = 0.0
+        self.rate_samples = 0
+        self.installed_time = time.monotonic()
+        self.last_time = self.installed_time
+        # 2026-10-30: ETラリー用の位置(plotterと同じ座標・同じ式で、向きだけ四捨五入前の値を使う)。
+        # plotterはジャイロの整数値で向きを計算するため、0.5度丸められると757mmの直進で約7mm横にずれる。
+        self.pose_x = float(runtime.plotter.loc_x) if runtime.plotter is not None else 0.0
+        self.pose_y = float(runtime.plotter.loc_y) if runtime.plotter is not None else 0.0
+        self.pose_counts = None
+        self.pose_azimuth = None
+        # 2026-10-30: その場旋回の間は位置を動かさない(set_et_turning)。0⇔90度の交互旋回30回で、
+        # エンコーダからは前50.7mm・右21.2mm動いた計算になったが、実測は前7mm・左1.5mm
+        # (1旋回あたり約0.2mm)だった。旋回中の左右の回転量の差は滑りで、車体の移動にはなっていない。
+        self.turning = False
+        # 2026-11-06: スタートでカメラから測った向きのずれ(ジャイロの向きの単位、度)。get_angle に足す
+        # (et_rally_start_pose.py)。計画の向きと実際の向きを合わせるため。
+        self.heading_offset = 0.0
+        # 2026-11-08: 向きと位置を更新するたびに呼ぶ関数 f(self, heading)(et_rally_course_pose.py がコース上の位置を持つため)。
+        self.pose_listener = None
+        # 2026-11-15: 速い急な円弧での滑り。この割合だけ、エンコーダの距離を割り引いて位置を進める(set_arc_slip)。
+        # slip_total = 割り引いた距離の合計(mm)。et_rally_path_segment は plotter の距離からこれを引いた距離で進みを数える。
+        self.arc_slip = 0.0
+        self.slip_total = 0.0
+
+    def set_arc_slip(self, ratio):
+        """2026-11-15: 円弧の区間の始めと終わりで呼ぶ。切り替える前に、ここまでの位置を今の割合で確定させる。"""
+        self.get_angle()
+        self.arc_slip = max(0.0, float(ratio or 0.0))
+
+    def set_heading_offset(self, offset_deg):
+        self.get_angle()   # ここまでの位置を、今までの向きで確定させる
+        self.heading_offset = float(offset_deg)
+        self.get_angle()   # 位置の積算の向きも新しい向きにそろえる(止まっている間なので位置は動かない)
+
+    def set_turning(self, turning):
+        # 切り替える前に、ここまでの位置を今の状態で確定させる(旋回前の惰性は数え、旋回中の分は数えない)。
+        self.get_angle()
+        self.turning = turning
+
+    def _update_pose(self, heading_deg):
+        """左右のエンコーダの変化と、前回と今回の向きの中間で、位置を進める(plotter.pyと同じ式)。"""
+        try:
+            counts = (runtime.right_motor.get_count(), runtime.left_motor.get_count())
+            diameter = runtime.plotter.tire_diameter
+        except Exception:
+            return
+        azimuth = math.radians(heading_deg)
+        if self.pose_counts is None or self.turning:
+            self.pose_counts = counts
+            self.pose_azimuth = azimuth
+            return
+        if counts == self.pose_counts:
+            self.pose_azimuth = azimuth
+            return
+        dist = math.pi * diameter * ((counts[0] - self.pose_counts[0]) + (counts[1] - self.pose_counts[1])) / 2.0 / 360.0
+        if self.arc_slip > 0.0:
+            # 2026-11-15: 速い急な円弧では、実際の進みがエンコーダより約7〜8% 少ない(11/15 配置36 の3回のカメラ補正から)
+            lost = dist * self.arc_slip
+            dist -= lost
+            self.slip_total += lost
+        mid = (self.pose_azimuth + azimuth) / 2.0
+        self.pose_x += dist * math.sin(mid)
+        self.pose_y += dist * math.cos(mid)
+        self.pose_counts = counts
+        self.pose_azimuth = azimuth
+
+    def pose_text(self):
+        return " et_loc=(%.1f,%.1f)" % (self.pose_x, self.pose_y)
+
+    def _raw_heading(self):
+        if self.float_heading and runtime.hub is not None:
+            try:
+                # 2026-11-17: タッチ前に測ったずれの差し引き(pre_touch_gyro)。ハブから直接読むときも同じだけ引く
+                return float(runtime.hub.hub_imu_get_heading()) - pre_touch_gyro.drift_total()
+            except Exception:
+                pass
+        return float(self._sensor.get_angle())
+
+    def _update_drift(self, now):
+        # ずれの速さで、前回からの経過時間ぶんの差し引きを足す。
+        self.drift_total += self.drift_rate * (now - self.last_time)
+        self.last_time = now
+
+    def set_drift_rate(self, rate, samples):
+        """ずれの速さを決める。差し替えた時点から今までの分も、まとめて差し引く。"""
+        now = time.monotonic()
+        self.drift_rate = rate
+        self.rate_samples = samples
+        self.drift_total = rate * (now - self.installed_time)
+        self.last_time = now
+
+    def _update_neg(self, raw):
+        # 遊び付きで追いかけ、追いかける値が減った分だけを左回りの量として足す。
+        if self.neg_track is None:
+            self.neg_track = raw
+        elif raw < self.neg_track - NEG_DEADBAND_DEG:
+            self.neg_total += self.neg_track - NEG_DEADBAND_DEG - raw
+            self.neg_track = raw + NEG_DEADBAND_DEG
+        elif raw > self.neg_track + NEG_DEADBAND_DEG:
+            self.neg_track = raw - NEG_DEADBAND_DEG
+
+    def _update_pos(self, raw):
+        # _update_negの逆向き。追いかける値が増えた分だけを右回りの量として足す。
+        if self.pos_track is None:
+            self.pos_track = raw
+        elif raw > self.pos_track + NEG_DEADBAND_DEG:
+            self.pos_total += raw - (self.pos_track + NEG_DEADBAND_DEG)
+            self.pos_track = raw - NEG_DEADBAND_DEG
+        elif raw < self.pos_track - NEG_DEADBAND_DEG:
+            self.pos_track = raw + NEG_DEADBAND_DEG
+
+    def _scale_adjust(self):
+        """左右の向きだけの倍率で、共通の倍率から足し引きする量(度)。"""
+        adj = 0.0
+        if self.scale_neg is not None:
+            adj -= self.neg_total * (self.scale_neg - self._scale)
+        if self.scale_pos is not None:
+            adj += self.pos_total * (self.scale_pos - self._scale)
+        return adj
+
+    def get_angle(self):
+        raw = self._raw_heading()
+        if self.drift_compensation:
+            self._update_drift(time.monotonic())
+            raw -= self.drift_total
+        heading = self._origin + (raw - self._origin) * self._scale
+        if self.scale_neg is not None:
+            self._update_neg(raw)
+        if self.scale_pos is not None:
+            self._update_pos(raw)
+        heading += self._scale_adjust()
+        heading += self.heading_offset - (self.plan_origin_deg or 0.0)
+        if self.float_heading:
+            self._update_pose(heading)
+            if self.pose_listener is not None:
+                self.pose_listener(self, heading)
+        return heading
+
+    def reset(self):
+        super().reset()
+        self.drift_total = 0.0
+        self.neg_track = None
+        self.neg_total = 0.0
+        self.pos_track = None
+        self.pos_total = 0.0
+
+    def summary(self):
+        text = "float_heading=%s drift_compensation=%s drift_rate=%+.4f deg/s drift_total=%+.3f deg samples=%d" % (
+            self.float_heading, self.drift_compensation, self.drift_rate, self.drift_total, self.rate_samples)
+        if self.scale_neg is not None:
+            text += " scale_neg=%.5f neg_total=%.1f deg neg_adjust=%+.3f deg" % (
+                self.scale_neg, self.neg_total, -self.neg_total * (self.scale_neg - self._scale))
+        if self.scale_pos is not None:
+            text += " scale_pos=%.5f pos_total=%.1f deg pos_adjust=%+.3f deg" % (
+                self.scale_pos, self.pos_total, self.pos_total * (self.scale_pos - self._scale))
+        if self.heading_offset:
+            text += " heading_offset=%+.2f deg" % self.heading_offset
+        if self.plan_origin_deg is not None:
+            text += " plan_origin=%+.2f deg" % self.plan_origin_deg
+        return text
+
+
+def et_pose_text():
+    """ETラリー用の位置(四捨五入前の向きで計算)をログ用の文字列で返す。使っていなければ空文字。"""
+    pose_text = getattr(runtime.gyro_sensor, "pose_text", None)
+    text = pose_text() if pose_text is not None else ""
+    from . import et_rally_course_pose
+    return text + et_rally_course_pose.text()
+
+
+def set_et_turning(turning):
+    """その場旋回の始まり(True)と終わり(False)を知らせる。ETラリー用の位置を使っていなければ何もしない。"""
+    set_turning = getattr(runtime.gyro_sensor, "set_turning", None)
+    if set_turning is not None:
+        set_turning(turning)
+
+
+class InstallEtRallyHeading(Behaviour):
+    """ETラリー工程の開始時に、runtime.gyro_sensorをEtRallyHeadingに差し替える。"""
+
+    def __init__(self, name, float_heading, drift_compensation, scale_neg=None, scale_pos=None, *, plan_origin=None):
+        super().__init__(name)
+        self.float_heading = float_heading
+        self.drift_compensation = drift_compensation
+        self.scale_neg = scale_neg
+        self.scale_pos = scale_pos
+        self.plan_origin = plan_origin
+
+    def update(self):
+        ensure_scaled_gyro()
+        current = runtime.gyro_sensor
+        if not isinstance(current, ScaledGyro) and self.plan_origin is None:
+            # 倍率補正が無効(DD-19較正用)のときは差し替えない。
+            self.logger.info("et_rally heading not installed (gyro scale disabled)")
+            return Status.SUCCESS
+        if isinstance(current, EtRallyHeading):
+            return Status.SUCCESS
+        before = current.get_angle()
+        plan_origin = None
+        if self.plan_origin is not None:
+            # ジャイロが360°を越えていても、同じ方位のうち今の値に近い方を使う。
+            plan_origin = before + bearing_delta(self.plan_origin(), before)
+        runtime.gyro_sensor = EtRallyHeading(current, self.float_heading, self.drift_compensation, self.scale_neg,
+                                            self.scale_pos, plan_origin_deg=plan_origin)
+        after = runtime.gyro_sensor.get_angle()
+        if plan_origin is not None:
+            self.logger.info("RALLY_FILE_HEADING origin=%+.2f gyro=%+.2f rally_heading=%+.2f" %
+                             (plan_origin, before, -runtime.course * after))
+        self.logger.info("et_rally heading installed: heading %.3f -> %.3f %s" % (
+            before, after, runtime.gyro_sensor.summary()))
+        return Status.SUCCESS
+
+
+class LogEtRallyHeading(Behaviour):
+    """ずれの速さと、差し引いた量をログに残す(周回の区切りなどに置く)。"""
+
+    def __init__(self, name, tag):
+        super().__init__(name)
+        self.tag = tag
+
+    def update(self):
+        if isinstance(runtime.gyro_sensor, EtRallyHeading):
+            self.logger.info("et_rally heading %s: %s" % (self.tag, runtime.gyro_sensor.summary()))
+        return Status.SUCCESS
+
+
+class RestoreEtRallyHeading(Behaviour):
+    """ETラリー工程の終了時に、元のScaledGyroへ戻す(後続の工程に影響させない)。"""
+
+    def update(self):
+        current = runtime.gyro_sensor
+        if isinstance(current, EtRallyHeading):
+            self.logger.info("et_rally heading restored: %s" % current.summary())
+            base = current.base
+            if isinstance(base, ScaledGyro):
+                base._origin = current._origin
+                scale = base._scale
+                if (current.scale_neg is not None or current.scale_pos is not None) and abs(1.0 - scale) > 1e-9:
+                    # ラリー用の原点は足し戻し、従来どおり左右別の倍率による補正を引き継ぐ。
+                    heading = current.get_angle() + (current.plan_origin_deg or 0.0)
+                    raw = float(base._sensor.get_angle())
+                    base._origin = (heading - scale * raw) / (1.0 - scale)
+            runtime.gyro_sensor = base
+        return Status.SUCCESS
+
+
+def _read_acceleration():
+    """ハブの加速度(x,y,z、mm/s^2、ハブの軸)。読めなければNone。"""
+    if runtime.hub is None:
+        return None
+    try:
+        return tuple(float(v) for v in runtime.hub.hub_imu_get_acceleration())
+    except Exception:
+        return None
+
+
+def _format_tilt(acc_sum, n):
+    """2026-11-05: 止まっている間の加速度の平均から、ハブのx・y軸の傾き(度)を出す(測るだけ)。
+    家のコースで、ゴール側が0.3〜0.5°低く(スマホで測定)、ログに出ない位置のずれが1周ごとに同じ向きに
+    約1cmたまっていたため。ハブの取り付けの傾きも含むので、床の傾きは同じ場所で向きを180°変えた2回の差の半分で見る。"""
+    if not n:
+        return "acc=none"
+    ax, ay, az = (v / n for v in acc_sum)
+    return "acc_mean=(%.0f,%.0f,%.0f) tilt_x=%+.2f tilt_y=%+.2f deg" % (
+        ax, ay, az, math.degrees(math.atan2(ax, az)), math.degrees(math.atan2(ay, az)))
+
+
+class EtRallyPostStopGyroMeasure(Behaviour):
+    """2026-11-05: ETラリーの最後に止まったあと、measure_sec秒ブレーキで止まったまま、z軸の回転の速さと
+    向き(heading)の変化を記録する。測るだけで補正はしない。
+    同じ設定でもログに出ない位置のずれが回ごとに2〜3cm違い、走る前の測定(angv_z_mean)とは合わなかったため、
+    走っている間のくせが走る前と違っていないかを、止まった直後から見る。書き換えたハブはブレーキ中に
+    くせを測り直すので、0.5秒ごとの平均・止まっている判定・向きの変化を並べて、測り直しの前後を分けて見る。"""
+
+    WINDOW_SEC = 0.5
+
+    def __init__(self, name, measure_sec):
+        super().__init__(name)
+        self.measure_sec = measure_sec
+        self.started = False
+
+    def update(self):
+        now = time.monotonic()
+        if not self.started:
+            self.started = True
+            for motor in (runtime.right_motor, runtime.left_motor):
+                motor.set_power(0)
+                motor.set_brake(True)
+            self.start_time = now
+            self.start_heading = runtime.gyro_sensor.get_angle()
+            self.windows = []
+            self.acc_sum = [0.0, 0.0, 0.0]
+            self.acc_n = 0
+            self._new_window(now)
+        if now - self.window["t0"] >= self.WINDOW_SEC:
+            self._close_window(now)
+            self._new_window(now)
+        if runtime.hub is not None:
+            try:
+                self.window["sum"] += float(runtime.hub.hub_imu_get_angular_velocity()[2])
+                self.window["n"] += 1
+                if runtime.hub.hub_imu_is_stationary():
+                    self.window["still"] += 1
+            except Exception:
+                pass
+        acc = _read_acceleration() if now - self.start_time >= 1.0 else None
+        if acc is not None:
+            self.acc_sum = [a + b for a, b in zip(self.acc_sum, acc)]
+            self.acc_n += 1
+        if now - self.start_time < self.measure_sec:
+            return Status.RUNNING
+        self._close_window(now)
+        end_heading = runtime.gyro_sensor.get_angle()
+        total_n = sum(w["n"] for w in self.windows)
+        total_mean = sum(w["sum"] for w in self.windows) / total_n if total_n else 0.0
+        elapsed = now - self.start_time
+        self.logger.info(
+            "post-stop gyro: %.2fs heading %.3f -> %.3f (change %+.3f deg, %+.4f deg/s) angv_z_mean=%+.4f "
+            "imu_stationary=%d/%d %s (after 1s)" % (
+                elapsed, self.start_heading, end_heading, end_heading - self.start_heading,
+                (end_heading - self.start_heading) / elapsed if elapsed > 0 else 0.0, total_mean,
+                sum(w["still"] for w in self.windows), total_n, _format_tilt(self.acc_sum, self.acc_n)))
+        self.logger.info("post-stop gyro windows(%.1fs: angv_z_mean/stationary/heading): %s" % (
+            self.WINDOW_SEC, " ".join("%+.3f/%d of %d/%.3f" % (
+                w["sum"] / w["n"] if w["n"] else 0.0, w["still"], w["n"], w["heading"]) for w in self.windows)))
+        return Status.SUCCESS
+
+    def _new_window(self, now):
+        self.window = dict(t0=now, sum=0.0, n=0, still=0, heading=0.0)
+
+    def _close_window(self, now):
+        self.window["heading"] = runtime.gyro_sensor.get_angle()
+        self.windows.append(self.window)
+
+    def terminate(self, new_status):
+        self.started = False
+
+
+class EtRallyArmUpWithDriftMeasure(Behaviour):
+    """ETラリー開始時にアームを上げ、上げ切ったあとsettle_sec秒待って振動を収めてから、measure_sec秒
+    止まったままz軸の回転の速さを平均して、ずれの速さを決める。車輪には走行中と同じくブレーキをかける
+    (モーターの状態でジャイロのくせが変わるため)。待っている間の揺れ幅もログに残す。"""
+
+    def __init__(self, name, arm_up, settle_sec=1.0, measure_sec=2.0):
+        super().__init__(name)
+        self.arm_up = arm_up
+        self.settle_sec = settle_sec
+        self.measure_sec = measure_sec
+        self.started = False
+
+    def update(self):
+        now = time.monotonic()
+        if not self.started:
+            self.started = True
+            for motor in (runtime.right_motor, runtime.left_motor):
+                motor.set_power(0)
+                motor.set_brake(True)
+            self.start_time = now
+            self.arm_done_time = None
+            self.values = []
+            self.rejected = 0
+            self.settle_min = None
+            self.settle_max = None
+            self.stationary_true = 0
+            self.stationary_n = 0
+            self.acc_sum = [0.0, 0.0, 0.0]
+            self.acc_n = 0
+        if self.arm_done_time is None:
+            if self.arm_up.update() != Status.SUCCESS:
+                return Status.RUNNING
+            self.arm_done_time = now
+            return Status.RUNNING
+        elapsed = now - self.arm_done_time
+        angv_z = self._read_angv_z()
+        if elapsed < self.settle_sec:
+            if angv_z is not None:
+                self.settle_min = angv_z if self.settle_min is None else min(self.settle_min, angv_z)
+                self.settle_max = angv_z if self.settle_max is None else max(self.settle_max, angv_z)
+            return Status.RUNNING
+        # ハブが「止まっている」と判定しているか(ハブのプログラムを書き換えた版では、ブレーキ中も
+        # 判定が出てハブ自身がくせを測り直す。元の版では全モーター脱力のときだけ)。
+        if runtime.hub is not None:
+            try:
+                self.stationary_n += 1
+                if runtime.hub.hub_imu_is_stationary():
+                    self.stationary_true += 1
+            except Exception:
+                pass
+        acc = _read_acceleration()
+        if acc is not None:
+            self.acc_sum = [a + b for a, b in zip(self.acc_sum, acc)]
+            self.acc_n += 1
+        if angv_z is not None:
+            if abs(angv_z) > MEASURE_MAX_ANGV_DEG_S:
+                self.rejected += 1
+            else:
+                self.values.append(angv_z)
+        if elapsed < self.settle_sec + self.measure_sec:
+            return Status.RUNNING
+        self._finish(now)
+        return Status.SUCCESS
+
+    def _read_angv_z(self):
+        if runtime.hub is None:
+            return None
+        try:
+            return float(runtime.hub.hub_imu_get_angular_velocity()[2])
+        except Exception:
+            return None
+
+    def _finish(self, now):
+        n = len(self.values)
+        mean = sum(self.values) / n if n else 0.0
+        std = (sum((v - mean) ** 2 for v in self.values) / n) ** 0.5 if n else 0.0
+        heading = runtime.gyro_sensor
+        used = isinstance(heading, EtRallyHeading) and heading.drift_compensation and n >= MEASURE_MIN_SAMPLES
+        if used:
+            # 2026-11-17: タッチ前に測ったずれの差し引きは、この速さの起点(差し替えた時刻)で止めて切り替える
+            pre_touch_gyro.stop_at(heading.installed_time)
+            heading.set_drift_rate(-mean, n)
+        settle_range = (self.settle_max - self.settle_min) if self.settle_min is not None else -1.0
+        self.logger.info(
+            "drift measure: %.2fs (arm %.2fs, settle %.1fs range=%.2f, measure %.1fs) samples=%d rejected=%d "
+            "angv_z_mean=%+.4f std=%.3f imu_stationary=%d/%d -> drift_rate=%+.4f deg/s (%s) %s" % (
+                now - self.start_time, self.arm_done_time - self.start_time, self.settle_sec, settle_range,
+                self.measure_sec, n, self.rejected, mean, std, self.stationary_true, self.stationary_n,
+                -mean if used else 0.0, "used" if used else "not used", _format_tilt(self.acc_sum, self.acc_n)))
+        # 2026-11-11: ハブがジャイロ用に直した版(brakecal、ブレーキ中も止まっている判定)なら、ここはほぼ全部「止まっている」になる
+        # (11/10 は 150/150 前後)。素の版(0.1.1)に戻っていると版の番号が同じでプログラムは止まらず、判定が0になり、
+        # ハブのジャイロの測り直しが効かない(11/08 に一度あった)。割合が低ければ警告を出す。
+        if self.stationary_n >= 20 and self.stationary_true < 0.5 * self.stationary_n:
+            self.logger.warning(
+                "HUB CHECK: imu_stationary only %d/%d while braking - the hub may not be the brakecal firmware "
+                "(asp_brakecal_904096d_v011.bin). Gyro bias is not being recalibrated." % (
+                    self.stationary_true, self.stationary_n))
+
+    def terminate(self, new_status):
+        self.started = False

@@ -17,6 +17,16 @@ from py_etrobo_util.plotter import GYRO_SCALE_FACTOR
 
 from .runtime import runtime
 
+# DD-19較正用: Trueの間はensure_scaled_gyro()を無効化する(--rally-gyro-tire-calibration off)。
+# EtRallyRunByGyro等、呼び出し側の個別フラグに関わらず無条件でensure_scaled_gyro()を呼ぶ
+# クラスがあるため、この窓口自体を止めることで「補正なし」を確実にする。
+_disabled = False
+
+
+def set_disabled(disabled: bool) -> None:
+    global _disabled
+    _disabled = disabled
+
 
 class ScaledGyro:
     """GyroSensorを包み、get_angle()だけ倍率補正して返す。他の属性・メソッドはそのまま委譲する。"""
@@ -42,12 +52,24 @@ class ScaledGyro:
 
 def ensure_scaled_gyro():
     """runtime.gyro_sensorを補正済みの窓口にする。すでに補正済みなら何もしない(何度呼んでもよい)。
-    戻り値: 今回新しく有効にしたらTrue。"""
+    戻り値: 今回新しく有効にしたらTrue。set_disabled(True)の間は常にFalseで何もしない。"""
+    if _disabled:
+        return False
     runtime.require("gyro_sensor")
     if isinstance(runtime.gyro_sensor, ScaledGyro):
         return False
     origin = float(runtime.gyro_sensor.get_angle())
     runtime.gyro_sensor = ScaledGyro(runtime.gyro_sensor, GYRO_SCALE_FACTOR, origin)
+    # 2026-11-17(ユーザー): タッチ前に測ったジャイロのずれの差し引き。同日夜から LAP にも効かせるのでタッチ時に始まっており、
+    # ここでは何もしない(測っただけで始まっていないときの保険)
+    from . import pre_touch_gyro
+    try:
+        from . import lap_diag
+        lap_diag.stop("lap gate")
+    except Exception:
+        pass
+    if pre_touch_gyro.start_now():
+        print(" -- pre-touch gyro drift: subtraction started (%+.4f deg/s)" % pre_touch_gyro.RATE, flush=True)
     return True
 
 

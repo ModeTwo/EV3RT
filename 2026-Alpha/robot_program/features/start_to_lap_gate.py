@@ -14,7 +14,7 @@ from ..behaviours.gyro_drive import RunByGyro
 from ..behaviours.line_trace import TraceLine
 from ..behaviours.section_motion import DriveDistance
 from ..start_lap_calibration import calibrated_profile
-from ..start_lap_profile_v1 import POINTS, BLUE_START_MM, LAP_GATE_MM
+from .. import start_lap_profile_left, start_lap_profile_right
 from ..types import HeadingType
 from .bt_imports import Color, TraceSide
 from py_trees.behaviour import Behaviour
@@ -105,7 +105,7 @@ class RunByGyroSpeedDownatCurve(RunByGyro):
         return status
 
 
-def build_start_to_lap_gate(context, config):
+def _build_devtk_start_to_lap_gate(context, config):
     # 旧方式は別ファイルへ保存。通常読む必要はない。
     if config.start_lap_mode == 'legacy':
         from .start_to_lap_gate_legacy import build_legacy_start_to_lap_gate
@@ -113,9 +113,19 @@ def build_start_to_lap_gate(context, config):
     if config.start_lap_mode != 'profile':
         raise ValueError('start_lap_mode must be profile or legacy')
 
+    # 方位表はコース別に選ぶ。左右の符号変換は走行制御側が行う。
+    course = getattr(config, 'start_lap_course', 'left')
+    if course == 'left':
+        route = start_lap_profile_left
+    elif course == 'right':
+        route = start_lap_profile_right
+    else:
+        raise ValueError('start_lap_course must be left or right')
+    print('LAP_ROUTE_PROFILE course=%s points=%d blue_mm=%.3f gate_mm=%.3f' %
+          (course, len(route.POINTS), route.BLUE_START_MM, route.LAP_GATE_MM), flush=True)
     # 1. 距離を渡すと目標角を返す関数を用意する。
     profile, blue_start_mm, lap_gate_mm = calibrated_profile(
-        POINTS, BLUE_START_MM, LAP_GATE_MM,
+        route.POINTS, route.BLUE_START_MM, route.LAP_GATE_MM,
         first_straight_mm=config.start_lap_first_straight_mm,
         route_scale=config.start_lap_route_scale,
     )
@@ -237,3 +247,12 @@ def build_start_to_lap_gate(context, config):
         max_heading_correction_deg=config.start_lap_max_heading_correction_deg,
         profile_log_interval_sec=config.start_lap_log_interval_sec,
     )
+
+
+def build_start_to_lap_gate(context, config):
+    """Use the same camera recovery in the LAP mission and the full mission."""
+    original = _build_devtk_start_to_lap_gate(context, config)
+    if config.start_lap_mode != 'profile' or config.mission_mode in ('hint2', 'hint2-return'):
+        return original
+    from .lap_camera_recovery import build_lap_camera_recovery
+    return build_lap_camera_recovery(context, config, original)

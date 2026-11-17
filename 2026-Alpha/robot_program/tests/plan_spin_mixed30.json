@@ -1,0 +1,125 @@
+{
+  "note": "2026-10-31: phase1_model check. one cycle = +40,+90,-110,-90,+110,-40 deg (ends at 0), x5 = 30 turns. Compare 'phase2 pulse#1 error' (phase1 result) and final error in the log; the robot should face the start direction at the end.",
+  "steps": [
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 130.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 20.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -70.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 130.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 20.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -70.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 130.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 20.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -70.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 130.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 20.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -70.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 130.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 20.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": -70.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 40.0
+    },
+    {
+      "type": "turn",
+      "target_heading_deg": 0.0
+    }
+  ]
+}

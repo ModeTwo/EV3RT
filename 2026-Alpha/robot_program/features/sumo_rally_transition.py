@@ -67,6 +67,7 @@ class TurnTowardRallyStart(Behaviour):
                 tolerance=1.0,
                 normalize_error=False,
             )
+            self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
 
         self.turn.tick_once()
 
@@ -247,6 +248,7 @@ class TurnAfterBlue(Behaviour):
                 pid_d=motion.turn_pid_d,
                 tolerance=1.0,
             )
+            self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
             self.logger.info(
                 "BLUE_EXIT_TURN START course=%s bearing=%.2f "
                 "target=%.2f power=55"
@@ -270,6 +272,10 @@ class TurnAfterBlue(Behaviour):
                 if motor is not None:
                     motor.set_power(0)
                     motor.set_brake(True)
+
+
+# 2026-11-17(devSS): これより小さい青は青い丸として扱わない(上の MoveToRallyBlue の DETECT)
+RALLY_BLUE_MIN_AREA = 250.0
 
 
 class MoveToRallyBlue(Behaviour):
@@ -513,6 +519,7 @@ class MoveToRallyBlue(Behaviour):
             pid_p=motion.turn_pid_p, pid_i=motion.turn_pid_i,
             pid_d=motion.turn_pid_d, tolerance=1.0,
         )
+        self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
         self.logger.info("RALLY_BLUE SEARCH count=%d offset=%.1f target=%.2f"
                          % (self.search_count, offset, target))
         self._set_phase("TURN")
@@ -582,6 +589,17 @@ class MoveToRallyBlue(Behaviour):
             candidate = observation.get("candidate")
             if not candidate:
                 return Status.RUNNING
+            # 2026-11-17(devSS): 小さすぎる青(面積 RALLY_BLUE_MIN_AREA 未満)は青い丸として扱わない。
+            # 本物の丸は面積約500〜1560、遠くの小さな青は約110〜160で、それを交互に丸と見て左右に向き直りを
+            # 繰り返し、上限6回に達して失敗した(ロボットA、16:43)。小さいものは見なかったことにして探し続ける。
+            if float(candidate.get("area", 0.0)) < RALLY_BLUE_MIN_AREA:
+                if now - getattr(self, "_small_blue_logged", 0.0) >= 1.0:
+                    self._small_blue_logged = now
+                    self.logger.info("RALLY_BLUE IGNORE small blue area=%.0f cx=%.0f (< %.0f)"
+                                     % (float(candidate.get("area", 0.0)), float(candidate.get("cx", 0.0)), RALLY_BLUE_MIN_AREA))
+                if now - self.phase_started_at >= self.SEARCH_WAIT_SEC:
+                    return self._start_search()
+                return Status.RUNNING
 
             if not self._blue_candidate_matches(candidate, now):
                 return Status.RUNNING
@@ -649,6 +667,7 @@ class MoveToRallyBlue(Behaviour):
                 pid_d=motion.turn_pid_d,
                 tolerance=0.5,
             )
+            self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
             self.turn.predictive_brake_horizon_sec = 0.01
 
             self.logger.info(
@@ -791,6 +810,43 @@ class MoveToRallyBlue(Behaviour):
             )
         )
         self._set_phase("DRIVE")
+        # 2026-11-17(devSS、ユーザー): 位置合わせが終わって丸へ走り出したら、もう本体のカメラは使わない(止まるのは色センサー)。
+        self._early_camera_handover()
+
+    def _early_camera_handover(self):
+        """2026-11-17(devSS、ユーザー): 本体のカメラを閉じて、ETラリーのカメラ(子プロセス)を開かせる。ETラリーの始めに開くと
+        使えるまで約1.9秒かかり、スタートで止まっている時間が延びていた。ETラリーの始め
+        (et_rally_course_pose.EtRallyCameraProcessStart)は、開いていればもう渡さない。"""
+        try:
+            from .. import et_rally_camera_proc
+            proc = et_rally_camera_proc.current()
+        except Exception:
+            proc = None
+        if proc is None or not getattr(proc, "defer_open", False) or getattr(proc, "opened", True):
+            return
+        release = getattr(runtime, "release_camera", None)
+        if release is None:
+            return
+        if self.session is not None and runtime.video is not None:
+            try:
+                runtime.video.end_rally_blue_read(self.session)
+            except Exception:
+                pass
+        self.session = None
+        import threading
+        t0 = time.monotonic()
+        logger = self.logger
+
+        def work():
+            try:
+                ok, what = release()
+            except Exception as error:
+                ok, what = False, "release failed: %r" % (error,)
+            proc.open_camera()
+            logger.info("RALLY_BLUE camera handover (early): main camera %s (%s), child told to open after %.2fs"
+                        % ("closed" if ok else "NOT closed", what, time.monotonic() - t0))
+
+        threading.Thread(target=work, name="rally-blue-camera-handover", daemon=True).start()
 
     def terminate(self, new_status):
         if self.turn is not None and self.turn.status == Status.RUNNING:
@@ -801,9 +857,9 @@ class MoveToRallyBlue(Behaviour):
 
         self._stop_motors()
 
-        if self.session is not None:
+        if self.session is not None and runtime.video is not None:
             runtime.video.end_rally_blue_read(self.session)
-            self.session = None
+        self.session = None
 
 
 # 既存のbuild_move_sumo_to_rally_startを拡張する。
@@ -812,7 +868,8 @@ _original_build_move_sumo_to_rally_start = build_move_sumo_to_rally_start
 
 def build_move_sumo_to_rally_start(context, config):
     root = _original_build_move_sumo_to_rally_start(context, config)
-    if config.mission_mode in ("sumo-stage-all", "bottle-sumo"):
+    # 2026-11-17(devSS): devAT のマージで戻っていた devTK(d7e6598)の "full" を入れ直す
+    if config.mission_mode in ("sumo-stage-all", "bottle-sumo", "full"):
         root.add_child(WaitForSumoRecordingClose(context))
     root.add_children([
         MoveToRallyBlue(context, config),

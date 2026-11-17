@@ -1,10 +1,10 @@
-"""run_logsのテキストログから、"LQI_CAL"タグの行だけを取り出し、構造化した記録の列にする。
+"""run_logsのテキストログから、"TURN_CAL"タグの行だけを取り出し、構造化した記録の列にする。
 
 使い方(単体):
     python -m wireless_device.et_rally_lqi.parse_log path/to/run.log
 
-ログの各行は、`et_rally_lqi_calibration.py`が出す形式:
-    LQI_CAL <marker> key=value key=value ...
+ログの各行は、`et_rally_turn_calibration.py`が出す形式:
+    TURN_CAL <marker> key=value key=value ...
 `<marker>`は、"step"/"threshold" のような単純な語、または
 "HoldSymmetricPower.start"のような「クラス名.フェーズ名」のどちらか。
 NOT_FOUND のような、値を伴わない語は、真偽フラグとして扱う。
@@ -13,12 +13,12 @@ NOT_FOUND のような、値を伴わない語は、真偽フラグとして扱�
 import re
 import sys
 
-TAG = "LQI_CAL"
+TAG = "TURN_CAL"
 _KV_RE = re.compile(r"^([A-Za-z_]+)=([+-]?[0-9.]+)$")
 
 
 def parse_line(line):
-    """1行から、LQI_CALタグ以降を取り出し、構造化したdictを返す。タグが無ければNone。"""
+    """1行から、TURN_CALタグ以降を取り出し、構造化したdictを返す。タグが無ければNone。"""
     index = line.find(TAG)
     if index < 0:
         return None

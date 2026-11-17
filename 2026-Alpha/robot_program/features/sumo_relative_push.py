@@ -316,10 +316,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     def _start_drive(self, now):
         # 最初の直進で指示する絶対目標を床面方位に変換して保持する。
         # 開始時の実姿勢ではなく、直進に使用する目標そのものを基準にする。
-        if self.continuous_entry:
-            if runtime.course not in (-1, 1):
-                raise ValueError("unsupported course for delivery-to-sumo")
-            self.approach_offset_from_reset_deg = -90.0 * runtime.course
+        # 方位はSumoPushSequence開始時に確定する。ここで再設定しない。
         # bottle-sumo: LEFTの右側、RIGHTの左側は共に床面方位180度。
         if getattr(self, "delivery_green_on_right", False):
             from dataclasses import replace

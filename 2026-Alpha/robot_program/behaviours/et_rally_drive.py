@@ -15,21 +15,115 @@ from py_trees.common import Status
 from simple_pid import PID
 
 from py_etrobo_util import SymmetricClamper
-from py_etrobo_util.plotter import ET_RALLY_TIRE_DIAMETER, WHEEL_TREAD
+from py_etrobo_util.plotter import WHEEL_TREAD
 
 from ..gyro_scale import ensure_scaled_gyro
+from ..et_rally_heading import et_pose_text
+from ..power_log import OscillationTracker, log_power_state
 from ..runtime import runtime
 from ..timing import CONTROL_INTERVAL_SEC as EXEC_INTERVAL
 from ..types import HeadingType
-
-# ETラリー工程の間はPlotter.tire_diameterもこの値になる(phases/et_rally.py)。
-TIRE_DIAMETER = ET_RALLY_TIRE_DIAMETER
 
 # sample_comment.pyは制御周期0.03秒で較正した。robot_programの周期(0.02秒)でも
 # 同じ「時間」で判定するため、tick数・1tickあたりの角度で持つ閾値を周期比で換算する。
 _TUNED_INTERVAL_SEC = 0.03
 _STALL_TICK_LIMIT = math.ceil(7 * _TUNED_INTERVAL_SEC / EXEC_INTERVAL - 1e-9)  # 0.03s x 7 = 約0.2秒
 _STALL_PROGRESS_DEG = 0.3 * EXEC_INTERVAL / _TUNED_INTERVAL_SEC  # 1tickあたり0.3度=10度/秒未満
+
+# DD-22較正用: 直前の旋回の方向(+1/-1)。0=まだ旋回していない(反転判定をしない)。
+# EtRallySpinAroundByEncoderの各インスタンスは旋回ごとに別オブジェクトのため、
+# 「前の旋回と逆方向か」をまたいで知るには、この窓口(モジュール変数)で持つ必要がある。
+_last_turn_direction = 0
+
+# DD-22較正用: 適応モード(adaptive_lag_compensation)で使う、引き込まれ量の
+# 実測からの推定値(指数移動平均)。固定の度数だと、較正に使った90度旋回より
+# 小さい旋回(フル周回には色々な大きさが混ざる)では過大になり、0にクランプされる
+# 不具合が実機で発生した(2026-10-10)。そのため度数ではなく、その旋回の
+# target_motor_degに対する比率(引き込まれ量÷先に止まる側の目標値)として持つ。
+# 初期値は、2026-10-10の実機power=70の2回分(各n=30、計60サンプル、90度旋回・
+# target_motor_deg≈121)の平均22.67度を121で割った比率。
+_LAG_REFERENCE_MOTOR_DEG = 121.0
+_lag_estimate_ratio = 22.67 / _LAG_REFERENCE_MOTOR_DEG
+# 2026-10-10: 実測2回分からノイズ(標準偏差2.6〜4.0度)と傾向(1旋回あたり約0.17度の
+# 緩やかな減少)を見積もり、ノイズ低減と追従遅れのトレードオフを数値最小化した結果、
+# 0.3よりも0.2の方がわずかに良い(誤差推定1.48度→1.37度)と分かったため変更。
+_LAG_ESTIMATE_ALPHA = 0.2
+# 2026-10-25較正用: 引き込まれ量(observed)は旋回の大きさに関係なくほぼ一定
+# (実測17〜31度)なので、early_baseが小さい旋回では比率が実態と無関係に発散する
+# (実機ログで1.7度・4.3度の旋回直後にratioが1.0超へ急騰する不具合を確認、2026-10-25)。
+# 旧ガード(early_base>1.0)では防げなかったため、閾値を上げるのに加えて、
+# 1サンプルが動かせる比率そのものにも上限をかける(どちらの値も実機データが
+# 増えたら見直す前提の暫定値)。
+_LAG_ESTIMATE_MIN_EARLY_BASE_DEG = 20.0
+_LAG_ESTIMATE_MAX_RATIO = 0.5
+
+
+def forward_mm_since(start_r, start_l):
+    """start_r/start_l(左右エンコーダ値)から今までに、車体中心が前後に動いた量(mm、前が+)。
+
+    2026-10-28: 直進の終了直後、止まりきる前に旋回へ移ったときの「直進の惰性で前へ
+    流れた量」を診断するため追加(plotterと同じく左右の回転量の平均から求める。
+    その場旋回なら左右が打ち消し合って0に近くなる)。ログ専用で、制御には使わない。
+    """
+    delta = (runtime.right_motor.get_count() - start_r) + (runtime.left_motor.get_count() - start_l)
+    return math.pi * runtime.plotter.tire_diameter * delta / 2.0 / 360.0
+
+
+# 2026-10-29: 旋回中に車体が前へ出た量(mm)を、次の直進へ渡すための受け渡し場所。
+# one_shot旋回は最後に片方の車輪だけが回るため、車体の中心が次に走る向きへ数mm出る
+# (周回コースのログで-1〜+10mm)。コースの形によっては周回ごとに同じ向きへ積み重なる
+# (2026-10-28、ゴール向きに約7mm/周)。EtRallyRunByGyro(turn_forward_compensation=True)が
+# 直進の開始時に受け取り、その分だけ短く走る。
+_pending_turn_forward_mm = None
+
+
+# 2026-10-30: 直進の向きのPIDで、前の直進の最後にたまっていたI成分を次の直進の初期値にする
+# (set_move_carry_integralで有効化、ETラリー工程の開始時)。左右のモーター差のため、まっすぐ走るには
+# 常に左右差(ログで右78・左82など)が要り、I成分が0から始まる直進ごとに約0.5度ずれたまま走っていた
+# (10/30ジグザグ: 直進3本ともerr_mean +0.53〜+0.63、実測で左へ12mm)。後退の直進では使わない。
+# 2026-10-30: 1区間ごとの値は振れる(ジグザグで +3.68 の次が +0.47)ため、これまでの全区間の平均を渡す。
+_carry_integral_enabled = False
+_carried_integral = None
+_carry_sum = 0.0
+_carry_n = 0
+
+
+def set_move_carry_integral(enabled):
+    global _carry_integral_enabled, _carried_integral, _carry_sum, _carry_n
+    _carry_integral_enabled = enabled
+    _carried_integral = None
+    _carry_sum = 0.0
+    _carry_n = 0
+
+
+# 2026-10-31: 直進の左右の出力を、向きのPIDの出力(小数)から作るときの調整(set_move_tuningで、
+# ETラリー工程の間だけ有効化。corrected_run.py経由の他工程は従来のまま)。
+# fine_power: int()で切り捨てると左右差が2刻みになり、向きの誤差0.25度未満では何も直さない。
+#   左右それぞれ、整数にしたときの端数を次のtickへ持ち越し、平均で小数の出力を出す。
+# pid_i: 向きのPIDのI。0.6では1回の直進(1〜3秒)でほとんどたまらず、Pだけで左右差を作るため
+#   約0.5度の向きのずれを残したまま走っていた(10/30周回ログ、赤ゲートへの直進で横7mm)。
+_fine_power_enabled = False
+_move_pid_i_override = None
+# 止まってから曲がる形の直進の向きのPIDのI(fine_power のとき、--rally-move-pid-i を付けない場合)。10/31 に 8 に決めた。
+OLD_STRAIGHT_PID_I = 8.0
+
+
+def set_move_tuning(fine_power, pid_i):
+    global _fine_power_enabled, _move_pid_i_override
+    _fine_power_enabled = fine_power
+    _move_pid_i_override = pid_i
+
+
+def set_turn_forward_mm(value):
+    global _pending_turn_forward_mm
+    _pending_turn_forward_mm = value
+
+
+def take_turn_forward_mm():
+    """渡された量を受け取り、受け渡し場所を空にする(次の直進で二重に引かないため)。"""
+    global _pending_turn_forward_mm
+    value, _pending_turn_forward_mm = _pending_turn_forward_mm, None
+    return value
 
 
 class EtRallySpinAroundByEncoder(Behaviour):
@@ -41,14 +135,15 @@ class EtRallySpinAroundByEncoder(Behaviour):
     保証するが、左右のタイヤの実効径やグリップにわずかでも差があると、実際の
     回転中心が車軸の中心からズレてしまい、「その場」旋回のはずが車体全体が
     平行移動する問題があった。et_rally_plannerでの検証(±90度の旋回のみを
-    30回繰り返すテスト)で、旋回だけで最大約40cm・再現性の高い(2回の試行で
+    30回繰り返すテスト)
+    (2回の試行で
     ほぼ同じ量・同じ向き)位置ズレが見つかっている。ランダムな滑りにしては
     再現性が高すぎるため、左右のタイヤの機械的な非対称性(回転中心のオフセット)
     が主因と推定した。
 
     このノードでは、目標の回転角度を「左右の車輪が地面の上で進むべき円弧の
-    長さ(符号は逆・大きさは同じ)」に変換し(WHEEL_TREAD/TIRE_DIAMETER、
-    py_etrobo_util/plotter.py参照)、実際に左右のエンコーダがその量だけ回転
+    長さ(符号は逆・大きさは同じ)」に変換し(WHEEL_TREAD/runtime.plotter.tire_diameter、
+    直進と同じタイヤ径。py_etrobo_util/plotter.py参照)、実際に左右のエンコーダがその量だけ回転
     するまで駆動する(フェーズ1)。左右対称に回転させている限り、タイヤの
     実効径の絶対値の較正誤差があっても「その場」であることには影響しない。
 
@@ -64,8 +159,41 @@ class EtRallySpinAroundByEncoder(Behaviour):
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType,
                  fine_tolerance_deg: float = 2.0,
                  decel_deg: float = 0.0, decel_power: int = 50,
-                 fine_trim: bool = True) -> None:
+                 fine_trim: bool = True, backlash_preload_deg: float = 0.0,
+                 lag_compensation_deg: float = 0.0,
+                 adaptive_lag_compensation: bool = False,
+                 left_target_scale: float = 1.0, tire_diameter_mm: float = None,
+                 settle_after_reversal_deg: float = None) -> None:
         super(EtRallySpinAroundByEncoder, self).__init__(name)
+        # 2026-11-17(devSS、ユーザー): 仕上げで一度行き過ぎて向きを反転したあとは、誤差がこの度数以内なら止める
+        # (None なら従来どおり fine_tolerance_deg まで続ける)。ETラリー以外の旋回(encoder_spin.EncoderSpin)が
+        # 出力50〜60のまま0.5°以内を狙って行き来し、13往復・約1.1秒かかっていた。
+        self.settle_after_reversal_deg = settle_after_reversal_deg
+        # DD-22較正用: 片輪エンコーダテストで実測した、右輪の方が同じエンコーダ回転量に
+        # 対して約0.9%多く実際の方位を変える(実効径・グリップの定常的な左右差)分を
+        # 補正する。旋回のたびの「引き込まれ」(lag_compensation_deg)とは別の、
+        # 物理的な車輪そのものの特性による差なので、どちらが先に止まるかとは無関係に
+        # 常に左輪の目標値だけにこの係数をかける。1.0なら無効(既定、挙動は変えない)。
+        self.left_target_scale = left_target_scale
+        # 2026-11-16(devTKとのマージ): 回す量に使うタイヤ径。None なら直進と同じ runtime.plotter.tire_diameter(ETラリー)。
+        # devTK の EncoderSpin(behaviours/encoder_spin.py)は、マージ前と同じ動きにするため元の 56.87 を渡す。
+        self.tire_diameter_mm = tire_diameter_mm
+        # DD-22較正用: 前の旋回と逆方向に切り替わる旋回だけ、フェーズ1の目標エンコーダ角度に
+        # この分を上乗せする。機構内のバックラッシュ(前の旋回で片側に詰まった遊びを、
+        # 逆方向ではまず詰め直す必要がある)による「エンコーダは回るが実際には車輪が
+        # 転がっていない」区間を事前に見込むためのもの。0なら無効(既定、挙動は変えない)。
+        self.backlash_preload_deg = backlash_preload_deg
+        # DD-22較正用: 先に目標へ到達して止まった側が、まだ回っているもう片方の反力で
+        # 「止まった後も同じ方向へ引き込まれて動いてしまう」分(実測、旋回ごとに17〜31度と
+        # 幅がある、power依存、2026-10-10)を見越して、先に止まる側(その旋回でマイナス
+        # 出力になる側、後述)の目標値をこの分だけ低く設定しておく。0なら無効。
+        self.lag_compensation_deg = lag_compensation_deg
+        # True: 上のlag_compensation_degを固定値として使う代わりに、モジュール変数
+        # _lag_estimate_ratio(target_motor_degに対する比率)を使う。これは毎回の
+        # 旋回終了後に実測の引き込まれ量で指数移動平均として更新していくため、
+        # 固定値では追従できない旋回ごとのばらつき・power依存・旋回の大きさの違いを、
+        # 実行中に自動で合わせ込む狙い。
+        self.adaptive_lag_compensation = adaptive_lag_compensation
         # 2026-09-20: フェーズ1(全力寄りのmain_power)のまま目標のエンコーダ角度に
         # 到達してブレーキをかけると、慣性で行き過ぎてフェーズ2の仕上げ補正が
         # 毎回必要になる。残りのエンコーダ角度がdecel_deg未満になったら
@@ -119,14 +247,57 @@ class EtRallySpinAroundByEncoder(Behaviour):
             # 目標角度(度)を、左右の車輪が地面の上で進むべき円弧の長さ(mm)に
             # 変換し、さらにエンコーダの回転角度(度)に変換する。
             arc_length_mm = math.radians(abs(error)) * (WHEEL_TREAD / 2.0)
-            self.target_motor_deg = arc_length_mm / (math.pi * TIRE_DIAMETER) * 360.0
+            # 直進(Plotter.plot())と同じタイヤ径を使う。固定値を別途持つと、
+            # --rally-gyro-tire-calibration offでの較正前/較正後の切替が旋回側に反映されない。
+            self.target_motor_deg = arc_length_mm / (math.pi * (self.tire_diameter_mm or runtime.plotter.tire_diameter)) * 360.0
             self.direction = 1 if error > 0 else -1
+
+            global _last_turn_direction
+            if (self.backlash_preload_deg > 0.0 and _last_turn_direction != 0
+                    and self.direction != _last_turn_direction):
+                self.target_motor_deg += self.backlash_preload_deg
+            _last_turn_direction = self.direction
+
+            # DD-22較正用: right_power=course*direction*main_powerなので、この符号が
+            # マイナスの側が先に目標へ到達して止まる(実測、2026-10-10)。先に止まる側は、
+            # もう片方がまだ回っている間、反力で同じ方向へ引き込まれて動いてしまう分
+            # (lag_compensation_deg/_LAG_REFERENCE_MOTOR_DEG、適応モードなら
+            # _lag_estimate_ratio)を見越して、目標値を低くしておく。
+            # 2026-10-10: 固定の度数ではなく、その旋回のtarget_motor_degに対する
+            # 比率として持つことで、較正に使った90度旋回より小さい旋回でも
+            # 自動的に適切な大きさに縮む(以前は0にクランプされる不具合があった)。
+            global _lag_estimate_ratio
+            compensation_ratio = (_lag_estimate_ratio if self.adaptive_lag_compensation
+                                   else self.lag_compensation_deg / _LAG_REFERENCE_MOTOR_DEG)
+            self.right_base_motor_deg = self.target_motor_deg
+            self.left_base_motor_deg = self.target_motor_deg * self.left_target_scale
+            right_power_sign = runtime.course * self.direction
+            self.early_side = 'right' if right_power_sign < 0 else 'left'
+            # 比率を使っても、万一1.0を超えるような値になった場合の保険として
+            # 先に止まる側の目標値の半分までしか引かないようにする。
+            if right_power_sign < 0:
+                capped = min(self.right_base_motor_deg * compensation_ratio, self.right_base_motor_deg * 0.5)
+                self.right_target_motor_deg = max(self.right_base_motor_deg - capped, 0.0)
+                self.left_target_motor_deg = self.left_base_motor_deg
+            else:
+                self.right_target_motor_deg = self.right_base_motor_deg
+                capped = min(self.left_base_motor_deg * compensation_ratio, self.left_base_motor_deg * 0.5)
+                self.left_target_motor_deg = max(self.left_base_motor_deg - capped, 0.0)
 
             self.start_r = runtime.right_motor.get_count()
             self.start_l = runtime.left_motor.get_count()
-            self.right_done = (self.target_motor_deg < 1e-6)
-            self.left_done = (self.target_motor_deg < 1e-6)
+            self.right_done = (self.right_target_motor_deg < 1e-6)
+            self.left_done = (self.left_target_motor_deg < 1e-6)
+            # target_motor_deg≈0(回転不要)なら、上のright_done/left_doneがTrueのまま
+            # 下の個別停止判定を一度も通らないため、ここでも基準値を用意しておく。
+            self.right_done_at_count = self.start_r
+            self.left_done_at_count = self.start_l
             self.phase = 1
+            self.oscillation = OscillationTracker()
+            # 2026-11-17(devSS): ETラリー以外の旋回で、フェーズ1(エンコーダで回す)が動かないときに上げる出力
+            self.phase1_boost = 0
+            self.phase1_stall_at = time.monotonic()
+            self.phase1_stall_counts = (self.start_r, self.start_l)
 
             self.running = True
             self.logger.info("%+06d %s.encoder-spin started at heading=%d for %d (target_motor_deg=%.1f)" % (
@@ -137,44 +308,101 @@ class EtRallySpinAroundByEncoder(Behaviour):
             delta_l = abs(runtime.left_motor.get_count() - self.start_l)
 
             # 目標のエンコーダ角度に達した方から個別に止める
-            # (左右のタイヤの実効径がわずかに違っても、片方だけ行き過ぎさせない)
-            if not self.right_done and delta_r >= self.target_motor_deg:
+            # (左右のタイヤの実効径がわずかに違っても、片方だけ行き過ぎさせない)。
+            # 目標値は、lag_compensation_deg適用時は先に止まる側だけ低くなっている。
+            if not self.right_done and delta_r >= self.right_target_motor_deg:
                 self.right_done = True
+                # ユーザー仮説(2026-10-10)の検証用: 止めた瞬間のエンコーダ値を記録し、
+                # もう片方がまだ動いている「遅れ」区間に、この止めたはずの輪が反力で
+                # 動いていないか(片輪テストのbrake_side_deltaと同じ考え方)を後で見る。
+                self.right_done_at_count = runtime.right_motor.get_count()
                 runtime.right_motor.set_power(0)
                 runtime.right_motor.set_brake(True)
-            if not self.left_done and delta_l >= self.target_motor_deg:
+            if not self.left_done and delta_l >= self.left_target_motor_deg:
                 self.left_done = True
+                self.left_done_at_count = runtime.left_motor.get_count()
                 runtime.left_motor.set_power(0)
                 runtime.left_motor.set_brake(True)
 
             if self.right_done and self.left_done:
+                lag_right_delta = runtime.right_motor.get_count() - self.right_done_at_count
+                lag_left_delta = runtime.left_motor.get_count() - self.left_done_at_count
+                if self.adaptive_lag_compensation:
+                    observed = abs(lag_right_delta if self.early_side == 'right' else lag_left_delta)
+                    early_base = (self.right_base_motor_deg if self.early_side == 'right'
+                                   else self.left_base_motor_deg)
+                    # early_baseが小さい旋回は、ほぼ一定の引き込まれ量をごく小さい値で割る
+                    # ことになり比率が発散するので無視する。発散しなかった場合も念のため
+                    # 比率そのものに上限をかけ、1サンプルで推定値を暴走させない。
+                    if early_base > _LAG_ESTIMATE_MIN_EARLY_BASE_DEG:
+                        observed_ratio = min(observed / early_base, _LAG_ESTIMATE_MAX_RATIO)
+                        _lag_estimate_ratio = (_LAG_ESTIMATE_ALPHA * observed_ratio
+                                               + (1.0 - _LAG_ESTIMATE_ALPHA) * _lag_estimate_ratio)
+                self.logger.info(
+                    "%+06d %s.encoder-spin phase1 lag check: lag_right_delta=%+d lag_left_delta=%+d "
+                    "lag_estimate_ratio=%.3f" % (
+                        runtime.plotter.get_distance(), self.__class__.__name__,
+                        lag_right_delta, lag_left_delta, _lag_estimate_ratio))
                 if not self.fine_trim:
                     # 仕上げなし: 停止したまま終了する。残った誤差はログにだけ残す。
                     residual = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
-                    self.logger.info("%+06d %s.encoder-spin ended without fine-trim at heading=%d, residual=%+.1f" % (
-                        runtime.plotter.get_distance(), self.__class__.__name__, current_heading, residual))
+                    self.logger.info("%+06d %s.encoder-spin ended without fine-trim at heading=%d, residual=%+.1f fwd_mm=%+.1f loc=(%d,%d)" % (
+                        runtime.plotter.get_distance(), self.__class__.__name__, current_heading, residual,
+                        forward_mm_since(self.start_r, self.start_l),
+                        runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
                     return Status.SUCCESS
                 self.phase = 2
                 self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL)
                 self.stall_ticks = 0
                 self.escalated = False
+                self.escalated_clamper = SymmetricClamper(max(int(self.main_power * 0.8), int(self.fine_clamper.min_val)), self.main_power)
+                self.phase2_started_at = time.monotonic()
                 self.prev_heading_for_stall = current_heading
+                # 2026-10-25較正用: フェーズ2が最初に行き過ぎて向きを反転させる直前の
+                # 誤差を、「フェーズ2の1回目の精度」(一発パルス仕上げとの公平な比較用)
+                # として一度だけログに残す。
+                self.first_reversal_logged = False
                 self.logger.info("%+06d %s.encoder-spin phase1 complete at heading=%d, entering gyro fine-trim" % (
                     runtime.plotter.get_distance(), self.__class__.__name__, current_heading))
                 return Status.RUNNING
 
+            if self.settle_after_reversal_deg is not None:
+                # 2026-11-17(devSS、実機): ボトルを押しながらの旋回が出力50のままフェーズ1で約14秒止まった
+                # (上げる仕組みはフェーズ2にしかなかった)。0.3秒ほど両輪とも2度未満しか回らなければ +10(上限 stall_power_cap、既定90)。
+                now = time.monotonic()
+                cr, cl = runtime.right_motor.get_count(), runtime.left_motor.get_count()
+                moved = max(abs(cr - self.phase1_stall_counts[0]), abs(cl - self.phase1_stall_counts[1]))
+                if moved >= 2:
+                    self.phase1_stall_at, self.phase1_stall_counts = now, (cr, cl)
+                elif now - self.phase1_stall_at > 0.3:
+                    cap = getattr(self, "stall_power_cap", 90)
+                    boost = min(self.phase1_boost + 10, max(0, cap - self.main_power))
+                    if boost != self.phase1_boost:
+                        self.phase1_boost = boost
+                        self.logger.info("%+06d %s.phase1 stalled, power up to %d" % (
+                            runtime.plotter.get_distance(), self.__class__.__name__, self.main_power + boost))
+                    self.phase1_stall_at, self.phase1_stall_counts = now, (cr, cl)
+            boost = getattr(self, "phase1_boost", 0)
             use_decel = self.decel_deg > 0 and self.target_motor_deg >= 2 * self.decel_deg
+            right_power = left_power = 0
             if not self.right_done:
-                p = self.decel_power if use_decel and self.target_motor_deg - delta_r < self.decel_deg else self.main_power
-                runtime.right_motor.set_power(runtime.course * self.direction * p)
+                p = self.decel_power if use_decel and self.right_target_motor_deg - delta_r < self.decel_deg else self.main_power
+                p += boost
+                right_power = runtime.course * self.direction * p
+                runtime.right_motor.set_power(right_power)
             if not self.left_done:
-                p = self.decel_power if use_decel and self.target_motor_deg - delta_l < self.decel_deg else self.main_power
-                runtime.left_motor.set_power((-1) * runtime.course * self.direction * p)
+                p = self.decel_power if use_decel and self.left_target_motor_deg - delta_l < self.decel_deg else self.main_power
+                p += boost
+                left_power = (-1) * runtime.course * self.direction * p
+                runtime.left_motor.set_power(left_power)
+            log_power_state(self.__class__.__name__ + ".phase1", right_power, left_power)
             return Status.RUNNING
 
         # --- フェーズ2: ジャイロによる低パワーの仕上げ補正 ---
         error = (float(self.target_heading) - current_heading + 180.0) % 360.0 - 180.0
-        if abs(error) < self.fine_tolerance_deg:
+        settle = self.settle_after_reversal_deg
+        settled = (settle is not None and self.oscillation.reversal_count >= 1 and abs(error) < settle)
+        if abs(error) < self.fine_tolerance_deg or settled:
             # 2026-09-14: 判定が通った瞬間、モーターを明示的に止めずにSUCCESSを
             # 返していたため、fine_min_power(50前後)で回っていた勢いのまま
             # 判定後も惰性で回り続け、毎回ほぼ一定量(28x90度/14x180度テストで
@@ -188,8 +416,11 @@ class EtRallySpinAroundByEncoder(Behaviour):
             runtime.right_motor.set_brake(True)
             runtime.left_motor.set_power(0)
             runtime.left_motor.set_brake(True)
-            self.logger.info("%+06d %s.encoder-spin ended at heading=%d" % (
-                runtime.plotter.get_distance(), self.__class__.__name__, current_heading))
+            self.logger.info("%+06d %s.encoder-spin ended at heading=%d residual=%+.1f reversals=%d samples=%d fwd_mm=%+.1f loc=(%d,%d)" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, current_heading, error,
+                self.oscillation.reversal_count, self.oscillation.sample_count,
+                forward_mm_since(self.start_r, self.start_l),
+                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
             return Status.SUCCESS
 
         # スタック検知: ジャイロの角度がしばらく進んでいなければ、静止摩擦に
@@ -199,18 +430,53 @@ class EtRallySpinAroundByEncoder(Behaviour):
         if heading_progress < _STALL_PROGRESS_DEG:
             self.stall_ticks += 1
             if self.stall_ticks > _STALL_TICK_LIMIT:  # 約0.2秒進捗なし(2026-09-12: 元は15tick=0.45秒、体感の停止時間を減らすため短縮)
+                if not self.escalated:
+                    self.logger.info("%+06d %s.stalled in fine-trim, escalating power" % (
+                        runtime.plotter.get_distance(), self.__class__.__name__))
                 self.escalated = True
-                self.logger.info("%+06d %s.stalled in fine-trim, escalating power" % (
-                    runtime.plotter.get_distance(), self.__class__.__name__))
+                if self.settle_after_reversal_deg is not None:
+                    # 2026-11-17(devSS、ユーザー): ETラリー以外の旋回では、上げても動かなければさらに段階的に上げる
+                    # (ヒント1のあとの旋回が、出力40のまま約6秒固まった)。約0.2秒ごとに +15、最大90。
+                    if self.stall_ticks % (_STALL_TICK_LIMIT + 1) == 0:
+                        lo = min(getattr(self, "stall_power_cap", 90), int(self.escalated_clamper.min_val) + 15)
+                        self.escalated_clamper = SymmetricClamper(lo, max(lo, int(self.escalated_clamper.max_val)))
+                        self.logger.info("%+06d %s.still stalled, power up to %d" % (
+                            runtime.plotter.get_distance(), self.__class__.__name__, lo))
         else:
             self.stall_ticks = 0
         self.prev_heading_for_stall = current_heading
+        if self.settle_after_reversal_deg is not None:
+            # 2026-11-17(devSS): 仕上げが FINE_TIMEOUT_SEC を超えたら打ち切る(このあとの直進・ライントレースが向きを寄せる)
+            if not hasattr(self, "phase2_started_at"):
+                self.phase2_started_at = time.monotonic()
+            if time.monotonic() - self.phase2_started_at > 2.5:
+                runtime.right_motor.set_power(0); runtime.right_motor.set_brake(True)
+                runtime.left_motor.set_power(0); runtime.left_motor.set_brake(True)
+                self.logger.warning("%+06d %s.fine-trim timeout at heading=%d residual=%+.1f, giving up" % (
+                    runtime.plotter.get_distance(), self.__class__.__name__, current_heading, error))
+                del self.phase2_started_at
+                return Status.SUCCESS
 
         self.pid.setpoint = current_heading + error
         clamper = self.escalated_clamper if self.escalated else self.fine_clamper
         power = int(clamper.clamp(self.pid(current_heading)))
-        runtime.right_motor.set_power(runtime.course * power)
-        runtime.left_motor.set_power((-1) * runtime.course * power)
+        if self.settle_after_reversal_deg is not None and power != 0:
+            # 2026-11-17(devSS): ETラリー以外の旋回では、回す向きは誤差の符号で決める。出力の下限(50)で丸めるため、
+            # 速く回っている間に微分の項でPIDの符号だけが反転すると±50で行き来し(誤差+6°のまま9往復・約0.8秒)、
+            # 行き過ぎていないのに「反転」と数えていた。
+            power = int(math.copysign(abs(power), error))
+        right_power = runtime.course * power
+        left_power = (-1) * runtime.course * power
+        runtime.right_motor.set_power(right_power)
+        runtime.left_motor.set_power(left_power)
+        log_power_state(self.__class__.__name__ + ".phase2", right_power, left_power)
+        self.oscillation.update(power)
+        if not self.first_reversal_logged and self.oscillation.reversal_count >= 1:
+            self.first_reversal_logged = True
+            self.logger.info(
+                "%+06d %s.phase2 first-pass error=%+.2f loc=(%d,%d)" % (
+                    runtime.plotter.get_distance(), self.__class__.__name__, error,
+                    runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y()))
         return Status.RUNNING
 
 
@@ -227,7 +493,9 @@ class EtRallyRunByGyro(Behaviour):
     """床の線を見ず、ジャイロセンサーの角度だけを頼りに指定の方角へ向かって真っ直ぐ直進するノード"""
     def __init__(self, name: str, target: int, power: int,
                  pid_p: float, pid_i: float, pid_d: float, target_type: HeadingType,
-                 distance_mm: float = 0.0, decel_mm: float = 0.0, decel_min_power: int = 40) -> None:
+                 distance_mm: float = 0.0, decel_mm: float = 0.0, decel_min_power: int = 40,
+                 accel_mm: float = 0.0, accel_min_power: int = 40,
+                 turn_forward_compensation: bool = False, reverse: bool = False) -> None:
         super(EtRallyRunByGyro, self).__init__(name)
         self.target = target
         self.target_type = target_type
@@ -243,11 +511,29 @@ class EtRallyRunByGyro(Behaviour):
         # decel_mm=0にして巡航のまま走らせる。
         self.distance_mm = distance_mm
         self.decel_mm = min(decel_mm, distance_mm * 0.6) if distance_mm > 0 else 0.0
+        self.decel_mm_setting = decel_mm
         self.decel_min_power = min(decel_min_power, power)
+        # 2026-09(会話にもとづく): 開始直後の急発進を避けるための、減速と対になる
+        # 加速区間。区間全体をゆっくり加減速させるのではなく、あくまで開始直後・
+        # 終了直前の「短い」区間だけで済ませる想定(accel_mm/decel_mmを小さく保つ)。
+        # accel_mm=0なら従来通り、開始直後から巡航パワーで走る(無効化)。
+        self.accel_mm = min(accel_mm, distance_mm * 0.6) if distance_mm > 0 else 0.0
+        self.accel_mm_setting = accel_mm
+        self.accel_min_power = min(accel_min_power, power)
+        # 2026-10-29: Trueなら、直前の旋回で前へ出た量(take_turn_forward_mm)だけ短く走り、
+        # 自分で距離に達したらSUCCESSを返す(IsDistanceEarnedは元の距離のままなので、
+        # 短くした分はこのノードで終える)。Falseなら従来どおり(終了はIsDistanceEarned任せ)。
+        self.turn_forward_compensation = turn_forward_compensation
+        self.base_distance_mm = distance_mm
+        # 2026-10-29: Trueなら後退する(スタート直後の直進確認用)。向きの補正(turn)は
+        # その場で回る成分なので、進む向きに関係なく同じ符号のまま使える。
+        # plotterの距離は絶対値で積算されるため、距離の判定もそのまま使える。
+        self.reverse = reverse
         self.last_log_time = None
         self.running = False
 
     def update(self) -> Status:
+        global _carried_integral, _carry_sum, _carry_n
         runtime.require("plotter", "gyro_sensor", "right_motor", "left_motor")
         # 2026-09-19: SpinAroundByEncoder(GYRO_SCALE_FACTOR適用済み)は旋回終了時点で
         # 真の向きをtarget_heading_degに正しく一致させているが、直後にRunByGyroが
@@ -272,28 +558,65 @@ class EtRallyRunByGyro(Behaviour):
                 self.target_heading = current_heading + self.target
             else:
                 self.target_heading = self.target
+            if self.turn_forward_compensation:
+                turn_forward_mm = take_turn_forward_mm() or 0.0
+                self.distance_mm = max(self.base_distance_mm - turn_forward_mm, 1.0)
+                self.decel_mm = min(self.decel_mm_setting, self.distance_mm * 0.6)
+                self.accel_mm = min(self.accel_mm_setting, self.distance_mm * 0.6)
+                self.logger.info("%+06d %s.turn forward compensation: turn_fwd_mm=%+.1f distance %.1f -> %.1f" % (
+                    runtime.plotter.get_distance(), self.__class__.__name__, turn_forward_mm,
+                    self.base_distance_mm, self.distance_mm))
             # 算出した旋回量が直進パワーを超えて暴走しないよう、output_limitsでしっかりキャップをかける
-            # (abs()により、power<0=後退でもmin<=maxを保った有効な範囲になる)
-            self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL, output_limits=(-abs(self.power), abs(self.power)))
-            self.logger.info("%+06d %s.gyro run started toward heading=%d" % (runtime.plotter.get_distance(), self.__class__.__name__, self.target_heading))
+            # 2026-11-05: --rally-move-pid-i を付けないときは、fine_power なら 10/31 に決めた 8(止まってから曲がる形の直進)。
+            pid_i = (_move_pid_i_override if _move_pid_i_override is not None
+                     else (OLD_STRAIGHT_PID_I if _fine_power_enabled else self.pid_i))
+            self.pid = PID(self.pid_p, pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL,
+                           # devTK(516cfa6): abs()により、power<0(後退)でもmin<=maxを保った有効な範囲になる。
+                           output_limits=(-abs(self.power), abs(self.power)))
+            # fine_power用の、左右それぞれの整数にしきれなかった端数。
+            self.right_residual = 0.0
+            self.left_residual = 0.0
+            carry_text = ""
+            if _move_pid_i_override is not None or _fine_power_enabled:
+                carry_text = " ki=%.2f fine_power=%s" % (pid_i, _fine_power_enabled)
+            if _carry_integral_enabled and not self.reverse:
+                if _carried_integral is not None:
+                    self.pid.set_auto_mode(False)
+                    self.pid.set_auto_mode(True, last_output=_carried_integral)
+                carry_text += " start_i=%s" % ("%+.2f" % _carried_integral if _carried_integral is not None else "none")
+            self.logger.info("%+06d %s.gyro run started toward heading=%d target_dist=%d loc=(%d,%d)%s%s" % (
+                runtime.plotter.get_distance(), self.__class__.__name__, self.target_heading, self.distance_mm,
+                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(), carry_text))
             self.orig_dist = runtime.plotter.get_distance()
             # 2026-09-20: PID比較用に、区間ごとの向きの誤差と、その誤差による横ズレの
             # 推定値(進んだ距離 x sin(向き - 目標))を集計し、区間の最後に1行で出す。
             self.prev_dist_lat = self.orig_dist
+            # 2026-10-28: 直進終了時点の速度(直近約0.1秒の平均)を診断ログに出すための履歴。
+            self.speed_history = []
             self.lat_mm = 0.0
             self.err_sum = 0.0
             self.err_n = 0
             self.err_max = 0.0
+            # 2026-10-30: 区間の後半のPID出力(まっすぐ保つのに要った左右差)の平均。次の直進のI成分の初期値にする。
+            self.out_sum = 0.0
+            self.out_n = 0
             self.summarized = False
             self.running = True
 
-        # 減速区間では、残り距離に比例して現在のパワーを下げる。
+        # 加速区間(開始直後)・減速区間(終了直前)、それぞれで現在のパワーの上限を計算し、
+        # 小さいほう(より制約が強いほう)を採用する。短い区間で両方の窓が重なっても、
+        # 単純により低いパワー側を使うだけで、破綻なく扱える。
         power_now = self.power
+        if self.accel_mm > 0.0:
+            traveled = runtime.plotter.get_distance() - self.orig_dist
+            if traveled < self.accel_mm:
+                ratio = max(traveled, 0.0) / self.accel_mm
+                power_now = min(power_now, int(self.accel_min_power + (self.power - self.accel_min_power) * ratio))
         if self.decel_mm > 0.0:
             remaining = self.distance_mm - (runtime.plotter.get_distance() - self.orig_dist)
             if remaining < self.decel_mm:
                 ratio = max(remaining, 0.0) / self.decel_mm
-                power_now = int(self.decel_min_power + (self.power - self.decel_min_power) * ratio)
+                power_now = min(power_now, int(self.decel_min_power + (self.power - self.decel_min_power) * ratio))
 
         # SpinAroundと同種の不具合(PID内部はsetpointとcurrent_headingの単純な引き算で、
         # 180度をまたぐ場合の短い方への正規化を行わない)を避けるため、ここでも
@@ -305,6 +628,9 @@ class EtRallyRunByGyro(Behaviour):
         self.pid.setpoint = current_heading + error
 
         now_dist = runtime.plotter.get_distance()
+        self.speed_history.append((time.monotonic(), now_dist))
+        if len(self.speed_history) > 6:
+            self.speed_history.pop(0)
         self.lat_mm += (now_dist - self.prev_dist_lat) * math.sin(math.radians(-error))
         self.prev_dist_lat = now_dist
         self.err_sum += error
@@ -313,16 +639,46 @@ class EtRallyRunByGyro(Behaviour):
         if (not self.summarized and self.distance_mm > 0.0
                 and now_dist - self.orig_dist >= self.distance_mm):
             self.summarized = True
-            self.logger.info("%+06d %s.run summary: dist=%d err_mean=%+.2f err_max=%.2f lat=%+.0fmm (+=目標より反時計回り側へ)" % (
-                now_dist, self.__class__.__name__, now_dist - self.orig_dist,
-                self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm))
+            if _carry_integral_enabled and not self.reverse and self.out_n > 0:
+                # I成分そのものは1区間(約1.2秒)では十分たまらない(I=0.6だと1区間に約0.3ずつ)ため、
+                # 区間の後半に実際に出していた出力の平均を、次の区間のI成分の初期値にする。
+                _carry_sum += self.out_sum / self.out_n
+                _carry_n += 1
+                _carried_integral = _carry_sum / _carry_n
+            actual_dist = now_dist - self.orig_dist
+            (t0, d0), (t1, d1) = self.speed_history[0], self.speed_history[-1]
+            end_speed = (d1 - d0) / (t1 - t0) if t1 - t0 > 1e-6 else 0.0
+            self.logger.info("%+06d %s.run summary: dist=%d target_dist=%d dist_err=%+d err_mean=%+.2f err_max=%.2f lat=%+.0fmm (+=目標より反時計回り側へ) end_speed=%.0fmm/s loc=(%d,%d)%s end_i=%+.2f" % (
+                now_dist, self.__class__.__name__, actual_dist, self.distance_mm, actual_dist - self.distance_mm,
+                self.err_sum / max(self.err_n, 1), self.err_max, self.lat_mm, end_speed,
+                runtime.plotter.get_loc_x(), runtime.plotter.get_loc_y(), et_pose_text(),
+                self.pid.components[1]))
 
-        turn = int(self.pid(current_heading))  # まっすぐ走るために必要な微修正の旋回量
-        # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める
-        # (PID自体の上限は巡航パワーで作ってあるため)。abs()により、power_now<0
-        # (後退)でも範囲が反転せずturnがそのまま出力される。
-        turn = max(-abs(power_now), min(abs(power_now), turn))
-        runtime.right_motor.set_power(power_now + runtime.course * turn)
-        runtime.left_motor.set_power(power_now - runtime.course * turn)
+        output = self.pid(current_heading)
+        if (not self.summarized and self.distance_mm > 0.0
+                and now_dist - self.orig_dist >= self.distance_mm * 0.5):
+            self.out_sum += output
+            self.out_n += 1
+        base_power = -power_now if self.reverse else power_now
+        if _fine_power_enabled:
+            turn_f = max(-abs(power_now), min(abs(power_now), output))
+            self.right_residual += base_power + runtime.course * turn_f
+            self.left_residual += base_power - runtime.course * turn_f
+            right_power = int(round(self.right_residual))
+            left_power = int(round(self.left_residual))
+            self.right_residual -= right_power
+            self.left_residual -= left_power
+        else:
+            turn = int(output)  # まっすぐ走るために必要な微修正の旋回量
+            # 減速中は基準パワーが下がるので、旋回量も現在のパワー以内に収める
+            # (PID自体の上限は巡航パワーで作ってあるため)。
+            turn = max(-abs(power_now), min(abs(power_now), turn))  # abs(): power<0(後退、devTKのEtRun)でも範囲が反転しない(devTK 516cfa6)
+            right_power = base_power + runtime.course * turn
+            left_power = base_power - runtime.course * turn
+        runtime.right_motor.set_power(right_power)
+        runtime.left_motor.set_power(left_power)
+        log_power_state(self.__class__.__name__, right_power, left_power)
+        if self.turn_forward_compensation and self.summarized:
+            return Status.SUCCESS
         return Status.RUNNING
 

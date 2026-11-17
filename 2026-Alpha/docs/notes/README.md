@@ -1,8 +1,19 @@
 # 走行関連の補足資料・変更履歴
 
+## LAPカメラ復帰の現行構成
+
+標準設定、比較用設定と実機確認範囲は [LAP_NATIVE_RECOVERY_v2.md](LAP_NATIVE_RECOVERY_v2.md) を参照。
+
 ## 2026-10-22 ETラリー周回数を正の整数へ拡張
 
 `--et-rally-laps` / `ET_RALLY_LAPS` を正の整数対応に変更。PC・経路計算ランナー・走行体の受信検証を統一した。詳細と実用上の制約は [LAP_COUNT_NATURAL_NUMBER_v1.md](LAP_COUNT_NATURAL_NUMBER_v1.md)。
+
+2026-09-29追記: モデル審査(CS大会)向けに、提出モデル4〜6枚目(設計①②・制御)の下書きを追加した。
+[ET_RALLY_MODEL_SURVEY_v2.md](ET_RALLY_MODEL_SURVEY_v2.md)。v1以降の検討(LQI検討→不採用、
+バックラッシュ診断、一発サイズ補正、カメラ角度補正のチェッカーボード較正方針)を反映し、
+実機未検証の項目も「実現前提の設計」として記述している(v1の調査資料とは性質が異なる点に注意)。
+
+2026-09-26追記: モデル審査(CS大会)向けに、ETラリー関連の設計判断・実装・検証記録を横断調査した資料を追加した。[ET_RALLY_MODEL_SURVEY_v1.md](ET_RALLY_MODEL_SURVEY_v1.md)。コード変更は伴わない調査結果であり、既存資料との不一致・未確認事項も明記している。
 
 2026-09-15更新: ETラリーの絶対方位が360度境界をまたぐとき、`SpinAround`の終了判定だけでなく、`SpinAround`と固定角度`RunByGyro`のPID目標も現在方位に最も近い等価角へ変換するよう修正した。たとえば現在314度・受信目標-44度はPID目標316度となり、-358度方向の大回転を指示しない。開始ログへ`requested`、`resolved`、`delta`を追加。経路計算、相対旋回、距離プロファイル走行は変更していない。PC上で構文と境界値を確認済み、実機未検証。
 
@@ -1356,3 +1367,7 @@ summary.routeにpost_return_correction=false、return_angle_gate=false、push_he
 ## ボトルデリバリー → ET相撲
 
 専用ミッションと通し順序の接続・未実装区間は [DELIVERY_SUMO_INTEGRATION_v1.md](DELIVERY_SUMO_INTEGRATION_v1.md) を参照。
+
+## 2026-11-14 LAP黒線復帰を通常VideoThreadに接続
+
+詳細は [LAP_NATIVE_RECOVERY_v1.md](LAP_NATIVE_RECOVERY_v1.md)。devTKの通常LAPと試験LAPで同一処理を使用し、ATの接近重複を防ぐ。PC検査済み、実機未検証。

@@ -1,0 +1,26 @@
+{
+  "note_1105": "円の3周テスト(plan_test_circle3_r150_*.json)の基準: 円を除いた同じ直進200mm+200mmで止まる。走り出しと止まり方のずれだけを測り、円のテストのずれから差し引く。",
+  "expected_end": {
+    "front_mm": 400.0,
+    "right_mm": 0.0,
+    "heading_deg": 0.0
+  },
+  "steps": [
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 200.0,
+      "reverse": false,
+      "stop": false,
+      "label": null
+    },
+    {
+      "type": "move",
+      "target_heading_deg": 0.0,
+      "distance_mm": 200.0,
+      "reverse": false,
+      "stop": true,
+      "label": null
+    }
+  ]
+}
