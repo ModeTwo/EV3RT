@@ -16,17 +16,228 @@ from ..behaviours.line_trace import TraceLine
 from ..behaviours.camera_line_trace import RecoverLineByCamera
 from ..behaviours.hint2_exit import Hint2Exit
 from ..behaviours.projected_distance import IsProjectedDistanceEarned
-from ..behaviours.conditions import IsDistanceEarned, IsTimePassed, IsColorDetected, IsBlackDetected, IsColorPassed, IsDistanceEarnedUntilColorEntered
+from ..behaviours.conditions import IsDistanceEarned, IsTimePassed, IsColorDetected, IsBlackDetected, IsColorPassed, IsDistanceEarnedUntilColorEntered, IsQRDistanceLimitReached
 from ..behaviours.motor_control import StopNow
 from ..behaviours.hint_reader import ReadHintCard as IsQRDecoded, PrepareHintCamera
+from ..behaviours.arc_turn import ArcTurn
+
+
+
+# ========================================================
+# QR読み取り開始から4秒経過したかを判定
+# ========================================================
+class IsQRTimeoutReached(Behaviour):
+
+    def __init__(self, name, qr_reader, timeout_sec=4.0):
+        super(IsQRTimeoutReached, self).__init__(name)
+
+        self.qr_reader = qr_reader
+        self.timeout_sec = timeout_sec
+        self.started_at = None
+
+    def update(self):
+
+        # QR読み取り成功済みならタイムアウトしない
+        if self.qr_reader.status == Status.SUCCESS:
+            return Status.FAILURE
+
+        # 初回実行時刻を記録
+        if self.started_at is None:
+            self.started_at = time.monotonic()
+
+        elapsed = time.monotonic() - self.started_at
+
+        # 4秒経過
+        if elapsed >= self.timeout_sec:
+            return Status.SUCCESS
+
+        return Status.FAILURE
+
+
+# ========================================================
+# QR読み取り成功まで待機
+# ========================================================
+class WaitForQRDecode(Behaviour):
+    """止まってQRが読めるまで待つ。
+
+    2026-11-17(devSS、ユーザー: ヒント2が読めないことは絶対に避けたい):
+    カメラはピントが固定(ピントの値を0〜250に変えても画像が同じ、実機で確認)。11/17 15:04 のヒント2は、止まった位置で
+    QRがぼけたまま30回以上読めなかった(幅約280画素。読めた回の画像も幅約277画素でぼけ方も近く、距離だけでは決まらない。
+    走っている間は毎回読めず、止まってから読めている)。同じ位置で待ち続けても変わらないので、読めないまま待つだけにせず、
+    WAIT_SEC 待っても読めなければ、STEPS の順に少しずつ前後に動いて(下がる→もっと下がる→…→元の位置→少し前→元の位置)、
+    動くたびに HOLD_SEC 止まって読む。一巡しても読めなければ繰り返す。
+    読めたら、元の位置へ戻ってから先へ進む(このあとの「黒線まで前進」は元の位置が前提)。
+    (11/17 の前の版はピントを振っていたが効かず、下がる出力30では車輪が回らなかった)
+    """
+
+    WAIT_SEC = 1.5
+    HOLD_SEC = 1.5
+    # 元の位置からの位置(mm、前が+)。この順に動く
+    STEPS = (-50.0, -100.0, -150.0, 0.0, 40.0, 0.0)
+    MOVE_POWER = 55
+    MOVE_TIMEOUT_SEC = 2.5
+
+    def __init__(self, name, qr_reader):
+        super(WaitForQRDecode, self).__init__(name)
+
+        self.qr_reader = qr_reader
+
+    def initialise(self):
+        self.started_at = None
+        self.stage = "wait"
+        self.stage_at = None
+        self.step = 0
+        self.cycle = 0
+        self.offset_mm = 0.0          # 元の位置からの今の位置(前が+)
+        self.returning = False
+
+    def _stop(self):
+        for motor in (runtime.left_motor, runtime.right_motor):
+            if motor is not None:
+                motor.set_power(0)
+                motor.set_brake(True)
+
+    def _counts(self):
+        return float(runtime.left_motor.get_count()), float(runtime.right_motor.get_count())
+
+    def _moved_mm(self):
+        left, right = self._counts()
+        return (abs(left - self.move_origin[0]) + abs(right - self.move_origin[1])) / 2.0 * self.move_mm_per_deg
+
+    def _start_move(self, target_offset, now):
+        import math
+        dist = target_offset - self.offset_mm
+        if abs(dist) < 1.0:
+            return False
+        self.move_dir = 1.0 if dist > 0 else -1.0
+        self.move_target_mm = abs(dist)
+        self.move_goal_offset = target_offset
+        self.move_origin = self._counts()
+        self.move_heading = float(runtime.gyro_sensor.get_angle())
+        self.move_mm_per_deg = math.pi * float(runtime.plotter.tire_diameter) / 360.0
+        self.stage = "move"
+        self.stage_at = now
+        self.logger.warning("QR_RECOVER move %s %.0fmm to %+.0fmm from the stop (cycle %d)" % (
+            "back" if dist < 0 else "forward", abs(dist), target_offset, self.cycle))
+        return True
+
+    def _update_move(self, now):
+        moved = self._moved_mm()
+        if moved >= self.move_target_mm or now - self.stage_at > self.MOVE_TIMEOUT_SEC:
+            self._stop()
+            self.offset_mm += self.move_dir * moved
+            if moved < self.move_target_mm:
+                self.logger.warning("QR_RECOVER move stopped short: %.0f of %.0fmm" % (moved, self.move_target_mm))
+            self.stage = "hold"
+            self.stage_at = now
+            return
+        error = (self.move_heading - float(runtime.gyro_sensor.get_angle()) + 180.0) % 360.0 - 180.0
+        correction = max(-10.0, min(10.0, 2.0 * error))
+        power = self.move_dir * self.MOVE_POWER
+        runtime.left_motor.set_brake(False)
+        runtime.right_motor.set_brake(False)
+        runtime.left_motor.set_power(int(round(power + correction)))
+        runtime.right_motor.set_power(int(round(power - correction)))
+
+    def update(self):
+        now = time.monotonic()
+        if self.started_at is None:
+            self.started_at = now
+            self.stage_at = now
+
+        if self.returning:
+            # 読めたあと、元の位置へ戻っている途中
+            if self.stage == "move":
+                self._update_move(now)
+                return Status.RUNNING
+            self.logger.warning("QR_RECOVER back at the stop position (offset %+.0fmm)" % self.offset_mm)
+            return Status.SUCCESS
+
+        # QR読み取り成功
+        if self.qr_reader.status == Status.SUCCESS:
+            if self.stage == "move":
+                # 動いている途中で読めた: ここまでの分を数えてから戻る
+                moved = self._moved_mm()
+                self._stop()
+                self.offset_mm += self.move_dir * moved
+            if self.stage != "wait" or self.cycle:
+                self.logger.warning("QR_RECOVER decoded at %+.0fmm from the stop after %.1fs (cycle %d)" % (
+                    self.offset_mm, now - self.started_at, self.cycle))
+            if abs(self.offset_mm) > 1.0:
+                self.returning = True
+                self._start_move(0.0, now)
+                return Status.RUNNING
+            return Status.SUCCESS
+
+        if self.stage == "wait":
+            if now - self.stage_at >= self.WAIT_SEC:
+                self.logger.warning("QR_RECOVER not decoded for %.1fs after stopping, moving to read from other distances" % (
+                    now - self.started_at))
+                self.step = 0
+                if not self._start_move(self.STEPS[0], now):
+                    self.stage, self.stage_at = "hold", now
+            return Status.RUNNING
+        if self.stage == "move":
+            self._update_move(now)
+            return Status.RUNNING
+        if self.stage == "hold":
+            if now - self.stage_at >= self.HOLD_SEC:
+                self.step += 1
+                if self.step >= len(self.STEPS):
+                    self.step = 0
+                    self.cycle += 1
+                if not self._start_move(self.STEPS[self.step], now):
+                    self.stage_at = now
+            return Status.RUNNING
+
+        # 未読み取りなら待機
+        return Status.RUNNING
+
+    def terminate(self, new_status):
+        if getattr(self, "stage", None) == "move":
+            self._stop()
 
 
 def build_tantou_tree(context, config, include_exit=True):
     settings = config.integration
-    SPIN_MAX_POWER = settings.to_spin_max_power  # 元: 60
-    SPIN_MIN_POWER = settings.to_spin_min_power  # 元: 55
+    # 2026-11-17(devSS、ユーザー): この区間はLAPでつかんだボトルをアームに挟んで押しながら走るので、旋回の出力を下げる
+    # (65 では勢いでボトルがアームの間から出ていきそうだった)。止まったときに上げる出力の上限も下げる。
+    SPIN_MAX_POWER = settings.delivery_carry_turn_power
+    SPIN_MIN_POWER = settings.delivery_carry_turn_power
+    STALL_CAP = settings.delivery_carry_turn_stall_cap
     TRACELINE_TARGET_V = 65
 
+    class QRSpeedUpRun(RunByGyro):
+        """QR読み取り成功後に走行パワーを上げる"""
+        def __init__(self, name, qr_reader,
+                        slow_power=55, fast_power=80, **kwargs):
+            self.qr_reader = qr_reader
+            self.slow_power = slow_power
+            self.fast_power = fast_power
+            # 初回起動時は55で走行
+            kwargs["power"] = slow_power
+            super(QRSpeedUpRun, self).__init__(
+                name=name,
+                **kwargs
+            )
+        def update(self):
+            # QR読み取り状況に応じて速度を切り替える
+            if self.qr_reader.status == Status.SUCCESS:
+                target_power = self.fast_power
+            else:
+                target_power = self.slow_power
+            # 基本出力を変更
+            self.power = target_power
+            # PID初期化後なら補正量の上限も変更
+            if self.running and hasattr(self, "pid"):
+                self.pid.output_limits = (
+                    -abs(target_power),
+                    abs(target_power)
+                )
+            return super().update()
+
+    # ここから下は、元のツリー構築処理を続ける
+        # TO担当区間の親ノード
     root = Sequence(
         name="Tantou Section",
         memory=True
@@ -45,16 +256,19 @@ def build_tantou_tree(context, config, include_exit=True):
         context=context,
         name="go_to_qr_drive",
         target=0,
-        power=70,
+        power=80,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
-        target_type=HeadingType.ABSOLUTE
+        target_type=HeadingType.ABSOLUTE,
+        distance_mm=200,
+        decel_mm=50,
+        decel_min_power=20
     )
     
     limit_qr = IsDistanceEarned(
         name="limit_qr",
-        delta_dist=50
+        delta_dist=200
     )
     
     go_to_qr.add_children([
@@ -67,24 +281,35 @@ def build_tantou_tree(context, config, include_exit=True):
         name="turn_left_55",
         memory=True
     )
-    turn_left_90 = Sequence(
-        name="turn_left_90",
-        memory=True
-    )
+    #turn_left_90 = Sequence(
+        #name="turn_left_90",
+        #memory=True
+    #)
 
 
     turn_left_55.add_children([
 
-        SpinAround(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+        #SpinAround(
+            #context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            #name="left 55",
+            #target=45,
+            #max_power=SPIN_MAX_POWER,
+            #min_power=SPIN_MIN_POWER,
+            #pid_p=0.2,
+            #pid_i=0.005,
+            #pid_d=0.03,
+            #target_type=HeadingType.ABSOLUTE
+        #),
+
+        ArcTurn(
             name="left 55",
-            target=45,
-            max_power=SPIN_MAX_POWER,
-            min_power=SPIN_MIN_POWER,
-            pid_p=0.2,
-            pid_i=0.005,
+            angle=90,
+            radius=50,
+            power=60,
+            pid_p=1.8,
+            pid_i=0.0,
             pid_d=0.03,
-            target_type=HeadingType.ABSOLUTE
+            wheel_tread_mm=95.0,
         ),
 
 
@@ -110,59 +335,62 @@ def build_tantou_tree(context, config, include_exit=True):
     # のどちらかで終了。
     # ========================================================
 
-    go_to_black_45 = Parallel(
-        name="go_to_black",
-        policy=ParallelPolicy.SuccessOnOne()
-    )    
-    go_to_black_45.add_children([
-        RunByGyro(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
-            name="run_to_black",
-            target=45,
-            power=70,
-            pid_p=1.1,
-            pid_i=0.00075,
-            pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
-        ),
-
-        #IsColorDetected(
-         #   name="detect_black",
-         #   color=Color.BLACK
-        #),
-
-        IsDistanceEarned(
-            name="black_distance_limit",
-            delta_dist=50  # tantou4: 550
-        ),
-       # ResetDevice(name="device_reset"),
-    ])
-
-    turn_left_90.add_children([
-        # 【統合差分】ジャイロをリセットせず、起動時からの共通方位基準を維持する。
-        SpinAround(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
-            name="left 55",
-            target=90,
-            max_power=SPIN_MAX_POWER,
-            min_power=SPIN_MIN_POWER,
-            pid_p=0.2,
-            pid_i=0.005,
-            pid_d=0.03,
-            target_type=HeadingType.ABSOLUTE
-        ),
-
-        #IsTimePassed(name="wait_after_spin", delta_time=0.05),
-
-        #StopNow(
-            #name="stop_after_left_e"
+    #go_to_black_45 = Parallel(
+        #name="go_to_black",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)    
+    #go_to_black_45.add_children([
+        #RunByGyro(
+            #context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            #name="run_to_black",
+            #target=45,
+            #power=70,
+            #pid_p=1.1,
+            #pid_i=0.00075,
+            #pid_d=0.04,
+            #target_type=HeadingType.ABSOLUTE,
+            #distance_mm=50,
+            #decel_mm=10,
+            #decel_min_power=10
         #),
 #
-        #IsTimePassed(
-            #name="wait_left_e",
-            #delta_time=0.2
+        ##IsColorDetected(
+         ##   name="detect_black",
+         ##   color=Color.BLACK
+        ##),
+#
+        #IsDistanceEarned(
+            #name="black_distance_limit",
+            #delta_dist=50  # tantou4: 550
         #),
-    ])
+       ## ResetDevice(name="device_reset"),
+    #])
+#
+    #turn_left_90.add_children([
+        ## 【統合差分】ジャイロをリセットせず、起動時からの共通方位基準を維持する。
+        #SpinAround(
+            #context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            #name="left 55",
+            #target=90,
+            #max_power=SPIN_MAX_POWER,
+            #min_power=SPIN_MIN_POWER,
+            #pid_p=0.2,
+            #pid_i=0.005,
+            #pid_d=0.03,
+            #target_type=HeadingType.ABSOLUTE
+        #),
+#
+        ##IsTimePassed(name="wait_after_spin", delta_time=0.05),
+#
+        ##StopNow(
+            ##name="stop_after_left_e"
+        ##),
+##
+        ##IsTimePassed(
+            ##name="wait_left_e",
+            ##delta_time=0.2
+        ##),
+    #])
 
     # ========================================================
     # 2. 黒線まで直進
@@ -189,7 +417,10 @@ def build_tantou_tree(context, config, include_exit=True):
             pid_p=1.1,
             pid_i=0.00075,
             pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
+            target_type=HeadingType.ABSOLUTE,
+            distance_mm=510,
+            decel_mm=50,
+            decel_min_power=40
         ),
 
         #IsColorDetected(
@@ -199,38 +430,38 @@ def build_tantou_tree(context, config, include_exit=True):
 
         IsDistanceEarned(
             name="black_distance_limit",
-            delta_dist=440  # tantou4: 550
+            delta_dist=510  # tantou4: 550
         ),
        # ResetDevice(name="device_reset"),
     ])
 
-    go_to_black_90_2 = Parallel(
-        name="go_to_black_90_2",
-        policy=ParallelPolicy.SuccessOnOne()
-    )    
-    go_to_black_90_2.add_children([
-        RunByGyro(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
-            name="run_to_black_2",
-            target=90,
-            power=70,
-            pid_p=1.1,
-            pid_i=0.00075,
-            pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
-        ),
-
-        #IsColorDetected(
-         #   name="detect_black",
-         #   color=Color.BLACK
+    #go_to_black_90_2 = Parallel(
+        #name="go_to_black_90_2",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)    
+    #go_to_black_90_2.add_children([
+        #RunByGyro(
+            #context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            #name="run_to_black_2",
+            #target=90,
+            #power=70,
+            #pid_p=1.1,
+            #pid_i=0.00075,
+            #pid_d=0.04,
+            #target_type=HeadingType.ABSOLUTE
         #),
-
-        IsDistanceEarned(
-            name="black_distance_limit_2",
-            delta_dist=70  # tantou4: 550
-        ),
-       # ResetDevice(name="device_reset"),
-    ])
+#
+        ##IsColorDetected(
+         ##   name="detect_black",
+         ##   color=Color.BLACK
+        ##),
+#
+        #IsDistanceEarned(
+            #name="black_distance_limit_2",
+            #delta_dist=70  # tantou4: 550
+        #),
+       ## ResetDevice(name="device_reset"),
+    #])
 
 
     # 黒線地点で停止
@@ -250,16 +481,15 @@ def build_tantou_tree(context, config, include_exit=True):
 
     turn_right_125.add_children([
         #ResetDevice(name="device_reset"),
-        SpinAround(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+        ArcTurn(
             name="right 125",
-            target=45,  # 【統合差分】添付-90。共通方位の既存値を維持
-            max_power=SPIN_MAX_POWER,
-            min_power=SPIN_MIN_POWER,
-            pid_p=0.2,
-            pid_i=0.005,
+            angle=-90,
+            radius=50,
+            power=60,
+            pid_p=1.8,
+            pid_i=0.0,
             pid_d=0.03,
-            target_type=HeadingType.ABSOLUTE
+            wheel_tread_mm=95.0,
         ),
 
         #IsTimePassed(name="wait_after_spin", delta_time=0.05),
@@ -274,65 +504,68 @@ def build_tantou_tree(context, config, include_exit=True):
         #),
     ])
 
-    turn_right_125_2 = Parallel(
-        name="turn_right_125_2",
-        policy=ParallelPolicy.SuccessOnOne()
-    )    
-
-    turn_right_125_2.add_children([
-        RunByGyro(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
-            name="turn_125_2",
-            target=45,
-            power=70,
-            pid_p=1.1,
-            pid_i=0.00075,
-            pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
-        ),
-
-        #IsColorDetected(
-         #   name="detect_black",
-         #   color=Color.BLACK
-        #),
-
-        IsDistanceEarned(
-            name="black_distance_limit_a",
-            delta_dist=50  # tantou4: 550
-        ),
-       # ResetDevice(name="device_reset"),
-    ])
-
-    turn_right_125_3 = Sequence(
-        name="turn_right_125_3",
-        memory=True
-    )
-
-    turn_right_125_3.add_children([
-        # 【統合差分】ジャイロをリセットせず、起動時からの共通方位基準を維持する。
-        SpinAround(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
-            name="turn_right_125_3",
-            target=0,
-            max_power=SPIN_MAX_POWER,
-            min_power=SPIN_MIN_POWER,
-            pid_p=0.2,
-            pid_i=0.005,
-            pid_d=0.03,
-            target_type=HeadingType.ABSOLUTE
-        ),
-
-        #IsTimePassed(name="wait_after_spin", delta_time=0.05),
-
-        #StopNow(
-            #name="stop_after_left_y"
+    #turn_right_125_2 = Parallel(
+        #name="turn_right_125_2",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)    
+#
+    #turn_right_125_2.add_children([
+        #RunByGyro(
+            #context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            #name="turn_125_2",
+            #target=45,
+            #power=70,
+            #pid_p=1.1,
+            #pid_i=0.00075,
+            #pid_d=0.04,
+            #target_type=HeadingType.ABSOLUTE,
+            #distance_mm=50,
+            #decel_mm=10,
+            #decel_min_power=10
         #),
 #
-        #IsTimePassed(
-            #name="wait_left_y",
-            #delta_time=0.2
+        ##IsColorDetected(
+         ##   name="detect_black",
+         ##   color=Color.BLACK
+        ##),
+#
+        #IsDistanceEarned(
+            #name="black_distance_limit_a",
+            #delta_dist=50  # tantou4: 550
         #),
-    ])
+       ## ResetDevice(name="device_reset"),
+    #])
+#
+    #turn_right_125_3 = Sequence(
+        #name="turn_right_125_3",
+        #memory=True
+    #)
+#
+    #turn_right_125_3.add_children([
+        ## 【統合差分】ジャイロをリセットせず、起動時からの共通方位基準を維持する。
+        #SpinAround(
+            #context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            #name="turn_right_125_3",
+            #target=0,
+            #max_power=SPIN_MAX_POWER,
+            #min_power=SPIN_MIN_POWER,
+            #pid_p=0.2,
+            #pid_i=0.005,
+            #pid_d=0.03,
+            #target_type=HeadingType.ABSOLUTE
+        #),
+#
+        ##IsTimePassed(name="wait_after_spin", delta_time=0.05),
+#
+        ##StopNow(
+            ##name="stop_after_left_y"
+        ##),
+##
+        ##IsTimePassed(
+            ##name="wait_left_y",
+            ##delta_time=0.2
+        ##),
+    #])
 
 
     # ========================================================
@@ -393,7 +626,7 @@ def build_tantou_tree(context, config, include_exit=True):
         IsDistanceEarned(
             name="distance_after_green",
             #delta_dist=settings.to_after_hint1_green_pass_mm  # 緑通過後320mm
-            delta_dist=165
+            delta_dist=215
         ),
     ])
 
@@ -412,7 +645,10 @@ def build_tantou_tree(context, config, include_exit=True):
             pid_p=1.1,
             pid_i=0.00075,
             pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
+            target_type=HeadingType.ABSOLUTE,
+            distance_mm=215,
+            decel_mm=50,
+            decel_min_power=30
         ),
 
         green_pass_then_320mm,
@@ -425,33 +661,33 @@ def build_tantou_tree(context, config, include_exit=True):
         ),
     ])
 
-    go_to_black_90_3 = Parallel(
-        name="go_to_black_90_3",
-        policy=ParallelPolicy.SuccessOnOne()
-    )    
-    go_to_black_90_3.add_children([
-        RunByGyro(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
-            name="run_to_black_90_3",
-            target=90,
-            power=70,
-            pid_p=1.1,
-            pid_i=0.00075,
-            pid_d=0.04,
-            target_type=HeadingType.ABSOLUTE
-        ),
-
-        #IsColorDetected(
-         #   name="detect_black",
-         #   color=Color.BLACK
+    #go_to_black_90_3 = Parallel(
+        #name="go_to_black_90_3",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)    
+    #go_to_black_90_3.add_children([
+        #RunByGyro(
+            #context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            #name="run_to_black_90_3",
+            #target=90,
+            #power=70,
+            #pid_p=1.1,
+            #pid_i=0.00075,
+            #pid_d=0.04,
+            #target_type=HeadingType.ABSOLUTE
         #),
-
-        IsDistanceEarned(
-            name="black_distance_limit_3",
-            delta_dist=50  # tantou4: 550
-        ),
-       # ResetDevice(name="device_reset"),
-    ])
+#
+        ##IsColorDetected(
+         ##   name="detect_black",
+         ##   color=Color.BLACK
+        ##),
+#
+        #IsDistanceEarned(
+            #name="black_distance_limit_3",
+            #delta_dist=50  # tantou4: 550
+        #),
+       ## ResetDevice(name="device_reset"),
+    #])
 
 
 
@@ -474,19 +710,16 @@ def build_tantou_tree(context, config, include_exit=True):
 
     turn_left_90_b.add_children([
         #ResetDevice(name="device_reset"),
-        SpinAround(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
-            name="left 90 again",
-            #target=90,
-            target=45,
-            max_power=SPIN_MAX_POWER,
-            min_power=SPIN_MIN_POWER,
-            pid_p=0.2,
-            pid_i=0.005,
+        ArcTurn(
+            name="left left 90_b",
+            angle=45,
+            radius=50,
+            power=60,
+            pid_p=1.8,
+            pid_i=0.0,
             pid_d=0.03,
-            target_type=HeadingType.ABSOLUTE
+            wheel_tread_mm=95.0,
         ),
-
         #StopNow(
             #name="stop_after_left_b"
         #),
@@ -535,7 +768,10 @@ def build_tantou_tree(context, config, include_exit=True):
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
-        target_type=HeadingType.ABSOLUTE
+        target_type=HeadingType.ABSOLUTE,
+        distance_mm=200,
+        decel_mm=50,
+        decel_min_power=40
     ) 
     run_to_black = RunByGyro(
         context=context,
@@ -584,20 +820,39 @@ def build_tantou_tree(context, config, include_exit=True):
         target=90,
         max_power=SPIN_MAX_POWER,
         min_power=SPIN_MIN_POWER,
+        stall_power_cap=STALL_CAP,
         pid_p=0.2,
         pid_i=0.005,
         pid_d=0.03,
         target_type=HeadingType.ABSOLUTE
     )
-
-    #stop_after_turn_to_90 = StopNow(
-        #name="stop_after_turn_to_90"
-    #)
+    
+    #go_to_black_90_9 = Parallel(
+        #name="go_to_black_90_9",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)    
+    #go_to_black_90_9.add_children([
+        #TraceLine(
+            #name="run_to_black_90_9",
+            #target=TRACELINE_TARGET_V,
+            #power=80,
+            #pid_p=0.65,
+            #pid_i=0.000001,
+            #pid_d=0.045,
+            #trace_side=TraceSide.NORMAL,
+        #),
 #
-    #wait_after_turn_to_90 = IsTimePassed(
-        #name="wait_after_turn_to_90",
-        #delta_time=0.2
-    #)
+        ##IsColorDetected(
+         ##   name="detect_black",
+         ##   color=Color.BLACK
+        ##),
+#
+        #IsDistanceEarned(
+            #name="black_distance_limit_4",
+            #delta_dist=100  # tantou4: 550
+        #),
+       ## ResetDevice(name="device_reset"),
+    #])
 
     # ==========================================
     # ② ①終了後 → ライントレース
@@ -605,14 +860,28 @@ def build_tantou_tree(context, config, include_exit=True):
     # (75度直進の開始位置を基準にした90度成分1200mm)だけに一本化する。
     # ==========================================
 
-    trace_650 = TraceLine(
+    #trace_650 = TraceLine(
+        #name="trace_650",
+        #target=TRACELINE_TARGET_V,
+        #power=100,
+        #pid_p=0.65,
+        #pid_i=0.000001,
+        #pid_d=0.045,
+        #trace_side=TraceSide.NORMAL,
+    #)
+
+    trace_650 = RunByGyro(
+        context=context,
         name="trace_650",
-        target=TRACELINE_TARGET_V,
+        target=90,
         power=100,
-        pid_p=0.65,
-        pid_i=0.000001,
-        pid_d=0.045,
-        trace_side=TraceSide.NORMAL,
+        pid_p=1.1,
+        pid_i=0.00075,
+        pid_d=0.04,
+        target_type=HeadingType.ABSOLUTE,
+        distance_mm=950,
+        decel_mm=100,
+        decel_min_power=40
     )
 
 
@@ -629,8 +898,11 @@ def build_tantou_tree(context, config, include_exit=True):
         non_black_run,
         black_or_550,
         turn_to_90_before_trace,
+        #go_to_black_90_9,
         #stop_after_turn_to_90,
         #wait_after_turn_to_90,
+        #to_line,
+        #go_to_black_90_5,
         # 【統合差分】QR2用のカメラ切替(~3.4秒)をtrace_650の走行時間に重ねて隠す。
         # camera_recovery_then_trace_120(コメントアウト済み)にあった
         # PrepareHintCamera("prepare hint2 camera")と同じ配置・目的。
@@ -664,32 +936,32 @@ def build_tantou_tree(context, config, include_exit=True):
         #name="stop_after_650"
     #)
 
-    go_to_black_90_4 = Parallel(
-        name="go_to_black_90_4",
-        policy=ParallelPolicy.SuccessOnOne()
-    )    
-    go_to_black_90_4.add_children([
-        TraceLine(
-            name="run_to_black_90_4",
-            target=TRACELINE_TARGET_V,
-            power=70,
-            pid_p=0.65,
-            pid_i=0.000001,
-            pid_d=0.045,
-            trace_side=TraceSide.NORMAL,
-        ),
-
-        #IsColorDetected(
-         #   name="detect_black",
-         #   color=Color.BLACK
+    #go_to_black_90_4 = Parallel(
+        #name="go_to_black_90_4",
+        #policy=ParallelPolicy.SuccessOnOne()
+    #)    
+    #go_to_black_90_4.add_children([
+        #TraceLine(
+            #name="run_to_black_90_4",
+            #target=TRACELINE_TARGET_V,
+            #power=70,
+            #pid_p=0.65,
+            #pid_i=0.000001,
+            #pid_d=0.045,
+            #trace_side=TraceSide.NORMAL,
         #),
-
-        IsDistanceEarned(
-            name="black_distance_limit_4",
-            delta_dist=100  # tantou4: 550
-        ),
-       # ResetDevice(name="device_reset"),
-    ])
+#
+        ##IsColorDetected(
+         ##   name="detect_black",
+         ##   color=Color.BLACK
+        ##),
+#
+        #IsDistanceEarned(
+            #name="black_distance_limit_4",
+            #delta_dist=100  # tantou4: 550
+        #),
+       ## ResetDevice(name="device_reset"),
+    #])
 
     # ========================================================
     # 7. 1200mm地点 → 右30°
@@ -706,16 +978,28 @@ def build_tantou_tree(context, config, include_exit=True):
         #),
 
         #ResetDevice(name="device_reset"),
-        SpinAround(
-            context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+        #SpinAround(
+            #context=context,  # 【統合差分】AT終了方位を加算せず共通方位を使用
+            #name="right 25 for qr2",
+            #target=105,  # 【統合差分】添付25。共通方位の既存値を維持
+            #max_power=SPIN_MAX_POWER,
+            #min_power=SPIN_MIN_POWER,
+            #stall_power_cap=STALL_CAP,
+            #pid_p=0.2,
+            #pid_i=0.005,
+            #pid_d=0.03,
+            #target_type=HeadingType.ABSOLUTE
+        #),
+
+        ArcTurn(
             name="right 25 for qr2",
-            target=107,  # 【統合差分】添付25。共通方位の既存値を維持
-            max_power=SPIN_MAX_POWER,
-            min_power=SPIN_MIN_POWER,
-            pid_p=0.2,
-            pid_i=0.005,
+            angle=15,
+            radius=50,
+            power=60,
+            pid_p=1.8,
+            pid_i=0.0,
             pid_d=0.03,
-            target_type=HeadingType.ABSOLUTE
+            wheel_tread_mm=95.0,
         ),
 
         #StopNow(
@@ -735,177 +1019,247 @@ def build_tantou_tree(context, config, include_exit=True):
     # 絶対方位0°を向いてQR2を読む。
     # ========================================================
 
+    #qr2_read = Sequence(
+        #name="qr2_read",
+        #memory=True
+    #)
+#
+    #qr2_read.add_children([
+#
+        #IsQRDecoded(
+            #name="read_qr2", context=context, hint_number=2
+        #),
+#
+        ##StopNow(
+            ##name="stop_after_qr2"
+        ##),
+    #])
+
+    read_qr2 = IsQRDecoded(
+        name="read_qr2",
+        context=context,
+        hint_number=2
+    )
+
     qr2_read = Sequence(
         name="qr2_read",
         memory=True
     )
 
     qr2_read.add_children([
-
-        IsQRDecoded(
-            name="read_qr2", context=context, hint_number=2
-        ),
-
-        StopNow(
-            name="stop_after_qr2"
-        ),
+        read_qr2,
     ])
 
 
-    # ========================================================
-    # 9. QR2 → 元の向き
-    #
-    # 右30°回転。
-    # ========================================================
-#
-#
-    ## 【統合差分】添付の600mm単純追従に置換せず、現行Hint2Exitを維持。
-    ## 10. 90度保持→連続白→追加前進→TO基準190度へのその場旋回→黒線再取得。
-    ## 旋回途中でも黒検出で追従へ移り、距離/時間上限ではFAILURE停止する。
-    #go_to_goal = Hint2Exit('hint2 white exit', context, settings)
-
-    # ==========================================
-    # ① 黒線検知 OR 200mm走行
-    # ==========================================
-    black_or_50 = Parallel(
-        name="black_or_50",
-        policy=ParallelPolicy.SuccessOnOne()
+    black_or_200 = Sequence(
+        name="black_or_200",
+        memory=True
     )
     
-    run_to_black_2_first = RunByGyro(
+    run_to_black_2_01 = Parallel(
+        name="run_to_black_2_01",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
+
+    run_to_black_2_01.add_children([
+
+    #RunByGyro(
+        #context=context,
+        #name="run_to_black_2_01",
+        #target=105,
+        #power=55,
+        #pid_p=1.1,
+        #pid_i=0.00075,
+        #pid_d=0.04,
+        #target_type=HeadingType.ABSOLUTE
+    #),
+
+    QRSpeedUpRun(
         context=context,
-        name="run_to_black_2_first",
-        target=107,
-        power=70,
+        name="run_to_black_2_01",
+        qr_reader=read_qr2,
+        target=105,
+        slow_power=50,
+        fast_power=75,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
         target_type=HeadingType.ABSOLUTE
-    )
+    ),
     
-    black_distance_limit_2 = IsDistanceEarned(
-        name="black_distance_limit_2",
-        delta_dist=50
-    )
-    
-    black_or_50.add_children([
-        run_to_black_2_first,
-        black_distance_limit_2,
+    IsDistanceEarned(
+        name="run_to_black_limit",
+        delta_dist=400  # tantou4: 550
+    ),
     ])
 
-    black_or_200 = Parallel(
-        name="black_or_200",
+    run_to_black_2 = Parallel(
+        name="run_to_black_2",
         policy=ParallelPolicy.SuccessOnOne()
     )
-    
-    run_to_black_2 = RunByGyro(
+
+    run_to_black_2.add_children([
+
+    #RunByGyro(
+        #context=context,
+        #name="run_to_black_2",
+        #target=105,
+        #power=55,
+        #pid_p=1.1,
+        #pid_i=0.00075,
+        #pid_d=0.04,
+        #target_type=HeadingType.ABSOLUTE
+    #),
+
+    QRSpeedUpRun(
         context=context,
         name="run_to_black_2",
-        target=107,
-        power=60,
+        qr_reader=read_qr2,
+        target=105,
+        slow_power=50,
+        fast_power=80,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
-        target_type=HeadingType.ABSOLUTE
-    )
+        target_type=HeadingType.ABSOLUTE,
+        distance_mm=200,
+        decel_mm=50,
+        decel_min_power=20
+    ),
     
-    detect_black_2 = IsBlackDetected(
+    IsBlackDetected(
         name="detect_black_2",
         black_threshold=settings.to_exit_black_v,
         required_frames=2
+    ),
+    ])
+    
+
+    # 黒線検知後に必ず停止する
+    black_detect_and_stop_2 = Sequence(
+        name="black_detect_and_stop_2",
+        memory=True
     )
     
-    # black_distance_limit_2 = IsDistanceEarned(
-    #     name="black_distance_limit_2",
-    #     delta_dist=140
-    # )
-    
-    black_or_200.add_children([
+    black_detect_and_stop_2.add_children([
         run_to_black_2,
-        detect_black_2,
+        StopNow(
+            name="stop_after_black_detected_2"
+        ),
+    ])
+
+
+    black_or_200.add_children([
+        run_to_black_2_01,
+        black_detect_and_stop_2,
         # black_distance_limit_2,
     ])
 
-    # ==========================================
-    # ①終了後、黒検知の有無に関わらず絶対方位180度へ向き直してから
-    # ボトルデリバリーへ進む(ET相撲のガレージ復帰と同じ「検知→既知方位へ
-    # 旋回」構造。見つからなかった場合も失敗にはせず、90度で試行を続ける)。
-    # ==========================================
 
-    #turn_to_180_before_trace = SpinAround(
-        #context=context,
-        #name="turn_to_180_before_trace",
-        #target=180,
-        #max_power=60,
-        #min_power=60,
-        #pid_p=0.2,
-        #pid_i=0.005,
-        #pid_d=0.03,
-        #target_type=HeadingType.ABSOLUTE
-    #)
-
-    #stop_after_turn_to_180 = StopNow(
-        #name="stop_after_turn_to_180"
-    #)
-#
-    #wait_after_turn_to_180 = IsTimePassed(
-        #name="wait_after_turn_to_180",
-        #delta_time=0.2
-    #)
-
-    # ==========================================
-    # ② ①終了後 → ライントレース
-    # 【統合差分】独自の650mm上限は削除。終了は外側のdist_1200_from_75deg_start
-    # (75度直進の開始位置を基準にした90度成分1200mm)だけに一本化する。
-    # ==========================================
+    go_forward_100mm = Parallel(
+        name="go_forward_100mm",
+        policy=ParallelPolicy.SuccessOnOne()
+    )
     
-    #l_trace_last = Parallel(
-        #name="l_trace_last",
-        #policy=ParallelPolicy.SuccessOnOne()
-    #)
-#    
-    #trace_last = TraceLine(
-        #name="trace_last",
-        #target=TRACELINE_TARGET_V,
-        #power=70,
-        #pid_p=0.65,
-        #pid_i=0.000001,
-        #pid_d=0.045,
-        #trace_side=TraceSide.NORMAL,
-    #)
-#
-    #trace_last_limit = IsDistanceEarned(
-        #name="trace_last_limit",
-        #delta_dist=150
-    #)  
-#    
-    #l_trace_last.add_children([
-        #trace_last,
-        #trace_last_limit,
-    #])
+    go_forward_100mm.add_children([
+    
+        RunByGyro(
+            context=context,
+            name="run_after_qr_100mm",
+            target=105,
+            power=80,
+            pid_p=1.1,
+            pid_i=0.00075,
+            pid_d=0.04,
+            target_type=HeadingType.ABSOLUTE,
+            distance_mm=200,
+            decel_mm=50,
+            decel_min_power=20
+        ),
+    
+        IsBlackDetected(
+            name="detect_black_3",
+            black_threshold=settings.to_exit_black_v,
+            required_frames=2
+        ),
 
-    # ==========================================
-    # ③ 順番に実行
-    # ==========================================
+        #IsDistanceEarned(
+            #name="detect_black_3",
+            #delta_dist=30  # tantou4: 550
+        #),
+    
+    ])
 
-    line_trace_last = Sequence(
-        name="line_trace_last",
+    pause_after_qr_timeout_2 = Sequence(
+        name="pause_after_qr_timeout_2",
         memory=True
     )
+    
+    pause_after_qr_timeout_2.add_children([
+    
+        # 4秒経過かつQR未読み取りの場合にSUCCESS
+        #IsQRTimeoutReached(
+            #name="qr_timeout_4sec_2",
+            #qr_reader=read_qr2,
+            #timeout_sec=4.0
+        #),
 
-    line_trace_last.add_children([
-        black_or_50,
+        IsQRDistanceLimitReached(
+            name="qr_distance_500mm_2",
+            qr_reader=read_qr2,
+            delta_dist=400
+        ),
+    
+        # 一時停止
+        StopNow(
+            name="stop_waiting_for_qr_2"
+        ),
+    
+        # QR読み取り成功まで待機
+        WaitForQRDecode(
+            name="wait_until_qr_decoded_2",
+            qr_reader=read_qr2
+        ),
+    
+        # QR読み取り成功後、200mm前進
+        go_forward_100mm,
+    
+    ])
+
+    drive_selector_2 = Selector(
+        name="drive_selector_2",
+        memory=False
+    )
+    
+    drive_selector_2.add_children([
+    
+        pause_after_qr_timeout_2,
         black_or_200,
-        #turn_to_180_before_trace,
-        #stop_after_turn_to_180,
-        #wait_after_turn_to_180,
-        # 【統合差分】QR2用のカメラ切替(~3.4秒)をtrace_lastの走行時間に重ねて隠す。
-        # camera_recovery_then_trace_120(コメントアウト済み)にあった
-        # PrepareHintCamera("prepare hint2 camera")と同じ配置・目的。
-        # これが無いと、read_qr2開始時に初めて切替が始まり、切替コストが
-        # そのままQR2読み取りのelapsed時間に乗ってしまう。
-        #PrepareHintCamera(name="prepare hint2 camera"),
-        #l_trace_last,
+    
+    ])
+    
+    # black_distance_limit_2 = IsDistanceEarned(
+    #     name="black_distance_limit_2",
+    #     delta_dist=750
+    # )
+    
+    #black_or_200.add_children([
+        #run_to_black_2,
+        #detect_black_2,
+        ## black_distance_limit_2,
+    #])
+
+    go_to_black_a_with_qr_2 = Parallel(
+        name="go_to_black_a_with_qr_2",
+        policy=ParallelPolicy.SuccessOnAll()
+    )
+
+    go_to_black_a_with_qr_2.add_children([
+
+        qr2_read,
+        #black_or_50,
+        drive_selector_2,
+
     ])
 
     # ゴールで停止
@@ -924,25 +1278,35 @@ def build_tantou_tree(context, config, include_exit=True):
         PrepareHintCamera(name="prepare hint1 camera"),
         go_to_qr,
         turn_left_55,
-        go_to_black_45,
-        turn_left_90,
+        #go_to_black_45,
+        #turn_left_90,
         go_to_black_90,
-        go_to_black_90_2,
         turn_right_125,
-        turn_right_125_2,
-        turn_right_125_3,
+        #turn_right_125_2,
+        #turn_right_125_3,
+        #go_to_black_a_with_qr,
+        #stop_at_black,
+        #non_black_45,
+        #go_to_black_45,
+        #turn_left_90,
+        #go_to_black_90,
+        #go_to_black_90_2,
+        #turn_right_125,
+        #turn_right_125_2,
+        #turn_right_125_3,
         trace_to_qr1,
         stop_at_qr1,
         go_to_blue_after_qr1,
         #stop_at_blue,
-        go_to_black_90_3,
+        #go_to_black_90_3,
         turn_left_90_b,
         line_trace_120_with_cap,
         #stop_at_650,
-        go_to_black_90_4,
+        #go_to_black_90_4,
         turn_right_qr2,
-        qr2_read,
-        line_trace_last,
+        #qr2_read,
+        #line_trace_last,
+        go_to_black_a_with_qr_2,
 
         # 【統合差分】TheEndはalpha.pyの末尾が担当。
     ])
