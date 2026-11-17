@@ -1557,6 +1557,8 @@ def _run_main(argv, startup_cleanup):
                         help=('While standing still at the ET rally start, measure the position and heading with the camera '
                               '(markers and gray dots) and use them for the first segment: the heading offset goes into the gyro, '
                               'a position offset re-plans the first connection (default off).'))
+    parser.add_argument('--rally-blue-stop-extra-mm', type=float, default=None,
+                        help='2026-11-18: stop this much further at the blue circle (colour-sensor stop). Default 0.')
     parser.add_argument('--rally-blue-exit-settle', action='store_true',
                         help=('2026-11-18: after the blue circle, turn to the rally direction with the predictive brake, wait '
                               'until stopped and trim if the heading is off by more than 0.5 deg (log BLUE_EXIT_SETTLE).'))
@@ -1966,6 +1968,12 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-arm-up-before-touch requires --mission rally-drive')
         mission_config = dataclasses.replace(
             mission_config, et_rally_arm_up_before_touch=(args.rally_arm_up_before_touch == 'on'))
+    if args.rally_blue_stop_extra_mm is not None:
+        if not -50.0 <= args.rally_blue_stop_extra_mm <= 60.0:
+            parser.error('--rally-blue-stop-extra-mm must be between -50 and 60')
+        from robot_program.features.sumo_rally_transition import StableBlueArrival as _sba
+        _sba.EXTRA_MM = float(args.rally_blue_stop_extra_mm)
+        print(' -- blue circle stop extra: %+.1f mm' % _sba.EXTRA_MM, flush=True)
     if args.rally_blue_exit_settle:
         from robot_program.features.sumo_rally_transition import TurnAfterBlue as _tab
         _tab.EXIT_SETTLE = True

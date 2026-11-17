@@ -180,6 +180,9 @@ class StableBlueArrival(Behaviour):
     # 正なら停止目標を手前へ補正。実測するまで0。
     STOP_ADVANCE_MM = 39.0  # ライトコースの実測による手前補正
     LEFT_STOP_ADVANCE_MM = 29.0  # レフトの右40mm偏りに対する初期補正
+    # 2026-11-18(devSS): 止める位置をこの距離だけ先へ(--rally-blue-stop-extra-mm)。ロボットA・右コースの5回で、
+    # ETラリーのスタートの取り込みが青い丸へ走った向きに約26mm 手前(ばらつき7mm)を示した。既定0。
+    EXTRA_MM = 0.0
 
     def __init__(self):
         super().__init__("青い丸中心への到着判定")
@@ -211,6 +214,7 @@ class StableBlueArrival(Behaviour):
                         % (
                             self.first_blue_distance, distance,
                             self.BLUE_RADIUS_MM + self.SENSOR_FORWARD_MM
+                            + self.EXTRA_MM
                             - (self.STOP_ADVANCE_MM if runtime.course == -1
                                else self.LEFT_STOP_ADVANCE_MM),
                         )
@@ -227,6 +231,7 @@ class StableBlueArrival(Behaviour):
         progress = distance - self.first_blue_distance
         target = (
             self.BLUE_RADIUS_MM + self.SENSOR_FORWARD_MM
+            + self.EXTRA_MM
             - (self.STOP_ADVANCE_MM if runtime.course == -1
                                else self.LEFT_STOP_ADVANCE_MM)
         )
