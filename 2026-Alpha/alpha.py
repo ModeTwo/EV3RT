@@ -1403,6 +1403,9 @@ def _run_main(argv, startup_cleanup):
         help=('During the ET rally, estimate the gyro drift rate while the wheels are stopped and '
               'subtract it over time. Default (unset) = off.'),
     )
+    parser.add_argument('--pre-touch-gyro-drift', choices=['on', 'off'], default=None,
+                        help=('2026-11-17: measure the gyro drift for the 3 s before the touch start and subtract it '
+                              'from the touch onward (all phases). off = measure and log only. Default (unset) = on.'))
     parser.add_argument('--rally-gyro-drift-extra-sec', type=float, default=None,
                         help=('With --rally-gyro-drift-comp on: seconds to stay still and measure the drift '
                               'rate after the arm is up and has settled. Default (unset) = 2.'))
@@ -2196,6 +2199,9 @@ def _run_main(argv, startup_cleanup):
         # 2026-11-14: 周回の判断のノードを作るため、持ち時間の仮の値を入れる。走るときは 制限時間 − 競技の開始からの秒 に置き換わる
         # (タッチの時刻が分からないときだけこの値を使う。テストと同じ70秒)。
         mission_config = dataclasses.replace(mission_config, et_rally_time_budget=70.0)
+    if args.pre_touch_gyro_drift is not None:
+        from robot_program import pre_touch_gyro
+        pre_touch_gyro.ENABLED = args.pre_touch_gyro_drift == 'on'
     if args.rally_gyro_drift_extra_sec is not None:
         if not 0.5 <= args.rally_gyro_drift_extra_sec <= 10.0:
             parser.error('--rally-gyro-drift-extra-sec must be between 0.5 and 10')

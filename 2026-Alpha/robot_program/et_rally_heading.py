@@ -46,6 +46,7 @@ from .features.sumo_bearing import bearing_delta
 
 from .gyro_scale import ScaledGyro, ensure_scaled_gyro
 from .runtime import runtime
+from . import pre_touch_gyro
 
 # 平均に入れるz軸の回転の速さの上限(度/秒)。アームの動きによる大きな揺れの読み取りを外す。
 # アームは上下に動くだけで、旋回の軸(z軸)への影響は平均すれば小さい想定(ログのstd・rejectedで確かめる)。
@@ -152,7 +153,8 @@ class EtRallyHeading(ScaledGyro):
     def _raw_heading(self):
         if self.float_heading and runtime.hub is not None:
             try:
-                return float(runtime.hub.hub_imu_get_heading())
+                # 2026-11-17: タッチ前に測ったずれの差し引き(pre_touch_gyro)。ハブから直接読むときも同じだけ引く
+                return float(runtime.hub.hub_imu_get_heading()) - pre_touch_gyro.drift_total()
             except Exception:
                 pass
         return float(self._sensor.get_angle())
@@ -496,6 +498,8 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
         heading = runtime.gyro_sensor
         used = isinstance(heading, EtRallyHeading) and heading.drift_compensation and n >= MEASURE_MIN_SAMPLES
         if used:
+            # 2026-11-17: タッチ前に測ったずれの差し引きは、この速さの起点(差し替えた時刻)で止めて切り替える
+            pre_touch_gyro.stop_at(heading.installed_time)
             heading.set_drift_rate(-mean, n)
         settle_range = (self.settle_max - self.settle_min) if self.settle_min is not None else -1.0
         self.logger.info(
