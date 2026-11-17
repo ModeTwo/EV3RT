@@ -60,8 +60,7 @@ def ensure_scaled_gyro():
         return False
     origin = float(runtime.gyro_sensor.get_angle())
     runtime.gyro_sensor = ScaledGyro(runtime.gyro_sensor, GYRO_SCALE_FACTOR, origin)
-    # 2026-11-17(ユーザー): タッチ前に測ったジャイロのずれの差し引き。同日夜から LAP にも効かせるのでタッチ時に始まっており、
-    # ここでは何もしない(測っただけで始まっていないときの保険)
+    # 2026-11-17(ユーザー): タッチ前に測ったジャイロのずれの差し引きは、LAP には入れずここから始める
     from . import pre_touch_gyro
     try:
         from . import lap_diag
