@@ -19,8 +19,8 @@ _CURVE_DISTANCE_MM = _CURVE_ARC_MM + _INWARD_STRAIGHT_MM
 _APPROACH_POWER = 100
 _CURVE_POWER = 70
 # 11/5 各1回の白判定距離。実機再測定までの仮値。
-_FALLBACK_MM = {BottleColor.RED.value: 403.0, BottleColor.BLUE.value: 592.0,
-                BottleColor.YELLOW.value: 744.0}
+_FALLBACK_MM = {BottleColor.RED.value: 503.0, BottleColor.BLUE.value: 692.0,
+                BottleColor.YELLOW.value: 844.0}
 _RED_TO_WHITE_FALLBACK_MM = 220.0
 
 

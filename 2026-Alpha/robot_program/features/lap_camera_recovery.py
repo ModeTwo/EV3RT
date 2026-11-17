@@ -1,5 +1,5 @@
 """LAP camera merge and gate control using the standard VideoThread."""
-import math, time
+import json, math, time
 from collections import deque, Counter
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status, ParallelPolicy
@@ -14,6 +14,7 @@ from .start_to_lap_gate import RunByGyroSpeedDownatCurve, speed_profile
 from .lap_straight_window import final_zero_window
 from .lap_recovery_options import (
     decision_offset_mm,
+    dark_heading_mode,
     approach_mode,
     blue_unconfirmed_limit_mm,
     confirmed_slow_distance,
@@ -37,6 +38,7 @@ from ..diagnostics.lap_recovery_observation import FloorMotionRecorder, DumpTran
 from ..behaviours.camera_merge_demo import CameraMergeDemo, ForwardOnlyTrace, IMAGE_EDGE_X, IMAGE_DEADBAND, CAMERA_MAX_AGE_SEC, TRACE_POWER, TRACE_MM, MERGE_LIMIT_MM, MERGE_PEAK_DEG, MERGE_POWER
 from py_etrobo_util import TraceSide, Color, ColorClassifier
 from ..heading_trace_blend_trial import mix_heading_trace
+from .lap_dark_heading import white_side_turn
 from ..behaviours.white_recovery_shadow import white_recovery_shadow
 from ..behaviours.lap_projected_distance import ProjectedDistance
 from ..gyro_scale import EnableGyroScale
@@ -95,6 +97,7 @@ RECOVERY_MAX_ATTEMPTS=2
 RECOVERY_PEAK_DEG=8.0
 
 FALLBACK_AFTER_GATE_MM=150.0
+UNSEEN_GATE_FALLBACK_AFTER_MM=100.0  # 青未検知時のみ推定ゲートから50 mm短縮
 
 GATE_STOP_RECORD_SEC=0.5
 
@@ -265,12 +268,17 @@ class TrialLoggedTrace(ForwardOnlyTrace):
         strong=near and approach in ('heading_strong','line_half')
         scale=variant['line_scale']*(0.5 if near and approach=='line_half' else 1.0)
         line_input=(left_power-right_power)*0.5*scale
+        floor_note = ''
+        if dark_heading_mode() == 'on':
+            h, s, v = runtime.color_sensor.get_raw_color_hsv()
+            line_input = white_side_turn(h, s, v, runtime.course, self.trace_side == TraceSide.NORMAL)
+            floor_note = '_DARK_HEADING_V%d_S%d' % (v, s)
         gain=4.0 if strong else variant['heading_gain'];heading_limit=20.0 if strong else 16.0
         left,right,error,line,correction,mode=mix_heading_trace(100+line_input,100-line_input,heading,self.owner.heading_origin,runtime.course,gain=gain,heading_limit=heading_limit)
         turn=(left-right)/2.0;limit=variant.get('turn_limit',50.0)
         turn=max(-limit,min(limit,turn));base=100.0-abs(turn)
         left,right=round(base+turn),round(base-turn)
-        mode=mode+'_'+name+('_NEAR_'+approach if near else '')
+        mode=mode+'_'+name+('_NEAR_'+approach if near else '')+floor_note
         super().set_motor_power(left,right)
         progress=float(runtime.plotter.get_distance())-self.owner.origin_distance
         self.owner.trace_motor_samples.append((time.monotonic(),progress,left,right,heading,error,line,correction,mode))
@@ -877,7 +885,8 @@ class Peak100ContinuousLap(RunByGyro):
                 base=self.fallback_estimated_gate_mm;source='estimated'
             slow_confirmed = self.confirmed_fallback_slow and self.fallback_gate_base is not None
             slow_blue = self.confirmed_fallback_slow and gate is not None and getattr(gate, 'saw_blue', False)
-            after_mm = self.confirmed_fallback_after_mm if slow_confirmed else FALLBACK_AFTER_GATE_MM
+            after_mm = (self.confirmed_fallback_after_mm if slow_confirmed else
+                        UNSEEN_GATE_FALLBACK_AFTER_MM if source == 'estimated' else FALLBACK_AFTER_GATE_MM)
             if slow_confirmed:
                 after_mm, approach_reason = confirmed_black_approach_mm(gate, self.confirmed_fallback_after_mm)
                 if not self.fallback_gate_slow:
@@ -1056,7 +1065,7 @@ class Peak100ContinuousLap(RunByGyro):
         if self.pre_gate_trace is not None:self.pre_gate_trace.running=False;self.pre_gate_trace=None
         self.fallback_reason=reason;self.fallback_gate_base=(float(self.completion_condition.black_progress) if self.gate_latched else None)
         self._transition_start('FALLBACK',distance,now)
-        self.logger.warning('LAP_FALLBACK_START reason=%s estimated_gate_mm=%.1f gate_latched=%s target_after_mm=%.1f' % (reason,self.fallback_estimated_gate_mm,self.gate_latched,FALLBACK_AFTER_GATE_MM))
+        self.logger.warning('LAP_FALLBACK_START reason=%s estimated_gate_mm=%.1f gate_latched=%s unseen_gate_after_mm=%.1f' % (reason,self.fallback_estimated_gate_mm,self.gate_latched,UNSEEN_GATE_FALLBACK_AFTER_MM))
         return self._transition_update()
     def update(self):
         if self.running and self.transition_phase is not None:return self._transition_update()
@@ -1321,10 +1330,17 @@ class RecentSide(Behaviour):
 
 class RollingCameraMerge(CameraMergeDemo):
     """Use the pre-gate snapshot without stopping or waiting after boundary."""
-    def __init__(self, session, side, *, post_gate_steer='baseline'):
+    def __init__(self, session, side, *, post_gate_steer='baseline', continuous_exit=False):
         super().__init__(session, allow_both_courses=True)
         self.side_source = side
         self.post_gate_steer = post_gate_steer
+        self.continuous_exit = continuous_exit
+
+    def terminate(self, status):
+        if status == Status.SUCCESS and self.continuous_exit:
+            self.trace = None
+            return
+        super().terminate(status)
 
     def initialise(self):
         self.phase='PRESELECTED';self.trace=None;self.white_count=0;self.post_trace_projection=None
@@ -1375,7 +1391,8 @@ class RollingCameraMerge(CameraMergeDemo):
         if projected>=self.post_trace_target_mm:
             lap = getattr(self.side_source, 'lap', None)
             command_time = time.monotonic() if getattr(lap, 'gate_stop_measure', False) else None
-            self._stop()
+            if not self.continuous_exit:
+                self._stop()
             if command_time is not None:
                 lap.mark_gate_stop(command_time)
             self.logger.info('DEMO_TRACE_DONE projected_mm=%.1f raw_mm=%.1f' % (projected,raw));return Status.SUCCESS
@@ -1609,6 +1626,7 @@ def build_lap_camera_recovery(context, config, original):
     lap.confirmed_fallback_after_mm = 200.0
     gate = BlueThenBlackGate(lap, allow_weak_blue=True)
     lap.completion_condition, lap.completion_min_mm = gate, lap.observation_start_mm if lap.observation_start_mm is not None else math.inf
+    continuous_to = config.mission_mode in ('lap-to', 'lap-to-sumo', 'full')
     session = _CurrentVideoSession()
     side = RecentSide(session, lap)
     lap.side_source = side
@@ -1616,17 +1634,23 @@ def build_lap_camera_recovery(context, config, original):
     motion = Sequence(name='LAP gate then bottle approach', memory=True)
     motion.add_children([lap, EnableGyroScale(),
                          Timeout(name='LAP post-gate approach timeout',
-                                 child=RollingCameraMerge(session, side, post_gate_steer='gyro'), duration=10)])
+                                 child=RollingCameraMerge(session, side, post_gate_steer='gyro', continuous_exit=continuous_to), duration=10)])
     run = Parallel(name='LAP camera recovery and bottle color', policy=ParallelPolicy.SuccessOnOne())
-    run.add_children([FloorMotionRecorder(lap), side, lap.profile_rejoin_source, motion,
+    floor_recorder = FloorMotionRecorder(lap, defer_output=continuous_to)
+    run.add_children([floor_recorder, side, lap.profile_rejoin_source, motion,
                       _DeferredBottleObservation(context, lap)])
     root = Sequence(name='LAP recovery and bottle approach', memory=True)
-    root.add_children([_StartLapObservations(), Timeout(name='LAP recovery timeout', child=run, duration=60),
-                       StopNow(name='LAP approach stop'), _FinishLapApproach(context, lap),
-                       DumpTransitionDiagnostics(lap)])
+    root.lap_controller, root.floor_recorder = lap, floor_recorder
+    root_children = [_StartLapObservations(), Timeout(name='LAP recovery timeout', child=run, duration=60)]
+    if not continuous_to:
+        root_children.append(StopNow(name='LAP approach stop'))
+    root_children.append(_FinishLapApproach(context, lap))
+    if not continuous_to:
+        root_children.append(DumpTransitionDiagnostics(lap))
+    root.add_children(root_children)
     print('LAP_CAMERA_REFERENCE_X value=%.1f' % lap_camera_reference_x(), flush=True)
     print('LAP_DEVTK_PROFILE source=%s correction_start_mm=%s' % (type(original).__name__, lap.camera_start_mm), flush=True)
-    print('LAP_RECOVERY enabled=True trace_target_v=%d gate=combined post_gate=gyro confirmed_mm=200 fallback_mm=150' % trace_target_v(), flush=True)
+    print('LAP_RECOVERY enabled=True trace_target_v=%d gate=combined post_gate=gyro confirmed_mm=200 fallback_unseen_mm=100 fallback_blue_mm=150' % trace_target_v(), flush=True)
     print('LAP_ADAPTIVE_PEAK_POLICY far_peak_deg=%.1f initial_offset_px=%.1f ramp_mm=%.1f' % (far_peak_deg(), ADAPTIVE_INITIAL_OFFSET_PX, ADAPTIVE_RAMP_MM), flush=True)
     print('LAP_DARK_ENTRY_EDGE_POLICY mode=%s' % dark_entry_edge_mode(), flush=True)
     print('LAP_GATE_DISTANCE_POLICY total_limit_mm=%.1f late_gap_mm=%.1f normal_after_black_mm=200' % (blue_unconfirmed_limit_mm(), LATE_BLUE_BLACK_GAP_MM), flush=True)

@@ -516,3 +516,22 @@ for offset in ('145.21','100'):
 assert windows[0][0]==windows[1][0] and windows[0][2]==windows[1][2]
 assert abs(windows[0][1]-windows[1][1]-45.21)<1e-6
 print('PASS production tree early decision retains observation and deadline')
+
+# Only a successful continuous handoff may retain the motor command.
+class StopProbe:
+ def __init__(self):self.commands=[]
+ def set_power(self,value):self.commands.append(('power',value))
+ def set_brake(self,value):self.commands.append(('brake',value))
+for continuous, expected_stop in ((False,True),(True,False)):
+ runtime.left_motor=StopProbe();runtime.right_motor=StopProbe()
+ lap=types.SimpleNamespace(gate_stop_measure=False)
+ post=v.RollingCameraMerge(types.SimpleNamespace(),types.SimpleNamespace(lap=lap,snapshot=None),post_gate_steer='gyro',continuous_exit=continuous)
+ post.initialise();post.post_trace_projection=types.SimpleNamespace(update=lambda plotter:200.,traveled=200.)
+ post.post_trace_target_mm=200.;runtime.color_sensor=types.SimpleNamespace(get_raw_color_hsv=lambda:(0,0,99));gyro[0]=0.
+ assert post._update_projected_trace()==Status.SUCCESS
+ post.terminate(Status.SUCCESS)
+ assert bool(runtime.left_motor.commands)==expected_stop,(continuous,runtime.left_motor.commands)
+ if continuous:
+  post.terminate(Status.FAILURE)
+  assert ('power',0) in runtime.left_motor.commands
+print('PASS continuous success retains power; normal success and cancellation stop')
