@@ -50,6 +50,14 @@ def _job(args):
     return key, time.time() - t0, why
 
 
+def _near_pairs_g(G):
+    """ゲートどうしが1マス以内に近い組の数(0〜3)。重い配置ほど多い。"""
+    pts = {c: [tuple(G[c]['a']), tuple(G[c]['b'])] for c in ('red', 'blue', 'yellow')}
+    d = lambda p, q: ((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2) ** 0.5
+    return sum(1 for x, y in (('red', 'blue'), ('blue', 'yellow'), ('yellow', 'red'))
+               if min(d(p, q) for p in pts[x] for q in pts[y]) <= 1.0)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('out')
@@ -60,6 +68,12 @@ def main():
     # 2回目はどちらも付けずに同じフォルダで回す(結果のない配置=後回しにした配置だけを計算する)。
     ap.add_argument('--defer-narrow', action='store_true')
     ap.add_argument('--cap', type=int, default=0)
+    # 2026-11-17(クラウドと分ける): ゲートが1マス以内に近い組の数で絞る、n本に分けた i 本目だけ(--shard i/n、全配置の並び順で
+    # 番号 % n == i)、ほかで計算済みの配置の一覧(1行1つ、またはカンマ区切り)を飛ばす
+    ap.add_argument('--near-min', type=int, default=0)
+    ap.add_argument('--near-max', type=int, default=3)
+    ap.add_argument('--shard', default=None)
+    ap.add_argument('--skip-file', default=None)
     a = ap.parse_args()
     if a.defer_narrow:
         os.environ['HR_DEFER_NARROW'] = '1'
@@ -73,10 +87,20 @@ def main():
     gdir = os.path.join(out, 'gates')
     os.makedirs(gdir, exist_ok=True)
     want = set(a.keys.split(',')) if a.keys else None
+    skip = set(open(a.skip_file, encoding='utf-8').read().replace(',', ' ').split()) if a.skip_file else set()
+    si, sn = (int(x) for x in a.shard.split('/')) if a.shard else (0, 1)
     jobs = []
+    idx = -1
     for g in all_layouts():
         key = layout_key(g)
         if want is not None and key not in want:
+            continue
+        if key in skip:
+            continue
+        if not (a.near_min <= _near_pairs_g(g) <= a.near_max):
+            continue
+        idx += 1
+        if idx % sn != si:
             continue
         gp = os.path.join(gdir, key + '.json')
         if not os.path.exists(gp):
@@ -86,13 +110,7 @@ def main():
         jobs.append((gp, out, key))
     # 2026-11-17: 重い配置から先に回す(最後に重い配置だけが残って CPU が遊ぶのを減らす)。100配置で、ゲートどうしが1マス以内に
     # 近い組が多いほど計算が重かった(近い組なし: 中央値26秒、2組以上: 208秒)。ゲートの位置だけで分かる。
-    def _near_pairs(gp):
-        G = json.load(open(gp, encoding='utf-8'))['gates']
-        pts = {c: [tuple(G[c]['a']), tuple(G[c]['b'])] for c in ('red', 'blue', 'yellow')}
-        d = lambda p, q: ((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2) ** 0.5
-        return sum(1 for x, y in (('red', 'blue'), ('blue', 'yellow'), ('yellow', 'red'))
-                   if min(d(p, q) for p in pts[x] for q in pts[y]) <= 1.0)
-    jobs.sort(key=lambda j: -_near_pairs(j[0]))
+    jobs.sort(key=lambda j: -_near_pairs_g(json.load(open(j[0], encoding='utf-8'))['gates']))
     if a.limit:
         jobs = jobs[:a.limit]
     print('%d layouts to compute, %d workers' % (len(jobs), a.workers), flush=True)
