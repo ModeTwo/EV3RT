@@ -81,6 +81,23 @@ def gates_from_context(context):
     """ロボットが読んだヒントから、経路の道具の gates。読めなければ None。"""
     hint1 = getattr(context, "hint1", None)
     hint2 = getattr(context, "hint2_gate_info", None)
+    if not hint2:
+        # 2026-11-17(devTK で、PC の計画が届かずガレージへ直行した): 受信(received)のときヒント2は PC が解くので、
+        # ロボットの context には暗号のままの hint2 しかなく、ここで None になって予備(ガレージだけ)を選んでいた。
+        # 起動時に入れた4桁の復号キーがあれば、ここで解く。
+        raw = getattr(context, "hint2", None)
+        key = getattr(context, "decryption_key", None)
+        if raw and key:
+            try:
+                from shared_communication.hint_decoder import decode_hint2
+                hint2 = decode_hint2(raw, key)
+                try:
+                    context.hint2_gate_info = hint2
+                except Exception:
+                    pass
+            except Exception as error:
+                print(" -- ET rally: could not decode hint2 on the robot: %r" % (error,), flush=True)
+                hint2 = None
     if not hint1 or not hint2:
         return None
     from shared_communication.et_rally_layouts import gates_from_hints

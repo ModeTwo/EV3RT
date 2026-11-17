@@ -42,9 +42,23 @@ class CameraProcess:
         self.defer_open = bool(defer_open)
         self.opened = not self.defer_open
         root = Path(__file__).resolve().parents[1]
-        self.proc = subprocess.Popen([child_python(), '-m', 'robot_program.et_rally_camera_proc', json.dumps(cfg)],
+        # 2026-11-18: 子のエラー出力をファイルに残す(それまでは捨てていて、別のラズパイで full のときだけ子が落ちても
+        # 理由が分からなかった)。run_logs/et_camera_child_<時刻>.log。書けなければ今までどおり捨てる。
+        self.stderr_path = None
+        err = subprocess.DEVNULL
+        try:
+            logs = root / 'run_logs'
+            logs.mkdir(parents=True, exist_ok=True)
+            self.stderr_path = logs / ('et_camera_child_%s.log' % time.strftime('%Y%m%dT%H%M%S'))
+            err = open(str(self.stderr_path), 'a')
+        except Exception:
+            self.stderr_path = None
+            err = subprocess.DEVNULL
+        python = child_python()
+        env = child_env(python)
+        self.proc = subprocess.Popen([python, '-m', 'robot_program.et_rally_camera_proc', json.dumps(cfg)],
                                      cwd=str(root), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, bufsize=1, universal_newlines=True)
+                                     stderr=err, bufsize=1, universal_newlines=True, env=env)
         self.folder = None if folder is None else Path(folder)
         if self.folder is not None:
             self.folder.mkdir(parents=True, exist_ok=True)   # 子がカメラを開く前に、親が位置の記録を書き始めることがある
@@ -92,6 +106,17 @@ class CameraProcess:
     def alive(self):
         return self.proc.poll() is None
 
+    def stderr_tail(self, lines=6):
+        """2026-11-18: 子のエラー出力の最後の数行(落ちた理由をログに出す用)。"""
+        if not self.stderr_path:
+            return ''
+        try:
+            with open(str(self.stderr_path), errors='replace') as f:
+                tail = [l.rstrip() for l in f.readlines()[-lines:]]
+            return ' | '.join(l for l in tail if l)
+        except Exception:
+            return ''
+
     def close(self, timeout=2.0):
         self.send('quit')
         try:
@@ -118,12 +143,45 @@ def child_python():
     return sys.executable
 
 
+def child_env(python):
+    """子に渡す環境変数。親(PyPy)と別のPythonで子を動かすときは PYTHONPATH・PYTHONHOME・LD_LIBRARY_PATH を外す。
+    2026-11-18: 別のラズパイの full でだけ、子の /usr/bin/python3 が「recursion is detected during loading of cv2」
+    で落ち、ETラリーのカメラ補正が止まっていた(端末から同じ子を起動すると動く)。親が cv2 を読むと、pip の
+    OpenCV は LD_LIBRARY_PATH に自分のライブラリの場所を足す(子プロセスに効く)ので、それを疑っている。"""
+    env = dict(os.environ)
+    if os.path.realpath(python) != os.path.realpath(sys.executable):
+        removed = {}
+        for name in ('PYTHONPATH', 'PYTHONHOME'):
+            value = env.pop(name, None)
+            if value:
+                removed[name] = value
+        # PyPy の cv2(/usr/local/lib/pypy3/dist-packages/cv2、自前ビルド)は読み込み時に
+        # LD_LIBRARY_PATH=/usr/local/lib: を足す(ロボットで確認)。/usr/bin/python3 の cv2(apt)には要らないので外す。
+        value = env.pop('LD_LIBRARY_PATH', None)
+        if value:
+            removed['LD_LIBRARY_PATH'] = value
+        # 2026-11-18: どれが子を壊していたかを突き止めるため、外した値と、残した PYTHON* をログに出す
+        kept = {k: v for k, v in env.items() if k.startswith('PYTHON')}
+        print(' -- ET rally camera process: child %s env removed %s kept %s' % (
+            python, removed or '-', kept or '-'), flush=True)
+    return env
+
+
 _shared = None
 
 
 def shared(**kwargs):
     """ETラリーの間に使う1つの子プロセス。なければ kwargs で起動する。"""
     global _shared
+    if _shared is not None and not _shared.alive():
+        # 2026-11-18: 先に起動しておいた子(full では起動時)が、ETラリーの前に終わっていたら理由をログに出す
+        # (別のラズパイの full で子が終わりのコード0で落ちていて、理由が分からなかった)
+        try:
+            evs = [json.dumps(e)[:1500] for e in _shared.poll()]
+            print(" -- ET rally camera process: the earlier one had exited (code %s) events: %s stderr: %s" % (
+                _shared.proc.poll(), " | ".join(evs) or "-", _shared.stderr_tail() or "-"), flush=True)
+        except Exception:
+            pass
     if _shared is None or not _shared.alive():
         _shared = CameraProcess(**kwargs)
     return _shared
@@ -151,7 +209,10 @@ def _child(cfg):
     try:
         import cv2
     except ImportError as error:
-        say(ev='error', what='cannot import cv2 in %s (%r)' % (sys.executable, error))
+        envs = {k: v for k, v in os.environ.items() if k.startswith('PYTHON') or k.startswith('LD_')}
+        mods = sorted(k for k in sys.modules if 'cv' in k.lower())
+        say(ev='error', what='cannot import cv2 in %s (%r) env=%r sys.path=%r cwd=%r modules=%r' % (
+            sys.executable, error, envs, sys.path, os.getcwd(), mods))
         return
     state = dict(save=False, detect=False, track=False, quit=False, mirror=bool(cfg.get('mirror')))
 
