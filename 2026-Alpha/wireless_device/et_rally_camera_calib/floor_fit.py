@@ -30,11 +30,12 @@ sys.path.insert(0, ROOT)
 from robot_program import et_rally_start_pose as sp  # noqa: E402
 
 
-def static_intervals(P, min_sec=0.8):
+def static_intervals(P, min_sec=0.8, still_mm=1.0):
+    # 2026-11-17: still_mm = 止まっているとみなす進んだ距離の幅(ロボットAは止まる間に1〜3mm 進むことがあった)
     out, i, n = [], 0, len(P)
     while i < n:
         j = i
-        while j + 1 < n and abs(P[j + 1, 4] - P[i, 4]) < 1.0:
+        while j + 1 < n and abs(P[j + 1, 4] - P[i, 4]) < still_mm:
             j += 1
         if P[j, 0] - P[i, 0] >= min_sec:
             out.append((P[i, 0], P[j, 0], i))
@@ -42,7 +43,7 @@ def static_intervals(P, min_sec=0.8):
     return out
 
 
-def load_run(d, cam, per_stop=8, settle=0.5):
+def load_run(d, cam, per_stop=8, settle=0.5, still_mm=1.0):
     """[(止まった場所の番号, odometry の姿勢 (x, y, h度), [(画素u, v, 種類, 重み), ...]), ...]"""
     P = np.loadtxt(os.path.join(d, 'poses.txt'))
     meta = [json.loads(l) for l in open(os.path.join(d, 'meta.jsonl'))]
@@ -50,7 +51,7 @@ def load_run(d, cam, per_stop=8, settle=0.5):
     starts = [m for m in meta if m.get('start')]
     if starts:
         stops.append(('start', tuple(P[0, 1:4]), starts))
-    for k, (t0, t1, i) in enumerate(static_intervals(P)):
+    for k, (t0, t1, i) in enumerate(static_intervals(P, still_mm=still_mm)):
         if P[i, 4] < 1.0 and starts:
             continue   # スタートの止まり(走り出す前)は start_*.jpg で数える
         fr = [m for m in meta if t0 + settle <= m['t'] <= t1 and not m.get('start')]
