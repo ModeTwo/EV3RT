@@ -25,6 +25,12 @@ class TurnTowardRallyStart(Behaviour):
     GREEN_ARC_RADIUS_MM = 300.0
     GREEN_ARC_MAX_DEG = 75.0
     GREEN_ARC_POWER = 50
+    # 円弧で青い丸へ近づきすぎるとカメラに映らず、青い丸を探す後退(VIEW_BACK)で緑の側へ下がってしまう
+    # (11/18 07:32、円弧の終わりで青い丸まで推定365mm→2回下がって見えた)。この距離より近いときは、
+    # 押す向きの真後ろを向いたところで旋回を止め、押す向きの逆(x の正)へまっすぐ下がってから残りを回る。
+    GREEN_BLUE_VIEW_MIN_MM = 460.0
+    GREEN_BACK_POWER = 40
+    GREEN_BACK_MAX_MM = 200.0
 
     def __init__(self, context, config):
         super().__init__("③ 青い丸へ向けて旋回")
@@ -37,6 +43,8 @@ class TurnTowardRallyStart(Behaviour):
         self.arc = None
         self.arc_done_deg = 0.0
         self.sweep_checked = False
+        self.split_turn = None
+        self.back = None
 
     def _current_axle(self, reference, start_bearing):
         """最後に記録された車軸の位置に、その後のエンコーダの移動を足す(_target_from_axle_pose と同じ計算)。"""
@@ -162,6 +170,122 @@ class TurnTowardRallyStart(Behaviour):
             "SUMO_GREEN_ARC END reason=%s rotated=%.1f travel=%.1f axle=(%.1f,%.1f) bearing=%.2f"
             % (arc["reason"], rotated, arc["travel"], arc["pose"][0], arc["pose"][1], bearing)
         )
+        self._plan_view_back(arc["pose"], approach)
+        return True
+
+    def _blue_xy(self):
+        import math
+        return 1170.0, -runtime.course * 1170.0 * math.tan(math.radians(14.0))
+
+    def _plan_view_back(self, pose, approach):
+        """円弧のあと青い丸まで近すぎるなら、真後ろを向く旋回+x の正への後退を準備する。"""
+        import math
+        bx, by = self._blue_xy()
+        x, y = pose
+        distance = math.hypot(bx - x, by - y)
+        if distance >= self.GREEN_BLUE_VIEW_MIN_MM:
+            self.logger.info("SUMO_GREEN_VIEW ok blue_distance=%.1f min=%.0f"
+                             % (distance, self.GREEN_BLUE_VIEW_MIN_MM))
+            return
+        need = self.GREEN_BLUE_VIEW_MIN_MM ** 2 - (y - by) ** 2
+        back = bx - x + math.sqrt(max(0.0, need))
+        back = max(0.0, min(self.GREEN_BACK_MAX_MM, back))
+        self.split_turn = dict(bearing=(approach + 180.0) % 360.0, back=back, stage="turn")
+        self.logger.info(
+            "SUMO_GREEN_VIEW near blue_distance=%.1f min=%.0f -> face %.1f and back %.1f mm"
+            % (distance, self.GREEN_BLUE_VIEW_MIN_MM, self.split_turn["bearing"], back)
+        )
+
+    def _make_spin(self, signed_angle, name):
+        motion = self.config.sumo
+        turn = SpinAround(
+            name,
+            target=-runtime.course * signed_angle,
+            max_power=60,
+            min_power=60,
+            pid_p=motion.turn_pid_p,
+            pid_i=motion.turn_pid_i,
+            pid_d=motion.turn_pid_d,
+            target_type=HeadingType.RELATIVE,
+            tolerance=1.0,
+            normalize_error=False,
+        )
+        turn.stall_boost = True
+        return turn
+
+    def _split_tick(self):
+        """分割旋回の前半(真後ろを向く)と、まっすぐの後退。終わったら True。"""
+        import math
+        st = self.split_turn
+        reference = getattr(self.context.sumo, "rally_turn_reference", None)
+        if st["stage"] == "turn":
+            if st.get("spin") is None:
+                start = current_bearing(self.context)
+                if runtime.course == -1:
+                    signed = -((start - st["bearing"]) % 360.0)
+                else:
+                    signed = (st["bearing"] - start) % 360.0
+                st["start"] = start
+                st["spin"] = self._make_spin(signed, "turn to face back before backing off")
+                self.logger.info("SUMO_GREEN_VIEW TURN start=%.2f target=%.2f angle=%.1f"
+                                 % (start, st["bearing"], signed))
+            st["spin"].tick_once()
+            if st["spin"].status == Status.FAILURE:
+                return None
+            if st["spin"].status != Status.SUCCESS:
+                return False
+            runtime.left_motor.set_power(0)
+            runtime.right_motor.set_power(0)
+            bearing = current_bearing(self.context)
+            self.arc_done_deg += abs((bearing - st["start"]) % 360.0 if runtime.course == 1
+                                     else (st["start"] - bearing) % 360.0)
+            pose = self._current_axle(reference, bearing)
+            if pose is None or st["back"] < 5.0:
+                return True
+            st["stage"] = "back"
+            st["pose"] = pose
+            st["counts"] = (float(runtime.left_motor.get_count()), float(runtime.right_motor.get_count()))
+            st["last_bearing"] = bearing
+            st["travel"] = 0.0
+            st["started"] = time.monotonic()
+            st["stopped"] = None
+            runtime.left_motor.set_brake(False)
+            runtime.right_motor.set_brake(False)
+            self.logger.info("SUMO_GREEN_VIEW BACK start axle=(%.1f,%.1f) bearing=%.2f target=%.1f"
+                             % (pose[0], pose[1], bearing, st["back"]))
+            return False
+
+        approach = float(reference["approach_bearing"])
+        bearing = current_bearing(self.context)
+        left = float(runtime.left_motor.get_count())
+        right = float(runtime.right_motor.get_count())
+        diameter = float(runtime.plotter.tire_diameter)
+        distance = math.pi * diameter * ((left - st["counts"][0]) + (right - st["counts"][1])) / 720.0
+        mid = st["last_bearing"] + ((bearing - st["last_bearing"] + 180.0) % 360.0 - 180.0) / 2.0
+        angle = math.radians(mid - approach)
+        x, y = st["pose"]
+        st["pose"] = (x + distance * math.cos(angle), y + distance * math.sin(angle))
+        st["counts"], st["last_bearing"] = (left, right), bearing
+        st["travel"] += abs(distance)
+        now = time.monotonic()
+        if st["stopped"] is None:
+            if st["travel"] >= st["back"] or now - st["started"] > 4.0:
+                runtime.left_motor.set_power(0)
+                runtime.right_motor.set_power(0)
+                st["stopped"] = now
+            else:
+                error = (st["bearing"] - bearing + 180.0) % 360.0 - 180.0  # 正なら時計回りに直す
+                turn = max(-15.0, min(15.0, 2.0 * error))
+                power = float(self.GREEN_BACK_POWER)
+                runtime.left_motor.set_power(int(round(-power + turn)))
+                runtime.right_motor.set_power(int(round(-power - turn)))
+                return False
+        if now - st["stopped"] < 0.2:
+            return False
+        reference["axle_pose"] = dict(x=st["pose"][0], y=st["pose"][1], left=left, right=right,
+                                      bearing=bearing)
+        self.logger.info("SUMO_GREEN_VIEW BACK end travel=%.1f axle=(%.1f,%.1f) bearing=%.2f"
+                         % (st["travel"], st["pose"][0], st["pose"][1], bearing))
         return True
 
     def _target_from_axle_pose(self, reference, start_bearing):
@@ -226,6 +350,13 @@ class TurnTowardRallyStart(Behaviour):
             if not self._arc_tick():
                 return Status.RUNNING
             self.arc["done"] = True
+        if self.split_turn is not None and self.turn is None and not self.split_turn.get("done"):
+            result = self._split_tick()
+            if result is None:
+                return Status.FAILURE
+            if not result:
+                return Status.RUNNING
+            self.split_turn["done"] = True
         if self.turn is None:
             import math
             if runtime.course not in (-1, 1):
@@ -298,6 +429,12 @@ class TurnTowardRallyStart(Behaviour):
 
     def terminate(self, new_status):
         if self.arc is not None and self.arc.get("stopped") is None:
+            runtime.left_motor.set_power(0)
+            runtime.right_motor.set_power(0)
+        if self.split_turn is not None and not self.split_turn.get("done"):
+            spin = self.split_turn.get("spin")
+            if spin is not None and spin.status == Status.RUNNING:
+                spin.stop(Status.INVALID)
             runtime.left_motor.set_power(0)
             runtime.right_motor.set_power(0)
         if self.turn is not None:
