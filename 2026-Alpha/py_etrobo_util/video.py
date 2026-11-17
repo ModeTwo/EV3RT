@@ -38,6 +38,10 @@ def round_up_to_odd(f) -> int:
     return int(np.ceil(f / 2.) * 2 + 1)
 
 # frame size for Raspberry Pi USB camera capture
+# 2026-11-17(devSS): ボトルの候補で、幅が高さのこの倍を超える横長の塊(床の線など)は、ほかに候補があれば選ばない
+BOTTLE_PICK_MAX_ASPECT = 2.5
+# 2026-11-17(devSS): ボトルの候補で、いちばん大きい塊のこの割合より小さい塊は選ばない
+BOTTLE_PICK_MIN_AREA_RATIO = 0.4
 IN_FRAME_WIDTH_QR  = 1920
 IN_FRAME_HEIGHT_QR = 1080
 IN_FRAME_WIDTH     = 640
@@ -344,15 +348,40 @@ class Video(object):
         results = zxingcpp.read_barcodes(
             _CL_DETECT.apply(crop), formats=_QR_ONLY, return_errors=True
         )
+        located = None
         if results:
             r = results[0]
             corners = [(x + CROP_X1, y) for x, y in self._result_pos_to_corners(r)]
             if r.valid:
                 return r.text, corners
             text = self._wechat_decode_roi(self._extract_roi(r, crop))
-            return text, corners
+            if text:
+                return text, corners
+            located = corners
 
-        return "", None
+        # Stage 4 (2026-11-17, devSS): 半分に縮めた画像でもう一度(ピントが少し外れたぼけに強い)。
+        # ヒント2が止まったまま23秒読めなかった回の対策。上の段で読めたときは通らない。
+        small = cv2.resize(crop, (crop.shape[1] // 2, crop.shape[0] // 2), interpolation=cv2.INTER_AREA)
+        results = zxingcpp.read_barcodes(small, formats=_QR_ONLY, return_errors=True)
+        if results:
+            r = results[0]
+            corners = [(2 * x + CROP_X1, 2 * y) for x, y in self._result_pos_to_corners(r)]
+            if r.valid:
+                return r.text, corners
+            located = located or corners
+        # WeChat は重いので、QRの位置が見えているときか、3回に1回だけ(走っていてQRが見えていない間に読み取りを遅らせない)
+        self._qr_small_tries = getattr(self, '_qr_small_tries', 0) + 1
+        if located is None and self._qr_small_tries % 3:
+            return "", None
+        try:
+            texts, _ = _WECHAT.detectAndDecode(small)
+            t = next((x for x in texts if x), None)
+            if t:
+                return t, located
+        except Exception:
+            pass
+
+        return "", located
 
     def _detection_worker(self) -> None:
         while not self._worker_stop.is_set():
@@ -375,12 +404,57 @@ class Video(object):
             finally:
                 with self._result_lock:
                     self._is_detecting = False
+            self._qr_diag(session, frame_id, gray, text, corners)
             if self._vision_sessions.publish_qr(session, frame_id, text):
                 with self._result_lock:
                     self._detected_corners = corners
+                    # 2026-11-17(devSS): QRの位置が見つかった時刻(読めなくても)。to_hint_route がQRの写りの大きさで止まるのに使う
+                    self._detected_corners_at = time.monotonic() if corners is not None else None
                     if text:
                         self._detected_text = text
                         self._last_decode_time = time.time()
+
+    def _qr_diag(self, session, frame_id, gray, text, corners):
+        """2026-11-17(devSS): QRが読めないときの手がかり。読み取りの回数・QRの位置は見つかった回数を2秒ごとに出し、
+        読めないまま3秒・8秒・15秒たったら、そのときの画像を work/qr-debug に残す(ヒント2で25秒読めなかった回の調査用)。"""
+        now = time.monotonic()
+        st = getattr(self, '_qr_diag_state', None)
+        if st is None or st['session'] != session:
+            st = self._qr_diag_state = dict(session=session, t0=now, n=0, located=0, last_log=now, saved=0)
+        st['n'] += 1
+        if corners is not None:
+            st['located'] += 1
+        if text:
+            width = ""
+            if corners is not None:
+                (x0, y0), (x1, y1) = corners[0], corners[1]
+                width = " width=%.0fpx" % math.hypot(x1 - x0, y1 - y0)
+            print("QR_STATS session=%s decoded after %.1fs attempts=%d located=%d%s" % (
+                session, now - st['t0'], st['n'], st['located'], width))
+            st['t0'] = float('inf')
+            return
+        if now - st['last_log'] >= 2.0:
+            st['last_log'] = now
+            # 2026-11-17: 位置が見つかったときは、QRの写りの幅(1920幅の画素)も出す(読める距離を調べるため)
+            width = ""
+            if corners is not None:
+                (x0, y0), (x1, y1) = corners[0], corners[1]
+                width = " width=%.0fpx" % math.hypot(x1 - x0, y1 - y0)
+            print("QR_STATS session=%s waiting %.1fs attempts=%d located=%d frame=%s%s" % (
+                session, now - st['t0'], st['n'], st['located'], frame_id, width))
+        marks = (3.0, 8.0, 15.0)
+        if st['saved'] < len(marks) and now - st['t0'] >= marks[st['saved']]:
+            st['saved'] += 1
+            try:
+                from pathlib import Path
+                from datetime import datetime
+                folder = Path(__file__).resolve().parents[1] / "work" / "qr-debug"
+                folder.mkdir(parents=True, exist_ok=True)
+                path = folder / ("%s-session-%s-%02ds.jpg" % (datetime.now().strftime("%Y%m%d-%H%M%S"), session, int(now - st['t0'])))
+                cv2.imwrite(str(path), gray, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                print("QR_DEBUG SAVED %s located=%s" % (path, corners is not None))
+            except Exception as error:
+                print("QR_DEBUG SAVE FAILED: %r" % (error,))
 
     def _marker_detection_worker(self) -> None:
         while not self._worker_stop.is_set():
@@ -420,8 +494,27 @@ class Video(object):
         with self._pending_lock:
             cfg = self._pending_cap_cfg
             self._pending_cap_cfg = None
+            self._opening_cap_cfg = cfg
         if cfg is not None:
-            self._open_cap(*cfg)
+            try:
+                self._open_cap(*cfg)
+            finally:
+                with self._pending_lock:
+                    self._opening_cap_cfg = None
+        # 2026-11-17(devSS): ピントの指示(request_focus)をこのスレッドで入れる
+        with self._pending_lock:
+            focus = getattr(self, '_pending_focus', False)
+            self._pending_focus = False
+        if focus is not False and self.cap is not None:
+            try:
+                if focus is None:
+                    self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+                else:
+                    self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+                    self.cap.set(cv2.CAP_PROP_FOCUS, int(focus))
+                print("QR_FOCUS %s" % ("auto" if focus is None else "manual %d" % int(focus)))
+            except Exception as error:
+                print("QR_FOCUS failed: %r" % (error,))
 
         capture_session, capture_mode = self._vision_sessions.capture_token()
         ret, frame = self.cap.read()
@@ -514,6 +607,7 @@ class Video(object):
                                   BottleColor.YELLOW]
 
                 best = None   # (area, color, cx, bottom_row, (x,y,w,h), cnt)
+                blobs = []
                 for color in candidates:
                     mask = self._bottle_mask(img_hsv, color)
                     # 青ボトルのHSV値をログ出力
@@ -559,8 +653,29 @@ class Video(object):
                             if w > BOTTLE_BLACK_MAX_W:           continue
                             if aspect > BOTTLE_BLACK_MAX_ASPECT: continue
                             if extent < BOTTLE_MIN_EXTENT:       continue
-                        if best is None or area > best[0]:
-                            best = (area, color, x + w // 2, y + h, (x, y, w, h), cnt)
+                        blobs.append((area, color, x + w // 2, y + h, (x, y, w, h), cnt))
+
+                # 2026-11-17(devSS): いちばん大きい塊ではなく、画面の真ん中(車体の正面)に近い塊を選ぶ。
+                # LAP の終わりで、正面の赤いボトルではなく画面の右に写った青いボトル(大きく写っていた)を選び、
+                # 青のエリアへ運んでいた(ロボットA)。床の線のような横長の塊(幅/高さ > BOTTLE_PICK_MAX_ASPECT)は
+                # ほかに候補があれば外す。黒(相撲)はこれまでどおり大きい順。
+                if blobs:
+                    if candidates == [BottleColor.BLACK]:
+                        best = max(blobs, key=lambda b: b[0])
+                    else:
+                        upright = [b for b in blobs if b[4][2] <= BOTTLE_PICK_MAX_ASPECT * max(b[4][3], 1)] or blobs
+                        # 2026-11-17(devSS、ユーザー): いちばん大きい塊の BOTTLE_PICK_MIN_AREA_RATIO 未満の小さい塊は選ばない
+                        # (真ん中に近い面積157の青を、面積635の黄より先に選んだ場面があった)
+                        biggest = max(b[0] for b in upright)
+                        upright = [b for b in upright if b[0] >= BOTTLE_PICK_MIN_AREA_RATIO * biggest] or upright
+                        best = min(upright, key=lambda b: (abs(b[2] - FRAME_WIDTH / 2), -b[0]))
+                        colors = set(b[1] for b in upright)
+                        now_pick = time.monotonic()
+                        if len(colors) > 1 and now_pick - getattr(self, '_bottle_pick_log', 0.0) >= 0.5:
+                            self._bottle_pick_log = now_pick
+                            print("BOTTLE PICK %s cx=%d area=%d from %s" % (
+                                best[1].value, best[2], int(best[0]),
+                                ", ".join("%s cx=%d area=%d" % (b[1].value, b[2], int(b[0])) for b in upright)))
 
                 if best is not None:
                     area, color, bcx, bbottom, (bx, by, bw, bh), cnt = best
@@ -1289,6 +1404,22 @@ class Video(object):
         if zxingcpp is None:
             raise RuntimeError('zxingcpp is required for the Hint1/Hint2 mission')
 
+    def get_qr_located(self):
+        """2026-11-17(devSS): 最後にQRの位置が見つかった画像での (左上→右上の幅 画素(1920幅), 何秒前)。なければ None。"""
+        with self._result_lock:
+            corners = self._detected_corners
+            at = getattr(self, '_detected_corners_at', None)
+        if corners is None or at is None:
+            return None
+        (x0, y0), (x1, y1) = corners[0], corners[1]
+        return math.hypot(x1 - x0, y1 - y0), time.monotonic() - at
+
+    def request_focus(self, value):
+        """2026-11-17(devSS): カメラのピント。None で自動(連続オートフォーカス)、数値(0〜255)で手動のその値。
+        カメラを読むスレッドで入れる(QR が読めないときにピントを振って探す、to_hint_route.WaitForQRDecode)。"""
+        with self._pending_lock:
+            self._pending_focus = value
+
     def prepare_qr_camera(self):
         """Prepare capture without accepting or decoding any QR observation."""
         self.require_qr_decoder()
@@ -1360,9 +1491,19 @@ class Video(object):
         with self._marker_frame_lock:
             self._latest_marker_frame = None
         cfg = _CAP_CONFIG.get(target_interested)
-        if cfg is not None and cfg != self._cap_cfg:
+        if cfg is not None:
+            # 2026-11-17(devSS): 開き直しの最中・予約済みと同じ設定なら、もう一度予約しない。
+            # QR の準備(QR_PREPARE)と読み取り開始が続けて来ると、1回目の開き直し(約3秒)の間は self._cap_cfg が
+            # まだ前の設定のため2回目も予約され、1080p で2回開き直していた(QR1 の読み取りに約6秒、2回目の開き直しは約3.7秒)。
             with self._pending_lock:
-                self._pending_cap_cfg = cfg
+                opening = getattr(self, '_opening_cap_cfg', None)
+                effective = self._pending_cap_cfg or opening or self._cap_cfg
+                if cfg == effective:
+                    pass
+                elif cfg == self._cap_cfg and opening is None:
+                    self._pending_cap_cfg = None
+                else:
+                    self._pending_cap_cfg = cfg
         # One worker for the Video lifetime. No join or 1s delay inside a BT tick.
         if target_interested == TargetInterested.QRCODE and not hasattr(self, '_detection_thread'):
             self._detection_thread = threading.Thread(target=self._detection_worker, daemon=True)

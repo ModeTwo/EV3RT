@@ -158,11 +158,13 @@ class RaceConfig:
     # 既定None=測定2秒・振動待ち1秒。
     et_rally_gyro_drift_extra_sec: Optional[float] = None
     # 2026-11-14: 1.0 を既定に(試験の --rally-gyro-drift-settle-sec 1.0 と同じ。本番の full でもオプションなしで効くように)
-    et_rally_gyro_drift_settle_sec: Optional[float] = 1.0
+    # 2026-11-17(ユーザー): 1.0→0.5、ハブの測り直し 2.0→1.5(スタートで止まる時間を3.0→2.0秒に。アームは走りながら上げるので
+    # 揺れ待ちは短くてよい。ハブは止まって1秒たつと測り直し始める)
+    et_rally_gyro_drift_settle_sec: Optional[float] = 0.5
     # 2026-10-29: ハブのプログラムを書き換えた版用。ETラリー開始時、アームを上げ切って振動待ちのあと、
     # この秒数だけブレーキで止まり、ハブ自身にジャイロのくせを測り直させる。既定None=止まらない。
     # 2026-11-14: 2秒を既定に(試験の --rally-gyro-hub-recal-sec 2 と同じ)
-    et_rally_gyro_hub_recal_sec: Optional[float] = 2.0
+    et_rally_gyro_hub_recal_sec: Optional[float] = 1.5
     # 2026-11-05: ETラリーの最後に止まったあと、この秒数ブレーキで止まったまま、ジャイロの回転の速さと向きの変化を
     # 記録する(測るだけで補正しない)。走行中のくせが走る前の測定と違うかを見るため。既定None=測らない。
     et_rally_gyro_post_measure_sec: Optional[float] = None

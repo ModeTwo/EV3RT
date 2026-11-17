@@ -264,10 +264,13 @@ def check(plan_path, params_path, budget, min_clear, ratio=0.93, tol=0.1):
     exs = (ex or {}).get('steps') or []
     t_exit = est(0, 0, exs) if exs else None
     done_laps, finish = laps_total, START_OVERHEAD_SEC + ratio * est(0, len(steps))
-    for k in sorted(marks):
+    mk = sorted(marks)
+    for i, k in enumerate(mk):
         el = START_OVERHEAD_SEC + ratio * est(0, marks[k])
-        if k + 1 < laps_total and (k + 1) in marks:
-            need = ratio * (est(marks[k], marks[k + 1]) + t_exit)
+        # 2026-11-17: 次の切り上げ(印)が1周先にないときは、次にある印まで(ロボットの execute_strategy と同じ)。
+        # 前は最後まで走る前提で見積もり、2周目の切り上げがない4配置が「1周でガレージ」になっていた。
+        if i + 1 < len(mk):
+            need = ratio * (est(marks[k], marks[mk[i + 1]]) + t_exit)
         else:
             need = ratio * est(marks[k], len(steps))
         if el + need + 2.0 > budget and k in ex_laps:

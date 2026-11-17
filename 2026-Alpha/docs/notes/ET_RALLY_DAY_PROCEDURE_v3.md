@@ -65,7 +65,7 @@ python wireless_device/et_rally_camera_calib/day_floor_calib.py C:\Users\MSAD\Do
 
 ## 3. 本番
 > **2026-11-16 の devTK とのマージ以降の注意**: 計画の取り方の既定が devTK に合わせて "file" になった。今の `--mission full` は
-> PC を待たず(4桁の復号キーの入力もない)、`robot_program/et_rally_default_plan.json`(配置36の計画)で走る。
+> PC を待たず(4桁の復号キーの入力もない)、`robot_program/et_rally_default_plan.json`(配置36の計画。11/17 に全配置の計算の版に差し替え、最小すき間 1.45→2.0cm)で走る。
 > 下の PC の計画を使う流れに戻すには、`robot_program/config.py` の `et_rally_strategy_source` を `"received"` にする(TODO: 本番前に決める)。
 > **2026-11-17**: `--mission full` でも ETラリーのカメラの補正(スタートの取り込みと走行中の補正)を既定で使う
 > (11/16 の full はカメラの補正なしで走り黄ゲートに当たった)。切るときは `--rally-start-pose off --rally-camera-correct off`。

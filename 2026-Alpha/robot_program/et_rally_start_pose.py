@@ -157,7 +157,7 @@ SCALE_LIMIT = (0.94, 1.06)
 class GroundCamera:
     """較正(calib_*.json の lens と jig[0])から、画像 → 床(車体の座標)の対応表を作っておく。"""
 
-    def __init__(self, calib_path=None, top_x=TOP_X, top_y=TOP_Y, top_s=TOP_S, extra_pitch_deg=0.0):
+    def __init__(self, calib_path=None, top_x=TOP_X, top_y=TOP_Y, top_s=TOP_S, extra_pitch_deg=0.0, build_map=True):
         import cv2
         import numpy as np
         self.cv2, self.np = cv2, np
@@ -218,6 +218,11 @@ class GroundCamera:
         self.K, self.dist, self.rvec, self.tvec = K, dist, rv, t
         self.R0 = cv2.Rodrigues(rv)[0]
         self.C0 = -self.R0.T @ t
+        if not build_map:
+            # 2026-11-17: 1点だけ床へ写すとき(相撲→ETラリーの青い丸)は、真上から見た画像の対応表を作らない(ラズパイで約2.8秒かかる)
+            self.map = None
+            self.valid = None
+            return
         xs = np.arange(top_x[1], top_x[0], -top_s); ys = np.arange(top_y[1], top_y[0], -top_s)
         YY, XX = np.meshgrid(ys, xs)
         pts = np.stack([XX.ravel(), YY.ravel(), np.zeros(XX.size)], 1)

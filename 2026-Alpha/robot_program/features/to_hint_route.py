@@ -58,20 +58,145 @@ class IsQRTimeoutReached(Behaviour):
 # QR読み取り成功まで待機
 # ========================================================
 class WaitForQRDecode(Behaviour):
+    """止まってQRが読めるまで待つ。
+
+    2026-11-17(devSS、ユーザー: ヒント2が読めないことは絶対に避けたい):
+    カメラはピントが固定(ピントの値を0〜250に変えても画像が同じ、実機で確認)。11/17 15:04 のヒント2は、止まった位置で
+    QRがぼけたまま30回以上読めなかった(幅約280画素。読めた回の画像も幅約277画素でぼけ方も近く、距離だけでは決まらない。
+    走っている間は毎回読めず、止まってから読めている)。同じ位置で待ち続けても変わらないので、読めないまま待つだけにせず、
+    WAIT_SEC 待っても読めなければ、STEPS の順に少しずつ前後に動いて(下がる→もっと下がる→…→元の位置→少し前→元の位置)、
+    動くたびに HOLD_SEC 止まって読む。一巡しても読めなければ繰り返す。
+    読めたら、元の位置へ戻ってから先へ進む(このあとの「黒線まで前進」は元の位置が前提)。
+    (11/17 の前の版はピントを振っていたが効かず、下がる出力30では車輪が回らなかった)
+    """
+
+    WAIT_SEC = 1.5
+    HOLD_SEC = 1.5
+    # 元の位置からの位置(mm、前が+)。この順に動く
+    STEPS = (-50.0, -100.0, -150.0, 0.0, 40.0, 0.0)
+    MOVE_POWER = 55
+    MOVE_TIMEOUT_SEC = 2.5
 
     def __init__(self, name, qr_reader):
         super(WaitForQRDecode, self).__init__(name)
 
         self.qr_reader = qr_reader
 
+    def initialise(self):
+        self.started_at = None
+        self.stage = "wait"
+        self.stage_at = None
+        self.step = 0
+        self.cycle = 0
+        self.offset_mm = 0.0          # 元の位置からの今の位置(前が+)
+        self.returning = False
+
+    def _stop(self):
+        for motor in (runtime.left_motor, runtime.right_motor):
+            if motor is not None:
+                motor.set_power(0)
+                motor.set_brake(True)
+
+    def _counts(self):
+        return float(runtime.left_motor.get_count()), float(runtime.right_motor.get_count())
+
+    def _moved_mm(self):
+        left, right = self._counts()
+        return (abs(left - self.move_origin[0]) + abs(right - self.move_origin[1])) / 2.0 * self.move_mm_per_deg
+
+    def _start_move(self, target_offset, now):
+        import math
+        dist = target_offset - self.offset_mm
+        if abs(dist) < 1.0:
+            return False
+        self.move_dir = 1.0 if dist > 0 else -1.0
+        self.move_target_mm = abs(dist)
+        self.move_goal_offset = target_offset
+        self.move_origin = self._counts()
+        self.move_heading = float(runtime.gyro_sensor.get_angle())
+        self.move_mm_per_deg = math.pi * float(runtime.plotter.tire_diameter) / 360.0
+        self.stage = "move"
+        self.stage_at = now
+        self.logger.warning("QR_RECOVER move %s %.0fmm to %+.0fmm from the stop (cycle %d)" % (
+            "back" if dist < 0 else "forward", abs(dist), target_offset, self.cycle))
+        return True
+
+    def _update_move(self, now):
+        moved = self._moved_mm()
+        if moved >= self.move_target_mm or now - self.stage_at > self.MOVE_TIMEOUT_SEC:
+            self._stop()
+            self.offset_mm += self.move_dir * moved
+            if moved < self.move_target_mm:
+                self.logger.warning("QR_RECOVER move stopped short: %.0f of %.0fmm" % (moved, self.move_target_mm))
+            self.stage = "hold"
+            self.stage_at = now
+            return
+        error = (self.move_heading - float(runtime.gyro_sensor.get_angle()) + 180.0) % 360.0 - 180.0
+        correction = max(-10.0, min(10.0, 2.0 * error))
+        power = self.move_dir * self.MOVE_POWER
+        runtime.left_motor.set_brake(False)
+        runtime.right_motor.set_brake(False)
+        runtime.left_motor.set_power(int(round(power + correction)))
+        runtime.right_motor.set_power(int(round(power - correction)))
+
     def update(self):
+        now = time.monotonic()
+        if self.started_at is None:
+            self.started_at = now
+            self.stage_at = now
+
+        if self.returning:
+            # 読めたあと、元の位置へ戻っている途中
+            if self.stage == "move":
+                self._update_move(now)
+                return Status.RUNNING
+            self.logger.warning("QR_RECOVER back at the stop position (offset %+.0fmm)" % self.offset_mm)
+            return Status.SUCCESS
 
         # QR読み取り成功
         if self.qr_reader.status == Status.SUCCESS:
+            if self.stage == "move":
+                # 動いている途中で読めた: ここまでの分を数えてから戻る
+                moved = self._moved_mm()
+                self._stop()
+                self.offset_mm += self.move_dir * moved
+            if self.stage != "wait" or self.cycle:
+                self.logger.warning("QR_RECOVER decoded at %+.0fmm from the stop after %.1fs (cycle %d)" % (
+                    self.offset_mm, now - self.started_at, self.cycle))
+            if abs(self.offset_mm) > 1.0:
+                self.returning = True
+                self._start_move(0.0, now)
+                return Status.RUNNING
             return Status.SUCCESS
+
+        if self.stage == "wait":
+            if now - self.stage_at >= self.WAIT_SEC:
+                self.logger.warning("QR_RECOVER not decoded for %.1fs after stopping, moving to read from other distances" % (
+                    now - self.started_at))
+                self.step = 0
+                if not self._start_move(self.STEPS[0], now):
+                    self.stage, self.stage_at = "hold", now
+            return Status.RUNNING
+        if self.stage == "move":
+            self._update_move(now)
+            return Status.RUNNING
+        if self.stage == "hold":
+            if now - self.stage_at >= self.HOLD_SEC:
+                self.step += 1
+                if self.step >= len(self.STEPS):
+                    self.step = 0
+                    self.cycle += 1
+                if not self._start_move(self.STEPS[self.step], now):
+                    self.stage_at = now
+            return Status.RUNNING
 
         # 未読み取りなら待機
         return Status.RUNNING
+
+    def terminate(self, new_status):
+        if getattr(self, "stage", None) == "move":
+            self._stop()
+
 
 def build_tantou_tree(context, config, include_exit=True):
     settings = config.integration

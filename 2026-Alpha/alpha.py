@@ -1020,7 +1020,9 @@ def build_behaviour_tree(
     if arm_up_before_touch(mission_config):
         # 2026-11-03: --rally-arm-up-before-touch: タッチの前にアームを上げておく(タッチの後はジャイロの測り直しだけ)。
         calibration.add_child(make_arm_up_down("arm up before touch", ArmDirection.UP, mission_config))
-    start.add_children([IsTouchOn(name="touch start")])
+    # 2026-11-17(ユーザー): タッチを待つ間にジャイロのずれを測る(押される直前の3秒。測ってログに出すだけ)
+    from robot_program.pre_touch_gyro import PreTouchGyroDrift
+    start.add_children([IsTouchOn(name="touch start"), PreTouchGyroDrift("pre-touch gyro drift")])
 
     mission_context = RaceContext(
         bottle_color=bottle_color,
@@ -1401,6 +1403,14 @@ def _run_main(argv, startup_cleanup):
         help=('During the ET rally, estimate the gyro drift rate while the wheels are stopped and '
               'subtract it over time. Default (unset) = off.'),
     )
+    parser.add_argument('--pre-touch-gyro-drift', choices=['on', 'off'], default=None,
+                        help=('2026-11-17: measure the gyro drift for the 3 s before the touch start and subtract it '
+                              'after the lap gate (not during the LAP line trace). off = measure and log only. Default (unset) = on.'))
+    parser.add_argument('--rally-strategy', choices=['file', 'received', 'local'], default=None,
+                        help=('ET rally plan source. file = the default plan file (robot_program/et_rally_default_plan.json), '
+                              'received = from the PC, local = pick a precomputed plan on the robot from the hints it read '
+                              '(~/et_rally_plans/plan_<key>.json or plans.zip; asks for the 4-digit key at start). '
+                              'Default (unset) = config (file).'))
     parser.add_argument('--rally-gyro-drift-extra-sec', type=float, default=None,
                         help=('With --rally-gyro-drift-comp on: seconds to stay still and measure the drift '
                               'rate after the arm is up and has settled. Default (unset) = 2.'))
@@ -1854,6 +1864,10 @@ def _run_main(argv, startup_cleanup):
         )
     except ValueError as error:
         parser.error(str(error))
+    if getattr(args, 'rally_strategy', None) is not None:
+        # 2026-11-17(ユーザー): ETラリーの計画の取り方。file = 既定の計画ファイル、received = PC から受け取る、
+        # local = PC を使わず、ロボットが読んだヒントで前もって作った計画(~/et_rally_plans)を選ぶ。
+        mission_config = dataclasses.replace(mission_config, et_rally_strategy_source=args.rally_strategy)
     if args.rally_plan_path is not None:
         # PC接続・Hint計算を一切使わず、指定したplan.json(steps形式)をそのまま実行する
         # (直進距離やキャスター引きずりの実機較正など、固定動作だけを試したいときに使う)。
@@ -2057,7 +2071,9 @@ def _run_main(argv, startup_cleanup):
             ('--rally-move-fine-power', args.rally_move_fine_power, 'et_rally_move_fine_power')):
         if value is None:
             continue
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+        # 2026-11-17(ユーザー): スタートで測ったジャイロのずれの差し引きは full でも試せるようにする
+        allowed = MANUAL_RALLY_MISSIONS + (('full',) if option == '--rally-gyro-drift-comp' else ())
+        if mission_config.mission_mode not in allowed:
             parser.error(option + ' requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(mission_config, **{field: value == 'on'})
     if args.rally_straight_pause_labels is not None:
@@ -2192,6 +2208,9 @@ def _run_main(argv, startup_cleanup):
         # 2026-11-14: 周回の判断のノードを作るため、持ち時間の仮の値を入れる。走るときは 制限時間 − 競技の開始からの秒 に置き換わる
         # (タッチの時刻が分からないときだけこの値を使う。テストと同じ70秒)。
         mission_config = dataclasses.replace(mission_config, et_rally_time_budget=70.0)
+    if args.pre_touch_gyro_drift is not None:
+        from robot_program import pre_touch_gyro
+        pre_touch_gyro.ENABLED = args.pre_touch_gyro_drift == 'on'
     if args.rally_gyro_drift_extra_sec is not None:
         if not 0.5 <= args.rally_gyro_drift_extra_sec <= 10.0:
             parser.error('--rally-gyro-drift-extra-sec must be between 0.5 and 10')
@@ -2282,6 +2301,14 @@ def _run_main(argv, startup_cleanup):
     if args.mission in INTEGRATION_MISSIONS and pending:
         parser.error('Integration verification cannot run with unimplemented features')
 
+    if (mission_config.enable_et_rally
+            and mission_config.et_rally_laps > 0
+            and mission_config.et_rally_strategy_source == "local"
+            and mission_config.mission_mode not in MANUAL_RALLY_MISSIONS):
+        # 2026-11-17: local は PC を待たず、ヒント2を解く4桁の復号キーだけ先に入れる
+        decryption_key = read_decryption_key()
+        tree.context.decryption_key = decryption_key
+        g_key = decryption_key
     if (mission_config.enable_et_rally
             and mission_config.et_rally_laps > 0
             and mission_config.et_rally_strategy_source == "received"):

@@ -151,7 +151,7 @@ def build_et_rally_phase(context, config):
     # 2026-11-17(ユーザー): 計画の0°の直し(plan_origin)は、受信("received")で走るときにも入れる。経路の道具の計画
     # (PC から丸ごと届く・ロボットが選ぶ・ガレージだけ)はファイルの計画と同じくラリー開始の向きが0°。旧い形の受信SEQ
     # (競技スタート基準)は、読み込むときに同じだけずらす(execute_strategy.build_execute_strategy)。
-    full_file = config.mission_mode == "full" and config.et_rally_strategy_source in ("file", "received")
+    full_file = config.mission_mode == "full" and config.et_rally_strategy_source in ("file", "received", "local")
     install_heading = full_file or float_heading or drift_compensation or scale_neg is not None or scale_pos is not None
 
     def full_file_plan_origin():
@@ -210,7 +210,7 @@ def build_et_rally_phase(context, config):
         arm_up = EtRallyArmAlreadyUp("et_rally arm up")
     elif drive_arm:
         arm_up = EtRallyArmUpLater("et_rally arm up later", drive_arm_reason)
-    elif (config.et_rally_strategy_source == "received" and getattr(config, "et_rally_arm_while_driving", None)):
+    elif (config.et_rally_strategy_source in ("received", "local") and getattr(config, "et_rally_arm_while_driving", None)):
         # 2026-11-15: 受信の計画では、スタートで上げる直前に、届いた計画で走りながら上げるかを決める
         from ..behaviours.et_rally_arm import EtRallyArmUpDeferred
         arm_up = EtRallyArmUpDeferred("et_rally arm up (decide)", context, config,
@@ -276,7 +276,8 @@ def build_et_rally_phase(context, config):
     move_tuning = fine_power or move_pid_i is not None
     if move_tuning:
         children.append(SetMoveTuning("et_rally move tuning", fine_power, move_pid_i))
-    if config.et_rally_strategy_source == "received":
+    if config.et_rally_strategy_source in ("received", "local"):
+        # 2026-11-17: local は計画をロボットが選ぶ(strategy_tree.py)。選べていなければここで選び直す(なければガレージだけ)
         children.append(build_receive_strategy(context, config))
     elif config.et_rally_strategy_source != "file":
         raise ValueError(

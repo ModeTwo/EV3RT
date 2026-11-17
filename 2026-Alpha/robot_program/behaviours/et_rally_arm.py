@@ -73,14 +73,26 @@ class EtRallyArmUpDown(Behaviour):
         self.ticks += 1
         self.trail = (self.trail + [delta])[-self.TRAIL_TICKS:]
         if self.ticks > self.GRACE_TICKS:
-            if delta < max(self.min_slow_deg, self.SLOW_RATIO * self.peak):
+            # 2026-11-17(devSS): 出力を落としたあと(上がりきる手前の SLOW_ZONE)は、遅い動きが当たり前なので下限だけで判定する
+            # (一番速い動き×0.3 と比べると、落とした直後に止まり、260°に届かず245〜257°で止まっていた)。
+            # 2026-11-17(devSS): 下げ(direction=+1)は重さで速さが変わる(途中で1tick 10〜18度落ちてから0〜4度に戻る)ので、
+            # 一番速い動きとの比は使わず、下限だけで判定する(比を使うと、落ちた直後の0・3・4度で -147 で止まった)。
+            if self.slowed or int(self.direction) > 0:
+                limit = self.min_slow_deg
+            else:
+                limit = max(self.min_slow_deg, self.SLOW_RATIO * self.peak)
+            if delta < limit:
                 self.slow += 1
             else:
                 self.slow = 0
         if self.ticks > 1:
             # 11/03実機: 起動直後の1tick目に、ハブのモーター初期化と重なって74度の飛びが出て、
             # それを一番速い動きとしたため、ふつうに動いている(5度/tick)のに遅いと判定して止まった。
-            self.peak = max(self.peak, delta)
+            # 2026-11-17(devSS): 一番速い動きは3tickの平均で数える。途中の1tickだけの飛び(12〜67度)で基準が上がり、
+            # ふつうに動いている(3〜4度/tick)のに遅いと判定して、下げが途中(-101〜-149)で止まっていた(ロボットA・Cとも)。
+            recent = self.trail[-3:]
+            if len(recent) == 3:
+                self.peak = max(self.peak, sum(recent) / 3.0)
         timed_out = now - self.start_time > self.TIMEOUT_SEC
         reached = False
         if self.max_travel_deg is not None:
