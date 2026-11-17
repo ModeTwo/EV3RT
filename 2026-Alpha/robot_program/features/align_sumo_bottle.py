@@ -119,10 +119,10 @@ class AlignSumoBottle(Behaviour):
             90 if abs(self.settings.distance_mm - 1100.0) < 0.001
             else self.settings.power
         )
-        if self.continuous_entry:
-            if runtime.course not in (-1, 1):
-                raise ValueError("unsupported course for delivery-to-sumo")
-            self.approach_offset_from_reset_deg = -90.0 * runtime.course
+        # 2026-11-17(devSS): devAT のマージで戻っていた devTK(d7e6598)の直しを入れ直す。接近方位は開始時に確定し、ここで上書きしない
+        # (上書きすると左コースで相撲へ逆向き(180°)に走った)。
+        if runtime.course not in (-1, 1):
+            raise ValueError("unsupported course for sumo approach")
         self.phase = "DRIVE"
         self.phase_started_at = now
         self.distance = IsDistanceEarned(
