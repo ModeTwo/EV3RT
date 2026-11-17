@@ -83,34 +83,74 @@ class SumoBlackDetector:
         return SumoBlackDetector._association(a, b) is not None
 
     def _candidates(self, mask, source, d, t, frame_id, gyro_deg):
-        # Apply ALL shape conditions before choosing any candidate.
+        # BOTTLE_BACKGROUND_AND_POLE_FIX
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
-        # 隣接するバーの根元とラベルを結合しないよう、
-        # クロージングは行わずオープニングのみ使用する。
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        points = []
+        contours, _ = cv2.findContours(
+            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        shapes = []
         for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            if y == 0 and w >= 90 and w / h > 1.5:
+                # 上端の横長背景につながったボトルを分離する。
+                local = np.zeros((h, w), np.uint8)
+                cv2.drawContours(
+                    local, [cnt], -1, 255, -1, offset=(-x, -y)
+                )
+                local = cv2.bitwise_and(
+                    local, mask[y:y+h, x:x+w]
+                )
+                wide = np.flatnonzero(
+                    np.count_nonzero(local, axis=1) >= w * 0.60
+                )
+                if len(wide) >= 4:
+                    cut = int(wide[-1]) + 1
+                    if cut < h - 12:
+                        pieces, _ = cv2.findContours(
+                            local[cut:].copy(),
+                            cv2.RETR_EXTERNAL,
+                            cv2.CHAIN_APPROX_SIMPLE,
+                        )
+                        for piece in pieces:
+                            clipped = cv2.boundingRect(piece)[1] <= 1
+                            piece[:, :, 0] += x
+                            piece[:, :, 1] += y + cut
+                            shapes.append((piece, clipped))
+                continue
+            shapes.append((cnt, False))
+
+        points = []
+        for cnt, clipped in shapes:
             area = float(cv2.contourArea(cnt))
             x, y, w, h = cv2.boundingRect(cnt)
-            if area < 150 or h < 12 or w > 176 or w / h > 1.5 or area / (w * h) < 0.45:
+            if (
+                area < 150 or h < 12 or w > 176
+                or w / h > 1.5 or area / (w * h) < 0.45
+            ):
                 continue
-            points.append(
-                dict(
-                    x=x,
-                    y=y,
-                    w=w,
-                    h=h,
-                    cx=x + w // 2,
-                    cy=y + h / 2,
-                    area=area,
-                    d=d,
-                    t=t,
-                    frame_id=frame_id,
-                    gyro_deg=gyro_deg,
-                    source=source,
+
+            blue = getattr(self, "_blue_mask", None)
+            if blue is not None and y >= 24:
+                above = blue[
+                    max(0, y-max(32, 2*h)):y, x:x+w
+                ] > 0
+                blue_rows = np.count_nonzero(
+                    np.mean(above, axis=1) >= 0.35
                 )
-            )
-        return sorted(points, key=lambda point: point["area"], reverse=True)
+                if np.mean(above) >= 0.25 and blue_rows >= 24:
+                    # 直上に青い支柱が長く続く黒い根元を除外。
+                    continue
+
+            points.append(dict(
+                x=x, y=y, w=w, h=h,
+                cx=x+w//2, cy=y+h/2,
+                area=area, d=d, t=t, frame_id=frame_id,
+                gyro_deg=gyro_deg, source=source,
+                background_clipped=clipped,
+            ))
+        return sorted(
+            points, key=lambda point: point["area"], reverse=True
+        )
 
     def step(self, image, d, t, frame_id, gyro_deg=None):
         if frame_id <= self.last_frame_id:
@@ -131,6 +171,7 @@ class SumoBlackDetector:
             self.top = 0
             expired = True
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        self._blue_mask = cv2.inRange(hsv, (85, 45, 35), (140, 255, 255))
         points = self._candidates(
             cv2.inRange(hsv, (0, 0, 0), (179, 120, 60)), "hsv", d, t, frame_id, gyro_deg
         )
@@ -181,7 +222,14 @@ class SumoBlackDetector:
                 if point["x"] > 0
                 and point["x"] + point["w"] < 320
                 and point["area"] >= 900
-                and point["h"] >= point["w"] * 1.25
+                and (
+                    point["h"] >= point["w"] * 1.25
+                    or (
+                        point.get("background_clipped", False)
+                        and point["h"] >= point["w"] * 0.85
+                        and point["area"] >= 0.70 * point["w"] * point["h"]
+                    )
+                )
             ]
             if seeds:
                 candidate = seeds[0]
