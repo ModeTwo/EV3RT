@@ -23,6 +23,7 @@
 
 import json
 import math
+import os
 import time
 from pathlib import Path
 
@@ -103,6 +104,21 @@ START_MM = (4 * P_MM + 149.0, 3.5 * P_MM)
 START_HEADING_DEG = 180.0
 
 DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_11161509_floor.json"   # 2026-11-15: 止まって撮る試験3回で取り付けの補正とスタートの癖(start_fix)を当てはめた
+# 2026-11-17: ロボットごとの較正(本番はロボットC = 上の DEFAULT_CALIB)。環境変数 ET_RALLY_CAMERA_CALIB(alpha.py の
+# --rally-camera-calib が入れる)があればそれを使う。ファイル名だけなら wireless_device/et_rally_camera_calib/ の中を探す。
+# カメラの子プロセスにも同じ環境変数が渡るので、親と子で同じ較正になる。
+CALIB_DIR = DEFAULT_CALIB.parent
+
+
+def resolve_calib(name):
+    p = Path(name)
+    if not p.is_absolute() and not p.exists():
+        p = CALIB_DIR / p
+    return p
+
+
+if os.environ.get("ET_RALLY_CAMERA_CALIB"):
+    DEFAULT_CALIB = resolve_calib(os.environ["ET_RALLY_CAMERA_CALIB"])
 
 # 真上から見た画像の範囲(車体の座標、mm)と1画素の大きさ。スタートでは止まっているので、少し広めに細かく見る。
 TOP_S = 0.5

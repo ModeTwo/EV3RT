@@ -1549,6 +1549,10 @@ def _run_main(argv, startup_cleanup):
                         help=('ET rally: correct the position and heading while driving with the camera (prototype). '
                               'POS,HEAD = the fraction of the difference applied per image (e.g. 0.15,0), or "on" = 0.15,0. '
                               'Only images taken on straight segments are used. Default: off.'))
+    parser.add_argument('--rally-camera-calib', default=None,
+                        help=('ET rally: camera calibration file for this robot (2026-11-17). A file name is looked up in '
+                              'wireless_device/et_rally_camera_calib/. Default: the robot C file (et_rally_start_pose.DEFAULT_CALIB). '
+                              'Robot A: --rally-camera-calib calib_A_11171107.json'))
     parser.add_argument('--rally-arm-up-sec', type=float, default=None,
                         help='Seconds the arm needs to go up, for --rally-arm-while-driving (default 3.0, provisional).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
@@ -1945,6 +1949,16 @@ def _run_main(argv, startup_cleanup):
         if not 1 <= args.rally_camera_exposure <= 5000:
             parser.error('--rally-camera-exposure must be between 1 and 5000')
         mission_config = dataclasses.replace(mission_config, et_rally_camera_exposure=args.rally_camera_exposure)
+    if args.rally_camera_calib is not None:
+        # 2026-11-17: ロボットごとの較正。親(この工程)と、あとで起動するカメラの子プロセスの両方に効かせる。
+        from robot_program import et_rally_start_pose as _sp
+        _calib = _sp.resolve_calib(args.rally_camera_calib)
+        if not _calib.exists():
+            parser.error('--rally-camera-calib: file not found: %s' % _calib)
+        os.environ['ET_RALLY_CAMERA_CALIB'] = str(_calib)
+        _sp.DEFAULT_CALIB = _calib
+        mission_config = dataclasses.replace(mission_config, et_rally_camera_calib_path=str(_calib))
+        print(' -- ET rally camera calibration: %s' % _calib.name, flush=True)
     if args.rally_camera_correct is not None:
         try:
             # 2026-11-11: "on" = 既定(位置0.15・向き0.1)。11/10は向きの補正が1°以上たまるのを誤りと見て0にしたが、
