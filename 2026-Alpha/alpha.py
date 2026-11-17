@@ -1913,8 +1913,8 @@ def _run_main(argv, startup_cleanup):
         mission_config = dataclasses.replace(
             mission_config, et_rally_arm_up_before_touch=(args.rally_arm_up_before_touch == 'on'))
     if args.rally_start_pose is not None:
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-            parser.error('--rally-start-pose requires --mission rally-drive, bottle-rally or rally-sumo')
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS + ('full',):
+            parser.error('--rally-start-pose requires --mission rally-drive, bottle-rally, rally-sumo or full')
         mission_config = dataclasses.replace(mission_config, et_rally_start_pose=(args.rally_start_pose == 'on'))
     if args.rally_arm_while_driving is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
@@ -1950,13 +1950,15 @@ def _run_main(argv, startup_cleanup):
             # 2026-11-11: "on" = 既定(位置0.15・向き0.1)。11/10は向きの補正が1°以上たまるのを誤りと見て0にしたが、
             # 11/11に配置37(右回り中心)で向きが1周約0.4°ずつずれて青ゲートに当たり、向き0.1で解消した(たまっていたのは
             # ジャイロの倍率の約0.1%のずれで、本当の向きのずれだった)。seedでも精度は悪くならなかった。
-            gains = (0.15, 0.1) if args.rally_camera_correct == 'on' else tuple(float(v) for v in args.rally_camera_correct.split(','))
+            # 2026-11-17: "off" = 使わない(full では既定で使うため)
+            gains = (None if args.rally_camera_correct == 'off' else (0.15, 0.1) if args.rally_camera_correct == 'on'
+                     else tuple(float(v) for v in args.rally_camera_correct.split(',')))
         except ValueError:
             gains = ()
-        if len(gains) != 2 or not all(0.0 <= g <= 1.0 for g in gains):
-            parser.error('--rally-camera-correct must be "on" or POS,HEAD with values between 0 and 1')
-        if args.mission != 'rally-drive':
-            parser.error('--rally-camera-correct requires --mission rally-drive (for now)')
+        if gains is not None and (len(gains) != 2 or not all(0.0 <= g <= 1.0 for g in gains)):
+            parser.error('--rally-camera-correct must be "on", "off" or POS,HEAD with values between 0 and 1')
+        if args.mission not in ('rally-drive', 'full'):
+            parser.error('--rally-camera-correct requires --mission rally-drive or full')
         mission_config = dataclasses.replace(mission_config, et_rally_camera_correct=gains)
     if args.rally_arm_up_sec is not None:
         if not 0.5 <= args.rally_arm_up_sec <= 10.0:
