@@ -123,6 +123,12 @@ class PreTouchGyroDrift(Behaviour):
         if not self.started:
             return
         self.started = False
+        # 2026-11-17: タッチ〜ラップゲートの電池・出力のログを始める(lap_diag.py、走りは変えない)
+        try:
+            from . import lap_diag
+            lap_diag.start()
+        except Exception as error:
+            self.logger.info("lap diag could not start: %s" % error)
         global RESULT
         if not self.buf:
             self.logger.info("pre-touch gyro drift: no samples")

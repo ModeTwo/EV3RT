@@ -63,6 +63,11 @@ def ensure_scaled_gyro():
     # 2026-11-17(ユーザー): タッチ前に測ったジャイロのずれの差し引き。同日夜から LAP にも効かせるのでタッチ時に始まっており、
     # ここでは何もしない(測っただけで始まっていないときの保険)
     from . import pre_touch_gyro
+    try:
+        from . import lap_diag
+        lap_diag.stop("lap gate")
+    except Exception:
+        pass
     if pre_touch_gyro.start_now():
         print(" -- pre-touch gyro drift: subtraction started (%+.4f deg/s)" % pre_touch_gyro.RATE, flush=True)
     return True

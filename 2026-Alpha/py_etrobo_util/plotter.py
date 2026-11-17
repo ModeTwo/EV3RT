@@ -94,6 +94,13 @@ class Plotter(object):
                right_delta / (6.0 * elapsed), left_delta / (6.0 * elapsed), self.distance,
                now - previous['right_changed'], now - previous['left_changed']), flush=True)
         previous.update(emit_time=now, emit_right=right_count, emit_left=left_count)
+        # 2026-11-17(devSS): タッチ〜ラップゲートの間だけ、電池と出力も出す(robot_program/lap_diag.py)
+        try:
+            from robot_program import lap_diag
+            if lap_diag.ACTIVE:
+                lap_diag.sample(self.distance)
+        except Exception:
+            pass
 
     def plot(
         self,
