@@ -39,7 +39,9 @@ def main():
         # 2026-11-16: run_all.py / run_layout.py の出力(<鍵>.plan.json、当たり判定は <鍵>.chk.json)も読む。NG の配置は書き出さない
         files = sorted(glob.glob(os.path.join(d, 'plan_*.json')))
         for f in sorted(glob.glob(os.path.join(d, '*.plan.json'))):
-            if f.endswith(('.fast.plan.json', '.base.plan.json')):
+            # 2026-11-17: 選んだ計画は <鍵>.plan.json。run_layout v2 の途中の段(.s1/.s2)や .fast/.base は書き出さない
+            # (並べ替えで .s1 が後に来て、選んだ計画を上書きしていた)。
+            if os.path.basename(f)[:-len('.plan.json')].count('.') > 0:
                 continue
             ck = f[:-len('.plan.json')] + '.chk.json'
             try:

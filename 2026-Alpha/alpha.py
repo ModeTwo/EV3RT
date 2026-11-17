@@ -1406,6 +1406,11 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument('--pre-touch-gyro-drift', choices=['on', 'off'], default=None,
                         help=('2026-11-17: measure the gyro drift for the 3 s before the touch start and subtract it '
                               'after the lap gate (not during the LAP line trace). off = measure and log only. Default (unset) = on.'))
+    parser.add_argument('--rally-strategy', choices=['file', 'received', 'local'], default=None,
+                        help=('ET rally plan source. file = the default plan file (robot_program/et_rally_default_plan.json), '
+                              'received = from the PC, local = pick a precomputed plan on the robot from the hints it read '
+                              '(~/et_rally_plans/plan_<key>.json or plans.zip; asks for the 4-digit key at start). '
+                              'Default (unset) = config (file).'))
     parser.add_argument('--rally-gyro-drift-extra-sec', type=float, default=None,
                         help=('With --rally-gyro-drift-comp on: seconds to stay still and measure the drift '
                               'rate after the arm is up and has settled. Default (unset) = 2.'))
@@ -1859,6 +1864,10 @@ def _run_main(argv, startup_cleanup):
         )
     except ValueError as error:
         parser.error(str(error))
+    if getattr(args, 'rally_strategy', None) is not None:
+        # 2026-11-17(ユーザー): ETラリーの計画の取り方。file = 既定の計画ファイル、received = PC から受け取る、
+        # local = PC を使わず、ロボットが読んだヒントで前もって作った計画(~/et_rally_plans)を選ぶ。
+        mission_config = dataclasses.replace(mission_config, et_rally_strategy_source=args.rally_strategy)
     if args.rally_plan_path is not None:
         # PC接続・Hint計算を一切使わず、指定したplan.json(steps形式)をそのまま実行する
         # (直進距離やキャスター引きずりの実機較正など、固定動作だけを試したいときに使う)。
@@ -2292,6 +2301,14 @@ def _run_main(argv, startup_cleanup):
     if args.mission in INTEGRATION_MISSIONS and pending:
         parser.error('Integration verification cannot run with unimplemented features')
 
+    if (mission_config.enable_et_rally
+            and mission_config.et_rally_laps > 0
+            and mission_config.et_rally_strategy_source == "local"
+            and mission_config.mission_mode not in MANUAL_RALLY_MISSIONS):
+        # 2026-11-17: local は PC を待たず、ヒント2を解く4桁の復号キーだけ先に入れる
+        decryption_key = read_decryption_key()
+        tree.context.decryption_key = decryption_key
+        g_key = decryption_key
     if (mission_config.enable_et_rally
             and mission_config.et_rally_laps > 0
             and mission_config.et_rally_strategy_source == "received"):

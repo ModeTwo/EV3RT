@@ -484,7 +484,9 @@ def strategy_kwargs_from_config(config):
 def build_execute_strategy(context, config, lap_number=None):
     # No.12は、PCが作成した全周回分のSEQを一度だけ実行する。
     source = config.et_rally_strategy_source
-    if source == "received":
+    # 2026-11-17(ユーザー): "local" = PC を使わず、ロボットが読んだヒントで前もって作った計画を選んで走る
+    # (services/strategy_tree.py が選ぶ)。走り方は受信の計画と同じ(context.strategy_plan_path を読む)。
+    if source in ("received", "local"):
         # 補正関数が使う「最初の旋回の直前の向き」。受信SEQはラリー開始向きを基準に
         # 作られており、ジャイロ座標系での開始向きはmission_modeで決まる。
         start_heading = full_start_to_gyro(
