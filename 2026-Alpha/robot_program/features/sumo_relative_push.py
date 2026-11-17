@@ -164,7 +164,11 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     # LAP_LINE_NEAR_X_MM は規約の図(図 5-21、灰色の点の間隔 246mm で縮尺)から読んだ「土俵の奥の縁 1590 + 約141mm」
     # = 黒線の手前の縁。±2〜3cm の誤差があるので、実測またはログの SUMO_LINE で詰める。
     LINE_ANCHOR = False
-    LAP_LINE_NEAR_X_MM = 1731.0
+    # 2026-11-18: 実測(右コース)で 土俵の外側の縁→黒線の土俵側の縁 136mm(図からの推定は 141)、
+    # 土俵の縁→緑の帯の縁 304mm、土俵の直径 370mm。
+    LAP_LINE_NEAR_X_MM = 1726.0
+    # ボトルの手前側の縁を、土俵の奥の縁からこの距離まで押す(--sumo-push-clearance-mm)。従来 300 = 緑の帯の縁(304)。
+    PUSH_CLEARANCE_MM = 300.0
     LINE_SENSOR_FORWARD_MM = 38.0   # 色センサーは車軸の 38mm 前(sumo_rally_transition と同じ)
     LINE_BLACK_MAX_V = 40           # 黒線は V≈13、白は約99。土俵の灰色の線を黒と取らないよう低めにする
     LINE_CONFIRM = 2                # 続けて黒を見た回数
@@ -279,8 +283,9 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.logger.info(
             "SUMO_FIXED ORIGIN approach=%.2f circle_far=1590.0 "
             "green=1895.0 bottle_offset=115.0 "
-            "bottle_radius=32.5 clearance=300.0"
-            % self.approach_bearing
+            "bottle_radius=32.5 clearance=%.1f line_near=%.1f anchor=%s"
+            % (self.approach_bearing, self.PUSH_CLEARANCE_MM, self.LAP_LINE_NEAR_X_MM,
+               "on" if self.LINE_ANCHOR else "observe")
         )
 
     def _fixed_sample(self):
@@ -331,7 +336,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
 
         # ボトル後端を円の奥縁から200mm外へ出す。
         rear = pose[0] + 115.0 * cosine - 32.5
-        remaining = (1590.0 + 300.0 - rear) / cosine
+        remaining = (1590.0 + self.PUSH_CLEARANCE_MM - rear) / cosine
         if remaining > 1500.0:
             raise ValueError("fixed-endpoint remaining distance too large")
         return remaining

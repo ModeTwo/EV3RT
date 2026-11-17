@@ -1704,7 +1704,13 @@ def _run_main(argv, startup_cleanup):
         "--sumo-line-x-mm",
         type=float,
         default=None,
-        help="near edge of the LAP black line in the sumo frame (mm from the approach start). Default 1731 (read from the rule figure).",
+        help="near edge of the LAP black line in the sumo frame (mm from the approach start). Default 1726 (measured 136mm beyond the ring).",
+    )
+    parser.add_argument(
+        "--sumo-push-clearance-mm",
+        type=float,
+        default=None,
+        help="push until the bottle's near edge is this far beyond the ring's far edge (default 300 = green strip edge at 304).",
     )
     args = parser.parse_args(argv)
     _configure_full_lap_defaults(args.mission)
@@ -2018,6 +2024,13 @@ def _run_main(argv, startup_cleanup):
         if not 1 <= args.rally_camera_exposure <= 5000:
             parser.error('--rally-camera-exposure must be between 1 and 5000')
         mission_config = dataclasses.replace(mission_config, et_rally_camera_exposure=args.rally_camera_exposure)
+    if args.sumo_push_clearance_mm is not None:
+        # 2026-11-18: ボトルの手前側の縁を土俵の奥の縁からこの距離まで押す(従来 300 = 緑の帯の縁 304mm)
+        if not 80.0 <= args.sumo_push_clearance_mm <= 300.0:
+            parser.error('--sumo-push-clearance-mm must be between 80 and 300')
+        from robot_program.features.sumo_relative_push import RelativeAlignAndPush as _rpc
+        _rpc.PUSH_CLEARANCE_MM = float(args.sumo_push_clearance_mm)
+        print(' -- sumo push clearance: %.1f mm beyond the ring' % _rpc.PUSH_CLEARANCE_MM, flush=True)
     if args.sumo_line_anchor or args.sumo_line_x_mm is not None:
         # 2026-11-18: 相撲の押し出しで LAP の黒線を使って押し終わりの位置を決め直す。
         from robot_program.features.sumo_relative_push import RelativeAlignAndPush as _rp
