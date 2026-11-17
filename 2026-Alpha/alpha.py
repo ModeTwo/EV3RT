@@ -1557,6 +1557,9 @@ def _run_main(argv, startup_cleanup):
                         help=('While standing still at the ET rally start, measure the position and heading with the camera '
                               '(markers and gray dots) and use them for the first segment: the heading offset goes into the gyro, '
                               'a position offset re-plans the first connection (default off).'))
+    parser.add_argument('--rally-stop-before-drive', action='store_true',
+                        help=('2026-11-18 test: with --mission bottle-sumo, continue into the ET rally start (arm, gyro '
+                              're-measure, start pose by camera, plan) and stop just before driving.'))
     parser.add_argument('--rally-arm-while-driving', choices=['on', 'off'], default=None,
                         help=('Raise the arm while driving when the plan file says the arm can be up before the legs are '
                               'reached (et_rally_arm.must_be_up_sec >= --rally-arm-up-sec + 0.5); otherwise raise it at the '
@@ -1960,6 +1963,10 @@ def _run_main(argv, startup_cleanup):
             parser.error('--rally-arm-up-before-touch requires --mission rally-drive')
         mission_config = dataclasses.replace(
             mission_config, et_rally_arm_up_before_touch=(args.rally_arm_up_before_touch == 'on'))
+    if args.rally_stop_before_drive:
+        if mission_config.mission_mode != 'bottle-sumo':
+            parser.error('--rally-stop-before-drive requires --mission bottle-sumo')
+        mission_config = dataclasses.replace(mission_config, et_rally_stop_before_drive=True)
     if args.rally_start_pose is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS + ('full',):
             parser.error('--rally-start-pose requires --mission rally-drive, bottle-rally, rally-sumo or full')

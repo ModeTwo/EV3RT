@@ -97,6 +97,15 @@ def build_later_integration_children(context, config):
             context, config), context, lambda c: c.bottle_delivered and c.rally_ready))
         nodes.append(build_sumo_after_delivery(context, config))
         nodes.append(build_move_sumo_to_rally_start(context, config))
+        if getattr(config, 'et_rally_stop_before_drive', None):
+            # 2026-11-18: 相撲→青い丸→ETラリーの受け渡しの試験。スタートの取り込み(カメラ)まで進めて走り出す前に止まる。
+            # full と同じく、スタートの取り込みと走行中のカメラ補正を有効にした設定で組む。
+            rally_config = replace(
+                config, enable_et_rally=True, et_rally_laps=max(1, config.et_rally_laps),
+                et_rally_start_pose=(config.et_rally_start_pose if config.et_rally_start_pose is not None else True),
+                et_rally_camera_correct=(config.et_rally_camera_correct if config.et_rally_camera_correct is not None
+                                         else (0.15, 0.1)))
+            nodes.append(build_et_rally_phase(context, rally_config))
         nodes.append(StopNow(name='Integration range complete brake'))
         return nodes
     if mode in ('bottle-rally', 'rally-sumo'):
