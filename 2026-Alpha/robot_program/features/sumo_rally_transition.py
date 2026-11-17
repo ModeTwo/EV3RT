@@ -675,6 +675,13 @@ class MoveToRallyBlue(Behaviour):
                 % (cx, error_px, candidate["area"], aim_cx)
             )
 
+            # 2026-11-18(devSS、ユーザー): カメラの較正(ETラリーと同じ、ロボットごとの較正ファイル)で丸の中心の
+            # 床の上の位置(車軸から前・左 mm)を出し、車軸まわりの角度と中心までの距離で向き直り・走る。
+            # 較正が読めない・範囲外のときは下の今までのやり方(画面のずれ×0.6、色センサーで止める)。
+            ground = self._ground(candidate)
+            if ground is not None:
+                return self._decide_from_ground(ground)
+
             # 画像中央に十分近い場合は追加旋回しない。
             if abs(error_px) <= self.CENTER_TOLERANCE_PX:
                 self._start_drive()
@@ -812,10 +819,25 @@ class MoveToRallyBlue(Behaviour):
 
             self.drive.tick_once()
 
+            if getattr(self, "drive_by_ground", False) and self.drive_blue_first is None:
+                # 確かめのログだけ: 色センサーが最初に青を見た距離(丸の端。センサーは車軸の38mm 前)
+                try:
+                    h, s_, v = runtime.color_sensor.get_raw_color_hsv()
+                    if self.drive_classifier.classify(h, s_, v) == Color.BLUE:
+                        self.drive_blue_first = float(runtime.plotter.get_distance()) - self.drive_start_mm
+                except Exception:
+                    pass
+
             if self.drive.status == Status.SUCCESS:
+                extra = ""
+                if getattr(self, "drive_by_ground", False):
+                    extra = " driven=%.0f first_blue_at=%s (stop command; it coasts about %.0f mm more)" % (
+                        float(runtime.plotter.get_distance()) - self.drive_start_mm,
+                        "none" if self.drive_blue_first is None else "%.0f" % self.drive_blue_first,
+                        self.GROUND_STOP_ADVANCE_MM)
                 self.logger.info(
-                    "RALLY_BLUE ARRIVED distance=%.1f"
-                    % runtime.plotter.get_distance()
+                    "RALLY_BLUE ARRIVED distance=%.1f%s"
+                    % (runtime.plotter.get_distance(), extra)
                 )
                 return Status.SUCCESS
 
@@ -827,6 +849,72 @@ class MoveToRallyBlue(Behaviour):
             return Status.RUNNING
 
         return self._fail("invalid phase")
+
+    # ---- 2026-11-18(devSS): カメラの較正で丸の中心の位置を出す(11/17 の 99cb177c を今の devAT の流れに入れ直し) ----
+    # 11/17 に同じ方法で4回走り、4回とも丸に着いた(ロボットA)。画面のずれ×0.6 の式は、カメラの向きのずれ(Cで左へ約0.7°)
+    # や、カメラが車軸より前にあること(回る中心は車軸)を含まない。色センサーで端を踏んだ所から止めると、
+    # 丸の中心から横にずれて通ったときに止まる位置が前後にずれる。
+    GROUND_SPIN_MIN_DEG = 3.0     # これより大きいずれは、その場で向き直ってから見直す(小さければ走りながら向ける)
+    GROUND_MAX_DIST_MM = 1000.0
+    GROUND_MIN_DIST_MM = 150.0
+    # 止める命令から止まるまでに進む分(出力70)。devAT が色センサーの止め方で実測した手前補正(StableBlueArrival.STOP_ADVANCE_MM)
+    # と同じ値。11/17 の4回でも、止めたあと約25〜40mm 進んでいた。
+    GROUND_STOP_ADVANCE_MM = 39.0
+    _ground_camera = None
+
+    def _ground(self, candidate):
+        try:
+            import math
+            import cv2
+            import numpy as np
+            from .. import et_rally_start_pose as sp
+            cam = MoveToRallyBlue._ground_camera
+            if cam is None or cam.calib_path != sp.DEFAULT_CALIB:
+                cam = MoveToRallyBlue._ground_camera = sp.GroundCamera(sp.DEFAULT_CALIB, build_map=False)
+            # 画像は 640x480 の真ん中の16:9(640x360)を 320x180 に縮めたもの(py_etrobo_util/video.py の BOTTLE)
+            u, v = 2.0 * float(candidate["cx"]), 2.0 * float(candidate["cy"]) + 60.0
+            n = cv2.undistortPoints(np.array([[[u, v]]], np.float64), cam.K, cam.dist).reshape(2)
+            ray = cam.R0.T @ np.array([n[0], n[1], 1.0])
+            if ray[2] >= -1e-6:
+                return None
+            k = -cam.C0[2] / ray[2]
+            fwd, left = float(cam.C0[0] + k * ray[0]), float(cam.C0[1] + k * ray[1])
+            dist = math.hypot(fwd, left)
+            if not (self.GROUND_MIN_DIST_MM <= dist <= self.GROUND_MAX_DIST_MM) or fwd <= 0:
+                self.logger.warning("RALLY_BLUE GROUND out of range fwd=%.0f left=%.0f, using the old way" % (fwd, left))
+                return None
+            return fwd, left
+        except Exception as error:
+            self.logger.warning("RALLY_BLUE GROUND unavailable (%r), using the old way" % (error,))
+            return None
+
+    def _decide_from_ground(self, ground):
+        import math
+        fwd, left = ground
+        dist = math.hypot(fwd, left)
+        angle = math.degrees(math.atan2(left, fwd))      # 車軸から見た丸の中心の向き、左が+
+        correction = -angle                               # 方位(bearing)は時計回りが+
+        self.logger.info(
+            "RALLY_BLUE GROUND center fwd=%.0f left=%+.0f mm -> distance %.0f mm, angle %+.1f deg (calib %s)"
+            % (fwd, left, dist, angle, getattr(MoveToRallyBlue._ground_camera, "calib_path", None)))
+        if abs(angle) > self.GROUND_SPIN_MIN_DEG and self.blue_alignment_turns < 3:
+            self.blue_alignment_turns += 1
+            motion = self.config.sumo
+            target_bearing = (current_bearing(self.context) + correction) % 360.0
+            # 向き直りは devAT の補正旋回と同じ設定(出力50・許容0.5°・止まったら出力を上げる・先読みブレーキ)
+            self.turn = SpinToBearing(
+                "rally blue alignment", self.context, target_bearing,
+                max_power=50, min_power=50,
+                pid_p=motion.turn_pid_p, pid_i=motion.turn_pid_i, pid_d=motion.turn_pid_d,
+                tolerance=0.5,
+            )
+            self.turn.stall_boost = True
+            self.turn.predictive_brake_horizon_sec = 0.01
+            self.logger.info("RALLY_BLUE TURN correction=%.2f target=%.2f (ground)" % (correction, target_bearing))
+            self._set_phase("TURN")
+            return Status.RUNNING
+        self._start_drive(distance_mm=max(0.0, dist - self.GROUND_STOP_ADVANCE_MM), bearing_offset_deg=correction)
+        return Status.RUNNING
 
     @staticmethod
     def _blue_aim_cx(candidate):
@@ -846,13 +934,17 @@ class MoveToRallyBlue(Behaviour):
             + width * MoveToRallyBlue.LEFT_AIM_LEFT_MM / diameter
         )
 
-    def _start_drive(self):
+    def _start_drive(self, distance_mm=None, bearing_offset_deg=0.0):
         # RunByGyroのABSOLUTEは床面方位ではなく、
         # -runtime.course * gyro角度を使用する。
+        # 2026-11-18(devSS): distance_mm があれば(カメラの較正で丸の中心が分かったとき)、方位を bearing_offset_deg だけ
+        # 向けて(方位は ジャイロ+定数 なので、この向きでは -course 倍)、その距離で止める(色センサーは確かめのログだけ)。
         target_heading = (
-            -runtime.course * float(runtime.gyro_sensor.get_angle())
+            -runtime.course * (float(runtime.gyro_sensor.get_angle()) + float(bearing_offset_deg))
         )
         motion = self.config.sumo
+        by_ground = distance_mm is not None
+        limit = float(distance_mm) if by_ground else self.MAX_DRIVE_MM
 
         self.drive = RunByGyro(
             name="rally blue gyro approach",
@@ -862,17 +954,22 @@ class MoveToRallyBlue(Behaviour):
             pid_i=motion.drive_pid_i,
             pid_d=motion.drive_pid_d,
             target_type=HeadingType.ABSOLUTE,
-            distance_limit_mm=self.MAX_DRIVE_MM,
-            completion_condition=StableBlueArrival(),
+            distance_limit_mm=limit,
+            completion_condition=None if by_ground else StableBlueArrival(),
             completion_min_mm=0.0,
         )
+        self.drive_by_ground = by_ground
+        self.drive_start_mm = float(runtime.plotter.get_distance())
+        self.drive_blue_first = None
+        self.drive_classifier = ColorClassifier() if by_ground else None
 
         self.logger.info(
-            "RALLY_BLUE DRIVE heading=%.2f power=%d limit=%.1f"
+            "RALLY_BLUE DRIVE heading=%.2f power=%d limit=%.1f%s"
             % (
                 target_heading,
                 self.DRIVE_POWER,
-                self.MAX_DRIVE_MM,
+                limit,
+                " (to the circle centre by camera, offset %+.1f deg)" % bearing_offset_deg if by_ground else "",
             )
         )
         self._set_phase("DRIVE")
