@@ -1,5 +1,6 @@
 import sys
 import platform
+import os
 if platform.python_implementation() == 'CPython':
     sys.path.append('/usr/lib/python3/dist-packages')
 elif platform.python_implementation() == 'PyPy':
@@ -114,6 +115,24 @@ class TraceSide(Enum):
     RIGHT = "Right"
     LEFT = "Left"
     CENTER = "Center"
+
+def _camera_device():
+    """2026-11-17(devSS): カメラのデバイス。USB が一度切れてつながり直すと /dev/video0 が /dev/video1 などに変わり、
+    0 番を開こうとして最初からカメラが使えなかった(ヒント1が読めない)。USB カメラの名前の付いたリンクがあればそれを使い、
+    なければ /dev/video0〜3 のうち存在する一番小さい番号を使う(Raspberry Pi の内蔵の video10 以降は使わない)。"""
+    import glob as _glob
+    links = sorted(_glob.glob('/dev/v4l/by-id/usb-*video-index0'))
+    if links:
+        real = os.path.realpath(links[0])
+        print("VID camera device %s (%s)" % (real, os.path.basename(links[0])))
+        return real
+    for n in range(4):
+        if os.path.exists('/dev/video%d' % n):
+            if n:
+                print("VID camera device /dev/video%d (video0 not found)" % n)
+            return n
+    return 0
+
 
 class TargetInterested(Enum):
     LINE = "Line"
@@ -253,7 +272,7 @@ class Video(object):
         start, and from the top of process()). Never call from a behavior thread."""
         if self.cap is not None:
             self.cap.release()
-        cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        cap = cv2.VideoCapture(_camera_device(), cv2.CAP_V4L2)
         # FOURCC first: setting resolution can reset the format and vice-versa.
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
