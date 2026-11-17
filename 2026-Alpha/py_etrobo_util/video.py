@@ -38,6 +38,8 @@ def round_up_to_odd(f) -> int:
     return int(np.ceil(f / 2.) * 2 + 1)
 
 # frame size for Raspberry Pi USB camera capture
+# 2026-11-17(devSS): ボトルの候補で、幅が高さのこの倍を超える横長の塊(床の線など)は、ほかに候補があれば選ばない
+BOTTLE_PICK_MAX_ASPECT = 2.5
 IN_FRAME_WIDTH_QR  = 1920
 IN_FRAME_HEIGHT_QR = 1080
 IN_FRAME_WIDTH     = 640
@@ -420,8 +422,13 @@ class Video(object):
         with self._pending_lock:
             cfg = self._pending_cap_cfg
             self._pending_cap_cfg = None
+            self._opening_cap_cfg = cfg
         if cfg is not None:
-            self._open_cap(*cfg)
+            try:
+                self._open_cap(*cfg)
+            finally:
+                with self._pending_lock:
+                    self._opening_cap_cfg = None
 
         capture_session, capture_mode = self._vision_sessions.capture_token()
         ret, frame = self.cap.read()
@@ -514,6 +521,7 @@ class Video(object):
                                   BottleColor.YELLOW]
 
                 best = None   # (area, color, cx, bottom_row, (x,y,w,h), cnt)
+                blobs = []
                 for color in candidates:
                     mask = self._bottle_mask(img_hsv, color)
                     # 青ボトルのHSV値をログ出力
@@ -559,8 +567,25 @@ class Video(object):
                             if w > BOTTLE_BLACK_MAX_W:           continue
                             if aspect > BOTTLE_BLACK_MAX_ASPECT: continue
                             if extent < BOTTLE_MIN_EXTENT:       continue
-                        if best is None or area > best[0]:
-                            best = (area, color, x + w // 2, y + h, (x, y, w, h), cnt)
+                        blobs.append((area, color, x + w // 2, y + h, (x, y, w, h), cnt))
+
+                # 2026-11-17(devSS): いちばん大きい塊ではなく、画面の真ん中(車体の正面)に近い塊を選ぶ。
+                # LAP の終わりで、正面の赤いボトルではなく画面の右に写った青いボトル(大きく写っていた)を選び、
+                # 青のエリアへ運んでいた(ロボットA)。床の線のような横長の塊(幅/高さ > BOTTLE_PICK_MAX_ASPECT)は
+                # ほかに候補があれば外す。黒(相撲)はこれまでどおり大きい順。
+                if blobs:
+                    if candidates == [BottleColor.BLACK]:
+                        best = max(blobs, key=lambda b: b[0])
+                    else:
+                        upright = [b for b in blobs if b[4][2] <= BOTTLE_PICK_MAX_ASPECT * max(b[4][3], 1)] or blobs
+                        best = min(upright, key=lambda b: (abs(b[2] - FRAME_WIDTH / 2), -b[0]))
+                        colors = set(b[1] for b in upright)
+                        now_pick = time.monotonic()
+                        if len(colors) > 1 and now_pick - getattr(self, '_bottle_pick_log', 0.0) >= 0.5:
+                            self._bottle_pick_log = now_pick
+                            print("BOTTLE PICK %s cx=%d area=%d from %s" % (
+                                best[1].value, best[2], int(best[0]),
+                                ", ".join("%s cx=%d area=%d" % (b[1].value, b[2], int(b[0])) for b in upright)))
 
                 if best is not None:
                     area, color, bcx, bbottom, (bx, by, bw, bh), cnt = best
@@ -1360,9 +1385,19 @@ class Video(object):
         with self._marker_frame_lock:
             self._latest_marker_frame = None
         cfg = _CAP_CONFIG.get(target_interested)
-        if cfg is not None and cfg != self._cap_cfg:
+        if cfg is not None:
+            # 2026-11-17(devSS): 開き直しの最中・予約済みと同じ設定なら、もう一度予約しない。
+            # QR の準備(QR_PREPARE)と読み取り開始が続けて来ると、1回目の開き直し(約3秒)の間は self._cap_cfg が
+            # まだ前の設定のため2回目も予約され、1080p で2回開き直していた(QR1 の読み取りに約6秒、2回目の開き直しは約3.7秒)。
             with self._pending_lock:
-                self._pending_cap_cfg = cfg
+                opening = getattr(self, '_opening_cap_cfg', None)
+                effective = self._pending_cap_cfg or opening or self._cap_cfg
+                if cfg == effective:
+                    pass
+                elif cfg == self._cap_cfg and opening is None:
+                    self._pending_cap_cfg = None
+                else:
+                    self._pending_cap_cfg = cfg
         # One worker for the Video lifetime. No join or 1s delay inside a BT tick.
         if target_interested == TargetInterested.QRCODE and not hasattr(self, '_detection_thread'):
             self._detection_thread = threading.Thread(target=self._detection_worker, daemon=True)

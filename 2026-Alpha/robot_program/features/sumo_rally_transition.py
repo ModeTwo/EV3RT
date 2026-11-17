@@ -44,6 +44,9 @@ class TurnTowardRallyStart(Behaviour):
                 )
                 return Status.FAILURE
 
+            # 2026-11-17(devSS、ユーザー): 向き終わる方位は同じまま、近い向きに回る(215°ではなく反対回りに145°)。
+            # 215°回るのに約2.2秒かかっていた。
+            signed_angle = ((signed_angle + 180.0) % 360.0) - 180.0
             start_bearing = current_bearing(self.context)
             target_bearing = (start_bearing + signed_angle) % 360.0
 
