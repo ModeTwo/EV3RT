@@ -920,6 +920,7 @@ class MoveToRallyBlue(Behaviour):
     # と同じ値。11/17 の4回でも、止めたあと約25〜40mm 進んでいた。
     GROUND_STOP_ADVANCE_MM = 39.0
     AIM_LEFT_MM = 0.0
+    DRIVE_PID = None   # (P, I, D)。None なら相撲の直進の値(config.sumo.drive_pid_*)
     _ground_camera = None
 
     def _ground(self, candidate):
@@ -1017,9 +1018,11 @@ class MoveToRallyBlue(Behaviour):
             name="rally blue gyro approach",
             target=lambda distance: target_heading,
             power=self.DRIVE_POWER,
-            pid_p=motion.drive_pid_p,
-            pid_i=motion.drive_pid_i,
-            pid_d=motion.drive_pid_d,
+            # 2026-11-18(devSS): --rally-blue-drive-pid。相撲の直進の値(P1.1 I0.1)では、カメラで向けた向きから
+            # 走っている間ずっと 1〜3° 同じ側にずれ(ロボットA の12回)、約55cm 先の丸で横に約25mm ずれていた。
+            pid_p=(self.DRIVE_PID[0] if self.DRIVE_PID else motion.drive_pid_p),
+            pid_i=(self.DRIVE_PID[1] if self.DRIVE_PID else motion.drive_pid_i),
+            pid_d=(self.DRIVE_PID[2] if self.DRIVE_PID else motion.drive_pid_d),
             target_type=HeadingType.ABSOLUTE,
             distance_limit_mm=limit,
             completion_condition=None if by_ground else StableBlueArrival(),
