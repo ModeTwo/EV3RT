@@ -304,6 +304,9 @@ class MoveToRallyBlue(Behaviour):
         self.phase_started_at = self.started_at
         self.phase = "DETECT"
         self.blue_alignment_turns = 0
+        self.edge_turns = 0
+        self._edge_frames = 0
+        self._edge_last_frame = None
         self.session = runtime.video.begin_rally_blue_read()
         self.logger.info(
             "RALLY_BLUE START session=%s" % self.session
@@ -323,6 +326,42 @@ class MoveToRallyBlue(Behaviour):
     def _set_phase(self, phase):
         self.phase = phase
         self.phase_started_at = time.monotonic()
+
+    # 2026-11-17(devSS の応急処置): 青い丸が画面の左右の端で切れて候補にならないとき(相撲の終わりの位置によって起きる、
+    # ロボットAで左下の端に切れて映り「blue circle not detected」で失敗した)、端の側へ向き直ってから探し直す。
+    EDGE_CONFIRM_FRAMES = 3
+    EDGE_MIN_TURN_DEG = 12.0
+    EDGE_MAX_TURN_DEG = 30.0
+    EDGE_MAX_TURNS = 2
+
+    def _edge_turn(self, observation):
+        import math
+        frame = observation.get("frame_id")
+        if frame != getattr(self, "_edge_last_frame", None):
+            self._edge_last_frame = frame
+            self._edge_frames = getattr(self, "_edge_frames", 0) + 1
+        if self._edge_frames < self.EDGE_CONFIRM_FRAMES or getattr(self, "edge_turns", 0) >= self.EDGE_MAX_TURNS:
+            return None
+        edge = observation["edge"]
+        error_px = float(edge["cx"]) - 160.0
+        correction = 0.6 * math.degrees(math.atan(error_px * 270.0 / 320.0 / 230.0))
+        sign = -1.0 if edge["side"] == "left" else 1.0
+        correction = sign * min(self.EDGE_MAX_TURN_DEG, max(self.EDGE_MIN_TURN_DEG, abs(correction)))
+        target_bearing = (current_bearing(self.context) + correction) % 360.0
+        self.edge_turns = getattr(self, "edge_turns", 0) + 1
+        self._edge_frames = 0
+        motion = self.config.sumo
+        self.turn = SpinToBearing(
+            "rally blue edge turn", self.context, target_bearing,
+            max_power=50, min_power=50,
+            pid_p=motion.turn_pid_p, pid_i=motion.turn_pid_i, pid_d=motion.turn_pid_d,
+            tolerance=2.0,
+        )
+        self.logger.warning(
+            "RALLY_BLUE EDGE side=%s cx=%.1f area=%.0f -> turn %.1f deg to %.2f (edge turn %d)"
+            % (edge["side"], edge["cx"], edge["area"], correction, target_bearing, self.edge_turns))
+        self._set_phase("TURN")
+        return Status.RUNNING
 
     def update(self):
         now = time.monotonic()
@@ -357,6 +396,14 @@ class MoveToRallyBlue(Behaviour):
                             observation.get("candidate_count"),
                             now - observation.get("t", now),
                         ))
+
+            if (observation and not observation.get("confirmed") and observation.get("edge")
+                    and now - observation.get("t", 0.0) <= self.MAX_OBSERVATION_AGE_SEC):
+                edge_turn = self._edge_turn(observation)
+                if edge_turn is not None:
+                    return edge_turn
+            elif observation and not observation.get("edge"):
+                self._edge_frames = 0
 
             if not observation or not observation.get("confirmed"):
                 return Status.RUNNING

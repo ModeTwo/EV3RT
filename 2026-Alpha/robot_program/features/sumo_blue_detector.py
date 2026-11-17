@@ -88,6 +88,36 @@ class SumoBlueDetector:
             "ellipse_tilt_deg": tilt,
         }
 
+    # 2026-11-17(devSS): 画面の左右の端で切れている青い丸(候補からは外れる)を知らせる。
+    # 相撲のあと青い丸へ向けて旋回したとき、丸が左下の端にかかって切れ、見つからずに失敗した(ロボットA)。
+    # 下半分にあって、上の端に触れず(ゲートの青い脚を外す)、左右どちらかの端に触れている、一定以上の大きさの青。
+    EDGE_MIN_AREA = 300
+    EDGE_MIN_CY_RATIO = 0.5
+
+    def _edge_blob(self, contours, shape):
+        height, width = shape[0], shape[1]
+        best = None
+        for contour in contours:
+            area = float(cv2.contourArea(contour))
+            if area < self.EDGE_MIN_AREA:
+                continue
+            x, y, w, h = cv2.boundingRect(contour)
+            if y <= 0:
+                continue
+            left, right = x <= 0, x + w >= width
+            if left == right:
+                continue
+            moments = cv2.moments(contour)
+            if moments["m00"] <= 0:
+                continue
+            cx = moments["m10"] / moments["m00"]
+            cy = moments["m01"] / moments["m00"]
+            if cy < height * self.EDGE_MIN_CY_RATIO:
+                continue
+            if best is None or area > best["area"]:
+                best = {"side": "left" if left else "right", "cx": cx, "cy": cy, "area": area}
+        return best
+
     def step(self, image):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(
@@ -115,6 +145,7 @@ class SumoBlueDetector:
                 "confirmed": False,
                 "candidate": None,
                 "candidate_count": 0,
+                "edge": self._edge_blob(contours, mask.shape),
             }
 
         nearby = []
