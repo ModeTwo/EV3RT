@@ -168,7 +168,7 @@ def shared(**kwargs):
         # 2026-11-18: 先に起動しておいた子(full では起動時)が、ETラリーの前に終わっていたら理由をログに出す
         # (別のラズパイの full で子が終わりのコード0で落ちていて、理由が分からなかった)
         try:
-            evs = [json.dumps(e)[:200] for e in _shared.poll()]
+            evs = [json.dumps(e)[:1500] for e in _shared.poll()]
             print(" -- ET rally camera process: the earlier one had exited (code %s) events: %s stderr: %s" % (
                 _shared.proc.poll(), " | ".join(evs) or "-", _shared.stderr_tail() or "-"), flush=True)
         except Exception:
@@ -200,8 +200,10 @@ def _child(cfg):
     try:
         import cv2
     except ImportError as error:
-        say(ev='error', what='cannot import cv2 in %s (%r) PYTHONPATH=%r LD_LIBRARY_PATH=%r sys.path=%r' % (
-            sys.executable, error, os.environ.get('PYTHONPATH'), os.environ.get('LD_LIBRARY_PATH'), sys.path[:6]))
+        envs = {k: v for k, v in os.environ.items() if k.startswith('PYTHON') or k.startswith('LD_')}
+        mods = sorted(k for k in sys.modules if 'cv' in k.lower())
+        say(ev='error', what='cannot import cv2 in %s (%r) env=%r sys.path=%r cwd=%r modules=%r' % (
+            sys.executable, error, envs, sys.path, os.getcwd(), mods))
         return
     state = dict(save=False, detect=False, track=False, quit=False, mirror=bool(cfg.get('mirror')))
 

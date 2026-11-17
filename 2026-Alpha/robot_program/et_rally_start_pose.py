@@ -1217,7 +1217,7 @@ class EtRallyStartPoseCapture(Behaviour):
             for ev in self.proc.poll():
                 e = dict(ev)
                 e.pop("r", None); e.pop("r0", None)
-                events.append(json.dumps(e)[:200])
+                events.append(json.dumps(e)[:1500])
             self.logger.warning("start pose: camera process exited (code %s) before it was ready, skipped. events: %s stderr: %s (%s)" % (
                 self.proc.proc.poll(), " | ".join(events) or "-", self.proc.stderr_tail() or "-",
                 getattr(self.proc, "stderr_path", None)))
