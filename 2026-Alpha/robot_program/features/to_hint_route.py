@@ -60,43 +60,35 @@ class IsQRTimeoutReached(Behaviour):
 class WaitForQRDecode(Behaviour):
     """止まってQRが読めるまで待つ。
 
-    2026-11-17(devSS、ユーザー: ヒント2が読めないことは絶対に避けたい): ヒント2が止まったまま23秒読めない回があった
-    (位置は読めた回と同じ。カメラは連続オートフォーカスで、ピントが迷っていた疑い)。読めないまま待つだけにせず、
-      1. WAIT_SEC 待っても読めなければ、ピントを手動で FOCUS_STEPS の順に振る(1つ FOCUS_HOLD_SEC)。
-      2. 振り終わっても読めなければ、自動のピントに戻して MOVE_MM 下がり、もう一度振る。
-      3. それでも読めなければ元の位置へ MOVE_MM 戻り、自動のピントで待ってから、また 1 から繰り返す。
-    読めたら自動のピントに戻す。止まる位置は最後に元へ戻るので、そのあとの前進(黒線まで)は変わらない。
+    2026-11-17(devSS、ユーザー: ヒント2が読めないことは絶対に避けたい):
+    カメラはピントが固定(ピントの値を0〜250に変えても画像が同じ、実機で確認)で、QRに近づきすぎるとぼけて読めない
+    (止まった位置でQRが幅約280画素に写り、ぼけたまま読めなかった。読めた回は約200画素)。読めないまま待つだけにせず、
+    WAIT_SEC 待っても読めなければ、STEPS の順に少しずつ前後に動いて(下がる→もっと下がる→…→元の位置→少し前→元の位置)、
+    動くたびに HOLD_SEC 止まって読む。一巡しても読めなければ繰り返す。
+    読めたら、元の位置へ戻ってから先へ進む(このあとの「黒線まで前進」は元の位置が前提)。
+    (11/17 の前の版はピントを振っていたが効かず、下がる出力30では車輪が回らなかった)
     """
 
-    WAIT_SEC = 2.0
-    FOCUS_STEPS = (0, 15, 30, 45, 60, 80, 100, 130, 170, 210)
-    FOCUS_HOLD_SEC = 0.6
-    MOVE_MM = 60.0
-    MOVE_POWER = 30
+    WAIT_SEC = 1.5
+    HOLD_SEC = 1.5
+    # 元の位置からの位置(mm、前が+)。この順に動く
+    STEPS = (-50.0, -100.0, -150.0, 0.0, 40.0, 0.0)
+    MOVE_POWER = 55
+    MOVE_TIMEOUT_SEC = 2.5
 
     def __init__(self, name, qr_reader):
         super(WaitForQRDecode, self).__init__(name)
 
         self.qr_reader = qr_reader
-        self.started_at = None
 
     def initialise(self):
         self.started_at = None
         self.stage = "wait"
         self.stage_at = None
-        self.focus_index = 0
+        self.step = 0
         self.cycle = 0
-        self.moved_back = False
-        self.focus_manual = False
-
-    def _video(self):
-        return getattr(runtime, "video", None)
-
-    def _focus(self, value):
-        video = self._video()
-        if video is not None and hasattr(video, "request_focus"):
-            video.request_focus(value)
-            self.focus_manual = value is not None
+        self.offset_mm = 0.0          # 元の位置からの今の位置(前が+)
+        self.returning = False
 
     def _stop(self):
         for motor in (runtime.left_motor, runtime.right_motor):
@@ -111,24 +103,31 @@ class WaitForQRDecode(Behaviour):
         left, right = self._counts()
         return (abs(left - self.move_origin[0]) + abs(right - self.move_origin[1])) / 2.0 * self.move_mm_per_deg
 
-    def _start_move(self, direction, distance_mm=None):
+    def _start_move(self, target_offset, now):
         import math
-        self.move_dir = direction
-        self.move_target_mm = self.MOVE_MM if distance_mm is None else float(distance_mm)
+        dist = target_offset - self.offset_mm
+        if abs(dist) < 1.0:
+            return False
+        self.move_dir = 1.0 if dist > 0 else -1.0
+        self.move_target_mm = abs(dist)
+        self.move_goal_offset = target_offset
         self.move_origin = self._counts()
         self.move_heading = float(runtime.gyro_sensor.get_angle())
         self.move_mm_per_deg = math.pi * float(runtime.plotter.tire_diameter) / 360.0
         self.stage = "move"
-        self.stage_at = time.monotonic()
-        self.logger.warning("QR_RECOVER move %s %.0fmm (cycle %d)" % (
-            "back" if direction < 0 else "forward", self.move_target_mm, self.cycle))
+        self.stage_at = now
+        self.logger.warning("QR_RECOVER move %s %.0fmm to %+.0fmm from the stop (cycle %d)" % (
+            "back" if dist < 0 else "forward", abs(dist), target_offset, self.cycle))
+        return True
 
     def _update_move(self, now):
-        progress = self._moved_mm()
-        if progress >= self.move_target_mm or now - self.stage_at > 3.0:
+        moved = self._moved_mm()
+        if moved >= self.move_target_mm or now - self.stage_at > self.MOVE_TIMEOUT_SEC:
             self._stop()
-            self.moved_back = self.move_dir < 0
-            self.stage = "settle"
+            self.offset_mm += self.move_dir * moved
+            if moved < self.move_target_mm:
+                self.logger.warning("QR_RECOVER move stopped short: %.0f of %.0fmm" % (moved, self.move_target_mm))
+            self.stage = "hold"
             self.stage_at = now
             return
         error = (self.move_heading - float(runtime.gyro_sensor.get_angle()) + 180.0) % 360.0 - 180.0
@@ -140,72 +139,54 @@ class WaitForQRDecode(Behaviour):
         runtime.right_motor.set_power(int(round(power - correction)))
 
     def update(self):
+        now = time.monotonic()
+        if self.started_at is None:
+            self.started_at = now
+            self.stage_at = now
 
-        if self.cycle == -1:
-            # 下がった位置で読めたあと、元の位置へ戻っている途中
+        if self.returning:
+            # 読めたあと、元の位置へ戻っている途中
             if self.stage == "move":
-                self._update_move(time.monotonic())
+                self._update_move(now)
                 return Status.RUNNING
-            self.moved_back = False
+            self.logger.warning("QR_RECOVER back at the stop position (offset %+.0fmm)" % self.offset_mm)
             return Status.SUCCESS
 
         # QR読み取り成功
         if self.qr_reader.status == Status.SUCCESS:
             if self.stage == "move":
+                # 動いている途中で読めた: ここまでの分を数えてから戻る
+                moved = self._moved_mm()
                 self._stop()
-            if self.focus_manual:
-                self._focus(None)
-            if self.cycle or self.stage != "wait":
-                self.logger.warning("QR_RECOVER decoded (stage=%s focus_index=%d cycle=%d moved_back=%s)" % (
-                    self.stage, self.focus_index, self.cycle, self.moved_back))
-            # 下がった位置(または戻る途中)で読めたら、元の位置へ戻ってから先へ進む(このあとの前進は元の位置が前提)
-            if self.stage == "move":
-                done = self._moved_mm()
-                back_mm = done if self.move_dir < 0 else max(0.0, self.move_target_mm - done)
-            else:
-                back_mm = self.MOVE_MM if self.moved_back else 0.0
-            if back_mm > 1.0:
-                self._start_move(+1, back_mm)
-                self.cycle = -1
+                self.offset_mm += self.move_dir * moved
+            if self.stage != "wait" or self.cycle:
+                self.logger.warning("QR_RECOVER decoded at %+.0fmm from the stop after %.1fs (cycle %d)" % (
+                    self.offset_mm, now - self.started_at, self.cycle))
+            if abs(self.offset_mm) > 1.0:
+                self.returning = True
+                self._start_move(0.0, now)
                 return Status.RUNNING
             return Status.SUCCESS
 
-        now = time.monotonic()
-        if self.started_at is None:
-            self.started_at = now
-            self.stage_at = now
         if self.stage == "wait":
             if now - self.stage_at >= self.WAIT_SEC:
-                self.stage = "focus"
-                self.focus_index = 0
-                self.stage_at = now
-                self.logger.warning("QR_RECOVER not decoded for %.1fs, sweeping focus (cycle %d)" % (
-                    now - self.started_at, self.cycle))
-                self._focus(self.FOCUS_STEPS[0])
-            return Status.RUNNING
-        if self.stage == "focus":
-            if now - self.stage_at >= self.FOCUS_HOLD_SEC:
-                self.focus_index += 1
-                self.stage_at = now
-                if self.focus_index < len(self.FOCUS_STEPS):
-                    self._focus(self.FOCUS_STEPS[self.focus_index])
-                else:
-                    self._focus(None)
-                    self._start_move(+1 if self.moved_back else -1)
+                self.logger.warning("QR_RECOVER not decoded for %.1fs after stopping, moving to read from other distances" % (
+                    now - self.started_at))
+                self.step = 0
+                if not self._start_move(self.STEPS[0], now):
+                    self.stage, self.stage_at = "hold", now
             return Status.RUNNING
         if self.stage == "move":
             self._update_move(now)
             return Status.RUNNING
-        if self.stage == "settle":
-            if now - self.stage_at >= 0.5:
-                if not self.moved_back:
+        if self.stage == "hold":
+            if now - self.stage_at >= self.HOLD_SEC:
+                self.step += 1
+                if self.step >= len(self.STEPS):
+                    self.step = 0
                     self.cycle += 1
-                    self.stage = "wait"
-                else:
-                    self.stage = "focus"
-                    self.focus_index = 0
-                    self._focus(self.FOCUS_STEPS[0])
-                self.stage_at = now
+                if not self._start_move(self.STEPS[self.step], now):
+                    self.stage_at = now
             return Status.RUNNING
 
         # 未読み取りなら待機
@@ -214,8 +195,7 @@ class WaitForQRDecode(Behaviour):
     def terminate(self, new_status):
         if getattr(self, "stage", None) == "move":
             self._stop()
-        if getattr(self, "focus_manual", False):
-            self._focus(None)
+
 
 def build_tantou_tree(context, config, include_exit=True):
     settings = config.integration
