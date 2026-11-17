@@ -913,7 +913,11 @@ class MoveToRallyBlue(Behaviour):
             self.logger.info("RALLY_BLUE TURN correction=%.2f target=%.2f (ground)" % (correction, target_bearing))
             self._set_phase("TURN")
             return Status.RUNNING
-        self._start_drive(distance_mm=max(0.0, dist - self.GROUND_STOP_ADVANCE_MM), bearing_offset_deg=correction)
+        # 2026-11-18: 止める位置はカメラの距離ではなく、devAT の色センサーの止め方(StableBlueArrival)に戻す。
+        # ロボットC(calib_11161509_floor)の full で、カメラの距離は 488mm だったが色センサーが青を踏んだのは止める命令の時点
+        # (454mm)で、丸の中心より約3〜4cm 手前に止まりETラリーのスタートがずれた(11/17 のAでも15〜25mm 短かった)。
+        # 500mm 先では下向き1°で距離が約25mm 変わる(止まった直後の揺れ・場所ごとの床の傾き)。向きは較正のまま(左右には効きにくい)。
+        self._start_drive(bearing_offset_deg=correction)
         return Status.RUNNING
 
     @staticmethod
@@ -969,7 +973,9 @@ class MoveToRallyBlue(Behaviour):
                 target_heading,
                 self.DRIVE_POWER,
                 limit,
-                " (to the circle centre by camera, offset %+.1f deg)" % bearing_offset_deg if by_ground else "",
+                (" (to the circle centre by camera, offset %+.1f deg)" % bearing_offset_deg if by_ground
+                 else (" (aimed by camera, offset %+.1f deg, stop by the colour sensor)" % bearing_offset_deg
+                       if bearing_offset_deg else "")),
             )
         )
         self._set_phase("DRIVE")
