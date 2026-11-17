@@ -929,7 +929,11 @@ def build_tantou_tree(context, config, include_exit=True):
     
     IsDistanceEarned(
         name="run_to_black_limit",
-        delta_dist=400  # tantou4: 550
+        # 2026-11-17(devSS、実機): 400→200。黒線を見るのはこの距離のあとからなので、ロボットの位置が回によって
+        # ずれて黒線が400mmより手前に来ると、見ずに通り過ぎた(ユーザー: 黒線に対して行き過ぎ)。
+        # 黒線までは走れた回で約515mm、遠かった回で746mm(位置の振れ ±200mm くらい)。始めの200mmは見ない
+        # (旋回した場所の近くの線を拾わないため)
+        delta_dist=200  # tantou4: 550
     ),
     ])
 
@@ -957,12 +961,14 @@ def build_tantou_tree(context, config, include_exit=True):
         qr_reader=read_qr2,
         target=105,
         slow_power=50,
-        fast_power=80,
+        # 2026-11-17(devSS): 黒線を見ながら走る区間を 200→400mm に延ばした(上の run_to_black_limit を 400→200 にした分)。
+        # 出力 80→65: 黒線の上を通る間にセンサーを読む回数を増やす(2回続けて黒で判定)
+        fast_power=65,
         pid_p=1.1,
         pid_i=0.00075,
         pid_d=0.04,
         target_type=HeadingType.ABSOLUTE,
-        distance_mm=200,
+        distance_mm=400,
         decel_mm=50,
         # 2026-11-17(devSS、実機): 20 だと200mmを過ぎたあと車輪が回らず(出力20で止まる)、黒線に届かないまま
         # 動かなくなった(ヒント2のQRは読めたあと、黒線が想定より約230mm先だった回)。200mmを過ぎても黒線まで
