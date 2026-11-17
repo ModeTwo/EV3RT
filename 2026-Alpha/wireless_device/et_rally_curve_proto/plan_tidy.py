@@ -84,6 +84,48 @@ def _straight_to_same_end(chunk, nxt):
     raise ValueError('could not build the S curve')
 
 
+def _split_at(whole, L1, marks):
+    """_straight_to_same_end_from の結果(直進1本か円弧2つ)を、始まりから L1(mm)の所で2つに分け、後ろの頭に marks を付ける。
+    切り上げの判断と exit の出発点が、元の折り返しの所(前の直進の終わり)とほぼ同じになる(横は数mm以内)。"""
+    out, acc = [], 0.0
+    done = False
+    for n_st, st in enumerate(whole):
+        Ls = _len(st)
+        if done or acc + Ls <= L1 + 1e-6 or L1 - acc < 1.0 or acc + Ls - L1 < 1.0:
+            out.append(dict(st))
+            acc += Ls
+            if not done and acc >= L1 - 1.0:
+                # ちょうど区切りに当たった: 次の区間の頭に印を付ける
+                done = True
+                out.append(None)
+            continue
+        f = (L1 - acc) / Ls
+        if st['type'] == 'move':
+            p1 = dict(st, distance_mm=round(L1 - acc, 1), stop=False, label=st.get('label'))
+            p2 = dict(st, distance_mm=round(acc + Ls - L1, 1), label=None)
+        else:
+            sw = float(st['sweep_deg'])
+            end_h = float(st['target_heading_deg'])
+            mid_h = end_h - sw * (1.0 - f)
+            p1 = dict(st, sweep_deg=round(sw * f, 4), target_heading_deg=round(mid_h, 4), stop=False)
+            p2 = dict(st, sweep_deg=round(sw * (1.0 - f), 4), label=None)
+            if n_st > 0:
+                # 後ろの円弧の印(次の周の lapN-red など)は、元どおり折り返しの後(分けた後ろ)に付ける
+                p1['label'], p2['label'] = None, st.get('label')
+        p1.pop('marks', None)
+        out.extend([p1, None, p2])
+        acc += Ls
+        done = True
+    if None not in out:
+        return None
+    k = out.index(None)
+    out.pop(k)
+    if k >= len(out):
+        return None
+    out[k] = dict(out[k], marks=list(marks))
+    return out
+
+
 def _straight_to_same_end_from(first, chunk, nxt):
     """first(直進)の始まりから、first → chunk → nxt で着く位置へ、同じ向き・同じ前後の向きで行く steps。
     横のずれは first+nxt の全体の長さにわたる緩いS字で寄せる。first の印(label)は最初の区間に残す。"""
@@ -115,8 +157,8 @@ def _straight_to_same_end_from(first, chunk, nxt):
     return None
 
 
-def merge_back_and_forth(steps, max_back_mm=250.0, max_dh=5.0):
-    """戻り値: (新しい steps, まとめた数)。"""
+def merge_back_and_forth(steps, max_back_mm=250.0, max_dh=5.0, allow_marks=True):
+    """戻り値: (新しい steps, まとめた数)。allow_marks=False なら、折り返しに周の区切りの印がある所はまとめない。"""
     out, i, n, merged = [], 0, len(steps), 0
     while i < n:
         s = steps[i]
@@ -134,13 +176,20 @@ def merge_back_and_forth(steps, max_back_mm=250.0, max_dh=5.0):
             if (ok and j > i + 1 and j < n and steps[j]['type'] == 'move' and bool(steps[j].get('reverse')) == d0
                     and _dh(steps[j]['target_heading_deg'], H) <= max_dh and back <= max_back_mm
                     and float(steps[j]['distance_mm']) > back and not labels
-                    # 周の区切りの印(marks、切り上げの判断の場所)が真ん中や次の区間にあると、まとめると場所が変わるのでまとめない
-                    and not any(st.get('marks') for st in steps[i + 1:j + 1])):
+                    # 周の区切りの印(marks、切り上げの判断の場所)が真ん中や次の区間にあると、まとめると場所が変わるのでまとめない。
+                    # ただし折り返しの最初(steps[i+1])にだけある印は、前の直進の終わり=元と同じ場所に残せる(下)
+                    and not any(st.get('marks') for st in steps[i + 2:j + 1])
+                    and (allow_marks or not steps[i + 1].get('marks'))):
+                turn_marks = steps[i + 1].get('marks')
                 # 真ん中の区間で動いた分(横の小さな寄せも含む)を足した終わりの位置へ、まっすぐ1本で行く
                 # (向きを少しだけ変える)。終わりの位置は元と同じになる(横の寄せを捨てると周ごとにたまる)。
                 if _dh(s['target_heading_deg'], steps[j]['target_heading_deg']) < 0.5:
                     # 2026-11-17: 前の直進から まとめて1本にする(横の寄せを長い距離に薄く広げ、急なS字にしない)
                     whole = _straight_to_same_end_from(s, steps[i + 1:j], steps[j])
+                    if whole is not None and turn_marks:
+                        # 折り返しに周の区切りの印(lapN-end)がある: 前の直進の長さの所で分けて印を付ける
+                        # (11/17 実機: 2周目以降は印があってまとめておらず、黄と赤の間の往復が残っていた)
+                        whole = _split_at(whole, float(s['distance_mm']), turn_marks)
                     if whole is not None:
                         out.extend(whole)
                         merged += 1
@@ -150,6 +199,11 @@ def merge_back_and_forth(steps, max_back_mm=250.0, max_dh=5.0):
                 # もとの計画では、この直進のあと向きを切り替えるので「止まる」(stop)が付いている。続けて走るので外す
                 # (11/17 実機: 付いたままで、黄と赤の間で減速して止まっていた)。
                 out.append(dict(s, stop=False))
+                if turn_marks:
+                    # 2026-11-17(実機: 2周目以降は直っていなかった): 黄のあとの折り返しに周の区切りの印(lapN-end)が
+                    # 付いていて、まとめていなかった。前の直進はそのまま残し、印は次の区間の頭に付け替える。
+                    # 切り上げの判断と exit の出発点は、元と同じ前の直進の終わりになる。
+                    nxt = [dict(nxt[0], marks=list(turn_marks))] + list(nxt[1:])
                 out.extend(nxt)
                 merged += 1
                 i = j + 1
@@ -159,14 +213,14 @@ def merge_back_and_forth(steps, max_back_mm=250.0, max_dh=5.0):
     return out, merged
 
 
-def tidy_plan(plan):
+def tidy_plan(plan, allow_marks=True):
     """計画(dict)の steps と exit の steps をまとめる。戻り値: (計画, まとめた数)。"""
     p = dict(plan)
-    p['steps'], m = merge_back_and_forth(plan['steps'])
+    p['steps'], m = merge_back_and_forth(plan['steps'], allow_marks=allow_marks)
     ex = plan.get('exit')
     if isinstance(ex, dict) and ex.get('steps'):
         p['exit'] = dict(ex)
-        p['exit']['steps'], m2 = merge_back_and_forth(ex['steps'])
+        p['exit']['steps'], m2 = merge_back_and_forth(ex['steps'], allow_marks=allow_marks)
         m += m2
     if m:
         p['note_tidy_1117'] = 'plan_tidy: 同じ直線上の前後の切り替え %d か所をまとめた' % m

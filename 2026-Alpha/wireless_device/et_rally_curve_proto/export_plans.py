@@ -18,6 +18,31 @@ sys.path.insert(0, ROOT)
 from shared_communication.et_rally_layouts import check, layout_key, all_layouts  # noqa: E402
 
 
+def _tidy_keeps_clearance(orig, tidied, tol_cm=0.1):
+    """check_plan で、手直しした計画のすき間(本線と各周の切り上げ)が元より tol_cm 超え狭くならず、NG もないか。"""
+    import tempfile
+    import check_plan as cp
+    params = os.path.join(cp.HERE, 'params_day.json')
+    res = []
+    for pl in (orig, tidied):
+        fd, path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
+        try:
+            json.dump(pl, open(path, 'w', encoding='utf-8'), ensure_ascii=False)
+            res.append(cp.check(path, params, 70.0, 1.5))
+        finally:
+            os.remove(path)
+    a, b = res
+    if b['ng']:
+        return False
+    if b['main']['min_clear'] < a['main']['min_clear'] - tol_cm:
+        return False
+    for k, e in a.get('exits', {}).items():
+        if k in b.get('exits', {}) and b['exits'][k]['min_clear'] < e['min_clear'] - tol_cm:
+            return False
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('dirs', nargs='+')
@@ -35,7 +60,7 @@ def main():
                 bad.add(os.path.basename(r.get('plan') or ('plan_%s.json' % r.get('name'))))
     os.makedirs(a.out, exist_ok=True)
     written, skipped, dup = {}, [], 0
-    tidied = []
+    tidied, fallback = [], []
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from plan_tidy import tidy_plan
     for d in a.dirs:
@@ -64,7 +89,14 @@ def main():
                 skipped.append('%s (%s)' % (os.path.basename(f), error))
                 continue
             # 2026-11-17(ユーザー): 同じ直線上の「後退→少し前進→後退」を1本にまとめる(plan_tidy.py、終わりの位置は同じ)
-            plan, n_tidy = tidy_plan(plan)
+            orig = plan
+            plan, n_tidy = tidy_plan(orig)
+            n_plain = tidy_plan(orig, allow_marks=False)[1]
+            if n_tidy > n_plain and not _tidy_keeps_clearance(orig, plan):
+                # 2026-11-17: 周の区切りの印のある折り返しもまとめた版で、すき間(本線・切り上げのどれか)が 1mm 超え狭くなったら、
+                # 印のある所はまとめない版にする(分けた所が S字の途中になり、切り上げの出発点が数mm横にずれるため)
+                plan, n_tidy = tidy_plan(orig, allow_marks=False)
+                fallback.append(key)
             if n_tidy:
                 tidied.append('%s(%d)' % (key, n_tidy))
             if key in written:
@@ -82,6 +114,8 @@ def main():
         print('  skipped', s)
     if tidied:
         print('tidied (back-and-forth merged): %s' % ', '.join(tidied))
+    if fallback:
+        print('lap-end turnarounds left as they were (clearance would drop): %s' % ', '.join(fallback))
 
 
 if __name__ == '__main__':
