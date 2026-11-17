@@ -343,7 +343,7 @@ class RunByGyro(Behaviour):
             self.path_tracker = (PathTracking(self.cross_track_lookahead_mm, self.max_heading_correction_deg)
                                  if self.cross_track_lookahead_mm > 0 else None)
             self.last_log_time = None
-            turn_limit = min(self.power, 100 - self.power)
+            turn_limit = min(self.power, 400 - self.power)
             self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=0,
                            sample_time=EXEC_INTERVAL,
                            output_limits=(-turn_limit, turn_limit))
@@ -376,7 +376,7 @@ class RunByGyro(Behaviour):
         correction = (self.path_tracker.correction(progress, actual_heading, self.target)
                       if self.path_tracker is not None else 0.0)
         self.target_heading = nominal_heading + correction
-        turn_limit = min(self.power, 100 - self.power)
+        turn_limit = min(self.power, 400 - self.power)
         feedforward = curvature_turn(self.target, progress, self.power,
                                      self.wheel_tread_mm, self.feedforward_gain)
         feedforward = max(-turn_limit, min(turn_limit, feedforward))
