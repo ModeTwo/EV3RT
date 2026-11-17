@@ -174,7 +174,10 @@ class EtRallyLapDecision(Behaviour):
         now = time.monotonic()
         if _t0 is None:
             start()
-        prev = _marks.get(self.lap - 1, _drive_t0 if _drive_t0 is not None else _t0)
+        # 2026-11-17: 前の周の印がない(その周の終わりに切り上げのつなぎがない)ときは、その前の印から測る
+        # (est_this_lap も前の印からの見込み。走り出しから測ると周の時間が長く見えて、早く切り上げていた)。
+        earlier = [t for k, t in _marks.items() if k < self.lap]
+        prev = max(earlier) if earlier else (_drive_t0 if _drive_t0 is not None else _t0)
         _marks[self.lap] = now
         lap_time = now - prev
         ratio = lap_time / self.est_this_lap
