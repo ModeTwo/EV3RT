@@ -9,6 +9,8 @@
      ガレージへ行くだけ、どの配置でも脚に当たらない)で走る。
 
 前もって作った計画の置き場所: 環境変数 ET_RALLY_PLANS_DIR、なければ ~/et_rally_plans。
+2026-11-17(ユーザー: 別のラズパイでも同じに動かしたい): リポジトリの 2026-Alpha/et_rally_plans/plans.zip(devSS で配る)を
+先に見る。順番は ET_RALLY_PLANS_DIR → リポジトリの et_rally_plans → ~/et_rally_plans(どれかで見つかればそれを使う)。
   plan_<鍵>.json を並べるか、plans.zip(中に plan_<鍵>.json)を置く。鍵は shared_communication/et_rally_layouts.py。
 """
 import json
@@ -23,8 +25,20 @@ RUN_LOGS = PROJECT_ROOT / "run_logs"
 GARAGE_ONLY_PLAN = PROJECT_ROOT / "robot_program" / "tests" / "plan_garage_only_1114.json"
 
 
+REPO_PLANS_DIR = PROJECT_ROOT / "et_rally_plans"
+
+
 def plans_dir():
     return Path(os.environ.get("ET_RALLY_PLANS_DIR") or (Path.home() / "et_rally_plans"))
+
+
+def plans_dirs():
+    """探す順の置き場所。"""
+    out = []
+    if os.environ.get("ET_RALLY_PLANS_DIR"):
+        out.append(Path(os.environ["ET_RALLY_PLANS_DIR"]))
+    out += [REPO_PLANS_DIR, Path.home() / "et_rally_plans"]
+    return out
 
 
 def validate_plan(plan):
@@ -81,22 +95,25 @@ def find_precomputed(gates):
     from shared_communication.et_rally_layouts import layout_key
     key = layout_key(gates)
     name = "plan_%s.json" % key
-    d = plans_dir()
-    f = d / name
-    try:
-        if f.exists():
-            return validate_plan(json.loads(f.read_text(encoding="utf-8"))), str(f)
-        z = d / "plans.zip"
-        if z.exists():
-            with zipfile.ZipFile(str(z)) as zf:
-                try:
-                    data = zf.read(name)
-                except KeyError:
-                    return None, "%s not in %s" % (name, z)
-            return validate_plan(json.loads(data.decode("utf-8"))), "%s:%s" % (z, name)
-    except (OSError, ValueError, zipfile.BadZipFile) as error:
-        return None, "%s unreadable (%r)" % (name, error)
-    return None, "%s not found in %s" % (name, d)
+    why = []
+    for d in plans_dirs():
+        f = d / name
+        try:
+            if f.exists():
+                return validate_plan(json.loads(f.read_text(encoding="utf-8"))), str(f)
+            z = d / "plans.zip"
+            if z.exists():
+                with zipfile.ZipFile(str(z)) as zf:
+                    try:
+                        data = zf.read(name)
+                    except KeyError:
+                        why.append("%s not in %s" % (name, z))
+                        continue
+                return validate_plan(json.loads(data.decode("utf-8"))), "%s:%s" % (z, name)
+            why.append("not in %s" % d)
+        except (OSError, ValueError, zipfile.BadZipFile) as error:
+            why.append("%s unreadable in %s (%r)" % (name, d, error))
+    return None, "%s: %s" % (name, "; ".join(why))
 
 
 def select_on_robot(context):

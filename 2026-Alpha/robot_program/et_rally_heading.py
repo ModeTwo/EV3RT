@@ -42,9 +42,11 @@ import time
 
 from py_trees.behaviour import Behaviour
 from py_trees.common import Status
+from .features.sumo_bearing import bearing_delta
 
 from .gyro_scale import ScaledGyro, ensure_scaled_gyro
 from .runtime import runtime
+from . import pre_touch_gyro
 
 # 平均に入れるz軸の回転の速さの上限(度/秒)。アームの動きによる大きな揺れの読み取りを外す。
 # アームは上下に動くだけで、旋回の軸(z軸)への影響は平均すれば小さい想定(ログのstd・rejectedで確かめる)。
@@ -59,9 +61,13 @@ NEG_DEADBAND_DEG = 0.2
 class EtRallyHeading(ScaledGyro):
     """ScaledGyroと同じ倍率補正に、四捨五入前の向きと、ずれの差し引きを加える。"""
 
-    def __init__(self, base, float_heading, drift_compensation, scale_neg=None, scale_pos=None):
-        super().__init__(base._sensor, base._scale, base._origin)
+    def __init__(self, base, float_heading, drift_compensation, scale_neg=None, scale_pos=None, *,
+                 plan_origin_deg=None):
+        scaled = base if isinstance(base, ScaledGyro) else ScaledGyro(base, 1.0, 0.0)
+        super().__init__(scaled._sensor, scaled._scale, scaled._origin)
         self.base = base
+        # 経路の0°に対応する全体ジャイロ方位。カメラの補正値とは独立に持つ。
+        self.plan_origin_deg = plan_origin_deg
         self.float_heading = float_heading
         self.drift_compensation = drift_compensation
         # 左回りだけの倍率。neg_trackは遊び付きでハブの向きを追いかける値、neg_totalはそれが減った量の合計。
@@ -147,7 +153,8 @@ class EtRallyHeading(ScaledGyro):
     def _raw_heading(self):
         if self.float_heading and runtime.hub is not None:
             try:
-                return float(runtime.hub.hub_imu_get_heading())
+                # 2026-11-17: タッチ前に測ったずれの差し引き(pre_touch_gyro)。ハブから直接読むときも同じだけ引く
+                return float(runtime.hub.hub_imu_get_heading()) - pre_touch_gyro.drift_total()
             except Exception:
                 pass
         return float(self._sensor.get_angle())
@@ -205,7 +212,7 @@ class EtRallyHeading(ScaledGyro):
         if self.scale_pos is not None:
             self._update_pos(raw)
         heading += self._scale_adjust()
-        heading += self.heading_offset
+        heading += self.heading_offset - (self.plan_origin_deg or 0.0)
         if self.float_heading:
             self._update_pose(heading)
             if self.pose_listener is not None:
@@ -231,6 +238,8 @@ class EtRallyHeading(ScaledGyro):
                 self.scale_pos, self.pos_total, self.pos_total * (self.scale_pos - self._scale))
         if self.heading_offset:
             text += " heading_offset=%+.2f deg" % self.heading_offset
+        if self.plan_origin_deg is not None:
+            text += " plan_origin=%+.2f deg" % self.plan_origin_deg
         return text
 
 
@@ -252,27 +261,36 @@ def set_et_turning(turning):
 class InstallEtRallyHeading(Behaviour):
     """ETラリー工程の開始時に、runtime.gyro_sensorをEtRallyHeadingに差し替える。"""
 
-    def __init__(self, name, float_heading, drift_compensation, scale_neg=None, scale_pos=None):
+    def __init__(self, name, float_heading, drift_compensation, scale_neg=None, scale_pos=None, *, plan_origin=None):
         super().__init__(name)
         self.float_heading = float_heading
         self.drift_compensation = drift_compensation
         self.scale_neg = scale_neg
         self.scale_pos = scale_pos
+        self.plan_origin = plan_origin
 
     def update(self):
         ensure_scaled_gyro()
         current = runtime.gyro_sensor
-        if not isinstance(current, ScaledGyro):
+        if not isinstance(current, ScaledGyro) and self.plan_origin is None:
             # 倍率補正が無効(DD-19較正用)のときは差し替えない。
             self.logger.info("et_rally heading not installed (gyro scale disabled)")
             return Status.SUCCESS
         if isinstance(current, EtRallyHeading):
             return Status.SUCCESS
         before = current.get_angle()
+        plan_origin = None
+        if self.plan_origin is not None:
+            # ジャイロが360°を越えていても、同じ方位のうち今の値に近い方を使う。
+            plan_origin = before + bearing_delta(self.plan_origin(), before)
         runtime.gyro_sensor = EtRallyHeading(current, self.float_heading, self.drift_compensation, self.scale_neg,
-                                            self.scale_pos)
+                                            self.scale_pos, plan_origin_deg=plan_origin)
+        after = runtime.gyro_sensor.get_angle()
+        if plan_origin is not None:
+            self.logger.info("RALLY_FILE_HEADING origin=%+.2f gyro=%+.2f rally_heading=%+.2f" %
+                             (plan_origin, before, -runtime.course * after))
         self.logger.info("et_rally heading installed: heading %.3f -> %.3f %s" % (
-            before, runtime.gyro_sensor.get_angle(), runtime.gyro_sensor.summary()))
+            before, after, runtime.gyro_sensor.summary()))
         return Status.SUCCESS
 
 
@@ -296,16 +314,16 @@ class RestoreEtRallyHeading(Behaviour):
         current = runtime.gyro_sensor
         if isinstance(current, EtRallyHeading):
             self.logger.info("et_rally heading restored: %s" % current.summary())
-            current.base._origin = current._origin
-            scale = current.base._scale
-            if (current.scale_neg is not None or current.scale_pos is not None) and abs(1.0 - scale) > 1e-9:
-                # 左右の向きだけの倍率で足し引きした分(neg_adjust・pos_adjust)を、元のScaledGyroの起点に織り込み、
-                # 戻した瞬間の向きを変えない(この後に相撲・フィニッシュの工程が続く場合がある)。
-                # 元の式 origin + (生値 - origin) * scale が、今の向きと一致するoriginを求める。
-                heading = current.get_angle()
-                raw = float(current.base._sensor.get_angle())
-                current.base._origin = (heading - scale * raw) / (1.0 - scale)
-            runtime.gyro_sensor = current.base
+            base = current.base
+            if isinstance(base, ScaledGyro):
+                base._origin = current._origin
+                scale = base._scale
+                if (current.scale_neg is not None or current.scale_pos is not None) and abs(1.0 - scale) > 1e-9:
+                    # ラリー用の原点は足し戻し、従来どおり左右別の倍率による補正を引き継ぐ。
+                    heading = current.get_angle() + (current.plan_origin_deg or 0.0)
+                    raw = float(base._sensor.get_angle())
+                    base._origin = (heading - scale * raw) / (1.0 - scale)
+            runtime.gyro_sensor = base
         return Status.SUCCESS
 
 
@@ -480,6 +498,8 @@ class EtRallyArmUpWithDriftMeasure(Behaviour):
         heading = runtime.gyro_sensor
         used = isinstance(heading, EtRallyHeading) and heading.drift_compensation and n >= MEASURE_MIN_SAMPLES
         if used:
+            # 2026-11-17: タッチ前に測ったずれの差し引きは、この速さの起点(差し替えた時刻)で止めて切り替える
+            pre_touch_gyro.stop_at(heading.installed_time)
             heading.set_drift_rate(-mean, n)
         settle_range = (self.settle_max - self.settle_min) if self.settle_min is not None else -1.0
         self.logger.info(

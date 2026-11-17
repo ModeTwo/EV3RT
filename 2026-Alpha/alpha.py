@@ -1020,7 +1020,9 @@ def build_behaviour_tree(
     if arm_up_before_touch(mission_config):
         # 2026-11-03: --rally-arm-up-before-touch: タッチの前にアームを上げておく(タッチの後はジャイロの測り直しだけ)。
         calibration.add_child(make_arm_up_down("arm up before touch", ArmDirection.UP, mission_config))
-    start.add_children([IsTouchOn(name="touch start")])
+    # 2026-11-17(ユーザー): タッチを待つ間にジャイロのずれを測る(押される直前の3秒。測ってログに出すだけ)
+    from robot_program.pre_touch_gyro import PreTouchGyroDrift
+    start.add_children([IsTouchOn(name="touch start"), PreTouchGyroDrift("pre-touch gyro drift")])
 
     mission_context = RaceContext(
         bottle_color=bottle_color,
@@ -1189,6 +1191,21 @@ def read_rally_drive_hints(mission, hint1, hint2_gate_info, check_tree, plan_giv
             '--rally-hint2-gate-info'
         )
     return hint1, hint2_gate_info
+
+
+def _configure_full_lap_defaults(mission):
+    """Use the latest tested LAP settings in full; explicit overrides win."""
+    if mission != 'full':
+        return
+    defaults = {
+        'LAP_WHITE_SIDED_REJOIN': 'on',
+        'LAP_DARK_HEADING': 'on',
+        'LAP_GATE_TARGET': 'gray_center',
+        'LAP_WEAK_BLUE_MODE': 'baseline',
+    }
+    for name, value in defaults.items():
+        os.environ.setdefault(name, value)
+    print(' -- full LAP settings: ' + ' '.join(name + '=' + os.environ[name] for name in defaults), flush=True)
 
 
 def _run_main(argv, startup_cleanup):
@@ -1401,6 +1418,14 @@ def _run_main(argv, startup_cleanup):
         help=('During the ET rally, estimate the gyro drift rate while the wheels are stopped and '
               'subtract it over time. Default (unset) = off.'),
     )
+    parser.add_argument('--pre-touch-gyro-drift', choices=['on', 'off'], default=None,
+                        help=('2026-11-17: measure the gyro drift for the 3 s before the touch start and subtract it '
+                              'from the touch (LAP included since 2026-11-17 night). off = measure and log only. Default (unset) = on.'))
+    parser.add_argument('--rally-strategy', choices=['file', 'received', 'local'], default=None,
+                        help=('ET rally plan source. file = the default plan file (robot_program/et_rally_default_plan.json), '
+                              'received = from the PC, local = pick a precomputed plan on the robot from the hints it read '
+                              '(~/et_rally_plans/plan_<key>.json or plans.zip; asks for the 4-digit key at start). '
+                              'Default (unset) = config (file).'))
     parser.add_argument('--rally-gyro-drift-extra-sec', type=float, default=None,
                         help=('With --rally-gyro-drift-comp on: seconds to stay still and measure the drift '
                               'rate after the arm is up and has settled. Default (unset) = 2.'))
@@ -1549,6 +1574,10 @@ def _run_main(argv, startup_cleanup):
                         help=('ET rally: correct the position and heading while driving with the camera (prototype). '
                               'POS,HEAD = the fraction of the difference applied per image (e.g. 0.15,0), or "on" = 0.15,0. '
                               'Only images taken on straight segments are used. Default: off.'))
+    parser.add_argument('--rally-camera-calib', default=None,
+                        help=('ET rally: camera calibration file for this robot (2026-11-17). A file name is looked up in '
+                              'wireless_device/et_rally_camera_calib/. Default: the robot C file (et_rally_start_pose.DEFAULT_CALIB). '
+                              'Robot A: --rally-camera-calib calib_A_11171107.json'))
     parser.add_argument('--rally-arm-up-sec', type=float, default=None,
                         help='Seconds the arm needs to go up, for --rally-arm-while-driving (default 3.0, provisional).')
     parser.add_argument('--rally-gyro-scale-neg', type=float, default=None,
@@ -1658,6 +1687,7 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument("--sumo-push-power", type=int, default=80)
     parser.add_argument("--sumo-push-turn-power", type=int, default=50)
     args = parser.parse_args(argv)
+    _configure_full_lap_defaults(args.mission)
     if args.mission == "sumo-push-route-test" and not args.sumo_push_calibration:
         from robot_program.features.sumo_relative_push_settings import (
             RelativePushSettings,
@@ -1771,6 +1801,7 @@ def _run_main(argv, startup_cleanup):
     mission_config = config_for_mission(args.mission)
     mission_config = dataclasses.replace(
         mission_config,
+        start_lap_course=args.course,
         sumo_push_calibration=args.sumo_push_calibration,
         sumo_push_execute=args.sumo_push_execute,
     )
@@ -1850,12 +1881,17 @@ def _run_main(argv, startup_cleanup):
         )
     except ValueError as error:
         parser.error(str(error))
+    if getattr(args, 'rally_strategy', None) is not None:
+        # 2026-11-17(ユーザー): ETラリーの計画の取り方。file = 既定の計画ファイル、received = PC から受け取る、
+        # local = PC を使わず、ロボットが読んだヒントで前もって作った計画(~/et_rally_plans)を選ぶ。
+        mission_config = dataclasses.replace(mission_config, et_rally_strategy_source=args.rally_strategy)
     if args.rally_plan_path is not None:
         # PC接続・Hint計算を一切使わず、指定したplan.json(steps形式)をそのまま実行する
         # (直進距離やキャスター引きずりの実機較正など、固定動作だけを試したいときに使う)。
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+        # 2026-11-17(ユーザー): full でも、計画ファイルを指定して走れる(配置を決めて試すとき。ヒントは読むが計画はこのファイル)
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS + ('full',):
             parser.error(
-                "--rally-plan-path requires --mission rally-drive, bottle-rally or rally-sumo"
+                "--rally-plan-path requires --mission full, rally-drive, bottle-rally or rally-sumo"
             )
         mission_config = dataclasses.replace(
             mission_config, et_rally_strategy_source='file', et_rally_plan_path=args.rally_plan_path)
@@ -1913,8 +1949,8 @@ def _run_main(argv, startup_cleanup):
         mission_config = dataclasses.replace(
             mission_config, et_rally_arm_up_before_touch=(args.rally_arm_up_before_touch == 'on'))
     if args.rally_start_pose is not None:
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
-            parser.error('--rally-start-pose requires --mission rally-drive, bottle-rally or rally-sumo')
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS + ('full',):
+            parser.error('--rally-start-pose requires --mission rally-drive, bottle-rally, rally-sumo or full')
         mission_config = dataclasses.replace(mission_config, et_rally_start_pose=(args.rally_start_pose == 'on'))
     if args.rally_arm_while_driving is not None:
         if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
@@ -1945,18 +1981,30 @@ def _run_main(argv, startup_cleanup):
         if not 1 <= args.rally_camera_exposure <= 5000:
             parser.error('--rally-camera-exposure must be between 1 and 5000')
         mission_config = dataclasses.replace(mission_config, et_rally_camera_exposure=args.rally_camera_exposure)
+    if args.rally_camera_calib is not None:
+        # 2026-11-17: ロボットごとの較正。親(この工程)と、あとで起動するカメラの子プロセスの両方に効かせる。
+        from robot_program import et_rally_start_pose as _sp
+        _calib = _sp.resolve_calib(args.rally_camera_calib)
+        if not _calib.exists():
+            parser.error('--rally-camera-calib: file not found: %s' % _calib)
+        os.environ['ET_RALLY_CAMERA_CALIB'] = str(_calib)
+        _sp.DEFAULT_CALIB = _calib
+        mission_config = dataclasses.replace(mission_config, et_rally_camera_calib_path=str(_calib))
+        print(' -- ET rally camera calibration: %s' % _calib.name, flush=True)
     if args.rally_camera_correct is not None:
         try:
             # 2026-11-11: "on" = 既定(位置0.15・向き0.1)。11/10は向きの補正が1°以上たまるのを誤りと見て0にしたが、
             # 11/11に配置37(右回り中心)で向きが1周約0.4°ずつずれて青ゲートに当たり、向き0.1で解消した(たまっていたのは
             # ジャイロの倍率の約0.1%のずれで、本当の向きのずれだった)。seedでも精度は悪くならなかった。
-            gains = (0.15, 0.1) if args.rally_camera_correct == 'on' else tuple(float(v) for v in args.rally_camera_correct.split(','))
+            # 2026-11-17: "off" = 使わない(full では既定で使うため)
+            gains = (None if args.rally_camera_correct == 'off' else (0.15, 0.1) if args.rally_camera_correct == 'on'
+                     else tuple(float(v) for v in args.rally_camera_correct.split(',')))
         except ValueError:
             gains = ()
-        if len(gains) != 2 or not all(0.0 <= g <= 1.0 for g in gains):
-            parser.error('--rally-camera-correct must be "on" or POS,HEAD with values between 0 and 1')
-        if args.mission != 'rally-drive':
-            parser.error('--rally-camera-correct requires --mission rally-drive (for now)')
+        if gains is not None and (len(gains) != 2 or not all(0.0 <= g <= 1.0 for g in gains)):
+            parser.error('--rally-camera-correct must be "on", "off" or POS,HEAD with values between 0 and 1')
+        if args.mission not in ('rally-drive', 'full'):
+            parser.error('--rally-camera-correct requires --mission rally-drive or full')
         mission_config = dataclasses.replace(mission_config, et_rally_camera_correct=gains)
     if args.rally_arm_up_sec is not None:
         if not 0.5 <= args.rally_arm_up_sec <= 10.0:
@@ -2041,7 +2089,9 @@ def _run_main(argv, startup_cleanup):
             ('--rally-move-fine-power', args.rally_move_fine_power, 'et_rally_move_fine_power')):
         if value is None:
             continue
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+        # 2026-11-17(ユーザー): スタートで測ったジャイロのずれの差し引きは full でも試せるようにする
+        allowed = MANUAL_RALLY_MISSIONS + (('full',) if option == '--rally-gyro-drift-comp' else ())
+        if mission_config.mission_mode not in allowed:
             parser.error(option + ' requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(mission_config, **{field: value == 'on'})
     if args.rally_straight_pause_labels is not None:
@@ -2176,6 +2226,9 @@ def _run_main(argv, startup_cleanup):
         # 2026-11-14: 周回の判断のノードを作るため、持ち時間の仮の値を入れる。走るときは 制限時間 − 競技の開始からの秒 に置き換わる
         # (タッチの時刻が分からないときだけこの値を使う。テストと同じ70秒)。
         mission_config = dataclasses.replace(mission_config, et_rally_time_budget=70.0)
+    if args.pre_touch_gyro_drift is not None:
+        from robot_program import pre_touch_gyro
+        pre_touch_gyro.ENABLED = args.pre_touch_gyro_drift == 'on'
     if args.rally_gyro_drift_extra_sec is not None:
         if not 0.5 <= args.rally_gyro_drift_extra_sec <= 10.0:
             parser.error('--rally-gyro-drift-extra-sec must be between 0.5 and 10')
@@ -2266,6 +2319,14 @@ def _run_main(argv, startup_cleanup):
     if args.mission in INTEGRATION_MISSIONS and pending:
         parser.error('Integration verification cannot run with unimplemented features')
 
+    if (mission_config.enable_et_rally
+            and mission_config.et_rally_laps > 0
+            and mission_config.et_rally_strategy_source == "local"
+            and mission_config.mission_mode not in MANUAL_RALLY_MISSIONS):
+        # 2026-11-17: local は PC を待たず、ヒント2を解く4桁の復号キーだけ先に入れる
+        decryption_key = read_decryption_key()
+        tree.context.decryption_key = decryption_key
+        g_key = decryption_key
     if (mission_config.enable_et_rally
             and mission_config.et_rally_laps > 0
             and mission_config.et_rally_strategy_source == "received"):

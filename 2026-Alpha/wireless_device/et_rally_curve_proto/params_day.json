@@ -5,6 +5,7 @@
  "half_width": 7.0,
  "margin_front": 3.0,
  "margin_rear": 3.0,
+ "pass_back_cm": 7.2,
  "radii": [
   20.0,
   15.0,
@@ -48,6 +49,9 @@
  "oblique_both": true,
  "start_at": "goal",
  "goal_at": "garage",
+ "garage_overlap_cm": 10.0,
+ "garage_overlap_y_cm": 12.0,
+ "note_garage_1117": "2026-11-17 ユーザー: ガレージは車体(アームなし)が横(x)に10cm以上、縦(y)に12cm以上食い込む位置で止める(前は6・8cm)",
  "goal_heading": 0.0,
  "goal_headings": [
   0.0,

@@ -23,6 +23,8 @@ class RaceConfig:
     # profile: PDF距離-方位表。legacy: 従来の固定方位+ライントレース。
     # profile: 谷口さんベースコードでSTART-LAPまで全部ライントレース
     start_lap_mode: str = 'profile'
+    # 選択したコースの方位表。alpha.pyでCLIから設定する。
+    start_lap_course: str = 'left'
     #start_lap_mode: str = 'legacy'
     #start_lap_mode: str = 'alltrace'
     start_lap_power: int = 100
@@ -135,7 +137,7 @@ class RaceConfig:
     et_rally_turn_wheel_sync_gain: Optional[float] = 2.0
     # 2026-10-31: wheel_sync有効時だけ、phase1の最後の(エンコーダ度, 出力)で左右そろって減速する。
     # 既定None=通常の(15度, 50)。同期ありでは止めた後の流れが約12度に増えて行き過ぎていたため。
-    et_rally_turn_sync_decel: Optional[tuple] = (40.0, 40)
+    et_rally_turn_sync_decel: Optional[tuple] = (40.0, 45)
     # 2026-10-28: one_shotで、旋回の前に車体が止まるまで待つ。既定None=False(待たない)。
     et_rally_turn_pre_stop: Optional[bool] = True
     # 2026-10-29: 経路の前に、スタートの向きへこの距離(mm)だけ前進→後退して、置いた向きを確かめる。既定None=しない。
@@ -158,11 +160,13 @@ class RaceConfig:
     # 既定None=測定2秒・振動待ち1秒。
     et_rally_gyro_drift_extra_sec: Optional[float] = None
     # 2026-11-14: 1.0 を既定に(試験の --rally-gyro-drift-settle-sec 1.0 と同じ。本番の full でもオプションなしで効くように)
-    et_rally_gyro_drift_settle_sec: Optional[float] = 1.0
+    # 2026-11-17(ユーザー): 1.0→0.5、ハブの測り直し 2.0→1.5(スタートで止まる時間を3.0→2.0秒に。アームは走りながら上げるので
+    # 揺れ待ちは短くてよい。ハブは止まって1秒たつと測り直し始める)
+    et_rally_gyro_drift_settle_sec: Optional[float] = 0.5
     # 2026-10-29: ハブのプログラムを書き換えた版用。ETラリー開始時、アームを上げ切って振動待ちのあと、
     # この秒数だけブレーキで止まり、ハブ自身にジャイロのくせを測り直させる。既定None=止まらない。
     # 2026-11-14: 2秒を既定に(試験の --rally-gyro-hub-recal-sec 2 と同じ)
-    et_rally_gyro_hub_recal_sec: Optional[float] = 2.0
+    et_rally_gyro_hub_recal_sec: Optional[float] = 1.5
     # 2026-11-05: ETラリーの最後に止まったあと、この秒数ブレーキで止まったまま、ジャイロの回転の速さと向きの変化を
     # 記録する(測るだけで補正しない)。走行中のくせが走る前の測定と違うかを見るため。既定None=測らない。
     et_rally_gyro_post_measure_sec: Optional[float] = None
@@ -474,6 +478,12 @@ def config_for_mission(mission: str, base: RaceConfig = None) -> RaceConfig:
             enable_finish=True,
             # 2026-11-14: 本番はタッチ1回で全工程を通す。ETラリーの持ち時間 = 120 − 競技の開始からの秒(et_rally_time_budget.py)
             et_rally_time_total=(config.et_rally_time_total if config.et_rally_time_total is not None else 120.0),
+            # 2026-11-17(ユーザー): full でも ETラリーのカメラの補正を使う(rally-drive で --rally-start-pose on・
+            # --rally-camera-correct on と同じ)。11/16 の full(ロボットC)はカメラの補正なしで走り、黄ゲートに当たった。
+            # コマンドの --rally-start-pose off / --rally-camera-correct で変えられる。
+            et_rally_start_pose=(config.et_rally_start_pose if config.et_rally_start_pose is not None else True),
+            et_rally_camera_correct=(config.et_rally_camera_correct if config.et_rally_camera_correct is not None
+                                     else (0.15, 0.1)),
         )
     return replace(config, mission_mode=('full' if mission == 'full' else 'configured'), **disabled)
 

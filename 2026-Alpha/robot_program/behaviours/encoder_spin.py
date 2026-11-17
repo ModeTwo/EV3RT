@@ -23,6 +23,9 @@ FINE_MIN_POWER = 50
 # 2026-11-16(devSSとのマージ): 回す量に使うタイヤ径。マージ前の EtRallySpinAroundByEncoder が使っていた
 # ET_RALLY_TIRE_DIAMETER(56.87)のまま固定する(devSS で ETラリーの値は 55.56 に変わり、旋回は直進と同じ径を使う形になったため)。
 LEGACY_TIRE_DIAMETER = 56.87
+# 2026-11-17(devSS、ユーザー): 仕上げで一度行き過ぎて戻ったあとは、この度数以内なら止める(細かい往復で遅くなっていた)。
+# 旋回のあとの直進・ライントレースは目標の向きへ寄せるので、この程度の残りは吸収される。
+SETTLE_AFTER_REVERSAL_DEG = 1.5
 
 
 class EncoderSpin(EtRallySpinAroundByEncoder):
@@ -30,7 +33,10 @@ class EncoderSpin(EtRallySpinAroundByEncoder):
     max_powerがフェーズ1の出力、toleranceが仕上げの許容(fine_trim=Falseのときは使われない)。"""
 
     def __init__(self, name, target, max_power, min_power, pid_p, pid_i, pid_d, target_type,
-                 tolerance=0.5, fine_trim=True):
+                 tolerance=0.5, fine_trim=True, stall_power_cap=None):
+        # stall_power_cap: 仕上げで止まって動かないときに上げる出力の上限(None なら 90)。ボトルを運ぶ旋回で低くする
+        if stall_power_cap is not None:
+            self.stall_power_cap = stall_power_cap
         fine_max = min(FINE_MAX_POWER, max_power)
         fine_min = min(FINE_MIN_POWER, fine_max)
         super().__init__(
@@ -38,7 +44,8 @@ class EncoderSpin(EtRallySpinAroundByEncoder):
             fine_max_power=fine_max, fine_min_power=fine_min,
             pid_p=pid_p, pid_i=pid_i, pid_d=pid_d, target_type=target_type,
             fine_tolerance_deg=tolerance, fine_trim=fine_trim,
-            tire_diameter_mm=LEGACY_TIRE_DIAMETER)
+            tire_diameter_mm=LEGACY_TIRE_DIAMETER,
+            settle_after_reversal_deg=max(SETTLE_AFTER_REVERSAL_DEG, tolerance))
 
 
 class LocalEncoderSpin(EncoderSpin):
@@ -76,13 +83,21 @@ class DeliveryEncoderTurn(EncoderSpin):
         return super().update()
 
 
-def delivery_encoder_turn(name, context, settings, target, fine_trim=True):
-    """delivery_turn.delivery_turnのエンコーダ版。"""
+def delivery_encoder_turn(name, context, settings, target, fine_trim=True, carrying_bottle=False):
+    """delivery_turn.delivery_turnのエンコーダ版。
+    carrying_bottle=True: ボトルを押して運びながらの旋回。出力を settings.delivery_carry_turn_power に下げ、
+    止まったときに上げる出力も settings.delivery_carry_turn_stall_cap までにする(2026-11-17、ボトルが外へ出そうだった)。"""
     root = Sequence(name=name, memory=True)
+    if carrying_bottle:
+        power = settings.delivery_carry_turn_power
+        turn = DeliveryEncoderTurn(name + ' spin', context, target, power, power, fine_trim=fine_trim)
+        turn.stall_power_cap = settings.delivery_carry_turn_stall_cap
+    else:
+        turn = DeliveryEncoderTurn(name + ' spin', context, target,
+                                   settings.to_spin_min_power, settings.to_spin_max_power,
+                                   fine_trim=fine_trim)
     root.add_children([
-        DeliveryEncoderTurn(name + ' spin', context, target,
-                            settings.to_spin_min_power, settings.to_spin_max_power,
-                            fine_trim=fine_trim),
+        turn,
         StopNow(name=name + ' brake'),
     ])
     return root

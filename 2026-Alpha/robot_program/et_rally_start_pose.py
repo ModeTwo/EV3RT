@@ -23,6 +23,7 @@
 
 import json
 import math
+import os
 import time
 from pathlib import Path
 
@@ -103,6 +104,21 @@ START_MM = (4 * P_MM + 149.0, 3.5 * P_MM)
 START_HEADING_DEG = 180.0
 
 DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_11161509_floor.json"   # 2026-11-15: 止まって撮る試験3回で取り付けの補正とスタートの癖(start_fix)を当てはめた
+# 2026-11-17: ロボットごとの較正(本番はロボットC = 上の DEFAULT_CALIB)。環境変数 ET_RALLY_CAMERA_CALIB(alpha.py の
+# --rally-camera-calib が入れる)があればそれを使う。ファイル名だけなら wireless_device/et_rally_camera_calib/ の中を探す。
+# カメラの子プロセスにも同じ環境変数が渡るので、親と子で同じ較正になる。
+CALIB_DIR = DEFAULT_CALIB.parent
+
+
+def resolve_calib(name):
+    p = Path(name)
+    if not p.is_absolute() and not p.exists():
+        p = CALIB_DIR / p
+    return p
+
+
+if os.environ.get("ET_RALLY_CAMERA_CALIB"):
+    DEFAULT_CALIB = resolve_calib(os.environ["ET_RALLY_CAMERA_CALIB"])
 
 # 真上から見た画像の範囲(車体の座標、mm)と1画素の大きさ。スタートでは止まっているので、少し広めに細かく見る。
 TOP_S = 0.5
@@ -141,7 +157,7 @@ SCALE_LIMIT = (0.94, 1.06)
 class GroundCamera:
     """較正(calib_*.json の lens と jig[0])から、画像 → 床(車体の座標)の対応表を作っておく。"""
 
-    def __init__(self, calib_path=None, top_x=TOP_X, top_y=TOP_Y, top_s=TOP_S, extra_pitch_deg=0.0):
+    def __init__(self, calib_path=None, top_x=TOP_X, top_y=TOP_Y, top_s=TOP_S, extra_pitch_deg=0.0, build_map=True):
         import cv2
         import numpy as np
         self.cv2, self.np = cv2, np
@@ -202,6 +218,11 @@ class GroundCamera:
         self.K, self.dist, self.rvec, self.tvec = K, dist, rv, t
         self.R0 = cv2.Rodrigues(rv)[0]
         self.C0 = -self.R0.T @ t
+        if not build_map:
+            # 2026-11-17: 1点だけ床へ写すとき(相撲→ETラリーの青い丸)は、真上から見た画像の対応表を作らない(ラズパイで約2.8秒かかる)
+            self.map = None
+            self.valid = None
+            return
         xs = np.arange(top_x[1], top_x[0], -top_s); ys = np.arange(top_y[1], top_y[0], -top_s)
         YY, XX = np.meshgrid(ys, xs)
         pts = np.stack([XX.ravel(), YY.ravel(), np.zeros(XX.size)], 1)
@@ -1316,8 +1337,12 @@ class EtRallyApplyStartPose(Behaviour):
             return Status.SUCCESS
         gyro = runtime.gyro_sensor
         if hasattr(gyro, "set_heading_offset"):
-            # 計画の向き(heading = -course × ジャイロ)で -dth になるように、ジャイロの向きに course × dth を足す。
-            gyro.set_heading_offset(getattr(runtime, "course", -1) * dth)
+            # 計画座標での向きが -dth になるようにジャイロを補正する。
+            offset = getattr(runtime, "course", -1) * dth
+            if getattr(gyro, "plan_origin_deg", None) is not None:
+                # fullでは正対の残差をジャイロが既に持つため、カメラの測定との差だけ足す。
+                offset = _nd(offset - (gyro.get_angle() - gyro.heading_offset))
+            gyro.set_heading_offset(offset)
         else:
             self.logger.warning("start pose: gyro has no heading offset (EtRallyHeading not installed), heading not applied")
         _applied = (x, y, h)
