@@ -377,12 +377,46 @@ class Video(object):
             finally:
                 with self._result_lock:
                     self._is_detecting = False
+            self._qr_diag(session, frame_id, gray, text, corners)
             if self._vision_sessions.publish_qr(session, frame_id, text):
                 with self._result_lock:
                     self._detected_corners = corners
                     if text:
                         self._detected_text = text
                         self._last_decode_time = time.time()
+
+    def _qr_diag(self, session, frame_id, gray, text, corners):
+        """2026-11-17(devSS): QRが読めないときの手がかり。読み取りの回数・QRの位置は見つかった回数を2秒ごとに出し、
+        読めないまま3秒・8秒・15秒たったら、そのときの画像を work/qr-debug に残す(ヒント2で25秒読めなかった回の調査用)。"""
+        now = time.monotonic()
+        st = getattr(self, '_qr_diag_state', None)
+        if st is None or st['session'] != session:
+            st = self._qr_diag_state = dict(session=session, t0=now, n=0, located=0, last_log=now, saved=0)
+        st['n'] += 1
+        if corners is not None:
+            st['located'] += 1
+        if text:
+            print("QR_STATS session=%s decoded after %.1fs attempts=%d located=%d" % (
+                session, now - st['t0'], st['n'], st['located']))
+            st['t0'] = float('inf')
+            return
+        if now - st['last_log'] >= 2.0:
+            st['last_log'] = now
+            print("QR_STATS session=%s waiting %.1fs attempts=%d located=%d frame=%s" % (
+                session, now - st['t0'], st['n'], st['located'], frame_id))
+        marks = (3.0, 8.0, 15.0)
+        if st['saved'] < len(marks) and now - st['t0'] >= marks[st['saved']]:
+            st['saved'] += 1
+            try:
+                from pathlib import Path
+                from datetime import datetime
+                folder = Path(__file__).resolve().parents[1] / "work" / "qr-debug"
+                folder.mkdir(parents=True, exist_ok=True)
+                path = folder / ("%s-session-%s-%02ds.jpg" % (datetime.now().strftime("%Y%m%d-%H%M%S"), session, int(now - st['t0'])))
+                cv2.imwrite(str(path), gray, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                print("QR_DEBUG SAVED %s located=%s" % (path, corners is not None))
+            except Exception as error:
+                print("QR_DEBUG SAVE FAILED: %r" % (error,))
 
     def _marker_detection_worker(self) -> None:
         while not self._worker_stop.is_set():
