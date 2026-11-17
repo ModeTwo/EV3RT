@@ -1020,7 +1020,9 @@ def build_behaviour_tree(
     if arm_up_before_touch(mission_config):
         # 2026-11-03: --rally-arm-up-before-touch: タッチの前にアームを上げておく(タッチの後はジャイロの測り直しだけ)。
         calibration.add_child(make_arm_up_down("arm up before touch", ArmDirection.UP, mission_config))
-    start.add_children([IsTouchOn(name="touch start")])
+    # 2026-11-17(ユーザー): タッチを待つ間にジャイロのずれを測る(押される直前の3秒。測ってログに出すだけ)
+    from robot_program.pre_touch_gyro import PreTouchGyroDrift
+    start.add_children([IsTouchOn(name="touch start"), PreTouchGyroDrift("pre-touch gyro drift")])
 
     mission_context = RaceContext(
         bottle_color=bottle_color,
