@@ -958,13 +958,23 @@ def build_tantou_tree(context, config, include_exit=True):
         target_type=HeadingType.ABSOLUTE,
         distance_mm=200,
         decel_mm=50,
-        decel_min_power=20
+        # 2026-11-17(devSS、実機): 20 だと200mmを過ぎたあと車輪が回らず(出力20で止まる)、黒線に届かないまま
+        # 動かなくなった(ヒント2のQRは読めたあと、黒線が想定より約230mm先だった回)。200mmを過ぎても黒線まで
+        # ゆっくり進み続けられる出力にする(出力30でも車輪が回らなかったことがある)
+        decel_min_power=40
     ),
     
     IsBlackDetected(
         name="detect_black_2",
         black_threshold=settings.to_exit_black_v,
         required_frames=2
+    ),
+
+    # 2026-11-17(devSS): それでも黒線が見つからないときに止まったままにならないよう、上限を置いて先へ進む
+    # (ふだんはこの区間の約110mmで黒線。11/17 の外れた回は約340mm)
+    IsDistanceEarned(
+        name="black_2_give_up",
+        delta_dist=600
     ),
     ])
     
@@ -1008,13 +1018,20 @@ def build_tantou_tree(context, config, include_exit=True):
             target_type=HeadingType.ABSOLUTE,
             distance_mm=200,
             decel_mm=50,
-            decel_min_power=20
+            # 2026-11-17(devSS): 20 だと200mmを過ぎて黒線がないとき車輪が回らず止まったままになる(run_to_black_2 と同じ)
+            decel_min_power=40
         ),
     
         IsBlackDetected(
             name="detect_black_3",
             black_threshold=settings.to_exit_black_v,
             required_frames=2
+        ),
+
+        # 2026-11-17(devSS): 黒線が見つからなくても止まったままにしない上限
+        IsDistanceEarned(
+            name="black_3_give_up",
+            delta_dist=600
         ),
 
         #IsDistanceEarned(
