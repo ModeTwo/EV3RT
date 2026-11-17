@@ -5,6 +5,7 @@
  "half_width": 7.0,
  "margin_front": 3.0,
  "margin_rear": 3.0,
+ "pass_back_cm": 7.2,
  "radii": [
   20.0,
   15.0,

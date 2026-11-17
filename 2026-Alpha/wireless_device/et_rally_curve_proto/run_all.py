@@ -74,7 +74,11 @@ def main():
     ap.add_argument('--near-max', type=int, default=3)
     ap.add_argument('--shard', default=None)
     ap.add_argument('--skip-file', default=None)
+    # 2026-11-17: 計算する配置の一覧のファイル(1行1つ、またはカンマ区切り)。--keys と同じ意味(多いとき用)
+    ap.add_argument('--keys-file', default=None)
     a = ap.parse_args()
+    if a.keys_file:
+        a.keys = ','.join(open(a.keys_file, encoding='utf-8').read().replace(',', ' ').split())
     if a.defer_narrow:
         os.environ['HR_DEFER_NARROW'] = '1'
     else:

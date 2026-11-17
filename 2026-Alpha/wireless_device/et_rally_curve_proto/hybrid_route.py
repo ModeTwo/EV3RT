@@ -186,6 +186,9 @@ PARAMS = dict(
     # 中心を結ぶ線を、線に垂直にこの距離だけ越えるまで直進で抜ける。規則は「ロボットが完全にゲートを通過すること」で、
     # ゲートには幅があり置き方にもむらがあるため、灰色の点の端(半径2.2cm、直径約44mm)から2cm = 4.2cm にした(以前は2.0cm)。
     pass_cm=4.2,
+    # 2026-11-17(ユーザー): 抜けきってから通った向きと逆に戻る通り方(往復 FB/BF)の、抜けの距離(cm)。通過の判定は人が目で見るので、
+    # はっきり抜けたと分かるよう点の縁から5cm(= 2.2 + 5 = 7.2)。None なら pass_cm と同じ。
+    pass_back_cm=None,
     # 2026-11-11(ユーザーの実測): ガレージエリア。今のスタート地点から、フィールドと逆向き(+x)に [x0, x1] cm、
     # Y5の方向(-y)に [y0, y1] cm の長方形。goal_at='garage' のとき、止まる向き(goal_headings)ごとに、車体の箱
     # (車軸から前 front・後ろ rear、幅 half_width×2)がこの長方形の真ん中に来るように車軸の位置を決める。
@@ -221,6 +224,7 @@ globals().update({k.upper(): v for k, v in PARAMS.items()})
 P = 24.64
 POST_R, ARM = 1.0, 4.0
 PM, CLR = PASS_CM, 0.5   # PM: 抜けの距離(上の pass_cm)。CLR: 入りで先の端の角が線の手前に来る距離
+PMB = PASS_BACK_CM if PASS_BACK_CM is not None else PASS_CM   # 往復(抜けて戻る)ときの抜けの距離
 INF = 1e9
 TAU = 2 * math.pi
 START = np.array([2 * 2 * P - (4 * P + 17.8), 3.5 * P]); START_H = 0.0
@@ -1102,7 +1106,7 @@ def _rot(v, deg):
     return np.array([v[0] * c - v[1] * sn, v[0] * sn + v[1] * c])
 
 
-def _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r):
+def _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r, pm=None):
     """ゲートの通過のプリミティブ。入りは向き a_in の直進で車軸が C(ゲートの線上)に着くまで、
     a_in != a_out なら C から半径 r の円弧で a_out に向きを変え、a_out の直進で抜ける。
     入りの条件: 先の端の角が線の CLR 手前、抜けの条件: 後の端の角が線を PM 越える(線に垂直な距離)。"""
@@ -1110,7 +1114,7 @@ def _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, ee, r):
     ci, si = math.cos(math.radians(a_in)), abs(math.sin(math.radians(a_in)))
     co, so = math.cos(math.radians(a_out)), abs(math.sin(math.radians(a_out)))
     S = C - u_in * ((lead * ci + HALF_WIDTH * si + CLR) / ci + ea)
-    need = trail * co + HALF_WIDTH * so + PM
+    need = trail * co + HALF_WIDTH * so + (PM if pm is None else pm)
     prims = [('line', S, C, m)]
     P2 = C
     if abs(a_out - a_in) > 1e-9:
@@ -1193,7 +1197,7 @@ def _visit_candidates(g, pairs_override=None, only=None):
                                 elif oblique:
                                     # 斜めの往復: 斜めの通過(抜けの余りなし)で抜けきったら止まり、同じ道を後退で戻って、
                                     # 入りの点からさらに ee だけ戻る(戻りも行きと同じ道なので、柱とのすき間も同じ)
-                                    fwd = _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, 0.0, r)
+                                    fwd = _pass_prims(g, C, base_u, a_in, a_out, lead, trail, m, ea, 0.0, r, pm=PMB)
                                     if fwd is None:
                                         continue
                                     back = [_retrace(q) for q in reversed(fwd)]
@@ -1202,7 +1206,7 @@ def _visit_candidates(g, pairs_override=None, only=None):
                                 else:
                                     # 往復(垂直だけ): 抜けきったら戻って、元の側へ抜けきる
                                     u = base_u
-                                    S = C - u * (lead + CLR + ea); T = C + u * (trail + PM)
+                                    S = C - u * (lead + CLR + ea); T = C + u * (trail + PMB)
                                     E = C - u * ((FRONT if mode == 'FB' else REAR) + CLR + ee)
                                     prims = [('line', S, T, m), ('line', T, E, -m)]
                                 ok = True

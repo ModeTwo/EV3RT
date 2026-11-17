@@ -107,6 +107,37 @@ def gate_crossings(hr, pts):
     return out
 
 
+def pass_backs(hr, pts, max_gap_cm=150.0):
+    """2026-11-17(ユーザー): 「ゲートを抜けきってから、通った向きと逆に戻る」所を探し、抜けたときに車体がゲートの線
+    (2つの点の中心を結ぶ線)をどこまで越えたか(車体の4つの角のうち一番線に近い角の、線からの垂直な距離の最大)を返す。
+    同じゲートを続けて逆向きに横切り、その間にほかのゲートを横切らず、間の道のりが max_gap_cm 以下のものだけ。
+    戻り値: [(色, 越えた距離cm, 1回目の横切りの点の番号)]。"""
+    import numpy as np
+    ev = []
+    for k, ((x0, y0, _h0, _i0), (x1, y1, _h1, _i1)) in enumerate(zip(pts, pts[1:])):
+        for c, g in hr.GATES.items():
+            if _cross((x0, y0), (x1, y1), g.pa, g.pb):
+                ev.append((k + 1, c))
+    out = []
+    P = np.array([(p[0], p[1]) for p in pts]); H = np.radians([p[2] for p in pts])
+    seg = np.r_[0.0, np.cumsum(np.hypot(*np.diff(P, axis=0).T))]
+    cx = np.array([hr.FRONT, hr.FRONT, -hr.REAR, -hr.REAR]); cy = np.array([-hr.HALF_WIDTH, hr.HALF_WIDTH] * 2)
+    for (k0, c0), (k1, c1) in zip(ev, ev[1:]):
+        if c0 != c1 or seg[k1] - seg[k0] > max_gap_cm:
+            continue
+        g = hr.GATES[c0]
+        pa, pb = np.asarray(g.pa, float), np.asarray(g.pb, float)
+        t = (pb - pa) / np.linalg.norm(pb - pa); n = np.array([-t[1], t[0]])
+        d = 1.0 if float(np.dot(P[k0] - pa, n)) > 0 else -1.0
+        sl = slice(k0, k1)
+        ch, sh = np.cos(H[sl])[:, None], np.sin(H[sl])[:, None]
+        X = P[sl, 0][:, None] + cx[None, :] * ch - cy[None, :] * sh
+        Y = P[sl, 1][:, None] + cx[None, :] * sh + cy[None, :] * ch
+        dist = d * ((X - pa[0]) * n[0] + (Y - pa[1]) * n[1])
+        out.append((c0, round(float(dist.min(axis=1).max()), 2), k0))
+    return out
+
+
 ORDER = {'red': 'blue', 'blue': 'yellow', 'yellow': 'red'}
 
 
@@ -199,6 +230,13 @@ def check(plan_path, params_path, budget, min_clear, ratio=0.93, tol=0.1):
         res['warn'].append('main: keepout within %.0fmm (%d samples) at %s' % (KEEPOUT_TOL_CM * 10, m['keepout_shallow'], m['keepout_first']))
     if bad:
         res['ng'].append('main: gate order %s' % res['main']['gates'])
+    # 2026-11-17(ユーザー): 抜けて逆向きに戻る所は、車体がゲートの線を pass_back_cm 以上越えているか(人が目で見て分かるように)
+    pbs = pass_backs(hr, pts)
+    res['main']['pass_back_min'] = min([d for _c, d, _k in pbs], default=None)
+    need_pb = hr.PARAMS.get('pass_back_cm')
+    if need_pb is not None and pbs and res['main']['pass_back_min'] < float(need_pb) - 0.2:
+        res['warn'].append('main: pass-back %.1fcm < %.1f (%s)' % (res['main']['pass_back_min'], float(need_pb),
+                                                                  ','.join(sorted(set(c for c, d, _k in pbs if d < float(need_pb) - 0.2)))))
     need_x, need_y = float(hr.PARAMS.get('garage_overlap_cm', 6.0)), float(hr.PARAMS.get('garage_overlap_y_cm', 8.0))
     if ov[0] < need_x - 0.5 or ov[1] < need_y - 0.5:
         res['ng'].append('main: garage overlap %.1f/%.1f < %.1f/%.1f' % (ov[0], ov[1], need_x, need_y))
