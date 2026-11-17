@@ -35,6 +35,9 @@ def main():
                 bad.add(os.path.basename(r.get('plan') or ('plan_%s.json' % r.get('name'))))
     os.makedirs(a.out, exist_ok=True)
     written, skipped, dup = {}, [], 0
+    tidied = []
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from plan_tidy import tidy_plan
     for d in a.dirs:
         # 2026-11-16: run_all.py / run_layout.py の出力(<鍵>.plan.json、当たり判定は <鍵>.chk.json)も読む。NG の配置は書き出さない
         files = sorted(glob.glob(os.path.join(d, 'plan_*.json')))
@@ -60,6 +63,10 @@ def main():
             except (OSError, ValueError, KeyError, TypeError) as error:
                 skipped.append('%s (%s)' % (os.path.basename(f), error))
                 continue
+            # 2026-11-17(ユーザー): 同じ直線上の「後退→少し前進→後退」を1本にまとめる(plan_tidy.py、終わりの位置は同じ)
+            plan, n_tidy = tidy_plan(plan)
+            if n_tidy:
+                tidied.append('%s(%d)' % (key, n_tidy))
             if key in written:
                 dup += 1
             written[key] = f
@@ -73,6 +80,8 @@ def main():
         len(written), dup, len(skipped), z, os.path.getsize(z) / 1e6, len(written), total))
     for s in skipped[:10]:
         print('  skipped', s)
+    if tidied:
+        print('tidied (back-and-forth merged): %s' % ', '.join(tidied))
 
 
 if __name__ == '__main__':
