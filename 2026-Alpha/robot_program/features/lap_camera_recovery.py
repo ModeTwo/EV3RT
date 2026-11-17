@@ -1793,6 +1793,33 @@ class _DeferredBottleObservation(Behaviour):
         self.started = False
     def initialise(self):
         self.started = False
+        self.aim_last_frame = -1
+        self.aim_logged = 0
+    def _log_bottle_aim(self):
+        # 2026-11-18(devSS): ボトルをつかみ損ねる(片方のアームに当たって外へそれる)調べ。見るだけ。
+        # 新しい画像ごとに、選んだボトルの画面上の位置を出す。床の上の位置は PC でカメラの較正から求める
+        # (u=2*cx, v=2*bottom+60 が 640x480 の画素。bottom は色の帯の下端で、床からの高さのぶん遠くに出る)。
+        if self.aim_logged >= 200:
+            return
+        try:
+            session, frame_id, observation = runtime.video.get_bottle_observation()
+        except Exception:
+            return
+        if frame_id is None or frame_id <= self.aim_last_frame:
+            return
+        self.aim_last_frame = frame_id
+        insight, color, cx, theta, bottom, area, blind = observation
+        if not insight:
+            return
+        self.aim_logged += 1
+        progress = float(runtime.plotter.get_distance()) - self.lap.origin_distance
+        gyro = float(runtime.gyro_sensor.get_angle())
+        lap_phase = getattr(self.lap, 'transition_phase', None)
+        self.logger.info('BOTTLE_AIM_OBS frame=%d progress_mm=%.1f gyro_deg=%.2f heading_origin=%s lap_phase=%s fallback=%s '
+                         'color=%s cx=%d bottom=%d area=%d blind=%s theta=%.2f'
+                         % (frame_id, progress, gyro, getattr(self.lap, 'heading_origin', None), lap_phase,
+                            getattr(self.lap, 'fallback_done', None), getattr(color, 'value', color),
+                            int(cx), int(bottom), int(area), bool(blind), float(theta)))
     def update(self):
         if not self.started:
             if not self.lap.running:
@@ -1802,6 +1829,7 @@ class _DeferredBottleObservation(Behaviour):
                 return Status.RUNNING
             self.started = True
         self.child.tick_once()
+        self._log_bottle_aim()
         return self.child.status
     def terminate(self, status):
         if self.started:
