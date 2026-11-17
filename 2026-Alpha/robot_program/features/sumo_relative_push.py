@@ -700,7 +700,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         self.push_leg_mm = max(0.0, self._forward_mm_from(self.push_encoder_origin))
 
         # 押し出し距離に関係なく150mm後退する
-        self.back_target_mm = 100.0
+        self.back_target_mm = 120.0
         self.back_left_origin = float(runtime.left_motor.get_count())
         self.back_right_origin = float(runtime.right_motor.get_count())
         self.back_heading = current_bearing(self.context)
