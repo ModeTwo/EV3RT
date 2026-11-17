@@ -20,6 +20,16 @@ def _dh(a, b):
     return abs(((float(a) - float(b) + 180.0) % 360.0) - 180.0)
 
 
+def _arc_like(base, target, sweep, R, rev, stop, label, drop_marks=False):
+    """base の直進の設定(max_power・marks など)を引き継いだ円弧。"""
+    a = {k: v for k, v in base.items() if k not in ('distance_mm',)}
+    if drop_marks:
+        a.pop('marks', None)
+    a.update(type='arc', target_heading_deg=round(target, 4), sweep_deg=round(sweep, 4), radius_mm=round(R, 1),
+             reverse=rev, stop=stop, label=label)
+    return a
+
+
 def _integrate(steps):
     """steps を (0,0) 向き(コースの向き)h0 から積算した終わりの (x, y, h)。check_plan.sample と同じ式(mm)。"""
     x = y = 0.0
@@ -66,17 +76,46 @@ def _straight_to_same_end(chunk, nxt):
     R = along / (2.0 * math.sin(eps))
     for sg in (1.0, -1.0):
         d = math.degrees(eps) * sg
-        a1 = dict(type='arc', target_heading_deg=round(H + d, 4), sweep_deg=round(d, 4), radius_mm=round(R, 1),
-                  reverse=rev, stop=False, label=None)
-        a2 = dict(type='arc', target_heading_deg=round(H, 4), sweep_deg=round(-d, 4), radius_mm=round(R, 1),
-                  reverse=rev, stop=False, label=nxt.get('label'))
+        a1 = _arc_like(nxt, H + d, d, R, rev, stop=False, label=None, drop_marks=True)
+        a2 = _arc_like(nxt, H, -d, R, rev, stop=nxt.get('stop', False), label=nxt.get('label'), drop_marks=True)
         ex, ey = _integrate([dict(nxt, distance_mm=0.0), a1, a2])
         if math.hypot(ex - wx, ey - wy) < 0.5:
             return [a1, a2]
     raise ValueError('could not build the S curve')
 
 
-def merge_back_and_forth(steps, max_back_mm=200.0, max_dh=3.0):
+def _straight_to_same_end_from(first, chunk, nxt):
+    """first(直進)の始まりから、first → chunk → nxt で着く位置へ、同じ向き・同じ前後の向きで行く steps。
+    横のずれは first+nxt の全体の長さにわたる緩いS字で寄せる。first の印(label)は最初の区間に残す。"""
+    if first['type'] != 'move' or nxt['type'] != 'move':
+        return None
+    total = [first] + list(chunk) + [nxt]
+    # first の始まりを原点に積算する(_integrate は最初の区間の向きを起点にする)
+    ex, ey = _integrate(total)
+    H = float(nxt['target_heading_deg'])
+    hh = 180.0 - H
+    rev = bool(nxt.get('reverse'))
+    th = math.radians(hh + (180.0 if rev else 0.0))
+    ux, uy = math.cos(th), math.sin(th)
+    along = ex * ux + ey * uy
+    lat = -ex * uy + ey * ux
+    if along <= 0:
+        return None
+    if abs(lat) < 0.2:
+        return [dict(nxt, distance_mm=round(along, 1), label=nxt.get('label') or first.get('label'), stop=nxt.get('stop', False))]
+    eps = 2.0 * math.atan2(abs(lat), along)
+    R = along / (2.0 * math.sin(eps))
+    for sg in (1.0, -1.0):
+        d = math.degrees(eps) * sg
+        a1 = _arc_like(first, H + d, d, R, rev, stop=False, label=first.get('label'))
+        a2 = _arc_like(nxt, H, -d, R, rev, stop=nxt.get('stop', False), label=nxt.get('label'))
+        fx, fy = _integrate([dict(nxt, distance_mm=0.0), a1, a2])
+        if math.hypot(fx - ex, fy - ey) < 0.5:
+            return [a1, a2]
+    return None
+
+
+def merge_back_and_forth(steps, max_back_mm=250.0, max_dh=5.0):
     """戻り値: (新しい steps, まとめた数)。"""
     out, i, n, merged = [], 0, len(steps), 0
     while i < n:
@@ -94,9 +133,19 @@ def merge_back_and_forth(steps, max_back_mm=200.0, max_dh=3.0):
                 j += 1
             if (ok and j > i + 1 and j < n and steps[j]['type'] == 'move' and bool(steps[j].get('reverse')) == d0
                     and _dh(steps[j]['target_heading_deg'], H) <= max_dh and back <= max_back_mm
-                    and float(steps[j]['distance_mm']) > back and not labels):
+                    and float(steps[j]['distance_mm']) > back and not labels
+                    # 周の区切りの印(marks、切り上げの判断の場所)が真ん中や次の区間にあると、まとめると場所が変わるのでまとめない
+                    and not any(st.get('marks') for st in steps[i + 1:j + 1])):
                 # 真ん中の区間で動いた分(横の小さな寄せも含む)を足した終わりの位置へ、まっすぐ1本で行く
                 # (向きを少しだけ変える)。終わりの位置は元と同じになる(横の寄せを捨てると周ごとにたまる)。
+                if _dh(s['target_heading_deg'], steps[j]['target_heading_deg']) < 0.5:
+                    # 2026-11-17: 前の直進から まとめて1本にする(横の寄せを長い距離に薄く広げ、急なS字にしない)
+                    whole = _straight_to_same_end_from(s, steps[i + 1:j], steps[j])
+                    if whole is not None:
+                        out.extend(whole)
+                        merged += 1
+                        i = j + 1
+                        continue
                 nxt = _straight_to_same_end(steps[i + 1:j], steps[j])
                 # もとの計画では、この直進のあと向きを切り替えるので「止まる」(stop)が付いている。続けて走るので外す
                 # (11/17 実機: 付いたままで、黄と赤の間で減速して止まっていた)。
