@@ -169,6 +169,7 @@ class RelativeAlignAndPush(AlignAndCatchTest):
     LAP_LINE_NEAR_X_MM = 1726.0
     # ボトルの手前側の縁を、土俵の奥の縁からこの距離まで押す(--sumo-push-clearance-mm)。従来 300 = 緑の帯の縁(304)。
     PUSH_CLEARANCE_MM = 300.0
+    LINE_WAIT_MM = 60.0
     LINE_SENSOR_FORWARD_MM = 38.0   # 色センサーは車軸の 38mm 前(sumo_rally_transition と同じ)
     LINE_BLACK_MAX_V = 40           # 黒線は V≈13、白は約99。土俵の灰色の線を黒と取らないよう低めにする
     LINE_CONFIRM = 2                # 続けて黒を見た回数
@@ -337,6 +338,10 @@ class RelativeAlignAndPush(AlignAndCatchTest):
         # ボトル後端を円の奥縁から200mm外へ出す。
         rear = pose[0] + 115.0 * cosine - 32.5
         remaining = (1590.0 + self.PUSH_CLEARANCE_MM - rear) / cosine
+        if self.LINE_ANCHOR and not getattr(self, "_line_done", True):
+            # 2026-11-18: 原点からの推定は実際より 27〜70mm 先に進んでいた。黒線を見る前に推定だけで止まると、
+            # 黒線の手前で止まって決め直せない(押し終わり 170 で not_seen)。見るまでは LINE_WAIT_MM だけ先まで許す。
+            remaining += self.LINE_WAIT_MM
         if remaining > 1500.0:
             raise ValueError("fixed-endpoint remaining distance too large")
         return remaining
