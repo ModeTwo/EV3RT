@@ -272,6 +272,10 @@ class TurnAfterBlue(Behaviour):
                     motor.set_brake(True)
 
 
+# 2026-11-17(devSS): これより小さい青は青い丸として扱わない(上の MoveToRallyBlue の DETECT)
+RALLY_BLUE_MIN_AREA = 250.0
+
+
 class MoveToRallyBlue(Behaviour):
     """画像認識→方向補正→距離制限付き前進→青色検知で停止。"""
 
@@ -509,6 +513,17 @@ class MoveToRallyBlue(Behaviour):
 
             candidate = observation.get("candidate")
             if not candidate:
+                return Status.RUNNING
+            # 2026-11-17(devSS): 小さすぎる青(面積 RALLY_BLUE_MIN_AREA 未満)は青い丸として扱わない。
+            # 本物の丸は面積約500〜1560、遠くの小さな青は約110〜160で、それを交互に丸と見て左右に向き直りを
+            # 繰り返し、上限6回に達して失敗した(ロボットA、16:43)。小さいものは見なかったことにして探し続ける。
+            if float(candidate.get("area", 0.0)) < RALLY_BLUE_MIN_AREA:
+                if now - getattr(self, "_small_blue_logged", 0.0) >= 1.0:
+                    self._small_blue_logged = now
+                    self.logger.info("RALLY_BLUE IGNORE small blue area=%.0f cx=%.0f (< %.0f)"
+                                     % (float(candidate.get("area", 0.0)), float(candidate.get("cx", 0.0)), RALLY_BLUE_MIN_AREA))
+                if now - self.phase_started_at >= self.SEARCH_WAIT_SEC:
+                    return self._start_search()
                 return Status.RUNNING
 
             cx = float(candidate["cx"])
