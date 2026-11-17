@@ -281,14 +281,64 @@ class TurnAfterBlue(Behaviour):
         self.config = config
         self.turn = None
 
+    # 2026-11-18(devSS、ユーザー): 旋回が「目標に着いた」で終わったあとも車体が回り続け、1.5〜2.5°行き過ぎていた
+    # (11/17 pi・11/18 A)。full ではこの向きがラリーの0°になる。--rally-blue-exit-settle で、先読みブレーキを使い、
+    # 止まりきるまで待ってから、ずれが TRIM_MIN_DEG を超えていれば小さく直す(最大 MAX_TRIMS 回)。
+    EXIT_SETTLE = False
+    SETTLE_SEC = 0.25
+    TRIM_MIN_DEG = 0.5
+    MAX_TRIMS = 2
+
     def initialise(self):
         self.turn = None
         self.started_at = time.monotonic()
+        self.settle_since = None
+        self.trims = 0
+
+    def _new_turn(self, target, power, tolerance, name):
+        motion = self.config.sumo
+        turn = SpinToBearing(
+            name=name, context=self.context, bearing=target,
+            max_power=power, min_power=power,
+            pid_p=motion.turn_pid_p, pid_i=motion.turn_pid_i, pid_d=motion.turn_pid_d,
+            tolerance=tolerance,
+        )
+        turn.stall_boost = True
+        if self.EXIT_SETTLE:
+            turn.predictive_brake_horizon_sec = 0.01
+        return turn
+
+    def _settle(self):
+        """止まりきるまで待ち、ずれを測る。大きければ小さく直す旋回を始める。終わりなら SUCCESS。"""
+        now = time.monotonic()
+        if self.settle_since is None:
+            for motor in (runtime.left_motor, runtime.right_motor):
+                if motor is not None:
+                    motor.set_power(0)
+                    motor.set_brake(True)
+            self.settle_since = now
+            return Status.RUNNING
+        if now - self.settle_since < self.SETTLE_SEC:
+            return Status.RUNNING
+        target = self.turn.target_bearing
+        error = (target - current_bearing(self.context) + 180.0) % 360.0 - 180.0
+        self.logger.info(
+            "BLUE_EXIT_SETTLE bearing=%.2f target=%.2f error=%+.2f trims=%d"
+            % (current_bearing(self.context), target, error, self.trims))
+        if abs(error) <= self.TRIM_MIN_DEG or self.trims >= self.MAX_TRIMS:
+            return Status.SUCCESS
+        self.trims += 1
+        self.settle_since = None
+        self.turn = self._new_turn(target, 50, 0.5, "face rally direction trim")
+        self.logger.info("BLUE_EXIT_TRIM %d error=%+.2f" % (self.trims, error))
+        return Status.RUNNING
 
     def update(self):
         if time.monotonic() - self.started_at > 6.0:
             self.logger.error("BLUE_EXIT_TURN timeout")
             return Status.FAILURE
+        if self.EXIT_SETTLE and self.settle_since is not None:
+            return self._settle()
 
         if self.turn is None:
             if runtime.course not in (-1, 1):
@@ -296,19 +346,8 @@ class TurnAfterBlue(Behaviour):
                 return Status.FAILURE
 
             target = 90.0 if runtime.course == -1 else 270.0
-            motion = self.config.sumo
-            self.turn = SpinToBearing(
-                name="face rally direction after blue arrival",
-                context=self.context,
-                bearing=target,
-                max_power=55,
-                min_power=55,
-                pid_p=motion.turn_pid_p,
-                pid_i=motion.turn_pid_i,
-                pid_d=motion.turn_pid_d,
-                tolerance=1.0,
-            )
-            self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
+            # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(stall_boost、gyro_drive.SpinAround)
+            self.turn = self._new_turn(target, 55, 1.0, "face rally direction after blue arrival")
             self.logger.info(
                 "BLUE_EXIT_TURN START course=%s bearing=%.2f "
                 "target=%.2f power=55"
@@ -321,6 +360,8 @@ class TurnAfterBlue(Behaviour):
                 "BLUE_EXIT_TURN COMPLETE bearing=%.2f target=%.2f"
                 % (current_bearing(self.context), self.turn.target_bearing)
             )
+            if self.EXIT_SETTLE:
+                return self._settle()
         return self.turn.status
 
     def terminate(self, new_status):
