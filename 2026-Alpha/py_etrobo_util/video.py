@@ -313,6 +313,45 @@ class Video(object):
                 return t
         return ""
 
+    def _deblur_decode(self, img_gray, corners):
+        """2026-11-17(devSS): QRの4隅(全体の画像の座標)のまわりを切り出し、ピンぼけ(円形)を計算で戻して読む。読めなければ ""。"""
+        try:
+            xs = [int(c[0]) for c in corners]; ys = [int(c[1]) for c in corners]
+            width = math.hypot(corners[1][0] - corners[0][0], corners[1][1] - corners[0][1])
+            if width < 60:
+                return ""
+            m = int(max(30, width * 0.15))
+            h, w = img_gray.shape[:2]
+            x0, x1 = max(0, min(xs) - m), min(w, max(xs) + m)
+            y0, y1 = max(0, min(ys) - m), min(h, max(ys) + m)
+            roi = img_gray[y0:y1, x0:x1].astype(np.float32) / 255.0
+            if roi.size == 0:
+                return ""
+            G = np.fft.fft2(roi)
+            r0 = width / 45.0
+            radii = []
+            for d in (0.0, -1.0, 1.0, 2.0, -2.0):
+                r = max(2, int(round(r0 + d)))
+                if r not in radii:
+                    radii.append(r)
+            for r in radii:
+                k = np.zeros((2 * r + 1, 2 * r + 1), np.float32)
+                cv2.circle(k, (r, r), r, 1.0, -1)
+                k /= k.sum()
+                H = np.fft.fft2(k, s=roi.shape)
+                for K in (0.01, 0.03):
+                    out = np.real(np.fft.ifft2(G * np.conj(H) / (np.abs(H) ** 2 + K)))
+                    out = np.roll(out, (r, r), axis=(0, 1))
+                    img = np.clip(out * 255.0, 0, 255).astype(np.uint8)
+                    for b in (zxingcpp.Binarizer.LocalAverage, _GH):
+                        codes = zxingcpp.read_barcodes(img, formats=_QR_ONLY, binarizer=b)
+                        if codes and codes[0].text:
+                            print("QR_DEBLUR decoded (width %.0fpx radius %d K %.2f)" % (width, r, K))
+                            return codes[0].text
+        except Exception as error:
+            print("QR_DEBLUR failed: %r" % (error,))
+        return ""
+
     def _detect_qr(self, img_gray):
         """Detect and decode QR from a grayscale 1920x1080 image.
 
@@ -342,6 +381,9 @@ class Video(object):
             if r.valid:
                 return r.text, corners
             text = self._wechat_decode_roi(self._extract_roi(r, crop))
+            if not text:
+                # 2026-11-17(devSS): 位置は分かったが読めない(ピンぼけ) → ぼけを計算で戻して読む(下の Stage 5 と同じ)
+                text = self._deblur_decode(img_gray, corners)
             return text, corners
 
         # Stage 3: CLAHE detection (zero false-positive rate on noise/part)
@@ -369,6 +411,22 @@ class Video(object):
             if r.valid:
                 return r.text, corners
             located = located or corners
+        # Stage 5 (2026-11-17, devSS): QRの位置が分かっていて読めないときは、ぼけを計算で戻してから読む(ウィーナーフィルタ)。
+        # カメラはピントが固定で、ヒント2(模様が細かい)はぼけて読めなかった。止まって撮った83枚では1枚も読めなかったが、
+        # この処理で5枚中4枚読めた。ぼけの大きさ(円の半径)は写りの幅のおよそ1/45(幅154画素で4、346画素で8)。
+        if located is None:
+            # 切り出しの外(右端 CROP_X2 より右)にはみ出したQRは、切り出しでは位置も分からないので、全体の画像で位置を探す
+            results = zxingcpp.read_barcodes(img_gray, formats=_QR_ONLY, return_errors=True)
+            if results:
+                r = results[0]
+                if r.valid:
+                    return r.text, self._result_pos_to_corners(r)
+                located = self._result_pos_to_corners(r)
+        if located is not None:
+            text = self._deblur_decode(img_gray, located)
+            if text:
+                return text, located
+
         # WeChat は重いので、QRの位置が見えているときか、3回に1回だけ(走っていてQRが見えていない間に読み取りを遅らせない)
         self._qr_small_tries = getattr(self, '_qr_small_tries', 0) + 1
         if located is None and self._qr_small_tries % 3:
