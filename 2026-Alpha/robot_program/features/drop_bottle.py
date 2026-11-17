@@ -76,7 +76,8 @@ def build_drop_bottle(context, config):
         route.add_children([
             IsSelectedDropZone(f"is {color.name.lower()} zone", color, context),
             # コース基準の色別方位でドロップゾーン側を向く。
-            to_turn(f"turn toward {color.name.lower()} drop zone", context, settings, heading),
+            # 2026-11-17(devSS、ユーザー): ボトルを押しながらの旋回なので出力を下げる(65で外へ出そうだった)
+            to_turn(f"turn toward {color.name.lower()} drop zone", context, settings, heading, carrying_bottle=True),
             # 色ごとの所定距離を前進し、ボトル色のゾーンまで進む。
             _drive(f"drive to {color.name.lower()} drop zone", context, settings,
                    heading, distance_mm, settings.delivery_drive_first_power,

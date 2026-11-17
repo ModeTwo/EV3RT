@@ -120,6 +120,8 @@ class AlignSumoBottle(Behaviour):
         return row
 
     def _start_drive(self, now):
+        self.approach_near_samples = []
+        self.approach_near_last_frame = -1
         approach_power = (
             90 if abs(self.settings.distance_mm - 1100.0) < 0.001
             else self.settings.power
@@ -300,28 +302,107 @@ class AlignSumoBottle(Behaviour):
             return Status.FAILURE
         return Status.RUNNING
 
+    def _approach_near_enough(self, observation, now):
+        # 連続進入だけに適用。閾値は実機調整用の初期値。
+        if not self.continuous_entry or observation is None:
+            return False
+        try:
+            frame = int(observation["frame_id"])
+            if frame <= self.approach_near_last_frame:
+                return False
+            self.approach_near_last_frame = frame
+
+            point = observation.get("candidate")
+            track = observation.get("track_id")
+            if not point or not observation.get("confirmed") or track is None:
+                self.approach_near_samples = []
+                return False
+
+            t = float(observation["t"])
+            w = float(point["w"])
+            h = float(point["h"])
+            y = float(point["y"])
+            area = float(point["area"])
+            if (
+                not all(math.isfinite(v) for v in (now, t, w, h, y, area))
+                or not 0 <= now - t <= min(
+                    0.15, self.settings.max_observation_age_sec
+                )
+                or not (
+                    0 < w <= 320 and 0 < h <= 180 and 0 <= y < 180
+                )
+            ):
+                self.approach_near_samples = []
+                return False
+
+            large = w >= 40 and h >= 60 and area >= 1800
+            low = (
+                y + h >= 160 and w >= 30
+                and h >= 40 and area >= 900
+            )
+            if not (large or low):
+                self.approach_near_samples = []
+                return False
+
+            samples = self.approach_near_samples
+            if samples and (
+                samples[-1][0] != track
+                or not 0 < t - samples[-1][1] <= 0.25
+            ):
+                samples = []
+            self.approach_near_samples = (samples + [(track, t)])[-3:]
+            return len(self.approach_near_samples) >= 3
+
+        except (KeyError, TypeError, ValueError, OverflowError):
+            self.approach_near_samples = []
+            return False
+
     def _update_prescribed_approach(self, now):
-        """規定距離の終了を先に判定し、未到達なら直進・画像追跡を進める。"""
+        """上限距離または近接画像で停止し、停止後の新画像で正対する。"""
         self.distance.tick_once()
         if self.distance.status == Status.SUCCESS:
             self._stop_child("drive")
             self._settle(now)
             return Status.RUNNING
+
         if now - self.phase_started_at > self.settings.drive_timeout_sec:
             return self._fail("approach distance timeout")
-        self.drive.tick_once()
-        if self.drive.status == Status.FAILURE:
-            return self._fail("gyro approach failed")
-        observation = runtime.video.get_sumo_alignment_observation(self.session)
+
+        observation = runtime.video.get_sumo_alignment_observation(
+            self.session
+        )
         if observation and observation["frame_id"] > self.last_frame_id:
             self.last_frame_id = observation["frame_id"]
-            c = observation["candidate"]
-            if c and observation["confirmed"]:
+            point = observation.get("candidate")
+            if point and observation.get("confirmed"):
                 self._remember_approach_observation(observation, now)
                 self.logger.info(
                     "SUMO_ALIGN TRACK frame=%d odo=%.1f cx=%d"
-                    % (observation["frame_id"], observation["d"], c["cx"])
+                    % (
+                        observation["frame_id"],
+                        observation["d"], point["cx"],
+                    )
                 )
+
+        if self._approach_near_enough(observation, now):
+            point = observation["candidate"]
+            self._stop_child("drive")
+            self._settle(now)
+            self.logger.info(
+                "SUMO_ALIGN EARLY_STOP frame=%s odo=%.1f "
+                "w=%.1f h=%.1f bottom=%.1f"
+                % (
+                    observation["frame_id"],
+                    runtime.plotter.get_distance(),
+                    point["w"], point["h"],
+                    point["y"] + point["h"],
+                )
+            )
+            return Status.RUNNING
+
+        self.drive.tick_once()
+        if self.drive.status == Status.FAILURE:
+            return self._fail("gyro approach failed")
         return Status.RUNNING
 
     def _remember_approach_observation(self, observation, now):

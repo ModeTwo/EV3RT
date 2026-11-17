@@ -294,6 +294,10 @@ class EtRallySpinAroundByEncoder(Behaviour):
             self.left_done_at_count = self.start_l
             self.phase = 1
             self.oscillation = OscillationTracker()
+            # 2026-11-17(devSS): ETラリー以外の旋回で、フェーズ1(エンコーダで回す)が動かないときに上げる出力
+            self.phase1_boost = 0
+            self.phase1_stall_at = time.monotonic()
+            self.phase1_stall_counts = (self.start_r, self.start_l)
 
             self.running = True
             self.logger.info("%+06d %s.encoder-spin started at heading=%d for %d (target_motor_deg=%.1f)" % (
@@ -351,6 +355,8 @@ class EtRallySpinAroundByEncoder(Behaviour):
                 self.pid = PID(self.pid_p, self.pid_i, self.pid_d, setpoint=self.target_heading, sample_time=EXEC_INTERVAL)
                 self.stall_ticks = 0
                 self.escalated = False
+                self.escalated_clamper = SymmetricClamper(max(int(self.main_power * 0.8), int(self.fine_clamper.min_val)), self.main_power)
+                self.phase2_started_at = time.monotonic()
                 self.prev_heading_for_stall = current_heading
                 # 2026-10-25較正用: フェーズ2が最初に行き過ぎて向きを反転させる直前の
                 # 誤差を、「フェーズ2の1回目の精度」(一発パルス仕上げとの公平な比較用)
@@ -360,14 +366,33 @@ class EtRallySpinAroundByEncoder(Behaviour):
                     runtime.plotter.get_distance(), self.__class__.__name__, current_heading))
                 return Status.RUNNING
 
+            if self.settle_after_reversal_deg is not None:
+                # 2026-11-17(devSS、実機): ボトルを押しながらの旋回が出力50のままフェーズ1で約14秒止まった
+                # (上げる仕組みはフェーズ2にしかなかった)。0.3秒ほど両輪とも2度未満しか回らなければ +10(上限 stall_power_cap、既定90)。
+                now = time.monotonic()
+                cr, cl = runtime.right_motor.get_count(), runtime.left_motor.get_count()
+                moved = max(abs(cr - self.phase1_stall_counts[0]), abs(cl - self.phase1_stall_counts[1]))
+                if moved >= 2:
+                    self.phase1_stall_at, self.phase1_stall_counts = now, (cr, cl)
+                elif now - self.phase1_stall_at > 0.3:
+                    cap = getattr(self, "stall_power_cap", 90)
+                    boost = min(self.phase1_boost + 10, max(0, cap - self.main_power))
+                    if boost != self.phase1_boost:
+                        self.phase1_boost = boost
+                        self.logger.info("%+06d %s.phase1 stalled, power up to %d" % (
+                            runtime.plotter.get_distance(), self.__class__.__name__, self.main_power + boost))
+                    self.phase1_stall_at, self.phase1_stall_counts = now, (cr, cl)
+            boost = getattr(self, "phase1_boost", 0)
             use_decel = self.decel_deg > 0 and self.target_motor_deg >= 2 * self.decel_deg
             right_power = left_power = 0
             if not self.right_done:
                 p = self.decel_power if use_decel and self.right_target_motor_deg - delta_r < self.decel_deg else self.main_power
+                p += boost
                 right_power = runtime.course * self.direction * p
                 runtime.right_motor.set_power(right_power)
             if not self.left_done:
                 p = self.decel_power if use_decel and self.left_target_motor_deg - delta_l < self.decel_deg else self.main_power
+                p += boost
                 left_power = (-1) * runtime.course * self.direction * p
                 runtime.left_motor.set_power(left_power)
             log_power_state(self.__class__.__name__ + ".phase1", right_power, left_power)
@@ -405,12 +430,32 @@ class EtRallySpinAroundByEncoder(Behaviour):
         if heading_progress < _STALL_PROGRESS_DEG:
             self.stall_ticks += 1
             if self.stall_ticks > _STALL_TICK_LIMIT:  # 約0.2秒進捗なし(2026-09-12: 元は15tick=0.45秒、体感の停止時間を減らすため短縮)
+                if not self.escalated:
+                    self.logger.info("%+06d %s.stalled in fine-trim, escalating power" % (
+                        runtime.plotter.get_distance(), self.__class__.__name__))
                 self.escalated = True
-                self.logger.info("%+06d %s.stalled in fine-trim, escalating power" % (
-                    runtime.plotter.get_distance(), self.__class__.__name__))
+                if self.settle_after_reversal_deg is not None:
+                    # 2026-11-17(devSS、ユーザー): ETラリー以外の旋回では、上げても動かなければさらに段階的に上げる
+                    # (ヒント1のあとの旋回が、出力40のまま約6秒固まった)。約0.2秒ごとに +15、最大90。
+                    if self.stall_ticks % (_STALL_TICK_LIMIT + 1) == 0:
+                        lo = min(getattr(self, "stall_power_cap", 90), int(self.escalated_clamper.min_val) + 15)
+                        self.escalated_clamper = SymmetricClamper(lo, max(lo, int(self.escalated_clamper.max_val)))
+                        self.logger.info("%+06d %s.still stalled, power up to %d" % (
+                            runtime.plotter.get_distance(), self.__class__.__name__, lo))
         else:
             self.stall_ticks = 0
         self.prev_heading_for_stall = current_heading
+        if self.settle_after_reversal_deg is not None:
+            # 2026-11-17(devSS): 仕上げが FINE_TIMEOUT_SEC を超えたら打ち切る(このあとの直進・ライントレースが向きを寄せる)
+            if not hasattr(self, "phase2_started_at"):
+                self.phase2_started_at = time.monotonic()
+            if time.monotonic() - self.phase2_started_at > 2.5:
+                runtime.right_motor.set_power(0); runtime.right_motor.set_brake(True)
+                runtime.left_motor.set_power(0); runtime.left_motor.set_brake(True)
+                self.logger.warning("%+06d %s.fine-trim timeout at heading=%d residual=%+.1f, giving up" % (
+                    runtime.plotter.get_distance(), self.__class__.__name__, current_heading, error))
+                del self.phase2_started_at
+                return Status.SUCCESS
 
         self.pid.setpoint = current_heading + error
         clamper = self.escalated_clamper if self.escalated else self.fine_clamper

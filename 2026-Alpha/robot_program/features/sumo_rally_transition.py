@@ -67,6 +67,7 @@ class TurnTowardRallyStart(Behaviour):
                 tolerance=1.0,
                 normalize_error=False,
             )
+            self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
 
         self.turn.tick_once()
 
@@ -247,6 +248,7 @@ class TurnAfterBlue(Behaviour):
                 pid_d=motion.turn_pid_d,
                 tolerance=1.0,
             )
+            self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
             self.logger.info(
                 "BLUE_EXIT_TURN START course=%s bearing=%.2f "
                 "target=%.2f power=50"
@@ -270,6 +272,10 @@ class TurnAfterBlue(Behaviour):
                 if motor is not None:
                     motor.set_power(0)
                     motor.set_brake(True)
+
+
+# 2026-11-17(devSS): これより小さい青は青い丸として扱わない(上の MoveToRallyBlue の DETECT)
+RALLY_BLUE_MIN_AREA = 250.0
 
 
 class MoveToRallyBlue(Behaviour):
@@ -441,6 +447,7 @@ class MoveToRallyBlue(Behaviour):
             pid_p=motion.turn_pid_p, pid_i=motion.turn_pid_i,
             pid_d=motion.turn_pid_d, tolerance=1.0,
         )
+        self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
         self.logger.info("RALLY_BLUE SEARCH count=%d offset=%.1f target=%.2f"
                          % (self.search_count, offset, target))
         self._set_phase("TURN")
@@ -510,6 +517,17 @@ class MoveToRallyBlue(Behaviour):
             candidate = observation.get("candidate")
             if not candidate:
                 return Status.RUNNING
+            # 2026-11-17(devSS): 小さすぎる青(面積 RALLY_BLUE_MIN_AREA 未満)は青い丸として扱わない。
+            # 本物の丸は面積約500〜1560、遠くの小さな青は約110〜160で、それを交互に丸と見て左右に向き直りを
+            # 繰り返し、上限6回に達して失敗した(ロボットA、16:43)。小さいものは見なかったことにして探し続ける。
+            if float(candidate.get("area", 0.0)) < RALLY_BLUE_MIN_AREA:
+                if now - getattr(self, "_small_blue_logged", 0.0) >= 1.0:
+                    self._small_blue_logged = now
+                    self.logger.info("RALLY_BLUE IGNORE small blue area=%.0f cx=%.0f (< %.0f)"
+                                     % (float(candidate.get("area", 0.0)), float(candidate.get("cx", 0.0)), RALLY_BLUE_MIN_AREA))
+                if now - self.phase_started_at >= self.SEARCH_WAIT_SEC:
+                    return self._start_search()
+                return Status.RUNNING
 
             cx = float(candidate["cx"])
             try:
@@ -575,6 +593,7 @@ class MoveToRallyBlue(Behaviour):
                 pid_d=motion.turn_pid_d,
                 tolerance=1.0,
             )
+            self.turn.stall_boost = True  # 2026-11-17(devSS): 動かないときは出力を段階的に上げる(gyro_drive.SpinAround)
             self.turn.predictive_brake_horizon_sec = 0.04
 
             self.logger.info(

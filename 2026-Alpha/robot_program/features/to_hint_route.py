@@ -200,8 +200,11 @@ class WaitForQRDecode(Behaviour):
 
 def build_tantou_tree(context, config, include_exit=True):
     settings = config.integration
-    SPIN_MAX_POWER = settings.to_spin_max_power
-    SPIN_MIN_POWER = settings.to_spin_min_power
+    # 2026-11-17(devSS、ユーザー): この区間はLAPでつかんだボトルをアームに挟んで押しながら走るので、旋回の出力を下げる
+    # (65 では勢いでボトルがアームの間から出ていきそうだった)。止まったときに上げる出力の上限も下げる。
+    SPIN_MAX_POWER = settings.delivery_carry_turn_power
+    SPIN_MIN_POWER = settings.delivery_carry_turn_power
+    STALL_CAP = settings.delivery_carry_turn_stall_cap
     TRACELINE_TARGET_V = 65
 
     class QRSpeedUpRun(RunByGyro):
@@ -285,6 +288,7 @@ def build_tantou_tree(context, config, include_exit=True):
             target=40,
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
+            stall_power_cap=STALL_CAP,
             pid_p=0.2,
             pid_i=0.005,
             pid_d=0.03,
@@ -667,6 +671,7 @@ def build_tantou_tree(context, config, include_exit=True):
         target=90,
         max_power=SPIN_MAX_POWER,
         min_power=SPIN_MIN_POWER,
+        stall_power_cap=STALL_CAP,
         pid_p=0.2,
         pid_i=0.005,
         pid_d=0.03,
@@ -830,6 +835,7 @@ def build_tantou_tree(context, config, include_exit=True):
             target=105,  # 【統合差分】添付25。共通方位の既存値を維持
             max_power=SPIN_MAX_POWER,
             min_power=SPIN_MIN_POWER,
+            stall_power_cap=STALL_CAP,
             pid_p=0.2,
             pid_i=0.005,
             pid_d=0.03,
