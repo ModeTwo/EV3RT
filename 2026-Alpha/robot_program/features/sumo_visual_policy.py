@@ -280,7 +280,7 @@ class VisualTurnPolicy:
             return
         fine = remaining <= self.s.visual_fine_error_deg or self.memory.reversals > 0
         if fine and now - self.pulse_at >= self.s.visual_pulse_on_sec:
-            self._brake(now, "fine-pulse-end")
+            self._brake(now, "fine-pulse-end", finish=True)
             return
         fast_allowed = (
             not self.memory.reversals

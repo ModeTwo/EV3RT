@@ -19,6 +19,8 @@ class SumoBlueDetector:
         self.stable_frames = 0
         self.previous_center = None
         self.previous_area = None
+        self.bottom_previous = None
+        self.bottom_frames = 0
 
     def _candidate(self, contour, shape):
         area = float(cv2.contourArea(contour))
@@ -88,35 +90,46 @@ class SumoBlueDetector:
             "ellipse_tilt_deg": tilt,
         }
 
-    # 2026-11-17(devSS): 画面の左右の端で切れている青い丸(候補からは外れる)を知らせる。
-    # 相撲のあと青い丸へ向けて旋回したとき、丸が左下の端にかかって切れ、見つからずに失敗した(ロボットA)。
-    # 下半分にあって、上の端に触れず(ゲートの青い脚を外す)、左右どちらかの端に触れている、一定以上の大きさの青。
-    EDGE_MIN_AREA = 300
-    EDGE_MIN_CY_RATIO = 0.5
-
-    def _edge_blob(self, contours, shape):
-        height, width = shape[0], shape[1]
-        best = None
+    def _bottom_hint(self, contours, shape):
+        # 見切れ領域は後退判断専用。接近対象として確定しない。
+        hints = []
         for contour in contours:
             area = float(cv2.contourArea(contour))
-            if area < self.EDGE_MIN_AREA:
-                continue
             x, y, w, h = cv2.boundingRect(contour)
-            if y <= 0:
+            if (area < self.MIN_AREA or w < 20 or h < 4
+                    or y < shape[0] * 0.5
+                    or y + h < shape[0] - 1
+                    or not 1.4 <= w / float(h) <= 10.0
+                    or area / (w * h) < 0.5):
                 continue
-            left, right = x <= 0, x + w >= width
-            if left == right:
+            hull_area = float(
+                cv2.contourArea(cv2.convexHull(contour))
+            )
+            if hull_area <= 0 or area / hull_area < 0.85:
                 continue
-            moments = cv2.moments(contour)
-            if moments["m00"] <= 0:
-                continue
-            cx = moments["m10"] / moments["m00"]
-            cy = moments["m01"] / moments["m00"]
-            if cy < height * self.EDGE_MIN_CY_RATIO:
-                continue
-            if best is None or area > best["area"]:
-                best = {"side": "left" if left else "right", "cx": cx, "cy": cy, "area": area}
-        return best
+            hints.append(dict(
+                cx=x + w / 2.0, cy=y + h / 2.0,
+                area=area, x=x, y=y, w=w, h=h,
+            ))
+
+        if not hints:
+            self.bottom_previous = None
+            self.bottom_frames = 0
+            return None
+
+        hint = max(hints, key=lambda item: item["area"])
+        previous = self.bottom_previous
+        same = (
+            previous is not None
+            and math.hypot(
+                hint["cx"] - previous["cx"],
+                hint["cy"] - previous["cy"],
+            ) <= 35.0
+            and 0.5 <= hint["area"] / previous["area"] <= 2.0
+        )
+        self.bottom_frames = self.bottom_frames + 1 if same else 1
+        self.bottom_previous = hint
+        return hint if self.bottom_frames >= 3 else None
 
     def step(self, image):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -131,6 +144,7 @@ class SumoBlueDetector:
         contours, _ = cv2.findContours(
             mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
+        bottom_hint = self._bottom_hint(contours, mask.shape)
         candidates = []
         for contour in contours:
             candidate = self._candidate(contour, mask.shape)
@@ -145,7 +159,7 @@ class SumoBlueDetector:
                 "confirmed": False,
                 "candidate": None,
                 "candidate_count": 0,
-                "edge": self._edge_blob(contours, mask.shape),
+                "bottom_hint": bottom_hint,
             }
 
         nearby = []
@@ -170,4 +184,5 @@ class SumoBlueDetector:
             "confirmed": self.stable_frames >= self.STABLE_FRAMES,
             "candidate": candidate,
             "candidate_count": len(candidates),
+            "bottom_hint": bottom_hint,
         }
