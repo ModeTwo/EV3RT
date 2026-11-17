@@ -148,7 +148,10 @@ def build_et_rally_phase(context, config):
     # 2026-10-30: 左回り(headingが減る向き)だけの倍率。
     scale_neg = getattr(config, "et_rally_gyro_scale_neg", None) if gyro_tire_calibration else None
     scale_pos = getattr(config, "et_rally_gyro_scale_pos", None) if gyro_tire_calibration else None
-    full_file = config.mission_mode == "full" and config.et_rally_strategy_source == "file"
+    # 2026-11-17(ユーザー): 計画の0°の直し(plan_origin)は、受信("received")で走るときにも入れる。経路の道具の計画
+    # (PC から丸ごと届く・ロボットが選ぶ・ガレージだけ)はファイルの計画と同じくラリー開始の向きが0°。旧い形の受信SEQ
+    # (競技スタート基準)は、読み込むときに同じだけずらす(execute_strategy.build_execute_strategy)。
+    full_file = config.mission_mode == "full" and config.et_rally_strategy_source in ("file", "received")
     install_heading = full_file or float_heading or drift_compensation or scale_neg is not None or scale_pos is not None
 
     def full_file_plan_origin():
