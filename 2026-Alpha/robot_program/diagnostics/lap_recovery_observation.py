@@ -13,7 +13,7 @@ class FloorMotionRecorder(Behaviour):
         self.lap = lap
         self.bottle_heading_recorder = bottle_heading_recorder
         self.defer_output = defer_output
-    def initialise(self):self.samples=deque(maxlen=500);self.total=0
+    def initialise(self):self.samples=deque(maxlen=500);self.total=0;self.live_last_time=None
     def update(self):
         if not self.lap.running and not self.lap.handoff_complete:return Status.RUNNING
         runtime.require('plotter','gyro_sensor','color_sensor')
@@ -32,7 +32,23 @@ class FloorMotionRecorder(Behaviour):
         if self.lap.running and getattr(self.lap, 'line_entry', None) == 'cross_rejoin':
             self.lap._observe_early_line_exit(progress, gyro, hsv)
         phase='POST_BOUNDARY' if self.lap.handoff_complete else 'LAP'
-        self.samples.append((time.monotonic(),progress,gyro,hsv,phase));self.total+=1
+        sampled_at=time.monotonic()
+        self.samples.append((sampled_at,progress,gyro,hsv,phase));self.total+=1
+        # Continuous missions defer the full dump until mission completion; retain
+        # bounded live evidence even when an operator interrupts later stages.
+        if self.defer_output and (self.live_last_time is None or sampled_at-self.live_last_time >= 0.1):
+            self.live_last_time=sampled_at
+            snapshot=getattr(getattr(self.lap,'side_source',None),'snapshot',None) or {}
+            commands=getattr(self.lap,'trace_motor_samples',())
+            command=commands[-1] if commands else None
+            command_age=(sampled_at-command[0]) if command is not None else None
+            if command_age is not None and (self.lap.transition_phase != 'TRACE' or not 0 <= command_age <= 0.2):
+                command=None
+            self.logger.info('LAP_LIVE_FLOOR mono_sec=%.6f progress_mm=%.1f gyro_deg=%.2f hsv=%s phase=%s gate_blue=%s gate_black=%s camera_side=%s camera_frame=%s camera_time=%s trace_motor=%s' % (
+                sampled_at,progress,gyro,hsv,self.lap.transition_phase or phase,
+                getattr(getattr(self.lap,'completion_condition',None),'saw_blue',False),
+                self.lap.gate_latched,snapshot.get('side'),snapshot.get('frame'),snapshot.get('capture_time'),
+                None if command is None else (command[1],command[2],command[3],command[0])))
         return Status.RUNNING
     def terminate(self,status):
         if self.defer_output and status == Status.INVALID and self.lap.handoff_complete:

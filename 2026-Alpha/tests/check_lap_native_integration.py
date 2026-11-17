@@ -89,8 +89,8 @@ run=root.children[1].kwargs['child']
 assert run.children[1].lap is run.children[2].lap
 lap=run.children[1].lap
 assert lap.line_entry=='cross_rejoin' and lap.profile_white_rejoin
-assert lap.confirmed_fallback_after_mm==200 and lap.completion_condition.allow_weak_blue
-print('PASS normal LAP tree contains shared video observers and 200 mm gate approach')
+assert lap.confirmed_fallback_after_mm==150 and lap.completion_condition.allow_weak_blue
+print('PASS normal LAP tree contains shared video observers and 150 mm gate approach')
 
 runtime.video=types.SimpleNamespace(set_lap_observation=lambda *a,**k:None)
 for ref,expected in (('160','RIGHT'),('186','LEFT')):
@@ -375,25 +375,26 @@ for cap in (300,350,450):
   assert b._transition_update()==Status.SUCCESS and b.fallback_done and not b.gate_latched
 print('PASS unconfirmed blue is bounded at 300/350/450 without asserting black')
 
-# Confirmed black keeps its 200 mm approach, even if the unconfirmed limit passes.
+# Confirmed black keeps its 150 mm approach, even if the unconfirmed limit passes.
 b=setup_transition('FALLBACK');b.completion_condition.blue_progress=5204.;b.gate_latched=True
-b.fallback_gate_base=5290.;b.confirmed_fallback_after_mm=200.;b.completion_condition.measure_projection=Projection()
-b.completion_condition.measure_projection.traveled=199.;distance[0]=5555.;b._finish_distance_run=lambda status:status
+b.completion_condition.black_progress=5290.
+b.fallback_gate_base=5290.;b.confirmed_fallback_after_mm=150.;b.completion_condition.measure_projection=Projection()
+b.completion_condition.measure_projection.traveled=149.;distance[0]=5555.;b._finish_distance_run=lambda status:status
 with patch.dict(os.environ,{'LAP_BLUE_UNCONFIRMED_LIMIT_MM':'300'}):
  assert b._transition_update()==Status.RUNNING
- b.completion_condition.measure_projection.traveled=200.
+ b.completion_condition.measure_projection.traveled=150.
  assert b._transition_update()==Status.SUCCESS and b.fallback_done
-print('PASS confirmed black preserves existing 200mm projected approach')
+print('PASS confirmed black in fallback uses 150mm projected approach')
 
 # 150 mm separates ordinary blue->black readings from the recorded late cases.
 for cap in (300,350):
  with patch.dict(os.environ,{'LAP_BLUE_UNCONFIRMED_LIMIT_MM':str(cap)}):
   for gap in (39.4, 78.4, 100.8, 138.8, 150.):
-   value,reason=v.confirmed_black_approach_mm(types.SimpleNamespace(blue_progress=5204.,black_progress=5204.+gap),200.)
-   assert value==200. and reason=='normal_black',(cap,gap,value,reason)
-  value,reason=v.confirmed_black_approach_mm(types.SimpleNamespace(blue_progress=5204.,black_progress=5456.1),200.)
+   value,reason=v.confirmed_black_approach_mm(types.SimpleNamespace(blue_progress=5204.,black_progress=5204.+gap),150.)
+   assert value==150. and reason=='normal_black',(cap,gap,value,reason)
+  value,reason=v.confirmed_black_approach_mm(types.SimpleNamespace(blue_progress=5204.,black_progress=5456.1),150.)
   assert abs(value-(cap-252.1))<1e-6 and reason=='late_black'
-print('PASS normal black retains 200mm; late black respects 300/350 total')
+print('PASS normal black uses 150mm; late black respects 300/350 total')
 
 b=setup_transition('FALLBACK');b.completion_condition.blue_progress=5204.;b.completion_condition.black_progress=5456.1
 b.gate_latched=True;b.fallback_gate_base=5456.1;b.confirmed_fallback_after_mm=200.
@@ -407,12 +408,17 @@ print('PASS actual fallback stops at calculated late-black distance')
 
 g=types.SimpleNamespace(confirmed=True,blue_progress=5204.,black_progress=5456.1,measure_projection=Projection())
 lap=types.SimpleNamespace(heading_origin=0.,origin_distance=0.,fallback_done=False,completion_condition=g,
-                          confirmed_fallback_after_mm=200.,camera_direction=1)
+                          confirmed_fallback_after_mm=150.,camera_direction=1)
 post=v.RollingCameraMerge(types.SimpleNamespace(),types.SimpleNamespace(lap=lap,snapshot=None),post_gate_steer='gyro')
 post.initialise();post._update_projected_trace=lambda:Status.RUNNING
 with patch.dict(os.environ,{'LAP_BLUE_UNCONFIRMED_LIMIT_MM':'350'}):
  assert post.update()==Status.RUNNING and abs(post.post_trace_target_mm-97.9)<1e-6
 print('PASS post-gate gyro path uses late-black total limit')
+g.black_progress=5304.
+post=v.RollingCameraMerge(types.SimpleNamespace(),types.SimpleNamespace(lap=lap,snapshot=None),post_gate_steer='gyro')
+post.initialise();post._update_projected_trace=lambda:Status.RUNNING
+assert post.update()==Status.RUNNING and post.post_trace_target_mm==150.
+print('PASS normal post-gate gyro path uses 150mm')
 
 # Missing final zero segment never selects a camera vote or stops the robot early.
 b=Peak100ContinuousLap(**kw);b.initialise();b.running=True;b.origin_distance=0.

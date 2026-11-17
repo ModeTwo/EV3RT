@@ -2,6 +2,13 @@
 import math
 import os
 
+def unseen_estimate_distance():
+    """Opt-in no-blue trial: remaining distance after estimated slow point."""
+    value = os.environ.get('LAP_UNSEEN_ESTIMATE_MM', 'off').lower()
+    if value not in ('off', '160', '200'):
+        raise ValueError('LAP_UNSEEN_ESTIMATE_MM must be off, 160 or 200')
+    return None if value == 'off' else float(value)
+
 def dark_heading_mode():
     value = os.environ.get('LAP_DARK_HEADING', 'off').lower()
     if value not in ('off', 'on'):

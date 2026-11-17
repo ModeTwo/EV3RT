@@ -1,5 +1,7 @@
 """Top-level robot mission composition."""
 
+from dataclasses import replace
+
 from .phases.bottle_and_rally_preparation import (
     build_bottle_and_rally_preparation_phase,
     build_bottle_delivery_final_phase,
@@ -12,6 +14,20 @@ from .features.catch_bottle import build_catch_bottle
 from .features.to_hint_route import build_tantou_tree
 from .behaviours.handoff import CaptureAtToHandoff
 from .gyro_scale import EnableGyroScale
+
+
+class _DeliveryLineBearingReference:
+    """Read the registered full-start heading in the delivery-line frame."""
+
+    def __init__(self, full_start_reference):
+        self.full_start_reference = full_start_reference
+
+    def bearing(self, gyro):
+        return (self.full_start_reference.bearing(gyro) + 180.0) % 360.0
+
+    def legacy_target(self, bearing, gyro, course):
+        full_start_bearing = (bearing + 180.0) % 360.0
+        return self.full_start_reference.legacy_target(full_start_bearing, gyro, course)
 
 
 def build_mission_children(context, config):
@@ -75,8 +91,14 @@ def build_mission_children(context, config):
                                 child=Timeout(name='delivery 60s limit', child=delivery, duration=60)),
                              ContinueAfterFailure(name='finish after sumo failure', child=sumo)])
         if config.mission_mode == 'full':
-            from .features.sumo_rally_transition import build_move_sumo_to_rally_start
+            from .features.sumo_rally_transition import TurnAfterBlue, build_move_sumo_to_rally_start
+
             transition = build_move_sumo_to_rally_start(context, config)
+            final_turn = next(child for child in transition.children if isinstance(child, TurnAfterBlue))
+            # 配置ラインは全体スタートと反対向き。正対ノードにだけ単体と同じ方位基準を渡す。
+            # 元の参照はResetDevice後に登録されるので、その値を実行時に使う。
+            reference = _DeliveryLineBearingReference(context.sumo.bearing_reference)
+            final_turn.context = replace(context, sumo=replace(context.sumo, bearing_reference=reference))
             children.append(ContinueAfterFailure(name='continue after sumo-to-rally failure', child=transition))
             if config.enable_et_rally and config.et_rally_laps > 0:
                 children.append(build_et_rally_phase(context, config))
