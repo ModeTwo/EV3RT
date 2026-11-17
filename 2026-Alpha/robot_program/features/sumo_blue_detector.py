@@ -14,6 +14,10 @@ class SumoBlueDetector:
     MIN_ELLIPSE_IOU = 0.82
     MAX_CENTER_MOVE_PX = 35
     STABLE_FRAMES = 3
+    # 2026-11-17(devSS): 候補の中の画素の彩度(S)の中央値の下限。床の灰色の点(ゲートの置き場の印)は色相が青の範囲に入り
+    # S が下限45ぎりぎり(46〜54)で、青い丸と誤って確定することがあった(面積 最大561)。本物の青い丸は 226〜230
+    # (11/17 の A・C の129枚、本物54個・灰色の点33個で重なりなし)。マスク自体は変えず、候補ごとに中央値で見る。
+    MIN_MEDIAN_SATURATION = 120
 
     def __init__(self):
         self.stable_frames = 0
@@ -22,10 +26,24 @@ class SumoBlueDetector:
         self.bottom_previous = None
         self.bottom_frames = 0
 
-    def _candidate(self, contour, shape):
+    def _median_saturation(self, contour, saturation, shape):
+        x, y, w, h = cv2.boundingRect(contour)
+        local = np.zeros((h, w), np.uint8)
+        shifted = contour.copy()
+        shifted[:, :, 0] -= x
+        shifted[:, :, 1] -= y
+        cv2.drawContours(local, [shifted], -1, 255, -1)
+        values = saturation[y:y + h, x:x + w][local > 0]
+        return float(np.median(values)) if values.size else 0.0
+
+    def _candidate(self, contour, shape, saturation=None):
         area = float(cv2.contourArea(contour))
         if area < self.MIN_AREA:
             return None
+        if saturation is not None:
+            sat = self._median_saturation(contour, saturation, shape)
+            if sat < self.MIN_MEDIAN_SATURATION:
+                return None
         x, y, w, h = cv2.boundingRect(contour)
         # 欠けた領域の中心を、丸全体の中心として使わない。
         if x <= 0 or y <= 0 or x + w >= shape[1] or y + h >= shape[0]:
@@ -90,12 +108,15 @@ class SumoBlueDetector:
             "ellipse_tilt_deg": tilt,
         }
 
-    def _bottom_hint(self, contours, shape):
+    def _bottom_hint(self, contours, shape, saturation=None):
         # 見切れ領域は後退判断専用。接近対象として確定しない。
         hints = []
         for contour in contours:
             area = float(cv2.contourArea(contour))
             x, y, w, h = cv2.boundingRect(contour)
+            if (saturation is not None and area >= self.MIN_AREA
+                    and self._median_saturation(contour, saturation, shape) < self.MIN_MEDIAN_SATURATION):
+                continue
             if (area < self.MIN_AREA or w < 20 or h < 4
                     or y < shape[0] * 0.5
                     or y + h < shape[0] - 1
@@ -144,10 +165,11 @@ class SumoBlueDetector:
         contours, _ = cv2.findContours(
             mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
-        bottom_hint = self._bottom_hint(contours, mask.shape)
+        saturation = hsv[:, :, 1]
+        bottom_hint = self._bottom_hint(contours, mask.shape, saturation)
         candidates = []
         for contour in contours:
-            candidate = self._candidate(contour, mask.shape)
+            candidate = self._candidate(contour, mask.shape, saturation)
             if candidate is not None:
                 candidates.append(candidate)
 
