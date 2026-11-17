@@ -1117,11 +1117,26 @@ def build_tantou_tree(context, config, include_exit=True):
         policy=ParallelPolicy.SuccessOnAll()
     )
 
+    # 2026-11-17(devSS): 黒線を早めに(200mmから)見るようにしたので、QRがまだ読めないうちに黒線で止まることがある。
+    # そのときは止まったまま待つだけにせず、WaitForQRDecode(少しずつ前後に動いて読み直し、読めたら止まった位置へ戻る)に入る。
+    # すでに読めていれば WaitForQRDecode はすぐ SUCCESS を返す。
+    drive_then_wait_qr_2 = Sequence(
+        name="drive_then_wait_qr_2",
+        memory=True
+    )
+    drive_then_wait_qr_2.add_children([
+        drive_selector_2,
+        WaitForQRDecode(
+            name="wait_qr_after_black_2",
+            qr_reader=read_qr2
+        ),
+    ])
+
     go_to_black_a_with_qr_2.add_children([
 
         qr2_read,
         #black_or_50,
-        drive_selector_2,
+        drive_then_wait_qr_2,
 
     ])
 
