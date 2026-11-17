@@ -1563,6 +1563,8 @@ def _run_main(argv, startup_cleanup):
                         help='2026-11-18: aim this many mm to the left of the blue circle centre seen by the camera. Default 0.')
     parser.add_argument('--rally-blue-drive-pid', type=str, default=None,
                         help='2026-11-18: heading PID "P,I,D" for the drive to the blue circle (default: the sumo drive 1.1,0.1,0.03).')
+    parser.add_argument('--rally-blue-align-encoder', action='store_true',
+                        help='2026-11-18: turn toward the blue circle seen by the camera with the encoder spin (as in the bottle delivery).')
     parser.add_argument('--rally-blue-exit-settle', action='store_true',
                         help=('2026-11-18: after the blue circle, turn to the rally direction with the predictive brake, wait '
                               'until stopped and trim if the heading is off by more than 0.5 deg (log BLUE_EXIT_SETTLE).'))
@@ -2000,6 +2002,10 @@ def _run_main(argv, startup_cleanup):
         from robot_program.features.sumo_rally_transition import MoveToRallyBlue as _mtb2
         _mtb2.DRIVE_PID = _pid
         print(' -- blue circle drive PID: P=%.2f I=%.2f D=%.3f' % _pid, flush=True)
+    if args.rally_blue_align_encoder:
+        from robot_program.features.sumo_rally_transition import MoveToRallyBlue as _mtb3
+        _mtb3.ALIGN_ENCODER = True
+        print(' -- blue circle alignment turn: encoder spin', flush=True)
     if args.rally_blue_exit_settle:
         from robot_program.features.sumo_rally_transition import TurnAfterBlue as _tab
         _tab.EXIT_SETTLE = True

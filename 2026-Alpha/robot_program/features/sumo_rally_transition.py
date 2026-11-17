@@ -921,6 +921,7 @@ class MoveToRallyBlue(Behaviour):
     GROUND_STOP_ADVANCE_MM = 39.0
     AIM_LEFT_MM = 0.0
     DRIVE_PID = None   # (P, I, D)。None なら相撲の直進の値(config.sumo.drive_pid_*)
+    ALIGN_ENCODER = False   # --rally-blue-align-encoder
     _ground_camera = None
 
     def _ground(self, candidate):
@@ -965,15 +966,26 @@ class MoveToRallyBlue(Behaviour):
             self.blue_alignment_turns += 1
             motion = self.config.sumo
             target_bearing = (current_bearing(self.context) + correction) % 360.0
-            # 向き直りは devAT の補正旋回と同じ設定(出力50・許容0.5°・止まったら出力を上げる・先読みブレーキ)
-            self.turn = SpinToBearing(
-                "rally blue alignment", self.context, target_bearing,
-                max_power=50, min_power=50,
-                pid_p=motion.turn_pid_p, pid_i=motion.turn_pid_i, pid_d=motion.turn_pid_d,
-                tolerance=0.5,
-            )
-            self.turn.stall_boost = True
-            self.turn.predictive_brake_horizon_sec = 0.01
+            if self.ALIGN_ENCODER:
+                # 2026-11-18(devSS、ユーザー): --rally-blue-align-encoder。SpinToBearing は +5°→-6°→+5°→-7° と往復して
+                # 3回で打ち切っていた(ロボットA)。青い丸のあとの向き直りと同じエンコーダ旋回(フェーズ1+ジャイロの仕上げ)にする。
+                from ..behaviours.encoder_spin import EncoderSpin
+                from ..types import HeadingType
+                raw = float(runtime.gyro_sensor.get_angle())
+                heading = self.context.sumo.bearing_reference.legacy_target(target_bearing, raw, runtime.course)
+                self.turn = EncoderSpin(name="rally blue alignment", target=heading, max_power=40, min_power=40,
+                                        pid_p=0.2, pid_i=0.00075, pid_d=0.03,
+                                        target_type=HeadingType.ABSOLUTE, tolerance=0.5)
+            else:
+                # 向き直りは devAT の補正旋回と同じ設定(出力50・許容0.5°・止まったら出力を上げる・先読みブレーキ)
+                self.turn = SpinToBearing(
+                    "rally blue alignment", self.context, target_bearing,
+                    max_power=50, min_power=50,
+                    pid_p=motion.turn_pid_p, pid_i=motion.turn_pid_i, pid_d=motion.turn_pid_d,
+                    tolerance=0.5,
+                )
+                self.turn.stall_boost = True
+                self.turn.predictive_brake_horizon_sec = 0.01
             self.logger.info("RALLY_BLUE TURN correction=%.2f target=%.2f (ground)" % (correction, target_bearing))
             self._set_phase("TURN")
             return Status.RUNNING
