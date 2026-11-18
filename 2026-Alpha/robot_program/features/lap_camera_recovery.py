@@ -1299,6 +1299,12 @@ class Peak100ContinuousLap(RunByGyro):
             return False
         self.logger.info('BOTTLE_AIM_START progress_mm=%.1f color=%s cx=%.0f bottom=%d area=%d right_deg=%.2f phase=%s gate_latched=%s'
                          % (progress, getattr(color, 'value', color), cx, bottom, area, right, self.transition_phase, self.gate_latched))
+        # 2026-11-18: ここからはこの色だけを探す(ほかの色のボトルや床の青い線を選ばない)。
+        # 次にボトルを読むとき(begin_bottle_read)に解除される。
+        try:
+            runtime.video.set_bottle_color(color)
+        except Exception as error:
+            self.logger.warning('BOTTLE_AIM color lock failed: %r' % (error,))
         return True
 
     def _bottle_aim_heading(self, heading):
@@ -1331,7 +1337,7 @@ class Peak100ContinuousLap(RunByGyro):
             offset = max(-BOTTLE_AIM_MAX_DEG, min(BOTTLE_AIM_MAX_DEG, offset))
             want = self.heading_origin + offset
             self.aim_target += BOTTLE_AIM_SMOOTH * ((want - self.aim_target + 180.0) % 360.0 - 180.0)
-        elif color is None and self.aim_max_area >= BOTTLE_AIM_UNDER_AREA and not self.aim_under:
+        elif color != self.aim_color and self.aim_max_area >= BOTTLE_AIM_UNDER_AREA and not self.aim_under:
             # 大きく見えていたボトルが見えなくなった = アームの間(カメラの下)に入った。そこからはまっすぐ。
             self.aim_under = True
             self.aim_target = heading
