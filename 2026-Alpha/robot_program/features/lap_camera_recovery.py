@@ -206,7 +206,30 @@ BOTTLE_AIM_POWER = None           # None なら今の fallback と同じ出力
 # 2026-11-18(devSS): 床の青→黒が見えなかったとき、推定のゲートを手前にする量(--lap-unseen-gate-shorten-mm、既定0)。
 # 11/18 のAのログ: 青→黒が見えた回は 5210〜5256mm で止まり、見えなかった回は推定のゲート(5290.5)まで進んで 5291〜5304mm。
 # 11/18 ユーザー指示で既定 60(--lap-unseen-gate-shorten-mm 0 で元どおり)。
-UNSEEN_GATE_SHORTEN_MM = 60.0
+# 11/18 夕: 会場の C のログでは左で青が見えなかった回の推定のゲートは止まるべき所より手前、右は先で、60 はどちらにも合わない。
+# 止めすぎの対策はボトルを捕まえた位置(CAPTURE_STOP_*)で行い、こちらは既定 0 に戻す(ユーザー指示)。
+UNSEEN_GATE_SHORTEN_MM = 0.0
+# 2026-11-18 夕(devSS、ユーザー指示で既定オン): ボトルを捕まえた位置から決まった距離で止める(--lap-capture-stop-mm、0 でオフ)。
+# 前の超音波センサーは、アームの奥に入ったボトルで 60〜80mm、アームの先で押しているだけなら 114〜118mm を読む。
+# 1〜CAPTURE_SONAR_MM を2回続けて読んだら捕まえたとし、最初に読んだ位置から CAPTURE_STOP_MM 進んだら止める。
+# 今の止め方(黒から120mm・推定のゲート)より早いときだけ効く(遅くはしない)。
+# 11/18 の C: 捕まえてから止まるまで右 +100〜108mm(推定のゲート)、左 +20〜22mm(黒から120mm)。右だけ約8cm前へ出ていた。
+CAPTURE_STOP_MM = 40.0
+CAPTURE_SONAR_MM = 85.0
+CAPTURE_MIN_PROGRESS_MM = 4900.0  # これより手前の読みは使わない(11/18 の捕まえた位置は 5184〜5316)
+
+
+def capture_stop_reached(lap):
+    """ボトルを捕まえた位置から CAPTURE_STOP_MM 進んだら True。"""
+    capture = getattr(lap, 'sonar_capture_mm', None)
+    if not CAPTURE_STOP_MM or capture is None:
+        return False
+    progress = float(runtime.plotter.get_distance()) - lap.origin_distance
+    if progress < capture + CAPTURE_STOP_MM:
+        return False
+    lap.logger.info('LAP_CAPTURE_STOP progress_mm=%.1f capture_mm=%.1f after_mm=%.1f'
+                    % (progress, capture, progress - capture))
+    return True
 # 11/18 1回目: 画素→角度の式(HORIZON_DISTANCE から)が実際の約1.7倍の角度を出して ±15°で振れ、ボトルの左へ抜けた。
 # ロボットAのカメラは左へ2.3°向いている。--rally-camera-calib の較正(レンズと取り付け)で車体から見た角度を出す。
 _AIM_CAM = None
@@ -447,6 +470,7 @@ class Peak100ContinuousLap(RunByGyro):
         self.native_capture_enabled = False
         self.aim_active = False; self.aim_hits = 0; self.aim_color = None; self.aim_last_frame = -1
         self.aim_last_obs = None
+        self.sonar_capture_mm = None
         self.aim_expected_color = None; self.aim_under = False; self.aim_target = None; self.aim_logged = 0; self.aim_heads = deque(maxlen=60); self.aim_max_area = 0
         self.handoff_complete=False;self.camera_direction=None;self.camera_search_logged=False;self.target=self.profile_target;self.pre_gate_trace=None;self.pre_gate_side=None;self.pre_gate_white_count=0;self.floor_classifier=ColorClassifier();self.trace_motor_samples=deque(maxlen=500);self.trace_motor_total=0;self.trace_projection=None;self.trace_projection_base=None
         self.transition_phase=None;self.transition_start=None;self.transition_time=None;self.gate_latched=False;self.recovery_attempts=0;self.edge_count=0;self.recovery_direction=None;self.frozen_camera_frame=None;self.frozen_camera_stream=None;self.fallback_done=False;self.fallback_reason=None;self.fallback_gate_base=None;self.transition_samples=deque(maxlen=500);self.transition_total=0;self._diag_context=None;self.entry_seek_parent=None;self.approach_near=False;self.entry_dark_hold=None;self.entry_dark_hold_used=False
@@ -1122,6 +1146,9 @@ class Peak100ContinuousLap(RunByGyro):
                     traveled_after = measure_projection.update(runtime.plotter)
                 except ValueError:
                     return self._finish_distance_run(Status.FAILURE)
+            if traveled_after < after_mm and capture_stop_reached(self):
+                source = 'bottle_capture'
+                traveled_after = after_mm
             if traveled_after >= after_mm:
                 self.fallback_done=True
                 self.logger.info('LAP_FALLBACK_DONE source=%s progress_mm=%.1f gate_base_mm=%.1f after_mm=%.1f' % (source,progress,base,traveled_after))
@@ -2003,6 +2030,9 @@ class RollingCameraMerge(CameraMergeDemo):
         except ValueError:
             return self._fail('trace_projection_invalid')
         raw=self.post_trace_projection.traveled
+        capture_lap = getattr(self.side_source, 'lap', None)
+        if projected<self.post_trace_target_mm and capture_lap is not None and capture_stop_reached(capture_lap):
+            projected=self.post_trace_target_mm
         if projected>=self.post_trace_target_mm:
             lap = getattr(self.side_source, 'lap', None)
             command_time = time.monotonic() if getattr(lap, 'gate_stop_measure', False) else None
@@ -2188,22 +2218,42 @@ class _DeferredBottleObservation(Behaviour):
         self.aim_logged = 0
         self.sonar_next = 0.0
         self.sonar_logged = 0
+        self.sonar_ok = True
+        self.capture_hits = 0
+        self.capture_first = None
     def _log_sonar(self):
         # 2026-11-18(devSS): ボトルがアームの間に入ったことを前の超音波センサーで分かるかの調べ。見るだけ。
         # 相撲と同じく 0.05 秒ごとに読み、進んだ距離と一緒に出す(最大200行)。
+        # 11/18 夕: 捕まえた判定(CAPTURE_STOP_*)にも使う。読むのは行数の上限と別。
         now = time.monotonic()
-        if self.sonar_logged >= 200 or now < self.sonar_next or runtime.sonar_sensor is None:
+        if not self.sonar_ok or now < self.sonar_next or runtime.sonar_sensor is None:
             return
         self.sonar_next = now + 0.05
         try:
             raw = runtime.sonar_sensor.get_distance()
         except Exception as error:
-            self.sonar_logged = 200
+            self.sonar_ok = False
             self.logger.warning('LAP_SONAR unavailable: %r' % (error,))
             return
-        self.sonar_logged += 1
         progress = float(runtime.plotter.get_distance()) - self.lap.origin_distance
-        self.logger.info('LAP_SONAR progress_mm=%.1f raw=%s' % (progress, raw))
+        if self.sonar_logged < 200:
+            self.sonar_logged += 1
+            self.logger.info('LAP_SONAR progress_mm=%.1f raw=%s' % (progress, raw))
+        if CAPTURE_STOP_MM and getattr(self.lap, 'sonar_capture_mm', None) is None:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                value = -1.0
+            if progress >= CAPTURE_MIN_PROGRESS_MM and 1.0 <= value <= CAPTURE_SONAR_MM:
+                if self.capture_hits == 0:
+                    self.capture_first = progress
+                self.capture_hits += 1
+                if self.capture_hits >= 2:
+                    self.lap.sonar_capture_mm = self.capture_first
+                    self.logger.info('LAP_CAPTURE progress_mm=%.1f first_mm=%.1f raw=%s stop_at_mm=%.1f'
+                                     % (progress, self.capture_first, raw, self.capture_first + CAPTURE_STOP_MM))
+            else:
+                self.capture_hits = 0
     def _log_bottle_aim(self):
         # 2026-11-18(devSS): ボトルをつかみ損ねる(片方のアームに当たって外へそれる)調べ。見るだけ。
         # 新しい画像ごとに、選んだボトルの画面上の位置を出す。床の上の位置は PC でカメラの較正から求める
@@ -2311,6 +2361,8 @@ def build_lap_camera_recovery(context, config, original):
     if UNSEEN_GATE_SHORTEN_MM:
         lap.fallback_estimated_gate_mm = float(lap.distance_limit_mm) - UNSEEN_GATE_SHORTEN_MM
     print('LAP_UNSEEN_GATE estimated_gate_mm=%.1f shorten_mm=%.1f' % (lap.fallback_estimated_gate_mm, UNSEEN_GATE_SHORTEN_MM), flush=True)
+    print('LAP_CAPTURE_STOP after_capture_mm=%s sonar_le_mm=%.0f min_progress_mm=%.0f'
+          % (CAPTURE_STOP_MM or 'off', CAPTURE_SONAR_MM, CAPTURE_MIN_PROGRESS_MM), flush=True)
     gate = BlueThenBlackGate(lap, allow_weak_blue=True)
     lap.completion_condition, lap.completion_min_mm = gate, lap.observation_start_mm if lap.observation_start_mm is not None else math.inf
     continuous_to = config.mission_mode in ('lap-to', 'lap-to-sumo', 'full')

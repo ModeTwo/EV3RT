@@ -1578,7 +1578,10 @@ def _run_main(argv, startup_cleanup):
                               '(default 3.0, on by default; 0 turns it off; a gate leg was 30x154 px, the bottle 51x71 px). Log SUMO_BLACK reject tall.'))
     parser.add_argument('--lap-unseen-gate-shorten-mm', type=float, default=None,
                         help=('2026-11-18: when the floor blue->black at the LAP gate is not seen, stop this many mm before the '
-                              'estimated gate (default 60; 0 = off). Runs that saw it stopped about 60 mm earlier than the estimated gate (robot A).'))
+                              'estimated gate (default 0 since 11/18 evening; the venue logs of C did not support 60).'))
+    parser.add_argument('--lap-capture-stop-mm', type=float, default=None,
+                        help=('2026-11-18: stop LAP this many mm after the front sonar shows the bottle inside the arms '
+                              '(2 reads of 1..85 mm), if that is earlier than the normal stop (default 40; 0 = off). Log LAP_CAPTURE.'))
     parser.add_argument('--lap-bottle-aim', action='store_true',
                         help=('2026-11-18: at the end of LAP, once the bottle is seen ahead, stop following the line and steer '
                               'toward the bottle by camera (fallback stop distance by blue->black or estimated gate). Log BOTTLE_AIM.'))
@@ -2049,6 +2052,12 @@ def _run_main(argv, startup_cleanup):
         from robot_program.features import lap_camera_recovery as _lcr0
         _lcr0.UNSEEN_GATE_SHORTEN_MM = float(args.lap_unseen_gate_shorten_mm)
         print(' -- LAP unseen gate: stop %.0f mm before the estimated gate' % _lcr0.UNSEEN_GATE_SHORTEN_MM, flush=True)
+    if args.lap_capture_stop_mm is not None:
+        if not 0.0 <= args.lap_capture_stop_mm <= 200.0:
+            parser.error('--lap-capture-stop-mm must be 0..200')
+        from robot_program.features import lap_camera_recovery as _lcr1
+        _lcr1.CAPTURE_STOP_MM = float(args.lap_capture_stop_mm)
+        print(' -- LAP capture stop: %s' % ('off' if not _lcr1.CAPTURE_STOP_MM else '%.0f mm after the bottle is in the arms' % _lcr1.CAPTURE_STOP_MM), flush=True)
     if args.lap_bottle_aim or args.lap_bottle_aim_power is not None or args.lap_bottle_aim_offset_deg is not None or args.lap_bottle_aim_start_mm is not None:
         from robot_program.features import lap_camera_recovery as _lcr
         _lcr.BOTTLE_AIM = bool(args.lap_bottle_aim)
