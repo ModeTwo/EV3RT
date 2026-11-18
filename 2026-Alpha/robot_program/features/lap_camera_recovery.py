@@ -1565,11 +1565,12 @@ class Peak100ContinuousLap(RunByGyro):
             want = self.heading_origin + offset
             self.aim_target += BOTTLE_AIM_SMOOTH * ((want - self.aim_target + 180.0) % 360.0 - 180.0)
         elif color != self.aim_color and self.aim_max_area >= BOTTLE_AIM_UNDER_AREA and not self.aim_under:
-            # 大きく見えていたボトルが見えなくなった = アームの間(カメラの下)に入った。そこからはまっすぐ。
+            # 大きく見えていたボトルが見えなくなった = アームの間(カメラの下)に入った。そこからは最後に求めたボトルの向きのまま。
+            # 11/18 09:34(A・左コース)はここで今の向き(-7°、揺れの端)に切り替えたため、ボトルの向き(+2°)から
+            # 9°ずれたまま進んで取りこぼした。
             self.aim_under = True
-            self.aim_target = heading
-            self.logger.info('BOTTLE_AIM_UNDER progress_mm=%.1f heading=%.2f max_area=%d'
-                             % (float(runtime.plotter.get_distance()) - self.origin_distance, heading, self.aim_max_area))
+            self.logger.info('BOTTLE_AIM_UNDER progress_mm=%.1f heading=%.2f keep_target=%.2f max_area=%d'
+                             % (float(runtime.plotter.get_distance()) - self.origin_distance, heading, self.aim_target, self.aim_max_area))
         if self.aim_logged < 200:
             self.aim_logged += 1
             progress = float(runtime.plotter.get_distance()) - self.origin_distance
