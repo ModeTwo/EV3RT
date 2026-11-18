@@ -9,12 +9,12 @@ from Crypto.Util.Padding import unpad
 
 
 def decode_hint2(raw_text, decryption_key):
-    # 大会指定の4桁キー以外を復号処理へ渡さない。
+    # 大会指定の4文字のキー(英数字)以外を復号処理へ渡さない。2026-11-18(devSS): 英字も受け付ける(大文字・小文字はそのまま)。
     if (not isinstance(decryption_key, str)
             or len(decryption_key) != 4
             or not decryption_key.isascii()
-            or not decryption_key.isdigit()):
-        raise ValueError("A four-digit decryption key is required")
+            or not decryption_key.isalnum()):
+        raise ValueError("A four-character (letters or digits) decryption key is required")
     if not isinstance(raw_text, str) or not raw_text:
         raise ValueError("Hint 2 raw text is required")
 
