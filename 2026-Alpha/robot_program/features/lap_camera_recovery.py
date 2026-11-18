@@ -194,7 +194,7 @@ APPROACH_MIN_AREA_PX=2000
 # その向きを heading_origin ではなく、画像ごとのボトルの方向にする。ボトルが近すぎて見えなくなったら最後の向きのまま。
 BOTTLE_AIM = False
 BOTTLE_AIM_START_MM = 4500.0      # LAP の進んだ距離。ボトルの色を読み始めるのは 4300
-BOTTLE_AIM_MIN_AREA = 300         # 画素の面積
+BOTTLE_AIM_MIN_AREA = 600         # 画素の面積(11/18 09:46: 遠くの面積407の青を選んだ。正しく始めた回は790〜1189)
 BOTTLE_AIM_HITS = 3               # 正面近くに同じ色が続けて見えた画像の数
 BOTTLE_AIM_START_MAX_DEG = 12.0   # 始めるのは、車体の正面からこの角度以内に見えたボトルだけ
 BOTTLE_AIM_OFFSET_DEG = 0.0       # 狙う向きを右へずらす(度)。アームの真ん中が車体の正面からずれていたら使う
@@ -425,7 +425,7 @@ class Peak100ContinuousLap(RunByGyro):
     def initialise(self):
         self.native_capture_enabled = False
         self.aim_active = False; self.aim_hits = 0; self.aim_color = None; self.aim_last_frame = -1
-        self.aim_under = False; self.aim_target = None; self.aim_logged = 0; self.aim_heads = deque(maxlen=60); self.aim_max_area = 0
+        self.aim_expected_color = None; self.aim_under = False; self.aim_target = None; self.aim_logged = 0; self.aim_heads = deque(maxlen=60); self.aim_max_area = 0
         self.handoff_complete=False;self.camera_direction=None;self.camera_search_logged=False;self.target=self.profile_target;self.pre_gate_trace=None;self.pre_gate_side=None;self.pre_gate_white_count=0;self.floor_classifier=ColorClassifier();self.trace_motor_samples=deque(maxlen=500);self.trace_motor_total=0;self.trace_projection=None;self.trace_projection_base=None
         self.transition_phase=None;self.transition_start=None;self.transition_time=None;self.gate_latched=False;self.recovery_attempts=0;self.edge_count=0;self.recovery_direction=None;self.frozen_camera_frame=None;self.frozen_camera_stream=None;self.fallback_done=False;self.fallback_reason=None;self.fallback_gate_base=None;self.transition_samples=deque(maxlen=500);self.transition_total=0;self._diag_context=None;self.entry_seek_parent=None;self.approach_near=False;self.entry_dark_hold=None;self.entry_dark_hold_used=False
         self.cross_direction = None
@@ -1290,8 +1290,12 @@ class Peak100ContinuousLap(RunByGyro):
         if obs is None:
             return False
         frame_id, color, cx, bottom, area, blind = obs
+        # 2026-11-18: LAP の色の読み取り(DetectBottleColor、3枚続けて同じ色)で決まった色のボトルにだけ向かう。
+        # 09:46 は赤いボトルの回に、遠くの青いもの(面積407)で始めて色を青に固定し、赤を一度も狙わなかった。
+        expected = getattr(self, 'aim_expected_color', None)
         right = _bottle_right_deg(cx, bottom) if color is not None else None
-        ok = (color is not None and area >= BOTTLE_AIM_MIN_AREA and not blind
+        ok = (color is not None and expected is not None and getattr(color, 'value', color) == expected
+              and area >= BOTTLE_AIM_MIN_AREA and not blind
               and abs(right) <= BOTTLE_AIM_START_MAX_DEG)
         if not ok:
             self.aim_hits, self.aim_color = 0, None
@@ -1994,6 +1998,8 @@ class _DeferredBottleObservation(Behaviour):
                 return Status.RUNNING
             self.started = True
         self.child.tick_once()
+        if self.child.context.bottle_color is not None:
+            self.lap.aim_expected_color = self.child.context.bottle_color
         self._log_bottle_aim()
         self._log_sonar()
         return self.child.status
