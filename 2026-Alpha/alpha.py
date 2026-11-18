@@ -2116,9 +2116,10 @@ def _run_main(argv, startup_cleanup):
                                              et_rally_camera_handover_test=(args.rally_camera_handover_test == 'on'))
     if args.rally_camera_log is not None:
         # 2026-11-18: bottle-sumo + --rally-stop-before-drive でも使える(スタートの画像が数枚残る。測れなかった回の原因を見るため)
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS and not (
+        # 2026-11-18 夜(ユーザー): full でも使える(相撲から走ってきた ETラリーのスタートで、床での較正の画像を撮るため)
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS + ('full',) and not (
                 mission_config.mission_mode == 'bottle-sumo' and mission_config.et_rally_stop_before_drive):
-            parser.error('--rally-camera-log requires --mission rally-drive, bottle-rally or rally-sumo '
+            parser.error('--rally-camera-log requires --mission rally-drive, bottle-rally, rally-sumo or full '
                          '(or bottle-sumo with --rally-stop-before-drive)')
         if not 1 <= args.rally_camera_log <= 30:
             parser.error('--rally-camera-log must be between 1 and 30')
@@ -2242,7 +2243,9 @@ def _run_main(argv, startup_cleanup):
             ('--rally-gyro-still-sec', args.rally_gyro_still_sec, 1.0, 600.0, 'et_rally_gyro_still_sec')):
         if value is None:
             continue
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+        # 2026-11-18 夜(ユーザー): 止まる設定は full でも使える(ETラリーのスタートで床での較正の画像を撮るため)
+        allowed = MANUAL_RALLY_MISSIONS + (('full',) if option.startswith('--rally-straight-pause') else ())
+        if mission_config.mission_mode not in allowed:
             parser.error(option + ' requires --mission rally-drive, bottle-rally or rally-sumo')
         if not low <= value <= high:
             parser.error('%s must be between %g and %g' % (option, low, high))
@@ -2260,7 +2263,7 @@ def _run_main(argv, startup_cleanup):
             parser.error(option + ' requires --mission rally-drive, bottle-rally or rally-sumo')
         mission_config = dataclasses.replace(mission_config, **{field: value == 'on'})
     if args.rally_straight_pause_labels is not None:
-        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS:
+        if mission_config.mission_mode not in MANUAL_RALLY_MISSIONS + ('full',):
             parser.error('--rally-straight-pause-labels requires --mission rally-drive, bottle-rally or rally-sumo')
         labels = tuple(v.strip() for v in args.rally_straight_pause_labels.split(',') if v.strip())
         if not labels:
