@@ -35,15 +35,28 @@ def decode_hint2(raw_text, decryption_key):
 
     salt = encrypted[8:16]
     ciphertext = encrypted[16:]
-    key = PBKDF2(
-        decryption_key.encode("ascii"),
-        salt,
-        dkLen=16,
-        count=10000,
-        hmac_hash_module=SHA256,
-    )
-    try:
-        plaintext = unpad(AES.new(key, AES.MODE_ECB).decrypt(ciphertext), 16)
-        return plaintext.decode("utf-8")
-    except (ValueError, UnicodeDecodeError) as error:
-        raise ValueError("Hint 2 decryption failed") from error
+    # 2026-11-18(devSS、本番の試走): キー T111 の回に復号できなかった(小文字で打った疑い)。
+    # 入力どおりで解けなければ、大文字・小文字を替えたキーも試す(違うキーで読める文字が出ることはまずない)。
+    tried = []
+    for candidate in (decryption_key, decryption_key.upper(), decryption_key.lower(), decryption_key.swapcase()):
+        if candidate in tried:
+            continue
+        tried.append(candidate)
+        key = PBKDF2(
+            candidate.encode("ascii"),
+            salt,
+            dkLen=16,
+            count=10000,
+            hmac_hash_module=SHA256,
+        )
+        try:
+            plaintext = unpad(AES.new(key, AES.MODE_ECB).decrypt(ciphertext), 16)
+            text = plaintext.decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        # 入力どおりのキーは従来どおり。替えたキーは読める文字のときだけ採用する。
+        if candidate == decryption_key or (text.strip() and text.strip().isprintable()):
+            if candidate != decryption_key:
+                print(" -- hint2: decrypted with key %r (entered %r)" % (candidate, decryption_key), flush=True)
+            return text
+    raise ValueError("Hint 2 decryption failed (tried keys %s)" % ", ".join(repr(k) for k in tried))

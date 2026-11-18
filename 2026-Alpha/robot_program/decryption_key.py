@@ -12,6 +12,8 @@ def read_decryption_key(input_fn=input, output_fn=print):
 
         confirmation = input_fn("Use this decryption key? (y/n): ").strip().lower()
         if confirmation == "y":
+            # 2026-11-18: 復号できなかったときに打ったキーが分かるようにログへ出す。
+            output_fn(" -- decryption key entered: %r" % value)
             return value
         if confirmation != "n":
             output_fn("Enter y or n.")
