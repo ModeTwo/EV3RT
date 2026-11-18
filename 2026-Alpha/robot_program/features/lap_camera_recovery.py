@@ -191,7 +191,7 @@ APPROACH_MIN_AREA_PX=2000
 # その向きを heading_origin ではなく、画像ごとのボトルの方向にする。ボトルが近すぎて見えなくなったら最後の向きのまま。
 BOTTLE_AIM = False
 BOTTLE_AIM_START_MM = 4500.0      # LAP の進んだ距離。ボトルの色を読み始めるのは 4300
-BOTTLE_AIM_MIN_AREA = 300         # 画素の面積
+BOTTLE_AIM_MIN_AREA = 600         # 画素の面積(11/18 09:46: 遠くの面積407の青を選んだ。正しく始めた回は790〜1189)
 BOTTLE_AIM_HITS = 3               # 正面近くに同じ色が続けて見えた画像の数
 BOTTLE_AIM_START_MAX_DEG = 12.0   # 始めるのは、車体の正面からこの角度以内に見えたボトルだけ
 BOTTLE_AIM_OFFSET_DEG = 0.0       # 狙う向きを右へずらす(度)。アームの真ん中が車体の正面からずれていたら使う
@@ -201,6 +201,9 @@ BOTTLE_AIM_LATENCY_SEC = 0.155    # 画像の遅れ。11/18 のログで約4枚(
 BOTTLE_AIM_UNDER_AREA = 2500      # この面積を超えて見えたあとで見えなくなったら、アームの間に入ったとしてまっすぐ進む
 BOTTLE_AIM_MAX_DEG = 15.0         # 線の向き(heading_origin)からの向きの変え幅の上限
 BOTTLE_AIM_POWER = None           # None なら今の fallback と同じ出力
+# 2026-11-18(devSS): 床の青→黒が見えなかったとき、推定のゲートを手前にする量(--lap-unseen-gate-shorten-mm、既定0)。
+# 11/18 のAのログ: 青→黒が見えた回は 5210〜5256mm で止まり、見えなかった回は推定のゲート(5290.5)まで進んで 5291〜5304mm。
+UNSEEN_GATE_SHORTEN_MM = 0.0
 # 11/18 1回目: 画素→角度の式(HORIZON_DISTANCE から)が実際の約1.7倍の角度を出して ±15°で振れ、ボトルの左へ抜けた。
 # ロボットAのカメラは左へ2.3°向いている。--rally-camera-calib の較正(レンズと取り付け)で車体から見た角度を出す。
 _AIM_CAM = None
@@ -440,7 +443,7 @@ class Peak100ContinuousLap(RunByGyro):
     def initialise(self):
         self.native_capture_enabled = False
         self.aim_active = False; self.aim_hits = 0; self.aim_color = None; self.aim_last_frame = -1
-        self.aim_under = False; self.aim_target = None; self.aim_logged = 0; self.aim_heads = deque(maxlen=60); self.aim_max_area = 0
+        self.aim_expected_color = None; self.aim_under = False; self.aim_target = None; self.aim_logged = 0; self.aim_heads = deque(maxlen=60); self.aim_max_area = 0
         self.handoff_complete=False;self.camera_direction=None;self.camera_search_logged=False;self.target=self.profile_target;self.pre_gate_trace=None;self.pre_gate_side=None;self.pre_gate_white_count=0;self.floor_classifier=ColorClassifier();self.trace_motor_samples=deque(maxlen=500);self.trace_motor_total=0;self.trace_projection=None;self.trace_projection_base=None
         self.transition_phase=None;self.transition_start=None;self.transition_time=None;self.gate_latched=False;self.recovery_attempts=0;self.edge_count=0;self.recovery_direction=None;self.frozen_camera_frame=None;self.frozen_camera_stream=None;self.fallback_done=False;self.fallback_reason=None;self.fallback_gate_base=None;self.transition_samples=deque(maxlen=500);self.transition_total=0;self._diag_context=None;self.entry_seek_parent=None;self.approach_near=False;self.entry_dark_hold=None;self.entry_dark_hold_used=False
         self.recovery_hold_log = None
@@ -1514,8 +1517,12 @@ class Peak100ContinuousLap(RunByGyro):
         if obs is None:
             return False
         frame_id, color, cx, bottom, area, blind = obs
+        # 2026-11-18: LAP の色の読み取り(DetectBottleColor、3枚続けて同じ色)で決まった色のボトルにだけ向かう。
+        # 09:46 は赤いボトルの回に、遠くの青いもの(面積407)で始めて色を青に固定し、赤を一度も狙わなかった。
+        expected = getattr(self, 'aim_expected_color', None)
         right = _bottle_right_deg(cx, bottom) if color is not None else None
-        ok = (color is not None and area >= BOTTLE_AIM_MIN_AREA and not blind
+        ok = (color is not None and expected is not None and getattr(color, 'value', color) == expected
+              and area >= BOTTLE_AIM_MIN_AREA and not blind
               and abs(right) <= BOTTLE_AIM_START_MAX_DEG)
         if not ok:
             self.aim_hits, self.aim_color = 0, None
@@ -2217,6 +2224,8 @@ class _DeferredBottleObservation(Behaviour):
                 return Status.RUNNING
             self.started = True
         self.child.tick_once()
+        if self.child.context.bottle_color is not None:
+            self.lap.aim_expected_color = self.child.context.bottle_color
         self._log_bottle_aim()
         self._log_sonar()
         return self.child.status
@@ -2285,6 +2294,9 @@ def build_lap_camera_recovery(context, config, original):
     lap.gate_recovery = 'baseline'
     lap.confirmed_fallback_slow = True
     lap.confirmed_fallback_after_mm = 120.0
+    if UNSEEN_GATE_SHORTEN_MM:
+        lap.fallback_estimated_gate_mm = float(lap.distance_limit_mm) - UNSEEN_GATE_SHORTEN_MM
+    print('LAP_UNSEEN_GATE estimated_gate_mm=%.1f shorten_mm=%.1f' % (lap.fallback_estimated_gate_mm, UNSEEN_GATE_SHORTEN_MM), flush=True)
     gate = BlueThenBlackGate(lap, allow_weak_blue=True)
     lap.completion_condition, lap.completion_min_mm = gate, lap.observation_start_mm if lap.observation_start_mm is not None else math.inf
     continuous_to = config.mission_mode in ('lap-to', 'lap-to-sumo', 'full')

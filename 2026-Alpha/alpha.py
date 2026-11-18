@@ -1573,6 +1573,9 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument('--rally-blue-exit-settle', action='store_true',
                         help=('2026-11-18: after the blue circle, turn to the rally direction with the predictive brake, wait '
                               'until stopped and trim if the heading is off by more than 0.5 deg (log BLUE_EXIT_SETTLE).'))
+    parser.add_argument('--lap-unseen-gate-shorten-mm', type=float, default=None,
+                        help=('2026-11-18: when the floor blue->black at the LAP gate is not seen, stop this many mm before the '
+                              'estimated gate (default 0). Runs that saw it stopped about 60 mm earlier than the estimated gate.'))
     parser.add_argument('--lap-bottle-aim', action='store_true',
                         help=('2026-11-18: at the end of LAP, once the bottle is seen ahead, stop following the line and steer '
                               'toward the bottle by camera (fallback stop distance by blue->black or estimated gate). Log BOTTLE_AIM.'))
@@ -2031,6 +2034,12 @@ def _run_main(argv, startup_cleanup):
         from robot_program.features.sumo_rally_transition import TurnAfterBlue as _tab
         _tab.EXIT_SETTLE = True
         print(' -- blue exit turn: settle and trim on', flush=True)
+    if args.lap_unseen_gate_shorten_mm is not None:
+        if not 0.0 <= args.lap_unseen_gate_shorten_mm <= 200.0:
+            parser.error('--lap-unseen-gate-shorten-mm must be 0..200')
+        from robot_program.features import lap_camera_recovery as _lcr0
+        _lcr0.UNSEEN_GATE_SHORTEN_MM = float(args.lap_unseen_gate_shorten_mm)
+        print(' -- LAP unseen gate: stop %.0f mm before the estimated gate' % _lcr0.UNSEEN_GATE_SHORTEN_MM, flush=True)
     if args.lap_bottle_aim or args.lap_bottle_aim_power is not None or args.lap_bottle_aim_offset_deg is not None or args.lap_bottle_aim_start_mm is not None:
         from robot_program.features import lap_camera_recovery as _lcr
         _lcr.BOTTLE_AIM = bool(args.lap_bottle_aim)
