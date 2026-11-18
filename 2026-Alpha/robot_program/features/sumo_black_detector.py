@@ -24,8 +24,8 @@ class SumoBlackDetector:
 
     # 2026-11-18(devSS、本番の試走 04:12): 相撲へ向かう直進で、ゲートの脚(幅30×高さ154画素)を黒いボトルと取り違え、
     # そちらへ向き直して捕まえに行った。ボトルは幅51×高さ71(高さ/幅 約1.4)。高さが幅のこの倍数を超える縦長の候補は外す。
-    # None なら外さない(--sumo-reject-tall で有効、既定オフ)。
-    TALL_MAX_RATIO = None
+    # None なら外さない。11/18 ユーザー指示で既定 3.0(--sumo-reject-tall 0 で外さない)。
+    TALL_MAX_RATIO = 3.0
     _tall_log_at = 0.0
 
     def __init__(self, mask_policy="dual"):
