@@ -199,6 +199,8 @@ BOTTLE_AIM_GAIN = 1.0             # ボトルの方向のずれのうち、向�
 BOTTLE_AIM_SMOOTH = 0.6           # 向かう向きを新しい値へ寄せる割合(画像ごと)
 BOTTLE_AIM_LATENCY_SEC = 0.155    # 画像の遅れ。11/18 のログで約4枚(1枚約35ms)遅れていた。この分だけ前の向きを基準にする
 BOTTLE_AIM_UNDER_AREA = 2500      # この面積を超えて見えたあとで見えなくなったら、アームの間に入ったとしてまっすぐ進む
+BOTTLE_AIM_JUMP_ROWS = 30         # 近づいたあと、下端がこれより上へ戻った候補は別のもの(画素)
+BOTTLE_AIM_JUMP_PX = 50           # 近づいたあと、横にこれより飛んだ候補は別のもの(画素)
 BOTTLE_AIM_MAX_DEG = 15.0         # 線の向き(heading_origin)からの向きの変え幅の上限
 BOTTLE_AIM_POWER = None           # None なら今の fallback と同じ出力
 # 2026-11-18(devSS): 床の青→黒が見えなかったとき、推定のゲートを手前にする量(--lap-unseen-gate-shorten-mm、既定0)。
@@ -443,6 +445,7 @@ class Peak100ContinuousLap(RunByGyro):
     def initialise(self):
         self.native_capture_enabled = False
         self.aim_active = False; self.aim_hits = 0; self.aim_color = None; self.aim_last_frame = -1
+        self.aim_last_obs = None
         self.aim_expected_color = None; self.aim_under = False; self.aim_target = None; self.aim_logged = 0; self.aim_heads = deque(maxlen=60); self.aim_max_area = 0
         self.handoff_complete=False;self.camera_direction=None;self.camera_search_logged=False;self.target=self.profile_target;self.pre_gate_trace=None;self.pre_gate_side=None;self.pre_gate_white_count=0;self.floor_classifier=ColorClassifier();self.trace_motor_samples=deque(maxlen=500);self.trace_motor_total=0;self.trace_projection=None;self.trace_projection_base=None
         self.transition_phase=None;self.transition_start=None;self.transition_time=None;self.gate_latched=False;self.recovery_attempts=0;self.edge_count=0;self.recovery_direction=None;self.frozen_camera_frame=None;self.frozen_camera_stream=None;self.fallback_done=False;self.fallback_reason=None;self.fallback_gate_base=None;self.transition_samples=deque(maxlen=500);self.transition_total=0;self._diag_context=None;self.entry_seek_parent=None;self.approach_near=False;self.entry_dark_hold=None;self.entry_dark_hold_used=False
@@ -1556,9 +1559,19 @@ class Peak100ContinuousLap(RunByGyro):
         # 下の端に掛かった(blind)ボトルも横の位置は使える。画面の左右の端に切れたものは使わない。
         use = (color is not None and color == self.aim_color and area >= BOTTLE_AIM_MIN_AREA and 8.0 <= cx <= 312.0
                and not self.aim_under)
+        # 2026-11-18(本番の試走 04:31、左・赤): 近づいたボトルが下へ消えた直後、画面の右上(遠く)に写った別の赤いものへ
+        # 乗り換えて右へ14°向き、ボトルをアームの先で押して取りこぼした。近くまで来たあとで、下端が大きく上へ戻ったもの・
+        # 横へ大きく飛んだものは別のものとして使わず、アームの間に入ったとみなす。
+        jumped = False
+        if use and self.aim_max_area >= BOTTLE_AIM_UNDER_AREA and getattr(self, 'aim_last_obs', None) is not None:
+            last_cx, last_bottom = self.aim_last_obs
+            if bottom < last_bottom - BOTTLE_AIM_JUMP_ROWS or abs(cx - last_cx) > BOTTLE_AIM_JUMP_PX:
+                use = False
+                jumped = True
         right = None
         past = heading
         if use:
+            self.aim_last_obs = (cx, bottom)
             self.aim_max_area = max(self.aim_max_area, area)
             right = _bottle_right_deg(cx, bottom)
             # 画像を撮ったときの向き(遅れの分だけ前)を基準にする
@@ -1571,7 +1584,7 @@ class Peak100ContinuousLap(RunByGyro):
             offset = max(-BOTTLE_AIM_MAX_DEG, min(BOTTLE_AIM_MAX_DEG, offset))
             want = self.heading_origin + offset
             self.aim_target += BOTTLE_AIM_SMOOTH * ((want - self.aim_target + 180.0) % 360.0 - 180.0)
-        elif color != self.aim_color and self.aim_max_area >= BOTTLE_AIM_UNDER_AREA and not self.aim_under:
+        elif (jumped or color != self.aim_color) and self.aim_max_area >= BOTTLE_AIM_UNDER_AREA and not self.aim_under:
             # 大きく見えていたボトルが見えなくなった = アームの間(カメラの下)に入った。そこからは最後に求めたボトルの向きのまま。
             # 11/18 09:34(A・左コース)はここで今の向き(-7°、揺れの端)に切り替えたため、ボトルの向き(+2°)から
             # 9°ずれたまま進んで取りこぼした。
