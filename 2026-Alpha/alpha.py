@@ -1578,7 +1578,7 @@ def _run_main(argv, startup_cleanup):
                               '(default 3.0, on by default; 0 turns it off; a gate leg was 30x154 px, the bottle 51x71 px). Log SUMO_BLACK reject tall.'))
     parser.add_argument('--lap-unseen-gate-shorten-mm', type=float, default=None,
                         help=('2026-11-18: when the floor blue->black at the LAP gate is not seen, stop this many mm before the '
-                              'estimated gate (default 0). Runs that saw it stopped about 60 mm earlier than the estimated gate.'))
+                              'estimated gate (default 60; 0 = off). Runs that saw it stopped about 60 mm earlier than the estimated gate (robot A).'))
     parser.add_argument('--lap-bottle-aim', action='store_true',
                         help=('2026-11-18: at the end of LAP, once the bottle is seen ahead, stop following the line and steer '
                               'toward the bottle by camera (fallback stop distance by blue->black or estimated gate). Log BOTTLE_AIM.'))

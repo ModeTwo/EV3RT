@@ -205,7 +205,8 @@ BOTTLE_AIM_MAX_DEG = 15.0         # 線の向き(heading_origin)からの向き�
 BOTTLE_AIM_POWER = None           # None なら今の fallback と同じ出力
 # 2026-11-18(devSS): 床の青→黒が見えなかったとき、推定のゲートを手前にする量(--lap-unseen-gate-shorten-mm、既定0)。
 # 11/18 のAのログ: 青→黒が見えた回は 5210〜5256mm で止まり、見えなかった回は推定のゲート(5290.5)まで進んで 5291〜5304mm。
-UNSEEN_GATE_SHORTEN_MM = 0.0
+# 11/18 ユーザー指示で既定 60(--lap-unseen-gate-shorten-mm 0 で元どおり)。
+UNSEEN_GATE_SHORTEN_MM = 60.0
 # 11/18 1回目: 画素→角度の式(HORIZON_DISTANCE から)が実際の約1.7倍の角度を出して ±15°で振れ、ボトルの左へ抜けた。
 # ロボットAのカメラは左へ2.3°向いている。--rally-camera-calib の較正(レンズと取り付け)で車体から見た角度を出す。
 _AIM_CAM = None
