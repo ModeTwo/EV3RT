@@ -185,6 +185,51 @@ PROFILE_REJOIN_ALIGNED_DEG = 3.0
 
 APPROACH_MIN_AREA_PX=2000
 
+# 2026-11-18(devSS): ボトルへカメラで向かう(--lap-bottle-aim、既定オフ)。
+# 最後の直進で線に戻る→それる→戻るの蛇行があり、ボトルに横ずれ・斜めで当たって片方のアームから外へそれる。
+# ボトルが正面近くに続けて見えたら、線をたどるのをやめて fallback(床の青→黒で止める距離を決める、見えなければ推定のゲート)へ移り、
+# その向きを heading_origin ではなく、画像ごとのボトルの方向にする。ボトルが近すぎて見えなくなったら最後の向きのまま。
+BOTTLE_AIM = False
+BOTTLE_AIM_START_MM = 4500.0      # LAP の進んだ距離。ボトルの色を読み始めるのは 4300
+BOTTLE_AIM_MIN_AREA = 300         # 画素の面積
+BOTTLE_AIM_HITS = 3               # 正面近くに同じ色が続けて見えた画像の数
+BOTTLE_AIM_START_MAX_DEG = 12.0   # 始めるのは、車体の正面からこの角度以内に見えたボトルだけ
+BOTTLE_AIM_OFFSET_DEG = 0.0       # 狙う向きを右へずらす(度)。アームの真ん中が車体の正面からずれていたら使う
+BOTTLE_AIM_GAIN = 1.0             # ボトルの方向のずれのうち、向きを変える割合(遅れを足し戻すので1でよい、11/18 机上)
+BOTTLE_AIM_SMOOTH = 0.6           # 向かう向きを新しい値へ寄せる割合(画像ごと)
+BOTTLE_AIM_LATENCY_SEC = 0.155    # 画像の遅れ。11/18 のログで約4枚(1枚約35ms)遅れていた。この分だけ前の向きを基準にする
+BOTTLE_AIM_UNDER_AREA = 2500      # この面積を超えて見えたあとで見えなくなったら、アームの間に入ったとしてまっすぐ進む
+BOTTLE_AIM_MAX_DEG = 15.0         # 線の向き(heading_origin)からの向きの変え幅の上限
+BOTTLE_AIM_POWER = None           # None なら今の fallback と同じ出力
+# 11/18 1回目: 画素→角度の式(HORIZON_DISTANCE から)が実際の約1.7倍の角度を出して ±15°で振れ、ボトルの左へ抜けた。
+# ロボットAのカメラは左へ2.3°向いている。--rally-camera-calib の較正(レンズと取り付け)で車体から見た角度を出す。
+_AIM_CAM = None
+
+
+def _bottle_aim_prepare():
+    """LAP を走り出す前に一度だけ較正を読む(走行中に読まない)。"""
+    global _AIM_CAM
+    try:
+        from .. import et_rally_start_pose as sp
+        _AIM_CAM = sp.GroundCamera(sp.DEFAULT_CALIB, build_map=False)
+        print('BOTTLE_AIM calibration %s' % getattr(sp.DEFAULT_CALIB, 'name', sp.DEFAULT_CALIB), flush=True)
+    except Exception as error:
+        _AIM_CAM = None
+        print('BOTTLE_AIM calibration unavailable (%r); using the image formula' % (error,), flush=True)
+
+
+def _bottle_right_deg(cx, bottom):
+    """ボトルが車体の正面から右へ何度に見えるか(画面は 640x480 の真ん中16:9 を 320x180 に縮めたもの)。"""
+    if _AIM_CAM is not None:
+        import cv2
+        import numpy as np
+        u, v = 2.0 * float(cx), 2.0 * float(bottom) + 60.0
+        n = cv2.undistortPoints(np.array([[[u, v]]], np.float64), _AIM_CAM.K, _AIM_CAM.dist).reshape(2)
+        ray = _AIM_CAM.R0.T @ np.array([n[0], n[1], 1.0])
+        return -math.degrees(math.atan2(ray[1], ray[0])) - BOTTLE_AIM_OFFSET_DEG
+    from py_etrobo_util.video import FRAME_WIDTH
+    return (float(cx) - FRAME_WIDTH / 2.0) / 7.5 - BOTTLE_AIM_OFFSET_DEG
+
 APPROACH_HITS=3
 
 APPROACH_MAX_AGE_SEC=0.25
@@ -394,6 +439,8 @@ class Peak100ContinuousLap(RunByGyro):
 
     def initialise(self):
         self.native_capture_enabled = False
+        self.aim_active = False; self.aim_hits = 0; self.aim_color = None; self.aim_last_frame = -1
+        self.aim_under = False; self.aim_target = None; self.aim_logged = 0; self.aim_heads = deque(maxlen=60); self.aim_max_area = 0
         self.handoff_complete=False;self.camera_direction=None;self.camera_search_logged=False;self.target=self.profile_target;self.pre_gate_trace=None;self.pre_gate_side=None;self.pre_gate_white_count=0;self.floor_classifier=ColorClassifier();self.trace_motor_samples=deque(maxlen=500);self.trace_motor_total=0;self.trace_projection=None;self.trace_projection_base=None
         self.transition_phase=None;self.transition_start=None;self.transition_time=None;self.gate_latched=False;self.recovery_attempts=0;self.edge_count=0;self.recovery_direction=None;self.frozen_camera_frame=None;self.frozen_camera_stream=None;self.fallback_done=False;self.fallback_reason=None;self.fallback_gate_base=None;self.transition_samples=deque(maxlen=500);self.transition_total=0;self._diag_context=None;self.entry_seek_parent=None;self.approach_near=False;self.entry_dark_hold=None;self.entry_dark_hold_used=False
         self.recovery_hold_log = None
@@ -541,6 +588,8 @@ class Peak100ContinuousLap(RunByGyro):
         gain,limit=(4.0,20.0) if strong else (2.0,16.0)
         turn=max(-limit,min(limit,gain*error))
         base=TRACE_POWER if slow else self.straight_power-abs(turn)
+        if getattr(self, 'aim_active', False) and BOTTLE_AIM_POWER is not None:
+            base=min(base, BOTTLE_AIM_POWER)
         runtime.left_motor.set_brake(False);runtime.right_motor.set_brake(False)
         left=round(base-runtime.course*turn);right=round(base+runtime.course*turn)
         runtime.left_motor.set_power(left);runtime.right_motor.set_power(right)
@@ -1083,7 +1132,7 @@ class Peak100ContinuousLap(RunByGyro):
                 self.fallback_blue_slow_logged = True
                 self.logger.info('LAP_FALLBACK_BLUE_SLOW power=%d blue_mm=%.1f gate_confirmed=False'
                                  % (TRACE_POWER, gate.blue_progress))
-            self._transition_drive(self.heading_origin,-runtime.course*gyro, slow=slow_confirmed or slow_blue or self.unseen_estimate_started)
+            self._transition_drive(self._bottle_aim_heading(-runtime.course*gyro),-runtime.course*gyro, slow=slow_confirmed or slow_blue or self.unseen_estimate_started)
             return Status.RUNNING
         if self.transition_phase == 'GATE_REJOIN' and self.gate_latched:
             return self._finish_distance_run(Status.SUCCESS)
@@ -1443,6 +1492,93 @@ class Peak100ContinuousLap(RunByGyro):
         self._transition_drive(self.heading_origin,-runtime.course*float(runtime.gyro_sensor.get_angle()))
         return Status.RUNNING
 
+    def _bottle_aim_frame(self):
+        """新しい画像ならボトルの観測 (frame, color, cx, bottom, area, blind) を返す。古い・見えないなら None。"""
+        try:
+            session, frame_id, observation = runtime.video.get_bottle_observation()
+        except Exception:
+            return None
+        if frame_id is None or frame_id <= self.aim_last_frame:
+            return None
+        self.aim_last_frame = frame_id
+        insight, color, cx, theta, bottom, area, blind = observation
+        if not insight:
+            return (frame_id, None, None, None, None, None)
+        return (frame_id, color, float(cx), int(bottom), int(area), bool(blind))
+
+    def _bottle_aim_ready(self):
+        progress = float(runtime.plotter.get_distance()) - self.origin_distance
+        if progress < BOTTLE_AIM_START_MM or progress >= self.distance_limit_mm:
+            return False
+        obs = self._bottle_aim_frame()
+        if obs is None:
+            return False
+        frame_id, color, cx, bottom, area, blind = obs
+        right = _bottle_right_deg(cx, bottom) if color is not None else None
+        ok = (color is not None and area >= BOTTLE_AIM_MIN_AREA and not blind
+              and abs(right) <= BOTTLE_AIM_START_MAX_DEG)
+        if not ok:
+            self.aim_hits, self.aim_color = 0, None
+            return False
+        self.aim_hits = self.aim_hits + 1 if color == self.aim_color else 1
+        self.aim_color = color
+        if self.aim_hits < BOTTLE_AIM_HITS:
+            return False
+        self.logger.info('BOTTLE_AIM_START progress_mm=%.1f color=%s cx=%.0f bottom=%d area=%d right_deg=%.2f phase=%s gate_latched=%s'
+                         % (progress, getattr(color, 'value', color), cx, bottom, area, right, self.transition_phase, self.gate_latched))
+        # 2026-11-18: ここからはこの色だけを探す(ほかの色のボトルや床の青い線を選ばない)。
+        # 次にボトルを読むとき(begin_bottle_read)に解除される。
+        try:
+            runtime.video.set_bottle_color(color)
+        except Exception as error:
+            self.logger.warning('BOTTLE_AIM color lock failed: %r' % (error,))
+        return True
+
+    def _bottle_aim_heading(self, heading):
+        """fallback で向かう向き。ボトルへ向かうときは画像ごとに更新する。"""
+        if not getattr(self, 'aim_active', False):
+            return self.heading_origin
+        now = time.monotonic()
+        self.aim_heads.append((now, heading))
+        if self.aim_target is None:
+            self.aim_target = heading
+        obs = self._bottle_aim_frame()
+        if obs is None:
+            return self.aim_target
+        frame_id, color, cx, bottom, area, blind = obs
+        # 下の端に掛かった(blind)ボトルも横の位置は使える。画面の左右の端に切れたものは使わない。
+        use = (color is not None and color == self.aim_color and area >= BOTTLE_AIM_MIN_AREA and 8.0 <= cx <= 312.0
+               and not self.aim_under)
+        right = None
+        past = heading
+        if use:
+            self.aim_max_area = max(self.aim_max_area, area)
+            right = _bottle_right_deg(cx, bottom)
+            # 画像を撮ったときの向き(遅れの分だけ前)を基準にする
+            for t, h in self.aim_heads:
+                if t <= now - BOTTLE_AIM_LATENCY_SEC:
+                    past = h
+            # 画面の右 = 実際の右。heading は右コースで右回りに増え、左コースで左回りに増える。
+            want = past - runtime.course * BOTTLE_AIM_GAIN * right
+            offset = (want - self.heading_origin + 180.0) % 360.0 - 180.0
+            offset = max(-BOTTLE_AIM_MAX_DEG, min(BOTTLE_AIM_MAX_DEG, offset))
+            want = self.heading_origin + offset
+            self.aim_target += BOTTLE_AIM_SMOOTH * ((want - self.aim_target + 180.0) % 360.0 - 180.0)
+        elif color != self.aim_color and self.aim_max_area >= BOTTLE_AIM_UNDER_AREA and not self.aim_under:
+            # 大きく見えていたボトルが見えなくなった = アームの間(カメラの下)に入った。そこからはまっすぐ。
+            self.aim_under = True
+            self.aim_target = heading
+            self.logger.info('BOTTLE_AIM_UNDER progress_mm=%.1f heading=%.2f max_area=%d'
+                             % (float(runtime.plotter.get_distance()) - self.origin_distance, heading, self.aim_max_area))
+        if self.aim_logged < 200:
+            self.aim_logged += 1
+            progress = float(runtime.plotter.get_distance()) - self.origin_distance
+            self.logger.info('BOTTLE_AIM frame=%d progress_mm=%.1f heading=%.2f past=%.2f target=%.2f origin=%.2f used=%s right_deg=%s color=%s cx=%s bottom=%s area=%s blind=%s'
+                             % (frame_id, progress, heading, past, self.aim_target, self.heading_origin, use,
+                                None if right is None else round(right, 2),
+                                getattr(color, 'value', color), cx, bottom, area, blind))
+        return self.aim_target
+
     def _start_fallback(self,reason):
         distance=float(runtime.plotter.get_distance());gyro=float(runtime.gyro_sensor.get_angle());now=time.monotonic()
         if runtime.course not in (-1,1) or not all(map(math.isfinite,(distance,gyro,now))):return self._finish_distance_run(Status.FAILURE)
@@ -1505,6 +1641,11 @@ class Peak100ContinuousLap(RunByGyro):
                 self.power = min(self.power, self.straight_power)
         if self.running:
             self._sync_lap_bottle_session(time.monotonic())
+        if self.running and BOTTLE_AIM and not getattr(self, 'aim_active', False) and self._bottle_aim_ready():
+            self.aim_active = True
+            self.aim_target = None
+            if self.transition_phase != 'FALLBACK':
+                return self._start_fallback('bottle_aim')
         if self.running and self.transition_phase is not None:return self._transition_update()
         if self.running and self.camera_start_mm is None:
             progress = float(runtime.plotter.get_distance()) - self.origin_distance
@@ -2006,6 +2147,8 @@ class _StartLapObservations(Behaviour):
     def update(self):
         runtime.require('video')
         runtime.video.set_lap_observation(False)
+        if BOTTLE_AIM:
+            _bottle_aim_prepare()
         return Status.SUCCESS
 
 
@@ -2019,6 +2162,51 @@ class _DeferredBottleObservation(Behaviour):
         self.started = False
     def initialise(self):
         self.started = False
+        self.aim_last_frame = -1
+        self.aim_logged = 0
+        self.sonar_next = 0.0
+        self.sonar_logged = 0
+    def _log_sonar(self):
+        # 2026-11-18(devSS): ボトルがアームの間に入ったことを前の超音波センサーで分かるかの調べ。見るだけ。
+        # 相撲と同じく 0.05 秒ごとに読み、進んだ距離と一緒に出す(最大200行)。
+        now = time.monotonic()
+        if self.sonar_logged >= 200 or now < self.sonar_next or runtime.sonar_sensor is None:
+            return
+        self.sonar_next = now + 0.05
+        try:
+            raw = runtime.sonar_sensor.get_distance()
+        except Exception as error:
+            self.sonar_logged = 200
+            self.logger.warning('LAP_SONAR unavailable: %r' % (error,))
+            return
+        self.sonar_logged += 1
+        progress = float(runtime.plotter.get_distance()) - self.lap.origin_distance
+        self.logger.info('LAP_SONAR progress_mm=%.1f raw=%s' % (progress, raw))
+    def _log_bottle_aim(self):
+        # 2026-11-18(devSS): ボトルをつかみ損ねる(片方のアームに当たって外へそれる)調べ。見るだけ。
+        # 新しい画像ごとに、選んだボトルの画面上の位置を出す。床の上の位置は PC でカメラの較正から求める
+        # (u=2*cx, v=2*bottom+60 が 640x480 の画素。bottom は色の帯の下端で、床からの高さのぶん遠くに出る)。
+        if self.aim_logged >= 200:
+            return
+        try:
+            session, frame_id, observation = runtime.video.get_bottle_observation()
+        except Exception:
+            return
+        if frame_id is None or frame_id <= self.aim_last_frame:
+            return
+        self.aim_last_frame = frame_id
+        insight, color, cx, theta, bottom, area, blind = observation
+        if not insight:
+            return
+        self.aim_logged += 1
+        progress = float(runtime.plotter.get_distance()) - self.lap.origin_distance
+        gyro = float(runtime.gyro_sensor.get_angle())
+        lap_phase = getattr(self.lap, 'transition_phase', None)
+        self.logger.info('BOTTLE_AIM_OBS frame=%d progress_mm=%.1f gyro_deg=%.2f heading_origin=%s lap_phase=%s fallback=%s '
+                         'color=%s cx=%d bottom=%d area=%d blind=%s theta=%.2f'
+                         % (frame_id, progress, gyro, getattr(self.lap, 'heading_origin', None), lap_phase,
+                            getattr(self.lap, 'fallback_done', None), getattr(color, 'value', color),
+                            int(cx), int(bottom), int(area), bool(blind), float(theta)))
     def update(self):
         if not self.started:
             if not self.lap.running:
@@ -2028,6 +2216,8 @@ class _DeferredBottleObservation(Behaviour):
                 return Status.RUNNING
             self.started = True
         self.child.tick_once()
+        self._log_bottle_aim()
+        self._log_sonar()
         return self.child.status
     def terminate(self, status):
         if self.started:

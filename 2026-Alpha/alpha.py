@@ -1573,6 +1573,15 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument('--rally-blue-exit-settle', action='store_true',
                         help=('2026-11-18: after the blue circle, turn to the rally direction with the predictive brake, wait '
                               'until stopped and trim if the heading is off by more than 0.5 deg (log BLUE_EXIT_SETTLE).'))
+    parser.add_argument('--lap-bottle-aim', action='store_true',
+                        help=('2026-11-18: at the end of LAP, once the bottle is seen ahead, stop following the line and steer '
+                              'toward the bottle by camera (fallback stop distance by blue->black or estimated gate). Log BOTTLE_AIM.'))
+    parser.add_argument('--lap-bottle-aim-power', type=int, default=None,
+                        help='2026-11-18: power cap while steering toward the bottle (default: same as the fallback).')
+    parser.add_argument('--lap-bottle-aim-offset-deg', type=float, default=None,
+                        help='2026-11-18: aim this many degrees to the right of straight ahead (default 0; the angle uses --rally-camera-calib).')
+    parser.add_argument('--lap-bottle-aim-start-mm', type=float, default=None,
+                        help='2026-11-18: LAP progress from which the bottle steering may start (default 4500).')
     parser.add_argument('--sumo-green-avoid', action='store_true',
                         help=('2026-11-18: after the push, if the turn toward the blue circle is predicted to put a body corner '
                               'over the green beside the ring (log SUMO_SWEEP), first back away on an arc turning the same way.'))
@@ -2022,6 +2031,23 @@ def _run_main(argv, startup_cleanup):
         from robot_program.features.sumo_rally_transition import TurnAfterBlue as _tab
         _tab.EXIT_SETTLE = True
         print(' -- blue exit turn: settle and trim on', flush=True)
+    if args.lap_bottle_aim or args.lap_bottle_aim_power is not None or args.lap_bottle_aim_offset_deg is not None or args.lap_bottle_aim_start_mm is not None:
+        from robot_program.features import lap_camera_recovery as _lcr
+        _lcr.BOTTLE_AIM = bool(args.lap_bottle_aim)
+        if args.lap_bottle_aim_power is not None:
+            if not 30 <= args.lap_bottle_aim_power <= 100:
+                parser.error('--lap-bottle-aim-power must be 30..100')
+            _lcr.BOTTLE_AIM_POWER = args.lap_bottle_aim_power
+        if args.lap_bottle_aim_offset_deg is not None:
+            if not -10.0 <= args.lap_bottle_aim_offset_deg <= 10.0:
+                parser.error('--lap-bottle-aim-offset-deg must be -10..10')
+            _lcr.BOTTLE_AIM_OFFSET_DEG = args.lap_bottle_aim_offset_deg
+        if args.lap_bottle_aim_start_mm is not None:
+            if not 4300.0 <= args.lap_bottle_aim_start_mm <= 5300.0:
+                parser.error('--lap-bottle-aim-start-mm must be 4300..5300')
+            _lcr.BOTTLE_AIM_START_MM = args.lap_bottle_aim_start_mm
+        print(' -- LAP bottle aim: %s start=%.0f power=%s offset=%.1f deg'
+              % ('on' if _lcr.BOTTLE_AIM else 'off', _lcr.BOTTLE_AIM_START_MM, _lcr.BOTTLE_AIM_POWER, _lcr.BOTTLE_AIM_OFFSET_DEG), flush=True)
     if args.sumo_green_avoid or args.sumo_green_ring_offset_mm is not None or args.sumo_green_arc_radius_mm is not None:
         from robot_program.features.sumo_rally_transition import TurnTowardRallyStart as _ttr
         if args.sumo_green_avoid:
