@@ -22,6 +22,12 @@ def prepare(frame):
 class SumoBlackDetector:
     """No predicted-only output. New read sessions require two new frames."""
 
+    # 2026-11-18(devSS、本番の試走 04:12): 相撲へ向かう直進で、ゲートの脚(幅30×高さ154画素)を黒いボトルと取り違え、
+    # そちらへ向き直して捕まえに行った。ボトルは幅51×高さ71(高さ/幅 約1.4)。高さが幅のこの倍数を超える縦長の候補は外す。
+    # None なら外さない(--sumo-reject-tall で有効、既定オフ)。
+    TALL_MAX_RATIO = None
+    _tall_log_at = 0.0
+
     def __init__(self, mask_policy="dual"):
         if mask_policy not in ("hsv", "dual"):
             raise ValueError("mask_policy must be hsv or dual")
@@ -127,6 +133,15 @@ class SumoBlackDetector:
                 area < 150 or h < 12 or w > 176
                 or w / h > 1.5 or area / (w * h) < 0.45
             ):
+                continue
+            ratio = self.TALL_MAX_RATIO
+            if ratio is not None and h > ratio * w:
+                import time as _time
+                now = _time.monotonic()
+                if now - SumoBlackDetector._tall_log_at >= 0.5:
+                    SumoBlackDetector._tall_log_at = now
+                    print("SUMO_BLACK reject tall candidate x=%d y=%d w=%d h=%d ratio=%.1f limit=%.1f frame=%s"
+                          % (x, y, w, h, h / float(w), ratio, frame_id), flush=True)
                 continue
 
             blue = getattr(self, "_blue_mask", None)
