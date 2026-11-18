@@ -204,6 +204,9 @@ BOTTLE_AIM_LATENCY_SEC = 0.155    # 画像の遅れ。11/18 のログで約4枚(
 BOTTLE_AIM_UNDER_AREA = 2500      # この面積を超えて見えたあとで見えなくなったら、アームの間に入ったとしてまっすぐ進む
 BOTTLE_AIM_MAX_DEG = 15.0         # 線の向き(heading_origin)からの向きの変え幅の上限
 BOTTLE_AIM_POWER = None           # None なら今の fallback と同じ出力
+# 2026-11-18(devSS): 床の青→黒が見えなかったとき、推定のゲートを手前にする量(--lap-unseen-gate-shorten-mm、既定0)。
+# 11/18 のAのログ: 青→黒が見えた回は 5210〜5256mm で止まり、見えなかった回は推定のゲート(5290.5)まで進んで 5291〜5304mm。
+UNSEEN_GATE_SHORTEN_MM = 0.0
 # 11/18 1回目: 画素→角度の式(HORIZON_DISTANCE から)が実際の約1.7倍の角度を出して ±15°で振れ、ボトルの左へ抜けた。
 # ロボットAのカメラは左へ2.3°向いている。--rally-camera-calib の較正(レンズと取り付け)で車体から見た角度を出す。
 _AIM_CAM = None
@@ -2053,6 +2056,9 @@ def build_lap_camera_recovery(context, config, original):
     lap.gate_recovery = 'baseline'
     lap.confirmed_fallback_slow = True
     lap.confirmed_fallback_after_mm = 120.0
+    if UNSEEN_GATE_SHORTEN_MM:
+        lap.fallback_estimated_gate_mm = float(lap.distance_limit_mm) - UNSEEN_GATE_SHORTEN_MM
+    print('LAP_UNSEEN_GATE estimated_gate_mm=%.1f shorten_mm=%.1f' % (lap.fallback_estimated_gate_mm, UNSEEN_GATE_SHORTEN_MM), flush=True)
     gate = BlueThenBlackGate(lap, allow_weak_blue=True)
     lap.completion_condition, lap.completion_min_mm = gate, lap.observation_start_mm if lap.observation_start_mm is not None else math.inf
     continuous_to = config.mission_mode in ('lap-to', 'lap-to-sumo', 'full')
