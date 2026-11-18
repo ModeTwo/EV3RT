@@ -188,6 +188,25 @@ PROFILE_REJOIN_ALIGNED_DEG = 3.0
 
 APPROACH_MIN_AREA_PX=2000
 
+# 2026-11-18(devSS): ボトルへカメラで向かう(--lap-bottle-aim、既定オフ)。
+# 最後の直進で線に戻る→それる→戻るの蛇行があり、ボトルに横ずれ・斜めで当たって片方のアームから外へそれる。
+# ボトルが正面近くに続けて見えたら、線をたどるのをやめて fallback(床の青→黒で止める距離を決める、見えなければ推定のゲート)へ移り、
+# その向きを heading_origin ではなく、画像ごとのボトルの方向にする。ボトルが近すぎて見えなくなったら最後の向きのまま。
+BOTTLE_AIM = False
+BOTTLE_AIM_START_MM = 4500.0      # LAP の進んだ距離。ボトルの色を読み始めるのは 4300
+BOTTLE_AIM_MIN_AREA = 300         # 画素の面積
+BOTTLE_AIM_HITS = 3               # 正面近くに同じ色が続けて見えた画像の数
+BOTTLE_AIM_MAX_CX_OFF = 110       # 画面の真ん中(BOTTLE_AIM_REF_CX)からこれ以内のボトルだけ(画面の幅 320)
+BOTTLE_AIM_REF_CX = 160.0         # アームの真ん中に見える画面の横の位置
+BOTTLE_AIM_GAIN = 1.0             # ボトルの方向のずれのうち、向きを変える割合
+BOTTLE_AIM_MAX_DEG = 15.0         # 線の向き(heading_origin)からの向きの変え幅の上限
+BOTTLE_AIM_POWER = None           # None なら今の fallback と同じ出力
+
+
+def _bottle_pixel_bearing(cx):
+    from py_etrobo_util.video import HORIZON_DISTANCE, AXLE_TO_HORIZON_DISTANCE, FRAME_WIDTH
+    return math.degrees(math.atan(((float(cx) - FRAME_WIDTH / 2.0) * HORIZON_DISTANCE / FRAME_WIDTH) / AXLE_TO_HORIZON_DISTANCE))
+
 APPROACH_HITS=3
 
 APPROACH_MAX_AGE_SEC=0.25
@@ -376,6 +395,8 @@ class Peak100ContinuousLap(RunByGyro):
 
     def initialise(self):
         self.native_capture_enabled = False
+        self.aim_active = False; self.aim_hits = 0; self.aim_color = None; self.aim_last_frame = -1
+        self.aim_target = None; self.aim_logged = 0
         self.handoff_complete=False;self.camera_direction=None;self.camera_search_logged=False;self.target=self.profile_target;self.pre_gate_trace=None;self.pre_gate_side=None;self.pre_gate_white_count=0;self.floor_classifier=ColorClassifier();self.trace_motor_samples=deque(maxlen=500);self.trace_motor_total=0;self.trace_projection=None;self.trace_projection_base=None
         self.transition_phase=None;self.transition_start=None;self.transition_time=None;self.gate_latched=False;self.recovery_attempts=0;self.edge_count=0;self.recovery_direction=None;self.frozen_camera_frame=None;self.frozen_camera_stream=None;self.fallback_done=False;self.fallback_reason=None;self.fallback_gate_base=None;self.transition_samples=deque(maxlen=500);self.transition_total=0;self._diag_context=None;self.entry_seek_parent=None;self.approach_near=False;self.entry_dark_hold=None;self.entry_dark_hold_used=False
         self.cross_direction = None
@@ -472,6 +493,8 @@ class Peak100ContinuousLap(RunByGyro):
         gain,limit=(4.0,20.0) if strong else (2.0,16.0)
         turn=max(-limit,min(limit,gain*error))
         base=TRACE_POWER if slow else self.straight_power-abs(turn)
+        if getattr(self, 'aim_active', False) and BOTTLE_AIM_POWER is not None:
+            base=min(base, BOTTLE_AIM_POWER)
         runtime.left_motor.set_brake(False);runtime.right_motor.set_brake(False)
         left=round(base-runtime.course*turn);right=round(base+runtime.course*turn)
         runtime.left_motor.set_power(left);runtime.right_motor.set_power(right)
@@ -997,7 +1020,7 @@ class Peak100ContinuousLap(RunByGyro):
                 self.fallback_blue_slow_logged = True
                 self.logger.info('LAP_FALLBACK_BLUE_SLOW power=%d blue_mm=%.1f gate_confirmed=False'
                                  % (TRACE_POWER, gate.blue_progress))
-            self._transition_drive(self.heading_origin,-runtime.course*gyro, slow=slow_confirmed or slow_blue or self.unseen_estimate_started)
+            self._transition_drive(self._bottle_aim_heading(-runtime.course*gyro),-runtime.course*gyro, slow=slow_confirmed or slow_blue or self.unseen_estimate_started)
             return Status.RUNNING
         if self.transition_phase == 'GATE_REJOIN' and self.gate_latched:
             return self._finish_distance_run(Status.SUCCESS)
@@ -1216,6 +1239,68 @@ class Peak100ContinuousLap(RunByGyro):
         self._transition_drive(self.heading_origin,-runtime.course*float(runtime.gyro_sensor.get_angle()))
         return Status.RUNNING
 
+    def _bottle_aim_frame(self):
+        """新しい画像ならボトルの観測 (frame, color, cx, bottom, area, blind) を返す。古い・見えないなら None。"""
+        try:
+            session, frame_id, observation = runtime.video.get_bottle_observation()
+        except Exception:
+            return None
+        if frame_id is None or frame_id <= self.aim_last_frame:
+            return None
+        self.aim_last_frame = frame_id
+        insight, color, cx, theta, bottom, area, blind = observation
+        if not insight:
+            return (frame_id, None, None, None, None, None)
+        return (frame_id, color, float(cx), int(bottom), int(area), bool(blind))
+
+    def _bottle_aim_ready(self):
+        progress = float(runtime.plotter.get_distance()) - self.origin_distance
+        if progress < BOTTLE_AIM_START_MM or progress >= self.distance_limit_mm:
+            return False
+        obs = self._bottle_aim_frame()
+        if obs is None:
+            return False
+        frame_id, color, cx, bottom, area, blind = obs
+        ok = (color is not None and area >= BOTTLE_AIM_MIN_AREA and not blind
+              and abs(cx - BOTTLE_AIM_REF_CX) <= BOTTLE_AIM_MAX_CX_OFF)
+        if not ok:
+            self.aim_hits, self.aim_color = 0, None
+            return False
+        self.aim_hits = self.aim_hits + 1 if color == self.aim_color else 1
+        self.aim_color = color
+        if self.aim_hits < BOTTLE_AIM_HITS:
+            return False
+        self.logger.info('BOTTLE_AIM_START progress_mm=%.1f color=%s cx=%.0f bottom=%d area=%d phase=%s gate_latched=%s'
+                         % (progress, getattr(color, 'value', color), cx, bottom, area, self.transition_phase, self.gate_latched))
+        return True
+
+    def _bottle_aim_heading(self, heading):
+        """fallback で向かう向き。ボトルへ向かうときは画像ごとに更新し、見えないあいだは最後の向き。"""
+        if not getattr(self, 'aim_active', False):
+            return self.heading_origin
+        if self.aim_target is None:
+            self.aim_target = heading
+        obs = self._bottle_aim_frame()
+        if obs is None:
+            return self.aim_target
+        frame_id, color, cx, bottom, area, blind = obs
+        use = (color is not None and color == self.aim_color and area >= BOTTLE_AIM_MIN_AREA and not blind
+               and abs(cx - BOTTLE_AIM_REF_CX) <= BOTTLE_AIM_MAX_CX_OFF)
+        if use:
+            error = _bottle_pixel_bearing(cx) - _bottle_pixel_bearing(BOTTLE_AIM_REF_CX)
+            # 画面の右 = 実際の右。heading は右コースで右回りに増え、左コースで左回りに増える。
+            target = heading - runtime.course * BOTTLE_AIM_GAIN * error
+            offset = (target - self.heading_origin + 180.0) % 360.0 - 180.0
+            offset = max(-BOTTLE_AIM_MAX_DEG, min(BOTTLE_AIM_MAX_DEG, offset))
+            self.aim_target = self.heading_origin + offset
+        if self.aim_logged < 200:
+            self.aim_logged += 1
+            progress = float(runtime.plotter.get_distance()) - self.origin_distance
+            self.logger.info('BOTTLE_AIM frame=%d progress_mm=%.1f heading=%.2f target=%.2f origin=%.2f used=%s color=%s cx=%s bottom=%s area=%s blind=%s'
+                             % (frame_id, progress, heading, self.aim_target, self.heading_origin, use,
+                                getattr(color, 'value', color), cx, bottom, area, blind))
+        return self.aim_target
+
     def _start_fallback(self,reason):
         distance=float(runtime.plotter.get_distance());gyro=float(runtime.gyro_sensor.get_angle());now=time.monotonic()
         if runtime.course not in (-1,1) or not all(map(math.isfinite,(distance,gyro,now))):return self._finish_distance_run(Status.FAILURE)
@@ -1278,6 +1363,11 @@ class Peak100ContinuousLap(RunByGyro):
                 self.power = min(self.power, self.straight_power)
         if self.running:
             self._sync_lap_bottle_session(time.monotonic())
+        if self.running and BOTTLE_AIM and not getattr(self, 'aim_active', False) and self._bottle_aim_ready():
+            self.aim_active = True
+            self.aim_target = None
+            if self.transition_phase != 'FALLBACK':
+                return self._start_fallback('bottle_aim')
         if self.running and self.transition_phase is not None:return self._transition_update()
         if self.running and self.camera_start_mm is None:
             progress = float(runtime.plotter.get_distance()) - self.origin_distance
