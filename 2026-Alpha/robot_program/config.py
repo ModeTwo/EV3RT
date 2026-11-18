@@ -30,6 +30,14 @@ class RaceConfig:
     start_lap_power: int = 100
     # fullのLAP最終直線上限。100に変更すれば従来速度に戻る。
     start_lap_final_straight_power: int = 75
+    # full用のLAP機能。明示した環境変数はこれらより優先。
+    lap_white_sided_rejoin: bool = True  # 両側が白い黒線候補で再判断
+    lap_dark_heading: bool = True  # 暗い床上で方位を維持
+    lap_recovery_vote_grace: bool = True  # 新画像の一時的な票不足を許容
+    lap_soft_blue_trial: bool = False  # 低彩度青候補（効果は実機未確定）
+    lap_repeat_damp_trial: bool = False  # 同方向への反復補正を減衰（実機未確定）
+    lap_weak_blue_mode: str = 'baseline'  # baseline / early
+    lap_gate_target: str = 'gray_center'  # 青判定・距離制御の設定
     # 車軸中心から最初のカーブまで。アーム先端から500mm＋前方100mm。
     start_lap_first_straight_mm: float = 600.0
     # 最初のカーブ以降の距離倍率。別途実測するまでは旧表の長さを維持。

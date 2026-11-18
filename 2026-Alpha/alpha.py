@@ -1197,11 +1197,16 @@ def _configure_full_lap_defaults(mission):
     """Use the latest tested LAP settings in full; explicit overrides win."""
     if mission != 'full':
         return
+    settings = RaceConfig()
+    on_off = lambda enabled: 'on' if enabled else 'off'
     defaults = {
-        'LAP_WHITE_SIDED_REJOIN': 'on',
-        'LAP_DARK_HEADING': 'on',
-        'LAP_GATE_TARGET': 'gray_center',
-        'LAP_WEAK_BLUE_MODE': 'baseline',
+        'LAP_WHITE_SIDED_REJOIN': on_off(settings.lap_white_sided_rejoin),
+        'LAP_DARK_HEADING': on_off(settings.lap_dark_heading),
+        'LAP_RECOVERY_VOTE_GRACE': on_off(settings.lap_recovery_vote_grace),
+        'LAP_SOFT_BLUE_TRIAL': on_off(settings.lap_soft_blue_trial),
+        'LAP_REPEAT_DAMP_TRIAL': on_off(settings.lap_repeat_damp_trial),
+        'LAP_GATE_TARGET': settings.lap_gate_target,
+        'LAP_WEAK_BLUE_MODE': settings.lap_weak_blue_mode,
     }
     for name, value in defaults.items():
         os.environ.setdefault(name, value)
