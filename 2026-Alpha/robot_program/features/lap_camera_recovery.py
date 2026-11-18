@@ -1938,6 +1938,24 @@ class _DeferredBottleObservation(Behaviour):
         self.started = False
         self.aim_last_frame = -1
         self.aim_logged = 0
+        self.sonar_next = 0.0
+        self.sonar_logged = 0
+    def _log_sonar(self):
+        # 2026-11-18(devSS): ボトルがアームの間に入ったことを前の超音波センサーで分かるかの調べ。見るだけ。
+        # 相撲と同じく 0.05 秒ごとに読み、進んだ距離と一緒に出す(最大200行)。
+        now = time.monotonic()
+        if self.sonar_logged >= 200 or now < self.sonar_next or runtime.sonar_sensor is None:
+            return
+        self.sonar_next = now + 0.05
+        try:
+            raw = runtime.sonar_sensor.get_distance()
+        except Exception as error:
+            self.sonar_logged = 200
+            self.logger.warning('LAP_SONAR unavailable: %r' % (error,))
+            return
+        self.sonar_logged += 1
+        progress = float(runtime.plotter.get_distance()) - self.lap.origin_distance
+        self.logger.info('LAP_SONAR progress_mm=%.1f raw=%s' % (progress, raw))
     def _log_bottle_aim(self):
         # 2026-11-18(devSS): ボトルをつかみ損ねる(片方のアームに当たって外へそれる)調べ。見るだけ。
         # 新しい画像ごとに、選んだボトルの画面上の位置を出す。床の上の位置は PC でカメラの較正から求める
@@ -1973,6 +1991,7 @@ class _DeferredBottleObservation(Behaviour):
             self.started = True
         self.child.tick_once()
         self._log_bottle_aim()
+        self._log_sonar()
         return self.child.status
     def terminate(self, status):
         if self.started:
