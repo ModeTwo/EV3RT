@@ -1573,6 +1573,9 @@ def _run_main(argv, startup_cleanup):
     parser.add_argument('--rally-blue-exit-settle', action='store_true',
                         help=('2026-11-18: after the blue circle, turn to the rally direction with the predictive brake, wait '
                               'until stopped and trim if the heading is off by more than 0.5 deg (log BLUE_EXIT_SETTLE).'))
+    parser.add_argument('--sumo-reject-tall', type=float, nargs='?', const=3.0, default=None,
+                        help=('2026-11-18: in the sumo black-bottle detector, ignore candidates taller than this many times their width '
+                              '(default 3.0 when given; a gate leg was 30x154 px, the bottle 51x71 px). Log SUMO_BLACK reject tall.'))
     parser.add_argument('--lap-unseen-gate-shorten-mm', type=float, default=None,
                         help=('2026-11-18: when the floor blue->black at the LAP gate is not seen, stop this many mm before the '
                               'estimated gate (default 0). Runs that saw it stopped about 60 mm earlier than the estimated gate.'))
@@ -2034,6 +2037,12 @@ def _run_main(argv, startup_cleanup):
         from robot_program.features.sumo_rally_transition import TurnAfterBlue as _tab
         _tab.EXIT_SETTLE = True
         print(' -- blue exit turn: settle and trim on', flush=True)
+    if args.sumo_reject_tall is not None:
+        if not 1.8 <= args.sumo_reject_tall <= 10.0:
+            parser.error('--sumo-reject-tall must be 1.8..10')
+        from robot_program.features.sumo_black_detector import SumoBlackDetector as _sbd
+        _sbd.TALL_MAX_RATIO = float(args.sumo_reject_tall)
+        print(' -- sumo black detector: reject candidates taller than %.1f x width' % _sbd.TALL_MAX_RATIO, flush=True)
     if args.lap_unseen_gate_shorten_mm is not None:
         if not 0.0 <= args.lap_unseen_gate_shorten_mm <= 200.0:
             parser.error('--lap-unseen-gate-shorten-mm must be 0..200')
