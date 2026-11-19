@@ -1,0 +1,17 @@
+{
+  "confirmed": true,
+  "candidate": {
+    "x": 109,
+    "y": 126,
+    "w": 62,
+    "h": 24,
+    "cx": 139.2294410301434,
+    "cy": 137.49956101843722,
+    "area": 1139.0,
+    "circularity": 0.6527120848823992,
+    "ellipse_iou": 0.9788617886178862,
+    "ellipse_tilt_deg": 2.1898574829101562
+  },
+  "candidate_count": 1,
+  "bottom_hint": null
+}

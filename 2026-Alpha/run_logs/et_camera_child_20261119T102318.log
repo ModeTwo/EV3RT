@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/pi/EV3RT/2026-Alpha/robot_program/et_rally_camera_proc.py", line 564, in <module>
+    _child(json.loads(sys.argv[1]))
+  File "/home/pi/EV3RT/2026-Alpha/robot_program/et_rally_camera_proc.py", line 268, in _child
+    time.sleep(0.02)
+KeyboardInterrupt
