@@ -131,9 +131,12 @@ def main():
     for p in a.logs:
         run = parse(p)
         name = os.path.basename(p)
-        if run['start'] is None or run['fix'] is None:
-            print('%s: スタートの姿勢か start_fix の行がない(使わない)' % name)
+        if run['start'] is None:
+            print('%s: スタートの姿勢の行がない(使わない)' % name)
             continue
+        if run['fix'] is None:
+            # 2026-11-19: 較正ファイルに start_fix がない(較正台で較正し直したばかり)と、applied の行が出ない。0 として扱う
+            run['fix'] = (0.0, 0.0, 0.0)
         e = estimate(run, a.window_sec, a.max_dist)
         if e is None:
             print('%s: 走り出しの読み直しが3枚未満(使わない)' % name)
