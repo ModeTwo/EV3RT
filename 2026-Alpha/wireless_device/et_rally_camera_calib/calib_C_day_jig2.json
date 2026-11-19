@@ -1,0 +1,211 @@
+{
+ "lens": {
+  "K": [
+   [
+    857.0491454598504,
+    0.0,
+    309.8919723370949
+   ],
+   [
+    0.0,
+    853.8229357654611,
+    257.4421239067983
+   ],
+   [
+    0.0,
+    0.0,
+    1.0
+   ]
+  ],
+  "dist": [
+   0.0871324062063102,
+   -0.3947671046672033,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "rms_px": 0.49259301096414315,
+  "size": [
+   640,
+   480
+  ],
+  "images": [
+   "a_lens_027.png",
+   "a_lens_028.png",
+   "a_lens_029.png",
+   "a_lens_033.png",
+   "a_lens_034.png",
+   "a_lens_035.png",
+   "a_lens_036.png",
+   "a_lens_037.png",
+   "a_lens_042.png",
+   "a_lens_043.png",
+   "a_lens_046.png",
+   "a_lens_047.png",
+   "a_lens_069.png",
+   "a_lens_070.png",
+   "a_lens_071.png",
+   "b_lens_001.png",
+   "b_lens_003.png",
+   "b_lens_004.png",
+   "b_lens_005.png",
+   "b_lens_006.png",
+   "b_lens_007.png",
+   "b_lens_008.png",
+   "b_lens_009.png",
+   "b_lens_010.png",
+   "b_lens_011.png",
+   "b_lens_012.png",
+   "b_lens_014.png",
+   "b_lens_015.png",
+   "b_lens_017.png",
+   "b_lens_018.png",
+   "b_lens_020.png",
+   "b_lens_022.png",
+   "b_lens_024.png",
+   "b_lens_025.png",
+   "b_lens_026.png",
+   "b_lens_027.png",
+   "b_lens_030.png",
+   "c_lens2_001.png",
+   "c_lens2_002.png",
+   "c_lens2_010.png",
+   "c_lens2_011.png",
+   "c_lens2_013.png",
+   "c_lens2_014.png",
+   "c_lens2_015.png",
+   "c_lens2_017.png",
+   "c_lens2_021.png",
+   "c_lens2_022.png",
+   "c_lens2_027.png",
+   "c_lens2_028.png",
+   "c_lens2_029.png",
+   "c_lens2_031.png",
+   "c_lens2_034.png",
+   "c_lens2_035.png",
+   "c_lens2_037.png",
+   "c_lens2_038.png",
+   "c_lens2_039.png",
+   "c_lens2_043.png",
+   "c_lens2_045.png",
+   "c_lens2_048.png",
+   "d_lens_001.png",
+   "d_lens_002.png",
+   "d_lens_003.png",
+   "d_lens_004.png",
+   "d_lens_012.png",
+   "d_lens_013.png",
+   "d_lens_014.png",
+   "d_lens_019.png",
+   "d_lens_020.png",
+   "d_lens_032.png",
+   "d_lens_034.png",
+   "d_lens_035.png",
+   "d_lens_036.png",
+   "d_lens_037.png",
+   "d_lens_038.png",
+   "d_lens_039.png",
+   "d_lens_040.png",
+   "d_lens_042.png",
+   "d_lens_043.png",
+   "d_lens_044.png",
+   "d_lens_045.png",
+   "d_lens_046.png",
+   "d_lens_047.png",
+   "d_lens_049.png",
+   "d_lens_050.png",
+   "d_lens_053.png",
+   "d_lens_054.png",
+   "d_lens_056.png",
+   "d_lens_058.png",
+   "d_lens_059.png",
+   "d_lens_063.png",
+   "d_lens_066.png",
+   "d_lens_067.png",
+   "d_lens_103.png",
+   "d_lens_104.png"
+  ]
+ },
+ "jig": [
+  {
+   "file": "20261119_093219_jig_jig_001.png",
+   "cam_mm": [
+    21.160415158074954,
+    -1.1546303629987231,
+    207.52637096988795
+   ],
+   "pitch_down_deg": 18.08011022571126,
+   "yaw_left_deg": 0.38604748765875546,
+   "roll_deg": -0.9091458606359779,
+   "reproj_px": 0.3062208890914917,
+   "rvec": [
+    1.4273965723856878,
+    -1.4416761287421758,
+    1.0284699406469027
+   ],
+   "tvec": [
+    2.105376355465403,
+    203.83720083106385,
+    44.29733554771868
+   ]
+  },
+  {
+   "file": "20261119_093114_jig_jig_001.png",
+   "cam_mm": [
+    21.72461170389471,
+    -1.0415970910229289,
+    207.61185293175038
+   ],
+   "pitch_down_deg": 18.07569534064092,
+   "yaw_left_deg": 0.49265750660859503,
+   "roll_deg": -0.969362440369071,
+   "reproj_px": 0.3073061406612396,
+   "rvec": [
+    1.427488323670203,
+    -1.4406798149254565,
+    1.0266651107246778
+   ],
+   "tvec": [
+    2.4040680489487696,
+    204.0927496061735,
+    43.77322436087601
+   ]
+  },
+  {
+   "file": "20261119_093137_jig_jig_001.png",
+   "cam_mm": [
+    21.247232081612204,
+    -1.2043984927302072,
+    207.69547187719303
+   ],
+   "pitch_down_deg": 18.101423859484996,
+   "yaw_left_deg": 0.39115365002702296,
+   "roll_deg": -0.9147309258498993,
+   "reproj_px": 0.3033338487148285,
+   "rvec": [
+    1.4276225335492403,
+    -1.441926649418429,
+    1.0281363633551626
+   ],
+   "tvec": [
+    2.0773302400612232,
+    204.0089041287481,
+    44.343615328591106
+   ]
+  }
+ ],
+ "jig_setup": {
+  "d1": [
+   603.0,
+   603.0
+  ],
+  "d2": 179.0,
+  "d3": 0.0,
+  "sq": 25.0,
+  "h": -2.0
+ },
+ "pitch_fix_deg": -0.82,
+ "lat_fix_mm": 4.0,
+ "front_fix_mm": 4.5,
+ "note": "2026-11-19 09:33 recalibrate_day.py: 較正台 3 枚(下向きが真ん中の 20261119_093219_jig_jig_001.png を先頭)、レンズ・置き方・補正は calib_C_day_jig.json から引き継ぎ。"
+}
