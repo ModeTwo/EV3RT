@@ -59,6 +59,7 @@ python3 alpha.py left --mission full --lap-bottle-aim --rally-strategy local
 - LAP: `LAP_CAPTURE`(ボトルを捕まえた位置)と、止まった理由(`LAP_CAPTURE_STOP` / `source=bottle_capture` / 黒から120mm)。
   ヒント1のオブジェクトにアームの先が当たらないかは目で見る。
 - 左コース: 2.9〜3.8m で、緑の禁止エリアに入らないか(目視)。
+- 右コース: 3.36〜3.79m の走る位置を変えた(向き -38→-39°)。ここで緑の禁止エリアに入らないか、そのあとの走りがおかしくないか(目視)。
 - 運搬のあと、床の赤→白を見つけたか。
 - 相撲: 捕まえた判定が出たか。
 - ETラリー: ゲートに当たらないか、周回中に大きな補正が入らないか(目視)。
@@ -85,7 +86,11 @@ python3 wireless_device/et_rally_camera_calib/lap_start_fix.py run_logs/run_<日
    ```
    cp robot_program/start_lap_profile_left_right_copy_1118.py robot_program/start_lap_profile_left.py
    ```
-3. 床の較正: そのまま使うか、`--clear` で元に戻すか。
+3. 右の LAP 経路: 新しい経路のまま使うか。悪くなったら元に戻す(commit はしない):
+   ```
+   cp robot_program/start_lap_profile_right_backup_1119.py robot_program/start_lap_profile_right.py
+   ```
+4. 床の較正: そのまま使うか、`--clear` で元に戻すか。
 
 ## 困ったとき
 
