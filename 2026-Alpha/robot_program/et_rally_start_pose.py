@@ -103,7 +103,7 @@ def _near_leg(w):
 START_MM = (4 * P_MM + 149.0, 3.5 * P_MM)
 START_HEADING_DEG = 180.0
 
-DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_C_day_jig2.json"   # 2026-11-19: 本番の日の較正台3枚(床の補正・start_fix は引き継がない。止まって撮る較正で入れる)
+DEFAULT_CALIB = Path(__file__).resolve().parent.parent / "wireless_device" / "et_rally_camera_calib" / "calib_C_1119_floor.json"   # 2026-11-19: 本番の日の較正台(calib_C_day_jig2)+試走の止まって撮る較正1回(取り付け 傾き-0.51° 高さ-2.7mm、start_fix 前+1.8 左+3.4 向き-0.25°)。ユーザー指示で既定
 # 2026-11-17: ロボットごとの較正(本番はロボットC = 上の DEFAULT_CALIB)。環境変数 ET_RALLY_CAMERA_CALIB(alpha.py の
 # --rally-camera-calib が入れる)があればそれを使う。ファイル名だけなら wireless_device/et_rally_camera_calib/ の中を探す。
 # カメラの子プロセスにも同じ環境変数が渡るので、親と子で同じ較正になる。
