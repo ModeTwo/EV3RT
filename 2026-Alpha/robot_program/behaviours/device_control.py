@@ -22,6 +22,11 @@ class ArmUpDownFull(Behaviour):
     ARM_SHIFT_PWM = 35
     STALL_TOLERANCE = 5
     STALL_TICKS = 20
+    # 2026-11-19(ユーザー: 最初のアームの上げ下げのカチカチに上限を。下げきることが最優先): 端に当たるとギアが滑って
+    # (カチカチ)モーターは回り続けるので、止まった判定が出ずに長く続いていた(11/18〜19 の13回で、動いた量は
+    # 上げ 559〜1351°・下げ 599〜2025°、端から端は約600°、出力35で約300°/秒)。動いた量がこれを超えたら止める
+    # (端から端の600°に、滑り分 約1.3秒を足した値)。止まった判定(STALL_*)はそのまま先に効く。
+    MAX_TRAVEL_DEG = 1000
 
     def __init__(self, name: str, direction: ArmDirection) -> None:
         super().__init__(name)
@@ -33,6 +38,7 @@ class ArmUpDownFull(Behaviour):
         if not self.running:
             self.running = True
             self.prev_degree = runtime.arm_motor.get_count()
+            self.start_degree = self.prev_degree
             self.logger.info(
                 "%+06d %s.start position is %d"
                 % (runtime.plotter.get_distance(), self.__class__.__name__, self.prev_degree)
@@ -41,6 +47,14 @@ class ArmUpDownFull(Behaviour):
             runtime.arm_motor.set_power(self.ARM_SHIFT_PWM * self.direction)
         else:
             cur_degree = runtime.arm_motor.get_count()
+            if self.MAX_TRAVEL_DEG and abs(cur_degree - self.start_degree) >= self.MAX_TRAVEL_DEG:
+                runtime.arm_motor.set_power(0)
+                runtime.arm_motor.set_brake(True)
+                self.logger.info(
+                    "%+06d %s.position set to %d (travel limit %d deg)"
+                    % (runtime.plotter.get_distance(), self.__class__.__name__, cur_degree, self.MAX_TRAVEL_DEG)
+                )
+                return Status.SUCCESS
             if abs(cur_degree - self.prev_degree) < self.STALL_TOLERANCE:
                 if self.count > self.STALL_TICKS:
                     runtime.arm_motor.set_power(0)
