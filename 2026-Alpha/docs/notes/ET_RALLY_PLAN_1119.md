@@ -40,7 +40,7 @@ git push
 
 ## 3. 試走
 
-### 3-1. 右: 止まって撮る較正(1〜2回)
+### 3-1. 右: 止まって撮る較正(1回)
 
 ETラリーのスタートから前へ15cm×5で止まって撮る。75cm 進んで止まるので、手で回収する。
 
@@ -48,17 +48,17 @@ ETラリーのスタートから前へ15cm×5で止まって撮る。75cm 進ん
 python3 alpha.py right --mission full --lap-bottle-aim --rally-plan-path robot_program/tests/plan_test_selfcal_stops_1114.json --rally-camera-log 1 --rally-straight-pause-sec 1.5 --rally-straight-pause-labels cal1,cal2,cal3,cal4,cal5
 ```
 
-ロボットの上で(PC・git・数字のやり取りは要らない。2回走ったら2回分を使う):
+ロボットの上で(PC・git・数字のやり取りは要らない):
 
 ```
-python3 wireless_device/et_rally_camera_calib/day_floor_calib.py --auto
+python3 wireless_device/et_rally_camera_calib/day_floor_calib.py --auto --runs 1
 ```
 
-- 今日の止まって撮る試験(新しい順に最大2回)を自動で選んで計算し、合格・不合格を出す(PCで30秒、ラズパイでは数分かかることがある)。
+- 今日のいちばん新しい止まって撮る試験を自動で選んで計算し、合格・不合格を出す(PCで30秒、ラズパイでは数分かかることがある)。
 - **合格**なら、次の走行から自動でその較正を使う(コマンドに何も付けない)。走ったログの最初に
   `ET rally camera calibration: calib_..._floor.json (LOCAL_CALIB.txt)` と出る。
 - **不合格**なら使わない(今の較正のまま)。理由が出るので、もう1回走らせて `--auto` をやり直す。直らなければそのまま走ってよい。
-- 1回だけで済ませるときは `--auto --runs 1`。やめて元に戻すときは `--clear`。
+- やめて元に戻すときは `--clear`。
 - `git pull` しても消えない(LOCAL_CALIB.txt は git に入れていない)。
 
 ### 3-2. 左右でいつもの full(時間があるだけ。LAP の止め方は左右3回ずつが目標)
