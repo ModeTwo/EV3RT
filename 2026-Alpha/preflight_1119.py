@@ -47,6 +47,11 @@ def alpha_imports():
 
 
 def libs():
+    # 走る本体(python3 = ロボットでは PyPy)は py_etrobo_util/video.py と同じ場所から cv2 を読む
+    import platform
+    extra = '/usr/local/lib/pypy3/dist-packages' if platform.python_implementation() == 'PyPy' else '/usr/lib/python3/dist-packages'
+    if os.path.isdir(extra) and extra not in sys.path:
+        sys.path.append(extra)
     import cv2
     import numpy
     import Crypto
@@ -54,7 +59,18 @@ def libs():
         import zxingcpp   # ヒントの QR を読む部品(ないと QR が読めない)
     except ImportError:
         raise RuntimeError('zxingcpp がない(ヒントの QR が読めない)。pip で入れるか、元のラズパイの環境を確認')
-    return 'cv2 %s, numpy %s, pycryptodome %s, zxingcpp あり' % (cv2.__version__, numpy.__version__, Crypto.__version__)
+    msg = '本体 %s: cv2 %s, numpy %s, pycryptodome %s, zxingcpp あり' % (
+        platform.python_implementation(), cv2.__version__, numpy.__version__, Crypto.__version__)
+    # カメラの子・床の較正は /usr/bin/python3(LD_LIBRARY_PATH を外す)で動く
+    if platform.python_implementation() == 'PyPy' and os.path.exists('/usr/bin/python3'):
+        env = {k: v for k, v in os.environ.items() if k not in ('PYTHONPATH', 'PYTHONHOME', 'LD_LIBRARY_PATH')}
+        r = subprocess.run(['/usr/bin/python3', '-c', 'import cv2, numpy; print(cv2.__version__)'],
+                           capture_output=True, text=True, env=env, timeout=60)
+        if r.returncode != 0:
+            raise RuntimeError('/usr/bin/python3 で cv2 が読めない(カメラの補正・床の較正が動かない): %s' % (
+                (r.stderr.strip().splitlines() or ['?'])[-1]))
+        msg += '。/usr/bin/python3: cv2 %s' % r.stdout.strip()
+    return msg
 
 
 def hint2():

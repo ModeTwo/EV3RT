@@ -36,8 +36,29 @@ import re
 import sys
 from datetime import datetime
 
-import cv2
-import numpy as np
+
+def _use_plain_python():
+    """2026-11-19: ロボットの python3 は PyPy で、cv2 がない・numpy がとても遅い。普通の Python(/usr/bin/python3、
+    カメラの子と同じ)で動かし直す。LD_LIBRARY_PATH などはカメラの子(et_rally_camera_proc.child_env)と同じく外す。"""
+    import platform
+    if platform.python_implementation() != 'PyPy' or os.environ.get('_DAY_FLOOR_CALIB_REEXEC'):
+        return
+    plain = os.environ.get('ET_CAMERA_PYTHON') or '/usr/bin/python3'
+    if not os.path.exists(plain):
+        return
+    env = dict(os.environ)
+    for name in ('PYTHONPATH', 'PYTHONHOME', 'LD_LIBRARY_PATH'):
+        env.pop(name, None)
+    env['_DAY_FLOOR_CALIB_REEXEC'] = '1'
+    print('(PyPy なので %s で動かし直す)' % plain, flush=True)
+    os.execve(plain, [plain, os.path.abspath(__file__)] + sys.argv[1:], env)
+
+
+_use_plain_python()
+if '/usr/lib/python3/dist-packages' not in sys.path and os.path.isdir('/usr/lib/python3/dist-packages'):
+    sys.path.append('/usr/lib/python3/dist-packages')   # apt の cv2・numpy(カメラの子と同じ)
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
