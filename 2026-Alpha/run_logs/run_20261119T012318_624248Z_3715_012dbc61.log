@@ -1,0 +1,31 @@
+2026-11-19T01:23:18.625+00:00 +0.001s [stdout] [run log] Recording: /home/pi/EV3RT/2026-Alpha/run_logs/run_20261119T012318_624248Z_3715_012dbc61.log
+2026-11-19T01:23:18.627+00:00 +0.002s [session] argv=['alpha.py', 'right', '--mission', 'full', '--lap-bottle-aim', '--rally-strategy', 'local']
+2026-11-19T01:23:18.679+00:00 +0.054s [stdout]  -- full LAP settings: LAP_WHITE_SIDED_REJOIN=on LAP_DARK_HEADING=on LAP_RECOVERY_VOTE_GRACE=on LAP_SOFT_BLUE_TRIAL=off LAP_REPEAT_DAMP_TRIAL=off LAP_GATE_TARGET=gray_center LAP_WEAK_BLUE_MODE=baseline
+2026-11-19T01:23:18.680+00:00 +0.056s [stdout]  -- shutdown-v8 control interval=0.020s mission=full
+2026-11-19T01:23:18.706+00:00 +0.082s [stdout]  -- LAP bottle aim: on start=4500 power=None offset=0.0 deg
+2026-11-19T01:23:18.707+00:00 +0.087s [stdout]  -- ET rally camera calibration: calib_C_day_jig2.json (default)
+2026-11-19T01:23:18.719+00:00 +0.094s [stdout] LAP_ROUTE_PROFILE course=right points=996 blue_mm=4755.957 gate_mm=4805.717
+2026-11-19T01:23:18.748+00:00 +0.124s [stdout] LAP_WHITE_SIDED_REJOIN mode=on
+2026-11-19T01:23:18.751+00:00 +0.126s [stdout] LAP_COMPARISON_TRIAL soft_blue=off repeat_damp=off
+2026-11-19T01:23:18.752+00:00 +0.127s [stdout] LAP_RECOVERY_VOTE_GRACE mode=on limit_mm=60.0 limit_sec=0.25
+2026-11-19T01:23:18.757+00:00 +0.133s [stdout] LAP_STRAIGHT_POWER start_mm=4138.2 power=75
+2026-11-19T01:23:18.758+00:00 +0.134s [stdout] LAP_FINAL_STRAIGHT start_mm=4138.2 observation_mm=4183.4 decision_mm=4283.4 deadline_mm=4483.4
+2026-11-19T01:23:18.759+00:00 +0.135s [stdout] LAP_UNSEEN_GATE estimated_gate_mm=5290.5 shorten_mm=0.0
+2026-11-19T01:23:18.760+00:00 +0.136s [stdout] LAP_CAPTURE_STOP after_capture_mm=40.0 sonar_le_mm=85 min_progress_mm=4900
+2026-11-19T01:23:18.765+00:00 +0.141s [stdout] LAP_REACQUIRE_POLICY mode=baseline limit_mm=60.0 limit_sec=0.15
+2026-11-19T01:23:18.767+00:00 +0.142s [stdout] LAP_GRAY_BLUE_POLICY target=gray_center weak=baseline gray_from_blue_mm=270.0 confirmed_override=fixed_black_120
+2026-11-19T01:23:18.768+00:00 +0.143s [stdout] LAP_CAMERA_REFERENCE_X value=160.0
+2026-11-19T01:23:18.769+00:00 +0.144s [stdout] LAP_DEVTK_PROFILE source=RunByGyroSpeedDownatCurve correction_start_mm=4283.363
+2026-11-19T01:23:18.770+00:00 +0.146s [stdout] LAP_RECOVERY enabled=True trace_target_v=40 gate=combined post_gate=gyro confirmed_mm=120 fallback_unseen_mm=0 fallback_blue=estimated_gate
+2026-11-19T01:23:18.771+00:00 +0.147s [stdout] LAP_ADAPTIVE_PEAK_POLICY far_peak_deg=10.0 initial_offset_px=84.0 ramp_mm=100.0
+2026-11-19T01:23:18.772+00:00 +0.148s [stdout] LAP_DARK_ENTRY_EDGE_POLICY mode=off
+2026-11-19T01:23:18.773+00:00 +0.149s [stdout] LAP_GATE_DISTANCE_POLICY confirmed=fixed_black_120 blue_unconfirmed=min_estimated_gate_blue_plus_240.0
+2026-11-19T01:23:18.775+00:00 +0.150s [stdout] LAP_UNSEEN_ESTIMATE after_slow_mm=None slow_before_estimated_gate_mm=190.0
+2026-11-19T01:23:18.876+00:00 +0.252s [stdout]  -- ET rally camera process: child /usr/bin/python3 env removed {'LD_LIBRARY_PATH': '/usr/local/lib:/opt/native-pi-gcc-14.2.0-64/lib64:/opt/native-pi-gcc-14.2.0-64/lib64:/opt/native-pi-gcc-14.2.0-64/lib64:'} kept -
+2026-11-19T01:23:18.938+00:00 +0.314s [stdout] Enter the four-character decryption key: Use this decryption key? (y/n):  -- decryption key entered: 'T111'
+2026-11-19T01:23:25.630+00:00 +7.005s [stdout]  -- camera enabled=True et_sumo=True
+2026-11-19T01:23:25.631+00:00 +7.007s [stdout]  -- no display (DISPLAY not set): camera preview disabled
+2026-11-19T01:23:25.646+00:00 +7.022s [stdout] VID camera device /dev/video0 (usb-Sunplus_IT_Co_Full_HD_webcam_20200618-video-index0)
+2026-11-19T01:23:27.036+00:00 +8.412s [stdout] VID cap opened fourcc=MJPG req=640x480@30 got=640x480@30.0
+2026-11-19T01:23:27.038+00:00 +8.414s [stdout]  -- camera preview enabled=False
+2026-11-19T01:23:27.050+00:00 +8.426s [stderr] LIBRASPIKE-ART STATIC 0.0.6 LOADED
