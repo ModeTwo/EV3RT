@@ -10,11 +10,11 @@ from Crypto.Util.Padding import unpad
 
 def decode_hint2(raw_text, decryption_key):
     # 大会指定の4文字のキー(英数字)以外を復号処理へ渡さない。2026-11-18(devSS): 英字も受け付ける(大文字・小文字はそのまま)。
+    # 2026-11-19(devSS、ユーザー: 形式は4桁なら何でもありかも): 記号なども受け付ける(4文字で、制御文字でなければよい)。
     if (not isinstance(decryption_key, str)
             or len(decryption_key) != 4
-            or not decryption_key.isascii()
-            or not decryption_key.isalnum()):
-        raise ValueError("A four-character (letters or digits) decryption key is required")
+            or not decryption_key.isprintable()):
+        raise ValueError("A four-character decryption key is required")
     if not isinstance(raw_text, str) or not raw_text:
         raise ValueError("Hint 2 raw text is required")
 
@@ -36,7 +36,7 @@ def decode_hint2(raw_text, decryption_key):
             continue
         tried.append(candidate)
         key = PBKDF2(
-            candidate.encode("ascii"),
+            candidate.encode("utf-8"),
             salt,
             dkLen=16,
             count=10000,
