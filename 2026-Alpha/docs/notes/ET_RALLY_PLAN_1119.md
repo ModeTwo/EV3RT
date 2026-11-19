@@ -116,8 +116,8 @@ python3 alpha.py <left|right> --mission full --lap-bottle-aim --rally-strategy l
 ET_RALLY_PLANS_DIR=et_rally_plans_m20 python3 alpha.py <left|right> --mission full --lap-bottle-aim --rally-strategy local
 ```
 
-- et_rally_plans_m20/plans.zip: 全4872配置のうち、70秒で周回が1つ増える1161配置(24%)だけ2cm 版。残りは1回目と同じ計画。
+- et_rally_plans_m20/plans.zip: 全4872配置のうち、70〜75秒のどこかで周回が増え65〜75秒のどこでも減らない2635配置だけ2cm 版。残りは1回目と同じ計画。平均の周回は 65秒 6.02→6.11、70秒 6.61→6.85、75秒 7.21→7.32。
 - 配置によっては2回目でも1回目と同じ経路になる(2cm にしても周回が増えない配置)。
 - ログに `precomputed et_rally_plans_m20/plans.zip:plan_...` と出れば2cm 用が使われている。`et_rally_plans/plans.zip` なら環境変数が効いていない。
-- 差し替えた配置の最小すき間は大半が2.0〜2.4cm(1.5〜1.9cm は8配置)。
+- 差し替えた配置の最小すき間は大半が2.0cm以上。1.43cm の2配置は3cm 版でも同じ1.43cm(狭い配置)。
 - 1回目と同じ計画に戻すときは、`ET_RALLY_PLANS_DIR=` を付けずに打つだけ。
