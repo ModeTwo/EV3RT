@@ -117,8 +117,21 @@ def resolve_calib(name):
     return p
 
 
+# 2026-11-19(ユーザー: 別のPC・ラズパイで git なしで進めたい): day_floor_calib.py --auto が合格の較正を
+# wireless_device/et_rally_camera_calib/LOCAL_CALIB.txt(git に入れない)に書く。環境変数がないときはそれを使う。
+LOCAL_CALIB_FILE = CALIB_DIR / "LOCAL_CALIB.txt"
+CALIB_SOURCE = "default"
 if os.environ.get("ET_RALLY_CAMERA_CALIB"):
     DEFAULT_CALIB = resolve_calib(os.environ["ET_RALLY_CAMERA_CALIB"])
+    CALIB_SOURCE = "env"
+elif LOCAL_CALIB_FILE.exists():
+    try:
+        _local = resolve_calib(LOCAL_CALIB_FILE.read_text(encoding="utf-8").strip())
+        if _local.exists():
+            DEFAULT_CALIB = _local
+            CALIB_SOURCE = "LOCAL_CALIB.txt"
+    except OSError:
+        pass
 
 # 真上から見た画像の範囲(車体の座標、mm)と1画素の大きさ。スタートでは止まっているので、少し広めに細かく見る。
 TOP_S = 0.5

@@ -9,3 +9,6 @@ test_*.py
 /rollback/
 
 /strategy_logs/
+
+# 2026-11-19: ロボットごとに day_floor_calib.py --auto が書く、使う較正の名前(git で配らない)
+wireless_device/et_rally_camera_calib/LOCAL_CALIB.txt

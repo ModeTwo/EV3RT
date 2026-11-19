@@ -48,32 +48,26 @@ ETラリーのスタートから前へ15cm×5で止まって撮る。75cm 進ん
 python3 alpha.py right --mission full --lap-bottle-aim --rally-plan-path robot_program/tests/plan_test_selfcal_stops_1114.json --rally-camera-log 1 --rally-straight-pause-sec 1.5 --rally-straight-pause-labels cal1,cal2,cal3,cal4,cal5
 ```
 
-PC で(画像のフォルダの日時は走ったときのもの):
+ロボットの上で(PC・git・数字のやり取りは要らない。2回走ったら2回分を使う):
 
 ```
-scp -r "shunsuke09@10.56.69.191:EV3RT/2026-Alpha/run_logs/et_camera_<日時>*" day_logs/
-python wireless_device/et_rally_camera_calib/day_floor_calib.py day_logs/et_camera_<1回目> [day_logs/et_camera_<2回目>]
+python3 wireless_device/et_rally_camera_calib/day_floor_calib.py --auto
 ```
 
-カメラの補正が小さく(1°・数mm 程度)、スタートの読み違いが回ごとに揃っていれば、既定にする。
-
-```
-python wireless_device/et_rally_camera_calib/day_floor_calib.py day_logs/et_camera_<1回目> [day_logs/et_camera_<2回目>] --set-default
-git add wireless_device/et_rally_camera_calib/calib_*_floor.json robot_program/et_rally_start_pose.py
-git commit -m "当日の床での較正(C、full でスタートまで走って撮った)"
-git push
-```
-
-ロボットで `git pull`。
+- 今日の止まって撮る試験(新しい順に最大2回)を自動で選んで計算し、合格・不合格を出す(PCで30秒、ラズパイでは数分かかることがある)。
+- **合格**なら、次の走行から自動でその較正を使う(コマンドに何も付けない)。走ったログの最初に
+  `ET rally camera calibration: calib_..._floor.json (LOCAL_CALIB.txt)` と出る。
+- **不合格**なら使わない(今の較正のまま)。理由が出るので、もう1回走らせて `--auto` をやり直す。直らなければそのまま走ってよい。
+- 1回だけで済ませるときは `--auto --runs 1`。やめて元に戻すときは `--clear`。
+- `git pull` しても消えない(LOCAL_CALIB.txt は git に入れていない)。
 
 ### 3-2. 左右でいつもの full(時間があるだけ。LAP の止め方は左右3回ずつが目標)
 
 ```
-python3 alpha.py left --mission full --lap-bottle-aim --rally-strategy local --rally-camera-log 5
-python3 alpha.py right --mission full --lap-bottle-aim --rally-strategy local --rally-camera-log 5
+python3 alpha.py left --mission full --lap-bottle-aim --rally-strategy local
+python3 alpha.py right --mission full --lap-bottle-aim --rally-strategy local
 ```
 
-`--rally-camera-log 5` はスタートのずれが残ったときの原因調べ用。本番では付けない。
 
 ### 毎回ログで見ること
 
@@ -84,10 +78,10 @@ python3 alpha.py right --mission full --lap-bottle-aim --rally-strategy local --
 - 相撲の捕まえた判定
 - ETラリー: カメラ補正(used/seen・resid)、スタートのずれ(下)、周回中のずれ
 
-スタートのずれを見る(PC):
+スタートのずれを見る(ロボットの上で):
 
 ```
-python wireless_device/et_rally_camera_calib/lap_start_fix.py day_logs/run_*.log
+python3 wireless_device/et_rally_camera_calib/lap_start_fix.py run_logs/run_<日時>.log
 ```
 
 左右とも、残りが数mm・0.3°以内なら較正は合っている。
@@ -99,7 +93,7 @@ python wireless_device/et_rally_camera_calib/lap_start_fix.py day_logs/run_*.log
    ```
    cp robot_program/start_lap_profile_left_right_copy_1118.py robot_program/start_lap_profile_left.py
    ```
-3. 較正: 3-1 の較正で、左右ともスタートのずれが小さいか。だめなら周回のログから `lap_start_fix.py ... --out calib_C_day_lap.json --set-default`。
+3. 較正: 3-1 の `--auto` が合格し、左右ともスタートのずれが小さいか。悪くなったと思ったら `day_floor_calib.py --clear` で元に戻す。
 4. 2回目に攻めるか: すき間2cm の計画(計算中、11/19 朝に結果)を使うか。
 
 ## 5. 本番

@@ -2157,6 +2157,13 @@ def _run_main(argv, startup_cleanup):
         _sp.DEFAULT_CALIB = _calib
         mission_config = dataclasses.replace(mission_config, et_rally_camera_calib_path=str(_calib))
         print(' -- ET rally camera calibration: %s' % _calib.name, flush=True)
+    else:
+        # 2026-11-19: どの較正で走ったかを毎回ログに残す(LOCAL_CALIB.txt で切り替えたときも分かるように)
+        try:
+            from robot_program import et_rally_start_pose as _sp
+            print(' -- ET rally camera calibration: %s (%s)' % (_sp.DEFAULT_CALIB.name, _sp.CALIB_SOURCE), flush=True)
+        except Exception as _error:
+            print(' -- ET rally camera calibration: unknown (%r)' % (_error,), flush=True)
     if args.rally_camera_correct is not None:
         try:
             # 2026-11-11: "on" = 既定(位置0.15・向き0.1)。11/10は向きの補正が1°以上たまるのを誤りと見て0にしたが、

@@ -46,6 +46,9 @@ def static_intervals(P, min_sec=0.8, still_mm=1.0):
 def load_run(d, cam, per_stop=8, settle=0.5, still_mm=1.0):
     """[(止まった場所の番号, odometry の姿勢 (x, y, h度), [(画素u, v, 種類, 重み), ...]), ...]"""
     P = np.loadtxt(os.path.join(d, 'poses.txt'))
+    # 2026-11-19: 走った距離は ETラリーのスタートからにそろえる(full で走ると LAP からの距離が足されていて、
+    # スタートの止まり(距離 < 1mm)を見分けられないため)。rally-drive は元から0始まりで変わらない
+    P[:, 4] -= P[0, 4]
     meta = [json.loads(l) for l in open(os.path.join(d, 'meta.jsonl'))]
     stops = []
     starts = [m for m in meta if m.get('start')]
